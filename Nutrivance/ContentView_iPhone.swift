@@ -8,6 +8,8 @@ struct ContentView_iPhone: View {
     @State private var selectedNutrient: String = "Calories"
     @State private var showNutrientDetail: Bool = false
     @State private var showCamera = false;
+    @State private var showNutritionScanner = false
+    @State private var isLongPressing = false
     @Environment(\.horizontalSizeClass) var horizontalSizeClass // Detects the device size class
 
     private let nutrientChoices = [
@@ -111,43 +113,43 @@ struct ContentView_iPhone: View {
                 .padding(.top, 10) // Optional: Add some padding at the top to give space from the top of the screen
 
                 // Camera button in bottom right corner
-                Button(action: {
-                    // Do nothing on tap; handled in long press
-                }) {
-                    Image(systemName: "camera.fill") // Use camera icon
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 30, height: 30)
-                        .foregroundColor(.white)
-                        .padding(10)
-                        .background(Color.gray.opacity(0.5)) // Translucent background
-                        .clipShape(Circle())
-                        .shadow(radius: 10)
-                }
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.5)
-                        .onChanged { _ in
-                            // Handle button grow effect if desired
-                            let generator = UIImpactFeedbackGenerator(style: .heavy)
-                            generator.prepare()
-                            generator.impactOccurred()
-                        }
-                        .onEnded { _ in
-                            // Open the camera
-                            showCamera = true
-                            let generator = UIImpactFeedbackGenerator(style: .heavy)
-                            generator.prepare()
-                            generator.impactOccurred()
-                        }
-                )
-                .padding()
-                .position(x: UIScreen.main.bounds.width - 50, y: UIScreen.main.bounds.height - 100) // Position it at the bottom right
+            // Update the camera button section with this code
+
+            Button(action: {}) {
+                Image(systemName: "text.viewfinder")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 30, height: 30)
+                    .foregroundColor(.white)
+                    .padding(10)
+                    .background(Color.blue.opacity(0.7))
+                    .clipShape(Circle())
+                    .shadow(radius: 10)
+                    .scaleEffect(isLongPressing ? 1.5 : 1.0)  // Larger scale effect
+                    .animation(.spring(response: 0.4, dampingFraction: 0.6), value: isLongPressing)
             }
-            .fullScreenCover(isPresented: $showCamera) {
-                CameraOCRView(isPresented: $showCamera) // Use your CameraView here
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.5)
+                    .onChanged { _ in
+                        isLongPressing = true
+                        let generator = UINotificationFeedbackGenerator()
+                        generator.notificationOccurred(.success)
+                    }
+                    .onEnded { _ in
+                        isLongPressing = false
+                        showNutritionScanner = true
+                        let generator = UIImpactFeedbackGenerator(style: .heavy)
+                        generator.impactOccurred(intensity: 1.0)
+                    }
+            )
+            .padding()
+            .position(x: UIScreen.main.bounds.width - 50, y: UIScreen.main.bounds.height - 100)
+
+            .sheet(isPresented: $showNutritionScanner) {
+                NutritionScannerView()
             }
-            .fullScreenCover(isPresented: $showNutrientDetail) {
-                NutrientDetailView(nutrientName: selectedNutrient) // Present the nutrient detail view
+
+
             }
 //        }
     }
