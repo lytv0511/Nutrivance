@@ -1,61 +1,40 @@
-//
-//  ContentView.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 10/29/24.
-//
-
 import SwiftUI
-import SwiftData
+import UIKit
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
-
+    @ObservedObject var healthKitManager = HealthKitManager()
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
+        Group { // Use Group to apply modifiers properly
+            if horizontalSizeClass == .regular {
+                ContentView_iPad_alt()
+            } else {
+//                ContentView_iPhone()
+                ContentView_iPhone_alt()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
+        }
+        .onAppear {
+            requestHealthDataPermissions()
         }
     }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+    
+    private func requestHealthDataPermissions() {
+        healthKitManager.requestAuthorization { success, error in
+            if let error = error {
+                print("Error requesting health data permissions: \(error.localizedDescription)")
+            } else if success {
+                print("Health data permissions granted.")
+                // Proceed to fetch data
+            } else {
+                print("Health data permissions not granted.")
             }
         }
     }
 }
 
-#Preview {
-    ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
 }

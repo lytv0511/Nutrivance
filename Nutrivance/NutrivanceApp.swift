@@ -27,6 +27,5 @@ struct NutrivanceApp: App {
         WindowGroup {
             ContentView()
         }
-        .modelContainer(sharedModelContainer)
     }
 }

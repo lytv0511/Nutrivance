@@ -3,10 +3,32 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 60;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */; };
+		1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0592CD26FA6004E1D13 /* HomeView.swift */; };
+		159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F516E2CD5591E001F5FFC /* HealthKitManager.swift */; };
+		159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */; };
+		159F51732CD6E82B001F5FFC /* ContentView_iPhone_alt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */; };
+		159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51792CD70DBD001F5FFC /* NutrientModel.swift */; };
+		159F517C2CD715AA001F5FFC /* ContentView_iPad_alt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */; };
+		159F517E2CD7C8FB001F5FFC /* NutrientCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */; };
+		15AC8E8B2CDCF4FC0002101A /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 15AC8E8A2CDCF4FC0002101A /* WidgetKit.framework */; };
+		15AC8E8D2CDCF4FC0002101A /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 15AC8E8C2CDCF4FC0002101A /* SwiftUI.framework */; };
+		15AC8E9E2CDCF4FE0002101A /* WaterWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 15AC8E882CDCF4FC0002101A /* WaterWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		15B273D12CECBB44004E6931 /* gpu_nms.mm in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D02CECBB44004E6931 /* gpu_nms.mm */; };
+		15B273D32CECBCB1004E6931 /* NutritionExtractorWrapper.mm in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D22CECBCA3004E6931 /* NutritionExtractorWrapper.mm */; };
+		15B273D62CECBD25004E6931 /* NutritionTableDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D52CECBD25004E6931 /* NutritionTableDetector.swift */; };
+		15CB57042CEEB87100A6E970 /* TableDetection.metal in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57032CEEB86800A6E970 /* TableDetection.metal */; };
+		15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */; };
+		15CB570A2CEEBED000A6E970 /* NutritionScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57092CEEBED000A6E970 /* NutritionScannerView.swift */; };
+		15CB570C2CEEBF4000A6E970 /* ImagePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB570B2CEEBF4000A6E970 /* ImagePicker.swift */; };
+		15CB570E2CEEC03B00A6E970 /* NutritionResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB570D2CEEC03B00A6E970 /* NutritionResultsView.swift */; };
+		15CB57102CEEC22300A6E970 /* NutrientRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB570F2CEEC22300A6E970 /* NutrientRow.swift */; };
+		15CB57122CEEC22F00A6E970 /* HealthKitImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57112CEEC22F00A6E970 /* HealthKitImportView.swift */; };
+		15CB57142CEEC25000A6E970 /* NutrientData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57132CEEC25000A6E970 /* NutrientData.swift */; };
 		15D7FFA12CD142690048E050 /* NutrivanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFA02CD142690048E050 /* NutrivanceApp.swift */; };
 		15D7FFA32CD142690048E050 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFA22CD142690048E050 /* ContentView.swift */; };
 		15D7FFA52CD142690048E050 /* Item.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFA42CD142690048E050 /* Item.swift */; };
@@ -15,9 +37,20 @@
 		15D7FFB42CD1426A0048E050 /* NutrivanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFB32CD1426A0048E050 /* NutrivanceTests.swift */; };
 		15D7FFBE2CD1426A0048E050 /* NutrivanceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFBD2CD1426A0048E050 /* NutrivanceUITests.swift */; };
 		15D7FFC02CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFBF2CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift */; };
+		15D7FFCD2CD148A70048E050 /* WheelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFCC2CD148A00048E050 /* WheelPicker.swift */; };
+		15D7FFD12CD159010048E050 /* NutrientDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFD02CD159010048E050 /* NutrientDetailView.swift */; };
+		15D8B5592CEEC73600E64AA3 /* Nutrivance-Bridging-Header.h in Sources */ = {isa = PBXBuildFile; fileRef = 15D8B5582CEEC6B000E64AA3 /* Nutrivance-Bridging-Header.h */; };
+		15FE8B902CE40B2F00495A2D /* CameraOCRView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15FE8B8F2CE40B2F00495A2D /* CameraOCRView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		15AC8E9C2CDCF4FE0002101A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 15D7FF952CD142690048E050 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 15AC8E872CDCF4FC0002101A;
+			remoteInfo = WaterWidgetExtension;
+		};
 		15D7FFB02CD1426A0048E050 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 15D7FF952CD142690048E050 /* Project object */;
@@ -34,7 +67,47 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				15AC8E9E2CDCF4FE0002101A /* WaterWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone.swift; sourceTree = "<group>"; };
+		1557A0592CD26FA6004E1D13 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		159F516D2CD55871001F5FFC /* Nutrivance.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Nutrivance.entitlements; sourceTree = "<group>"; };
+		159F516E2CD5591E001F5FFC /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
+		159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad.swift; sourceTree = "<group>"; };
+		159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone_alt.swift; sourceTree = "<group>"; };
+		159F51762CD6F2DD001F5FFC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		159F51792CD70DBD001F5FFC /* NutrientModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientModel.swift; sourceTree = "<group>"; };
+		159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad_alt.swift; sourceTree = "<group>"; };
+		159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientCardView.swift; sourceTree = "<group>"; };
+		15AC8E882CDCF4FC0002101A /* WaterWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WaterWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		15AC8E8A2CDCF4FC0002101A /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		15AC8E8C2CDCF4FC0002101A /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		15B273CF2CECBB44004E6931 /* gpu_nms.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gpu_nms.h; sourceTree = "<group>"; };
+		15B273D02CECBB44004E6931 /* gpu_nms.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = gpu_nms.mm; sourceTree = "<group>"; };
+		15B273D22CECBCA3004E6931 /* NutritionExtractorWrapper.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = NutritionExtractorWrapper.mm; sourceTree = "<group>"; };
+		15B273D42CECBCBC004E6931 /* NutritionExtractorWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NutritionExtractorWrapper.h; sourceTree = "<group>"; };
+		15B273D52CECBD25004E6931 /* NutritionTableDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionTableDetector.swift; sourceTree = "<group>"; };
+		15CB57032CEEB86800A6E970 /* TableDetection.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = TableDetection.metal; sourceTree = "<group>"; };
+		15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionDetection.swift; sourceTree = "<group>"; };
+		15CB57092CEEBED000A6E970 /* NutritionScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionScannerView.swift; sourceTree = "<group>"; };
+		15CB570B2CEEBF4000A6E970 /* ImagePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePicker.swift; sourceTree = "<group>"; };
+		15CB570D2CEEC03B00A6E970 /* NutritionResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionResultsView.swift; sourceTree = "<group>"; };
+		15CB570F2CEEC22300A6E970 /* NutrientRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientRow.swift; sourceTree = "<group>"; };
+		15CB57112CEEC22F00A6E970 /* HealthKitImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitImportView.swift; sourceTree = "<group>"; };
+		15CB57132CEEC25000A6E970 /* NutrientData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientData.swift; sourceTree = "<group>"; };
 		15D7FF9D2CD142690048E050 /* Nutrivance.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nutrivance.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		15D7FFA02CD142690048E050 /* NutrivanceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceApp.swift; sourceTree = "<group>"; };
 		15D7FFA22CD142690048E050 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -46,9 +119,36 @@
 		15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NutrivanceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		15D7FFBD2CD1426A0048E050 /* NutrivanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITests.swift; sourceTree = "<group>"; };
 		15D7FFBF2CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		15D7FFCC2CD148A00048E050 /* WheelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WheelPicker.swift; sourceTree = "<group>"; };
+		15D7FFD02CD159010048E050 /* NutrientDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientDetailView.swift; sourceTree = "<group>"; };
+		15D8B5582CEEC6B000E64AA3 /* Nutrivance-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Nutrivance-Bridging-Header.h"; sourceTree = "<group>"; };
+		15FE8B8F2CE40B2F00495A2D /* CameraOCRView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraOCRView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		15AC8EA22CDCF4FE0002101A /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 15AC8E872CDCF4FC0002101A /* WaterWidgetExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		15AC8E8E2CDCF4FC0002101A /* WaterWidget */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (15AC8EA22CDCF4FE0002101A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = WaterWidget; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		15AC8E852CDCF4FC0002101A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				15AC8E8D2CDCF4FC0002101A /* SwiftUI.framework in Frameworks */,
+				15AC8E8B2CDCF4FC0002101A /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15D7FF9A2CD142690048E050 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -73,13 +173,50 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		15AC8E892CDCF4FC0002101A /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				15AC8E8A2CDCF4FC0002101A /* WidgetKit.framework */,
+				15AC8E8C2CDCF4FC0002101A /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		15B273BB2CECB8FC004E6931 /* NutritionExtractor */ = {
+			isa = PBXGroup;
+			children = (
+				15B273CB2CECBB00004E6931 /* lib */,
+			);
+			path = NutritionExtractor;
+			sourceTree = "<group>";
+		};
+		15B273CB2CECBB00004E6931 /* lib */ = {
+			isa = PBXGroup;
+			children = (
+				15B273CD2CECBB1E004E6931 /* utils */,
+			);
+			path = lib;
+			sourceTree = "<group>";
+		};
+		15B273CD2CECBB1E004E6931 /* utils */ = {
+			isa = PBXGroup;
+			children = (
+				15B273CF2CECBB44004E6931 /* gpu_nms.h */,
+				15B273D02CECBB44004E6931 /* gpu_nms.mm */,
+			);
+			path = utils;
+			sourceTree = "<group>";
+		};
 		15D7FF942CD142690048E050 = {
 			isa = PBXGroup;
 			children = (
 				15D7FF9F2CD142690048E050 /* Nutrivance */,
 				15D7FFB22CD1426A0048E050 /* NutrivanceTests */,
 				15D7FFBC2CD1426A0048E050 /* NutrivanceUITests */,
+				15AC8E8E2CDCF4FC0002101A /* WaterWidget */,
+				15AC8E892CDCF4FC0002101A /* Frameworks */,
 				15D7FF9E2CD142690048E050 /* Products */,
+				15B273BB2CECB8FC004E6931 /* NutritionExtractor */,
 			);
 			sourceTree = "<group>";
 		};
@@ -89,6 +226,7 @@
 				15D7FF9D2CD142690048E050 /* Nutrivance.app */,
 				15D7FFAF2CD1426A0048E050 /* NutrivanceTests.xctest */,
 				15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */,
+				15AC8E882CDCF4FC0002101A /* WaterWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -96,11 +234,36 @@
 		15D7FF9F2CD142690048E050 /* Nutrivance */ = {
 			isa = PBXGroup;
 			children = (
+				15CB57032CEEB86800A6E970 /* TableDetection.metal */,
+				15B273D22CECBCA3004E6931 /* NutritionExtractorWrapper.mm */,
+				15D8B5582CEEC6B000E64AA3 /* Nutrivance-Bridging-Header.h */,
+				159F51762CD6F2DD001F5FFC /* Info.plist */,
+				159F516D2CD55871001F5FFC /* Nutrivance.entitlements */,
 				15D7FFA02CD142690048E050 /* NutrivanceApp.swift */,
-				15D7FFA22CD142690048E050 /* ContentView.swift */,
+				15D7FFCC2CD148A00048E050 /* WheelPicker.swift */,
 				15D7FFA42CD142690048E050 /* Item.swift */,
 				15D7FFA62CD1426A0048E050 /* Assets.xcassets */,
 				15D7FFA82CD1426A0048E050 /* Preview Content */,
+				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
+				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
+				159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */,
+				159F516E2CD5591E001F5FFC /* HealthKitManager.swift */,
+				15FE8B8F2CE40B2F00495A2D /* CameraOCRView.swift */,
+				15D7FFD02CD159010048E050 /* NutrientDetailView.swift */,
+				15CB570F2CEEC22300A6E970 /* NutrientRow.swift */,
+				15CB57112CEEC22F00A6E970 /* HealthKitImportView.swift */,
+				15CB57132CEEC25000A6E970 /* NutrientData.swift */,
+				1557A0592CD26FA6004E1D13 /* HomeView.swift */,
+				159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */,
+				15CB57092CEEBED000A6E970 /* NutritionScannerView.swift */,
+				15CB570D2CEEC03B00A6E970 /* NutritionResultsView.swift */,
+				15CB570B2CEEBF4000A6E970 /* ImagePicker.swift */,
+				159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */,
+				159F51792CD70DBD001F5FFC /* NutrientModel.swift */,
+				15D7FFA22CD142690048E050 /* ContentView.swift */,
+				15B273D52CECBD25004E6931 /* NutritionTableDetector.swift */,
+				15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */,
+				15B273D42CECBCBC004E6931 /* NutritionExtractorWrapper.h */,
 			);
 			path = Nutrivance;
 			sourceTree = "<group>";
@@ -133,6 +296,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		15AC8E872CDCF4FC0002101A /* WaterWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 15AC8EA32CDCF4FE0002101A /* Build configuration list for PBXNativeTarget "WaterWidgetExtension" */;
+			buildPhases = (
+				15AC8E842CDCF4FC0002101A /* Sources */,
+				15AC8E852CDCF4FC0002101A /* Frameworks */,
+				15AC8E862CDCF4FC0002101A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				15AC8E8E2CDCF4FC0002101A /* WaterWidget */,
+			);
+			name = WaterWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = WaterWidgetExtension;
+			productReference = 15AC8E882CDCF4FC0002101A /* WaterWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		15D7FF9C2CD142690048E050 /* Nutrivance */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 15D7FFC32CD1426A0048E050 /* Build configuration list for PBXNativeTarget "Nutrivance" */;
@@ -140,10 +325,12 @@
 				15D7FF992CD142690048E050 /* Sources */,
 				15D7FF9A2CD142690048E050 /* Frameworks */,
 				15D7FF9B2CD142690048E050 /* Resources */,
+				15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				15AC8E9D2CDCF4FE0002101A /* PBXTargetDependency */,
 			);
 			name = Nutrivance;
 			productName = Nutrivance;
@@ -193,11 +380,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1600;
+				LastSwiftUpdateCheck = 1610;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					15AC8E872CDCF4FC0002101A = {
+						CreatedOnToolsVersion = 16.1;
+					};
 					15D7FF9C2CD142690048E050 = {
 						CreatedOnToolsVersion = 16.0;
+						LastSwiftMigration = 1610;
 					};
 					15D7FFAE2CD1426A0048E050 = {
 						CreatedOnToolsVersion = 16.0;
@@ -225,11 +416,19 @@
 				15D7FF9C2CD142690048E050 /* Nutrivance */,
 				15D7FFAE2CD1426A0048E050 /* NutrivanceTests */,
 				15D7FFB82CD1426A0048E050 /* NutrivanceUITests */,
+				15AC8E872CDCF4FC0002101A /* WaterWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		15AC8E862CDCF4FC0002101A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15D7FF9B2CD142690048E050 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -256,13 +455,43 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		15AC8E842CDCF4FC0002101A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15D7FF992CD142690048E050 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */,
+				15D7FFD12CD159010048E050 /* NutrientDetailView.swift in Sources */,
+				15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */,
+				15CB570C2CEEBF4000A6E970 /* ImagePicker.swift in Sources */,
 				15D7FFA32CD142690048E050 /* ContentView.swift in Sources */,
+				15CB57102CEEC22300A6E970 /* NutrientRow.swift in Sources */,
+				15D8B5592CEEC73600E64AA3 /* Nutrivance-Bridging-Header.h in Sources */,
+				159F51732CD6E82B001F5FFC /* ContentView_iPhone_alt.swift in Sources */,
 				15D7FFA52CD142690048E050 /* Item.swift in Sources */,
+				15CB57122CEEC22F00A6E970 /* HealthKitImportView.swift in Sources */,
+				159F517E2CD7C8FB001F5FFC /* NutrientCardView.swift in Sources */,
+				15CB570E2CEEC03B00A6E970 /* NutritionResultsView.swift in Sources */,
+				15B273D62CECBD25004E6931 /* NutritionTableDetector.swift in Sources */,
+				15B273D12CECBB44004E6931 /* gpu_nms.mm in Sources */,
+				159F517C2CD715AA001F5FFC /* ContentView_iPad_alt.swift in Sources */,
 				15D7FFA12CD142690048E050 /* NutrivanceApp.swift in Sources */,
+				159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */,
+				1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */,
+				15CB57042CEEB87100A6E970 /* TableDetection.metal in Sources */,
+				15CB57142CEEC25000A6E970 /* NutrientData.swift in Sources */,
+				159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */,
+				15FE8B902CE40B2F00495A2D /* CameraOCRView.swift in Sources */,
+				15B273D32CECBCB1004E6931 /* NutritionExtractorWrapper.mm in Sources */,
+				159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */,
+				15CB570A2CEEBED000A6E970 /* NutritionScannerView.swift in Sources */,
+				15D7FFCD2CD148A70048E050 /* WheelPicker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -286,6 +515,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		15AC8E9D2CDCF4FE0002101A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 15AC8E872CDCF4FC0002101A /* WaterWidgetExtension */;
+			targetProxy = 15AC8E9C2CDCF4FE0002101A /* PBXContainerItemProxy */;
+		};
 		15D7FFB12CD1426A0048E050 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 15D7FF9C2CD142690048E050 /* Nutrivance */;
@@ -299,6 +533,62 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		15AC8EA02CDCF4FE0002101A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 27TF38C56Z;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WaterWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WaterWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.WaterWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		15AC8EA12CDCF4FE0002101A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 27TF38C56Z;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WaterWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WaterWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.WaterWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		15D7FFC12CD1426A0048E050 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -351,6 +641,12 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>Your app needs access to Health data to provide personalized recommendations.</string>";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -358,6 +654,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OBJC_BRIDGING_HEADER = "/Users/vincentleong/Library/Mobile Documents/com~apple~CloudDocs/Xcode/Nutrivance/Nutrivance/Nutrivance-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -408,12 +705,19 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>Your app needs access to Health data to provide personalized recommendations.</string>";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OBJC_BRIDGING_HEADER = "/Users/vincentleong/Library/Mobile Documents/com~apple~CloudDocs/Xcode/Nutrivance/Nutrivance/Nutrivance-Bridging-Header.h";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -423,17 +727,24 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Nutrivance/Nutrivance.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Nutrivance/Preview Content\"";
 				DEVELOPMENT_TEAM = 27TF38C56Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Nutrivance/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "<key>NSCameraUsageDescription</key>\n<string>This app requires access to the camera to capture images for nutritional analysis.</string>";
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>Your app needs access to Health data to provide personalized recommendations.</string>";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UISupportedInterfaceOrientations (Array)\nUIInterfaceOrientationPortrait";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -442,6 +753,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Nutrivance/Nutrivance-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -452,17 +765,24 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Nutrivance/Nutrivance.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Nutrivance/Preview Content\"";
 				DEVELOPMENT_TEAM = 27TF38C56Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Nutrivance/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "<key>NSCameraUsageDescription</key>\n<string>This app requires access to the camera to capture images for nutritional analysis.</string>";
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>Your app needs access to Health data to provide personalized recommendations.</string>";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UISupportedInterfaceOrientations (Array)\nUIInterfaceOrientationPortrait";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -471,6 +791,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Nutrivance/Nutrivance-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -551,6 +872,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		15AC8EA32CDCF4FE0002101A /* Build configuration list for PBXNativeTarget "WaterWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				15AC8EA02CDCF4FE0002101A /* Debug */,
+				15AC8EA12CDCF4FE0002101A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		15D7FF982CD142690048E050 /* Build configuration list for PBXProject "Nutrivance" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
