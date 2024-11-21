@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */; };
 		1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0592CD26FA6004E1D13 /* HomeView.swift */; };
+		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
 		159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F516E2CD5591E001F5FFC /* HealthKitManager.swift */; };
 		159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */; };
 		159F51732CD6E82B001F5FFC /* ContentView_iPhone_alt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */; };
@@ -84,6 +85,7 @@
 /* Begin PBXFileReference section */
 		1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone.swift; sourceTree = "<group>"; };
 		1557A0592CD26FA6004E1D13 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		15741EA42CEFE2F400CDE4F9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		159F516D2CD55871001F5FFC /* Nutrivance.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Nutrivance.entitlements; sourceTree = "<group>"; };
 		159F516E2CD5591E001F5FFC /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
 		159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad.swift; sourceTree = "<group>"; };
@@ -210,6 +212,7 @@
 		15D7FF942CD142690048E050 = {
 			isa = PBXGroup;
 			children = (
+				15741EA42CEFE2F400CDE4F9 /* README.md */,
 				15D7FF9F2CD142690048E050 /* Nutrivance */,
 				15D7FFB22CD1426A0048E050 /* NutrivanceTests */,
 				15D7FFBC2CD1426A0048E050 /* NutrivanceUITests */,
@@ -433,6 +436,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */,
 				15D7FFAA2CD1426A0048E050 /* Preview Assets.xcassets in Resources */,
 				15D7FFA72CD1426A0048E050 /* Assets.xcassets in Resources */,
 			);
