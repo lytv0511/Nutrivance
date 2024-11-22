@@ -23,31 +23,28 @@ A nutrition and wellness advancement platform designed to help users achieve the
 1. Clone the repository
 ```bash
 git clone https://github.com/yourusername/nutrivance.git
+```
 2. Install dependencies
 ```bash
 cd nutrivance && npm install
-3. Configure environment variables
-   - Copy `.env.example` to `.env`
-   - Update the variables with your configuration
+```
+3. Build and run the application on your iOS device or simulator
 
-4. Start the application
-```bash
-npm run start
 ## Usage
 
-1. Create an account or log in
-2. Complete the initial health assessment
-3. Set your wellness goals
-4. Track your daily nutrition
-5. Monitor your progress through the dashboard
+1. Launch the app on your iOS device
+2. Select a nutrient category from the interactive grid
+3. Use the wheel picker for precise nutrient selection
+4. Long press the scanner button to analyze nutrition labels
+5. View detailed nutrient information
 
 ## Tech Stack
 
-- Frontend: React.js
-- Backend: Node.js with Express
-- Database: MongoDB
-- Authentication: JWT
-- API Documentation: Swagger
+- Frontend: SwiftUI
+- Backend: Swift
+- Database: SwiftData
+- Camera: VisionKit
+- Platform: iOS 17+
 
 ## Contributing
 
@@ -76,6 +73,6 @@ Project Link: [https://github.com/yourusername/nutrivance](https://github.com/yo
 
 - 0.1
   - Initial Release
-  - Basic feature implementation
-  - Core functionality established
+  - Interactive nutrient selection interface
+  - Nutrition label scanning capability
 
