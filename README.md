@@ -14,9 +14,10 @@ A nutrition and wellness advancement platform designed to help users achieve the
 
 ### Prerequisites
 
-- Node.js v14 or higher
-- MongoDB v4.4+
-- npm or yarn package manager
+- Xcode 15+
+- iOS 17+ device or simulator
+- macOS Sonoma or later for development
+- Apple Developer Account (for deployment)
 
 ### Installation
 
