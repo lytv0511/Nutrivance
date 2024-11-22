@@ -23,7 +23,7 @@ A nutrition and wellness advancement platform designed to help users achieve the
 
 1. Clone the repository
 ```bash
-git clone https://github.com/yourusername/nutrivance.git
+git clone https://github.com/lytv0511/nutrivance.git
 ```
 2. Install dependencies
 ```bash
@@ -61,8 +61,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Contact
 
-Project Lead - [@yourusername](https://twitter.com/yourusername)
-Project Link: [https://github.com/yourusername/nutrivance](https://github.com/yourusername/nutrivance)
+Project Lead - [@lytv0511](https://twitter.com/lytv0511)
+Project Link: [https://github.com/lytv0511/nutrivance](https://github.com/lytv0511/nutrivance)
 
 ## Acknowledgments
 
