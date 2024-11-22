@@ -14,8 +14,8 @@ A nutrition and wellness advancement platform designed to help users achieve the
 
 ### Prerequisites
 
-- Xcode 15+
-- iOS 17+ device or simulator
+- Xcode 16+
+- iOS or iPadOS 18+ device or simulator
 - macOS Sonoma or later for development
 - Apple Developer Account (for deployment)
 
@@ -33,7 +33,7 @@ cd nutrivance && npm install
 
 ## Usage
 
-1. Launch the app on your iOS device
+1. Launch the app on your iOS or iPadOS device
 2. Select a nutrient category from the interactive grid
 3. Use the wheel picker for precise nutrient selection
 4. Long press the scanner button to analyze nutrition labels
@@ -41,11 +41,11 @@ cd nutrivance && npm install
 
 ## Tech Stack
 
-- Frontend: SwiftUI
-- Backend: Swift
-- Database: SwiftData
+- Frontend: SwiftUI, UIKit
+- Backend: Swift, Objective-C, Objective-C++, Metal
+- Frameworks: HealthKit
 - Camera: VisionKit
-- Platform: iOS 17+
+- Platform: iOS 18+ or iPadOS 18+
 
 ## Contributing
 
