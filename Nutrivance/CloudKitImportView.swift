@@ -1,23 +1,22 @@
 //
-//  HealthKitImportView.swift
+//  CloudKitImportView.swift
 //  Nutrivance
 //
-//  Created by Vincent Leong on 11/20/24.
+//  Created by Vincent Leong on 11/22/24.
 //
+
+import Foundation
+import SwiftUI
+import CloudKit
 
 import SwiftUI
 
-struct HealthKitImportView: View {
+struct CloudKitImportView_Mac: View {
     let nutrients: [NutrientData]
-    @StateObject private var healthStore = HealthKitManager()
+    @StateObject private var cloudKitManager = CloudKitManager() // Using the CloudKitManager to manage CloudKit operations
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedNutrients: Set<String>
-    
-    init(nutrients: [NutrientData]) {
-        self.nutrients = nutrients
-        _selectedNutrients = State(initialValue: Set(nutrients.map { $0.name }))
-    }
-    
+    @State private var selectedNutrients: Set<String> = []
+
     var body: some View {
         NavigationView {
             List {
@@ -32,17 +31,16 @@ struct HealthKitImportView: View {
                             }
                         }
                     )) {
-                        Text("\(nutrient.name.capitalized): \(String(format: "%.1f", nutrient.value)) \(nutrient.unit)")
-
+                        Text("\(nutrient.name): \(nutrient.value) \(nutrient.unit)")
                     }
                 }
             }
-            .navigationTitle("Import to Health")
+            .navigationTitle("Import to CloudKit")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Import") {
                         let selectedData = nutrients.filter { selectedNutrients.contains($0.name) }
-                        healthStore.saveNutrients(selectedData) { success in
+                        cloudKitManager.saveNutrientsToCloud(selectedData) { success in
                             if success {
                                 dismiss()
                             }
@@ -54,9 +52,6 @@ struct HealthKitImportView: View {
                         dismiss()
                     }
                 }
-            }
-            .onAppear {
-                selectedNutrients = Set(nutrients.map { $0.name })
             }
         }
     }

@@ -21,24 +21,33 @@ struct ContentView_iPhone_alt: View {
     
     var body: some View {
         TabView {
-            // Home Tab
             Tab("Home", systemImage: "house.fill") {
                 HomeView()
             }
             .customizationID("iPad.tab.home")
+            .defaultVisibility(.visible, for: .tabBar)
             
-            // Camera Tab
+            Tab("Water", systemImage: "drop.fill") {
+                NutrientDetailView(nutrientName: "Water")
+            }
+            .customizationID("iPad.tab.water")
+            .defaultVisibility(.visible, for: .tabBar)
+            
             Tab("Labels", systemImage: "doc.text.viewfinder") {
                 NutritionScannerView()
             }
             .customizationID("iPad.tab.camera")
             .defaultVisibility(.visible, for: .tabBar)
-
-            // Nutrients Tab with List
+            
             Tab("Nutrients", systemImage: "leaf") {
                 NutrientListView()
             }
             .customizationID("iPad.tab.nutrients")
+        
+            Tab(role: .search) {
+                SearchView()
+            }
+            .customizationID("iPad.tab.search")
         }
 //        .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)

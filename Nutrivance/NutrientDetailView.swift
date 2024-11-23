@@ -127,23 +127,27 @@ struct NutrientDetailView: View {
 
     // Computed property to determine the display value and unit
     private var displayValue: String {
-            let unit: String
-            switch nutrientName {
-            case "Calories":
-                unit = "kcal"
-            case "Water":
-                unit = "L"
-            default:
-                unit = "g"
-            }
-            
-            // Only append the unit if the nutrient value is not nil
-            if let currentNutrient = todayCurrentNutrient {
-                return "\(String(format: "%.2f", currentNutrient)) \(unit)"
-            } else {
-                return "Fetching..." // Only return "Fetching..." when data is not yet available
-            }
+        let unit: String
+        switch nutrientName {
+        case "Calories":
+            unit = "kcal"
+        case "Water":
+            unit = "L"
+        default:
+            unit = "g"
         }
+        
+        // Check if todayCurrentNutrient is nil, not zero
+        if let currentNutrient = todayCurrentNutrient {
+            return "\(String(format: "%.2f", currentNutrient)) \(unit)"
+        } else {
+            #if targetEnvironment(macCatalyst)
+            return "Please see Health data on iPhone or iPad."
+            #else
+            return "Fetching..." // Only when data is actually unavailable
+            #endif
+        }
+    }
     
     var body: some View {
         ZStack {
@@ -198,20 +202,6 @@ struct NutrientDetailView: View {
                 }
                 .edgesIgnoringSafeArea(.top)
                 .contentShape(Rectangle())
-                .gesture(
-                    DragGesture()
-                        .onEnded { value in
-                            if horizontalSizeClass == .compact {
-                                if value.startLocation.x < 30 && value.translation.width > geometry.size.width / 5 {
-                                    presentationMode.wrappedValue.dismiss()
-                                }
-                            } else {
-                                if value.startLocation.x < 30 && value.translation.width > geometry.size.width / 10 {
-                                    presentationMode.wrappedValue.dismiss()
-                                }
-                            }
-                        }
-                )
                 .onAppear {
                     healthKitManager.fetchTodayNutrientData(for: nutrientName) { result, error in
                         if let error = error {

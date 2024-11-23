@@ -5,6 +5,7 @@
 //  Created by Vincent Leong on 11/7/24.
 //
 
+#if canImport(ActivityKit) && os(iOS)  // Ensure it only compiles for iOS with ActivityKit support
 import ActivityKit
 import WidgetKit
 import SwiftUI
@@ -78,3 +79,5 @@ extension WaterWidgetAttributes.ContentState {
     WaterWidgetAttributes.ContentState.smiley
     WaterWidgetAttributes.ContentState.starEyes
 }
+
+#endif

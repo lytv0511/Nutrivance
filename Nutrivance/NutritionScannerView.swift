@@ -33,6 +33,7 @@ public struct NutritionScannerView: View {
             }
             .disabled(nutritionScanner.isProcessing)
             .scaleEffect(nutritionScanner.isProcessing ? 0.9 : 1.0)
+            .padding(100)
             .confirmationDialog("Choose Photo Source", isPresented: $showingSourceSelection) {
                 Button("Camera") {
                     sourceType = .camera
@@ -76,6 +77,7 @@ public struct NutritionScannerView: View {
             .sheet(isPresented: $showingImportOptions) {
                 HealthKitImportView(nutrients: convertToNutrientData(nutritionScanner.detectedNutrition))
             }
+            .padding(100)
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -125,7 +127,11 @@ public struct NutritionScannerView: View {
                 let nsLine = line as NSString
                 let name = nsLine.substring(with: match.range(at: 1))
                 if let value = Double(nsLine.substring(with: match.range(at: 2))) {
-                    let unit = match.range(at: 3).location != NSNotFound ? nsLine.substring(with: match.range(at: 3)) : "g"
+                    let unit = switch name.lowercased() {
+                        case "calories": "kcal"
+                        case "water": "ml"
+                        default: match.range(at: 3).location != NSNotFound ? nsLine.substring(with: match.range(at: 3)) : "g"
+                    }
                     return NutritionScannerViewModel.NutritionDetection(name: name, value: value, unit: unit)
                 }
             }
