@@ -24,32 +24,31 @@ struct ContentView_iPhone_alt: View {
             Tab("Home", systemImage: "house.fill") {
                 HomeView()
             }
-            .customizationID("iPad.tab.home")
+            .customizationID("iPhone.tab.home")
             .defaultVisibility(.visible, for: .tabBar)
             
-            Tab("Water", systemImage: "drop.fill") {
-                NutrientDetailView(nutrientName: "Water")
+            Tab("Insights", systemImage: "chart.line.uptrend.xyaxis") {
+                HealthInsightsView()
             }
-            .customizationID("iPad.tab.water")
+            .customizationID("iPhone.tab.insights")
             .defaultVisibility(.visible, for: .tabBar)
             
             Tab("Labels", systemImage: "doc.text.viewfinder") {
                 NutritionScannerView()
             }
-            .customizationID("iPad.tab.camera")
+            .customizationID("iPhone.tab.camera")
             .defaultVisibility(.visible, for: .tabBar)
             
             Tab("Nutrients", systemImage: "leaf") {
                 NutrientListView()
             }
-            .customizationID("iPad.tab.nutrients")
+            .customizationID("iPhone.tab.nutrients")
         
             Tab(role: .search) {
                 SearchView()
             }
-            .customizationID("iPad.tab.search")
+            .customizationID("iPhone.tab.search")
         }
-//        .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)
     }
 }

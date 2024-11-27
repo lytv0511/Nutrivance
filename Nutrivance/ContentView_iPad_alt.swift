@@ -116,12 +116,12 @@ struct ContentView_iPad_alt: View {
                 .customizationID("iPad.tab.home")
                 .defaultVisibility(.visible, for: .tabBar)
                 
-                Tab("Water", systemImage: "drop.fill") {
-                    NutrientDetailView(nutrientName: "Water")
+                Tab("Insights", systemImage: "chart.line.uptrend.xyaxis") {
+                    HealthInsightsView()
                 }
-                .customizationID("iPad.tab.water")
+                .customizationID("iPad.tab.insights")
                 .defaultVisibility(.visible, for: .tabBar)
-                
+            
                 Tab("Labels", systemImage: "doc.text.viewfinder") {
                     NutritionScannerView()
                 }
@@ -157,6 +157,13 @@ struct ContentView_iPad_alt: View {
                 }
                 .customizationID("iPad.tab.fats")
                 .defaultVisibility(.hidden, for: .tabBar)
+                
+                Tab("Water", systemImage: "drop.fill") {
+                    NutrientDetailView(nutrientName: "Water")
+                }
+                .customizationID("iPad.tab.water")
+                .defaultVisibility(.visible, for: .tabBar)
+                
             } header: {
                 Text("Macronutrients")
                     .font(.headline)

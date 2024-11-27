@@ -1,150 +1,74 @@
 import HealthKit
-import Combine
+import SwiftUI
 
 class HealthKitManager: ObservableObject {
-    let healthStore = HKHealthStore()
-    @Published var isAuthorized = false
-
-    // Define the types of data you want to read
-    let healthDataTypes: Set<HKSampleType> = {
-        var types = Set<HKSampleType>()
-        if let carbs = HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates) {
-            types.insert(carbs)
+    private let healthStore = HKHealthStore()
+    
+    struct NutritionEntry: Identifiable {
+        let id: UUID
+        let timestamp: Date
+        let nutrients: [String: Double]
+        let source: EntrySource
+        let mealType: String?
+        
+        enum EntrySource {
+            case scanner
+            case search
+            case savedMeal
         }
-        if let protein = HKQuantityType.quantityType(forIdentifier: .dietaryProtein) {
-            types.insert(protein)
-        }
-        if let fat = HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal) {
-            types.insert(fat)
-        }
-        if let calories = HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed) {
-            types.insert(calories)
-        }
-        if let water = HKQuantityType.quantityType(forIdentifier: .dietaryWater) {
-            types.insert(water)
-        }
-        return types
-    }()
-
+    }
+    
     func requestAuthorization(completion: @escaping (Bool, Error?) -> Void) {
-        if HKHealthStore.isHealthDataAvailable() {
-            print("Good")
-        } else {
-            print ("Bad")
-        }
-            // Check if running on Mac Catalyst
-            #if targetEnvironment(macCatalyst)
-            healthStore.requestAuthorization(toShare: [], read: healthDataTypes) { success, error in
-                DispatchQueue.main.async {
-                    self.isAuthorized = success
-                    if success {
-                        print("HealthKit authorization granted on Mac Catalyst")
-                    } else if let error = error {
-                        print("Authorization error: \(error.localizedDescription)")
-                    }
-                    completion(success, error)
-                }
+        let types = Set([
+            HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryProtein)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryWater)!
+        ])
+        
+        healthStore.requestAuthorization(toShare: types, read: types) { success, error in
+            DispatchQueue.main.async {
+                completion(success, error)
             }
-            #else
-            // iOS request authorization as usual
-            healthStore.requestAuthorization(toShare: [], read: healthDataTypes) { success, error in
-                DispatchQueue.main.async {
-                    self.isAuthorized = success
-                    if success {
-                        print("HealthKit authorization granted on iOS")
-                    } else if let error = error {
-                        print("Authorization error: \(error.localizedDescription)")
-                    }
-                    completion(success, error)
-                }
-            }
-            #endif
         }
-
-    func fetchNutrientData(for nutrient: String, completion: @escaping (Double?, Error?) -> Void) {
-        guard let type = nutritionTypeFor(nutrient) else {
+    }
+    
+    func fetchTodayNutrientData(for nutrientType: String, completion: @escaping (Double?, Error?) -> Void) {
+        guard let type = quantityType(for: nutrientType) else {
             completion(nil, nil)
             return
         }
         
-        let query = HKStatisticsQuery(quantityType: type,
-                                     quantitySamplePredicate: nil,
-                                     options: .cumulativeSum) { _, result, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    completion(nil, error)
-                    return
-                }
-                let value = result?.sumQuantity()?.doubleValue(for: self.unitFor(nutrient))
-                completion(value, nil)
-            }
-        }
-        healthStore.execute(query)
-    }
-
-    func fetchTodayNutrientData(for nutrient: String, completion: @escaping (Double?, Error?) -> Void) {
-        let nutrientType: HKQuantityType?
-        let unit: HKUnit
-
-        switch nutrient.lowercased() {
-        case "calories":
-            nutrientType = HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)
-            unit = HKUnit.kilocalorie()
-        case "carbs", "carbohydrates":
-            nutrientType = HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)
-            unit = HKUnit.gram()
-        case "water":
-            nutrientType = HKQuantityType.quantityType(forIdentifier: .dietaryWater)
-            unit = HKUnit.liter()
-        case "protein":
-            nutrientType = HKQuantityType.quantityType(forIdentifier: .dietaryProtein)
-            unit = HKUnit.gram()
-        case "fats":
-            nutrientType = HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)
-            unit = HKUnit.gram()
-        default:
-            nutrientType = nil
-            unit = HKUnit.gram()
-        }
-
-
-        guard let type = nutrientType else {
-            completion(nil, NSError(domain: "HealthKitManagerError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid nutrient type."]))
-            return
-        }
-
+        let calendar = Calendar.current
         let now = Date()
-        let startOfDay = Calendar.current.startOfDay(for: now)
+        let startOfDay = calendar.startOfDay(for: now)
         let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: now, options: .strictStartDate)
-
-        let query = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, error in
-            guard let result = result, let sum = result.sumQuantity() else {
-                completion(nil, error)
-                return
+        
+        let query = HKStatisticsQuery(quantityType: type,
+                                    quantitySamplePredicate: predicate,
+                                    options: .cumulativeSum) { _, result, error in
+            DispatchQueue.main.async {
+                let value = result?.sumQuantity()?.doubleValue(for: self.unit(for: nutrientType))
+                completion(value, error)
             }
-            let total = sum.doubleValue(for: unit)
-            completion(total, nil)
         }
-
+        
         healthStore.execute(query)
     }
 
-
-
-    // New save functionality
+    
     func saveNutrients(_ nutrients: [NutrientData], completion: @escaping (Bool) -> Void) {
-        var samples: [HKQuantitySample] = []
-        
-        for nutrient in nutrients {
-            if let type = nutritionTypeFor(nutrient.name) {
-                let unit = nutrient.name.lowercased() == "water" ? HKUnit.liter() :
-                          nutrient.name.lowercased() == "calories" ? HKUnit.kilocalorie() :
-                          HKUnit.gram()
-                
-                let quantity = HKQuantity(unit: unit, doubleValue: nutrient.value)
-                let sample = HKQuantitySample(type: type, quantity: quantity, start: Date(), end: Date())
-                samples.append(sample)
-            }
+        let entryId = UUID()
+        let samples = nutrients.compactMap { nutrient -> HKQuantitySample? in
+            guard let type = quantityType(for: nutrient.name) else { return nil }
+            let quantity = HKQuantity(unit: unit(for: nutrient.name), doubleValue: nutrient.value)
+            let metadata: [String: Any] = [
+                "entryId": entryId.uuidString,
+                "source": "manual",
+                "mealType": "meal"
+            ]
+            return HKQuantitySample(type: type, quantity: quantity, start: Date(), end: Date(), metadata: metadata)
         }
         
         healthStore.save(samples) { success, error in
@@ -153,36 +77,157 @@ class HealthKitManager: ObservableObject {
             }
         }
     }
-
-
-    private func nutritionTypeFor(_ name: String) -> HKQuantityType? {
-        switch name.lowercased() {
+    
+    func fetchNutrientData(for nutrientType: String, completion: @escaping (Double?, Error?) -> Void) {
+        guard let type = quantityType(for: nutrientType) else {
+            completion(nil, nil)
+            return
+        }
+        
+        let calendar = Calendar.current
+        let now = Date()
+        let startOfDay = calendar.startOfDay(for: now)
+        let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: now, options: .strictStartDate)
+        
+        let query = HKStatisticsQuery(quantityType: type,
+                                    quantitySamplePredicate: predicate,
+                                    options: .cumulativeSum) { _, result, error in
+            DispatchQueue.main.async {
+                let value = result?.sumQuantity()?.doubleValue(for: self.unit(for: nutrientType))
+                completion(value, error)
+            }
+        }
+        
+        healthStore.execute(query)
+    }
+    
+    func fetchNutrientHistory(from startDate: Date, to endDate: Date, completion: @escaping ([NutritionEntry]) -> Void) {
+        let types = [
+            (HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!, "calories"),
+            (HKObjectType.quantityType(forIdentifier: .dietaryProtein)!, "protein"),
+            (HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!, "fats"),
+            (HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates)!, "carbs"),
+            (HKObjectType.quantityType(forIdentifier: .dietaryWater)!, "water")
+        ]
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        var entriesByID: [String: NutritionEntry] = [:]
+        let group = DispatchGroup()
+        
+        for (type, nutrientKey) in types {
+            group.enter()
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                defer { group.leave() }
+                
+                guard let samples = samples as? [HKQuantitySample] else { return }
+                
+                for sample in samples {
+                    let entryId = sample.metadata?["entryId"] as? String ?? UUID().uuidString
+                    let source = sample.metadata?["source"] as? String ?? "unknown"
+                    let mealType = sample.metadata?["mealType"] as? String
+                    
+                    if var entry = entriesByID[entryId] {
+                        var updatedNutrients = entry.nutrients
+                        updatedNutrients[nutrientKey] = sample.quantity.doubleValue(for: self.unit(for: nutrientKey))
+                        entriesByID[entryId] = NutritionEntry(
+                            id: entry.id,
+                            timestamp: entry.timestamp,
+                            nutrients: updatedNutrients,
+                            source: entry.source,
+                            mealType: entry.mealType
+                        )
+                    } else {
+                        let entrySource: NutritionEntry.EntrySource = {
+                            switch source {
+                            case "scanner": return .scanner
+                            case "search": return .search
+                            default: return .savedMeal
+                            }
+                        }()
+                        
+                        entriesByID[entryId] = NutritionEntry(
+                            id: UUID(uuidString: entryId) ?? UUID(),
+                            timestamp: sample.startDate,
+                            nutrients: [nutrientKey: sample.quantity.doubleValue(for: self.unit(for: nutrientKey))],
+                            source: entrySource,
+                            mealType: mealType
+                        )
+                    }
+                }
+            }
+            
+            healthStore.execute(query)
+        }
+        
+        group.notify(queue: .main) {
+            let entries = Array(entriesByID.values).sorted { $0.timestamp > $1.timestamp }
+            completion(entries)
+        }
+    }
+    
+    func deleteNutrientData(for id: UUID, completion: @escaping (Bool) -> Void) {
+        let types = [
+            HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryProtein)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryWater)!
+        ]
+        
+        let group = DispatchGroup()
+        var success = true
+        
+        for type in types {
+            group.enter()
+            let predicate = HKQuery.predicateForObjects(withMetadataKey: "entryId", operatorType: .equalTo, value: id.uuidString)
+            
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                guard let samples = samples else {
+                    group.leave()
+                    return
+                }
+                
+                self.healthStore.delete(samples) { result, error in
+                    if !result || error != nil {
+                        success = false
+                    }
+                    group.leave()
+                }
+            }
+            
+            healthStore.execute(query)
+        }
+        
+        group.notify(queue: .main) {
+            completion(success)
+        }
+    }
+    
+    private func quantityType(for nutrientType: String) -> HKQuantityType? {
+        switch nutrientType.lowercased() {
         case "calories":
-            return HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)
+            return HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)
         case "protein":
-            return HKObjectType.quantityType(forIdentifier: .dietaryProtein)
-        case "fat":
-            return HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)
-        case "carbohydrates", "carbs":
-            return HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates)
+            return HKQuantityType.quantityType(forIdentifier: .dietaryProtein)
+        case "carbs":
+            return HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)
+        case "fats":
+            return HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)
         case "water":
-            return HKObjectType.quantityType(forIdentifier: .dietaryWater)
+            return HKQuantityType.quantityType(forIdentifier: .dietaryWater)
         default:
             return nil
         }
     }
     
-    private func unitFor(_ nutrient: String) -> HKUnit {
-        switch nutrient.lowercased() {
-        case "Calories":
+    private func unit(for nutrientType: String) -> HKUnit {
+        switch nutrientType.lowercased() {
+        case "calories":
             return .kilocalorie()
-        case "Protein", "Carbs", "Fats", "Fiber":
-            return .gram()
-        case "Water":
-            return .liter()
+        case "water":
+            return .literUnit(with: .milli)
         default:
             return .gram()
         }
     }
-
 }
