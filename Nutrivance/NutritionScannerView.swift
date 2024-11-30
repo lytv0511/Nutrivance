@@ -3,142 +3,222 @@ import Vision
 import HealthKit
 import UIKit
 
+// ViewModel for managing nutrition scanning
 class NutritionScannerViewModel: ObservableObject {
     @Published var isProcessing = false
     @Published var detectedNutrition: [NutritionDetection] = []
-    
-    struct NutritionDetection: Equatable {
+
+    struct NutritionDetection: Identifiable, Equatable {
+        let id = UUID()
         let name: String
-        let value: Double
+        var value: Double
         let unit: String
     }
 }
 
+// Main View for the Nutrition Scanner
 public struct NutritionScannerView: View {
     @StateObject private var nutritionScanner = NutritionScannerViewModel()
-    @StateObject private var healthStore = HealthKitManager()
-    @State private var showingImportOptions = false
+    @StateObject private var healthStore = HealthKitManager() // HealthKit integration
     @State private var showingImagePicker = false
-    @State private var showingSourceSelection = false
+    @State private var showingSourceSelection = false  // New state for source selection dialog
     @State private var selectedImage: UIImage?
-    @State private var sourceType: UIImagePickerController.SourceType = .camera
+    @State private var newValue: String = ""
+    @State private var showEditSheet: Bool = false
+    @State private var selectedNutrient: NutritionScannerViewModel.NutritionDetection?
+    @State private var sourceType: UIImagePickerController.SourceType = .camera  // Default to camera
     
     public var body: some View {
-        VStack {
-            Button(action: {
-                showingSourceSelection = true
-            }) {
-                Label("Scan Nutrition Label", systemImage: "doc.text.viewfinder")
-                    .font(.title2)
-            }
-            .disabled(nutritionScanner.isProcessing)
-            .scaleEffect(nutritionScanner.isProcessing ? 0.9 : 1.0)
-            .padding(100)
-            .confirmationDialog("Choose Photo Source", isPresented: $showingSourceSelection) {
-                Button("Camera") {
-                    sourceType = .camera
-                    showingImagePicker = true
+        NavigationStack {
+            VStack {
+                HStack {
+                    Text("Labels")
+                        .font(.largeTitle)
+                        .bold()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                    Spacer()
                 }
-                Button("Photo Library") {
-                    sourceType = .photoLibrary
-                    showingImagePicker = true
-                }
-            }
-            
-            if nutritionScanner.isProcessing {
-                ProgressView("Analyzing nutrition label...")
-                    .transition(.scale.combined(with: .opacity))
-            } else if !nutritionScanner.detectedNutrition.isEmpty {
-                detectedNutrientsView
-            }
-        }
-        .animation(.spring(), value: nutritionScanner.isProcessing)
-        .animation(.spring(), value: nutritionScanner.detectedNutrition)
-        .fullScreenCover(isPresented: $showingImagePicker) {
-            ImagePicker(selectedImage: $selectedImage, sourceType: sourceType)
-        }
-        .onChange(of: selectedImage) { oldValue, newValue in
-            guard let image = newValue else { return }
-            nutritionScanner.isProcessing = true
-            processImage(image)
-        }
-    }
-    
-    private var detectedNutrientsView: some View {
-        VStack {
-            NutritionResultsView(detections: nutritionScanner.detectedNutrition)
-            
-            Button(action: {
-                showingImportOptions = true
-            }) {
-                Label("Import to Health", systemImage: "heart.fill")
-                    .foregroundColor(.green)
-            }
-            .sheet(isPresented: $showingImportOptions) {
-                HealthKitImportView(nutrients: convertToNutrientData(nutritionScanner.detectedNutrition))
-            }
-            .padding(100)
-        }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-    
-    private func convertToNutrientData(_ detections: [NutritionScannerViewModel.NutritionDetection]) -> [NutrientData] {
-        detections.map { detection in
-            NutrientData(
-                name: detection.name,
-                value: detection.value,
-                unit: detection.unit
-            )
-        }
-    }
-    private func processResults(_ results: [Any]) -> [NutritionScannerViewModel.NutritionDetection] {
-        // Convert the detector results to NutritionDetection objects
-        // Implementation depends on the format of your detector results
-        return []
-    }
-    private func processNutritionText(_ text: String) {
-        let lines = text.components(separatedBy: .newlines)
-        var detectedNutrients: [NutritionScannerViewModel.NutritionDetection] = []
-        
-        for line in lines {
-            // Match patterns like "Protein 12g" or "Calories 240"
-            if let nutrient = extractNutrient(from: line) {
-                detectedNutrients.append(nutrient)
-            }
-        }
-        
-        DispatchQueue.main.async {
-            nutritionScanner.detectedNutrition = detectedNutrients
-            nutritionScanner.isProcessing = false
-        }
-    }
-    private func extractNutrient(from line: String) -> NutritionScannerViewModel.NutritionDetection? {
-        let patterns = [
-            // Matches "Protein 12g" or "Protein: 12g"
-            "^(Calories|Protein|Carbs|Fats|Fiber)\\s*:?\\s*(\\d+\\.?\\d*)\\s*(g|kcal)?$",
-            // Matches "Total Fat 12g" or "Total Fat: 12g"
-            "^Total\\s+(Fat|Carbohydrate|Protein)\\s*:?\\s*(\\d+\\.?\\d*)\\s*(g|kcal)?$"
-        ]
-        
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-               let match = regex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.count)) {
                 
-                let nsLine = line as NSString
-                let name = nsLine.substring(with: match.range(at: 1))
-                if let value = Double(nsLine.substring(with: match.range(at: 2))) {
-                    let unit = switch name.lowercased() {
-                        case "calories": "kcal"
-                        case "water": "ml"
-                        default: match.range(at: 3).location != NSNotFound ? nsLine.substring(with: match.range(at: 3)) : "g"
+                // Image preview or placeholder
+                ZStack {
+                    if let image = selectedImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .cornerRadius(12)
+                            .frame(height: 400)
+                    } else {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.gray.opacity(0.2))
+                            .frame(height: 200)
+                            .overlay(
+                                VStack {
+                                    Image(systemName: "photo.on.rectangle.angled")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 50, height: 50)
+                                        .foregroundColor(.gray)
+                                    Text("No Image Selected")
+                                        .foregroundColor(.gray)
+                                }
+                            )
                     }
-                    return NutritionScannerViewModel.NutritionDetection(name: name, value: value, unit: unit)
+                    
+                    // Overlay progress indicator
+                    if nutritionScanner.isProcessing {
+                        Color.black.opacity(0.5)
+                            .cornerRadius(12)
+                            .overlay(
+                                ProgressView("Analyzing...")
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .foregroundColor(.white)
+                            )
+                    }
                 }
+                .padding()
+                
+                // Scan Button with Source Selection
+                Button(action: {
+                    showingSourceSelection = true  // Trigger source selection dialog
+                }) {
+                    Label("Scan Nutrition Label", systemImage: "doc.text.viewfinder")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(LinearGradient(gradient: Gradient(colors: [Color.blue, Color.cyan]), startPoint: .leading, endPoint: .trailing))
+                        .cornerRadius(12)
+                        .shadow(radius: 5)
+                }
+                .padding(.horizontal)
+                .hoverEffect(.highlight)
+                .confirmationDialog("Choose Photo Source", isPresented: $showingSourceSelection) {
+                    Button("Camera") {
+                        sourceType = .camera
+                        showingImagePicker = true
+                    }
+                    Button("Photo Library") {
+                        sourceType = .photoLibrary
+                        showingImagePicker = true
+                    }
+                }
+                
+                // Detected Nutrients List
+                if !nutritionScanner.detectedNutrition.isEmpty {
+                    List {
+                        ForEach(nutritionScanner.detectedNutrition) { nutrient in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(nutrient.name.capitalized)
+                                        .font(.headline)
+                                    Text("\(nutrient.value, specifier: "%.1f") \(nutrient.unit)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: nutrientIcon(for: nutrient.name))
+                                    .foregroundColor(.blue)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    deleteNutrient(nutrient)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                
+                                Button {
+                                    editNutrient(nutrient) // Trigger edit nutrient
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(.yellow)
+                            }
+                        }
+                    }
+                    
+                    // Sheet for editing the nutrient value
+                    .sheet(isPresented: $showEditSheet) {
+                        VStack {
+                            Text("Edit \(selectedNutrient?.name ?? "")")
+                                .font(.title2)
+                                .bold()
+                                .padding()
+                            
+                            TextField("Enter new value", text: $newValue)
+                                .keyboardType(.decimalPad) // Allow decimal input
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .padding()
+                            
+                            Button(action: {
+                                if let newValue = Double(newValue), let nutrient = selectedNutrient {
+                                    updateNutrientValue(nutrient, newValue: newValue) // Update the nutrient value
+                                    showEditSheet = false // Close the sheet
+                                }
+                            }) {
+                                Text("Save")
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Color.blue)
+                                    .cornerRadius(8)
+                            }
+                            
+                            Button(action: {
+                                showEditSheet = false // Close the sheet
+                            }) {
+                                Text("Cancel")
+                                    .foregroundColor(.red)
+                                    .padding()
+                                    .background(Color.white)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        .padding()
+                    }
+                    .listStyle(InsetGroupedListStyle())
+                    
+                    // Import to Health Button
+                    Button(action: importToHealth) {
+                        Label("Import to Health", systemImage: "heart.fill")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.green)
+                            .cornerRadius(12)
+                            .shadow(radius: 5)
+                    }
+                    .padding(.horizontal)
+                    .hoverEffect(.highlight)
+                }
+                
+                Spacer()
+            }
+            .sheet(isPresented: $showingImagePicker) {
+                ImagePicker(selectedImage: $selectedImage, sourceType: sourceType)
+            }
+            .onChange(of: selectedImage) { _, newValue in
+                guard let image = newValue else { return }
+                nutritionScanner.isProcessing = true
+                processImage(image)
             }
         }
-        return nil
     }
     
+    // Nutrient Icon Mapping
+    private func nutrientIcon(for nutrient: String) -> String {
+        switch nutrient.lowercased() {
+        case "calories": return "flame.fill"
+        case "protein": return "bolt.fill"
+        case "carbs": return "leaf.fill"
+        case "fats": return "drop.fill"
+        case "fiber": return "tree.fill"
+        case "water": return "drop.fill"
+        default: return "questionmark.circle.fill"
+        }
+    }
+    
+    // Image Processing Logic
     private func processImage(_ image: UIImage) {
         let requestHandler = VNImageRequestHandler(cgImage: image.cgImage!, options: [:])
         let request = VNRecognizeTextRequest { request, error in
@@ -156,7 +236,124 @@ public struct NutritionScannerView: View {
         
         try? requestHandler.perform([request])
     }
+    
+    private func deleteNutrient(_ nutrient: NutritionScannerViewModel.NutritionDetection) {
+        if let index = nutritionScanner.detectedNutrition.firstIndex(of: nutrient) {
+            nutritionScanner.detectedNutrition.remove(at: index)
+        }
+    }
+    
+    private func editNutrient(_ nutrient: NutritionScannerViewModel.NutritionDetection) {
+        // Create a mutable copy of the nutrient
+        if let index = nutritionScanner.detectedNutrition.firstIndex(where: { $0.id == nutrient.id }) {
+            var updatedNutrient = nutritionScanner.detectedNutrition[index]
+            
+            // Show the alert to edit the value
+            let alert = UIAlertController(title: "Edit \(updatedNutrient.name.capitalized)", message: "Enter new value for \(updatedNutrient.name.capitalized)", preferredStyle: .alert)
+            
+            alert.addTextField { textField in
+                textField.placeholder = "New Value"
+                textField.keyboardType = .decimalPad
+                textField.text = "\(updatedNutrient.value)"
+            }
+            
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+            
+            alert.addAction(UIAlertAction(title: "Save", style: .default, handler: { _ in
+                if let newValueText = alert.textFields?.first?.text, let newValue = Double(newValueText) {
+                    // Update the nutrient value
+                    updatedNutrient.value = newValue
+                    
+                    // Replace the old nutrient with the updated one in the array
+                    nutritionScanner.detectedNutrition[index] = updatedNutrient
+                }
+            }))
+            
+            // Present the alert
+            if let rootVC = UIApplication.shared.windows.first?.rootViewController {
+                rootVC.present(alert, animated: true, completion: nil)
+            }
+        }
+    }
+    
+    private func updateNutrientValue(_ nutrient: NutritionScannerViewModel.NutritionDetection, newValue: Double) {
+        // Find the index of the selected nutrient
+        if let index = nutritionScanner.detectedNutrition.firstIndex(where: { $0.id == nutrient.id }) {
+            // Create a mutable copy of the nutrient at that index
+            var updatedNutrient = nutritionScanner.detectedNutrition[index]
+            
+            // Modify the value of the mutable copy
+            updatedNutrient.value = newValue
+            
+            // Replace the old nutrient with the updated one in the array
+            nutritionScanner.detectedNutrition[index] = updatedNutrient
+        }
+    }
+    
+    // Processing OCR Text
+    private func processNutritionText(_ text: String) {
+        let lines = text.components(separatedBy: .newlines)
+        var detectedNutrients: [NutritionScannerViewModel.NutritionDetection] = []
+        
+        for line in lines {
+            if let nutrient = extractNutrient(from: line) {
+                detectedNutrients.append(nutrient)
+            }
+        }
+        
+        DispatchQueue.main.async {
+            nutritionScanner.detectedNutrition = detectedNutrients
+            nutritionScanner.isProcessing = false
+        }
+    }
+    
+    // Extract Nutrient Information from Text
+    private func extractNutrient(from line: String) -> NutritionScannerViewModel.NutritionDetection? {
+        let patterns = [
+            #"(?i)^(Calories|Protein|Carbs|Fats|Fiber|Water)\s*:?\s*(\d+\.?\d*)\s*(g|kcal|mL)?"#,
+            #"(?i)^Total\s+(Fat|Carbohydrate|Protein)\s*:?\s*(\d+\.?\d*)\s*(g|kcal|mL)?"#
+        ]
+        
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
+                
+                let nsLine = line as NSString
+                let name = nsLine.substring(with: match.range(at: 1))
+                if let value = Double(nsLine.substring(with: match.range(at: 2))) {
+                    let unit = match.range(at: 3).location != NSNotFound ? nsLine.substring(with: match.range(at: 3)) : "g"
+                    let normalizedName = normalizeNutrientName(name)
+                    return NutritionScannerViewModel.NutritionDetection(name: normalizedName, value: value, unit: unit)
+                }
+            }
+        }
+        return nil
+    }
+    
+    // Normalize Nutrient Names
+    private func normalizeNutrientName(_ name: String) -> String {
+        switch name.lowercased() {
+        case "carb", "carbs", "carbohydrate": return "carbs"
+        case "fat", "total fat": return "fats"
+        case "protein": return "protein"
+        case "calorie", "calories": return "calories"
+        case "fiber": return "fiber"
+        case "water": return "water"
+        default: return name
+        }
+    }
 
-
-
+    // Import to HealthKit
+    private func importToHealth() {
+        let nutrientData = nutritionScanner.detectedNutrition.map { detection in
+            NutrientData(name: detection.name, value: detection.value, unit: detection.unit)
+        }
+        healthStore.saveNutrients(nutrientData) { success in
+            if success {
+                print("Data imported successfully to HealthKit")
+            } else {
+                print("Failed to import data")
+            }
+        }
+    }
 }

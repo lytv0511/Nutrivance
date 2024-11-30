@@ -17,73 +17,101 @@ struct SearchView: View {
     @FocusState private var isSearchBarFocused: Bool
     @State private var showingImportView = false
     @State private var nutrientData: [NutrientData] = []
+    @State private var showingNutrientSheet = false
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     private let nlProcessor = NLNaturalLanguageProcessor()
     private let healthStore = HKHealthStore()
     
     var body: some View {
-        Spacer(minLength: 50)
-        VStack(spacing: 20) {
-            Text("Add Nutrients")
-                .font(.largeTitle)
-                .bold()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-            
-            // Enhanced search bar
-            HStack {
-                Image(systemName: "text.bubble")
-                    .foregroundColor(.blue)
-                    .padding(.leading, 10)
-                
-                TextField("Describe what you ate...", text: $searchText)
-                    .focused($isSearchBarFocused)
-                    .foregroundColor(.primary)
-                    .padding(.vertical, 8)
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("Add Nutrients")
+                    .font(.largeTitle)
+                    .bold()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.gray.opacity(0.3))
-                    )
-                    .onSubmit {
-                        processInput()
-                    }
                 
-                Button(action: processInput) {
-                    Image(systemName: "arrow.right.circle.fill")
+                // Enhanced search bar
+                HStack {
+                    Image(systemName: "text.bubble")
                         .foregroundColor(.blue)
-                        .font(.title2)
-                }
-//                .padding(10)
-                .hoverEffect(.highlight) // Adds a subtle highlight effect for pointer interactions
-            }
-            .padding()
-            
-            if !extractedNutrients.isEmpty {
-                // Results card view with icons
-                VStack(spacing: 15) {
-                    Text("Extracted Nutrients")
-                        .font(.headline)
-                        .padding(.top)
+                        .padding(.leading, 10)
                     
-                    ForEach(Array(extractedNutrients.keys.sorted()), id: \.self) { nutrient in
-                        HStack {
-                            Image(systemName: getNutrientIcon(for: nutrient))
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 30, height: 30)
-                                .foregroundColor(.blue)
-                                .padding(.trailing, 8)
-                            
-                            Text(nutrient.capitalized)
-                                .font(.body)
-                            Spacer()
-                            Text("\(extractedNutrients[nutrient] ?? 0, specifier: "%.1f") \(getUnit(for: nutrient))")
-                                .font(.body)
-                                .foregroundColor(.blue)
-                        }
+                    TextField("Describe what you ate...", text: $searchText)
+                        .focused($isSearchBarFocused)
+                        .foregroundColor(.primary)
+                        .padding(.vertical, 8)
                         .padding(.horizontal)
-                        Divider()
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.gray.opacity(0.3))
+                        )
+                        .onSubmit {
+                            processInput()
+                        }
+                    
+                    Button(action: processInput) {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .foregroundColor(.blue)
+                            .font(.title2)
+                    }
+                    .hoverEffect(.highlight)
+                }
+                .padding()
+                
+                if extractedNutrients.isEmpty && !isSearchBarFocused {
+                    BubblesView(activeNutrients: Set(), rotationSpeed: 0.001, nutrientValues: [:])
+                        .frame(minHeight: 300)
+                } else if !extractedNutrients.isEmpty && !isSearchBarFocused {
+                    BubblesView(activeNutrients: Set(extractedNutrients.keys), rotationSpeed: 0.005, nutrientValues: extractedNutrients)
+                        .frame(minHeight: 300)
+                }
+                
+                if !extractedNutrients.isEmpty {
+                    VStack(spacing: 15) {
+                        HStack {
+                            Text("Extracted Nutrients")
+                                .font(.headline)
+                            Spacer()
+                            Button {
+                                showingNutrientSheet = true
+                            } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .foregroundStyle(.blue)
+                                    .padding()
+                            }
+                            .hoverEffect(.highlight)
+                        }
+                        .padding(.top)
+                        .padding(.horizontal)
+                        if horizontalSizeClass == .regular {
+                            ScrollView {
+                            ForEach(Array(extractedNutrients.keys.sorted()), id: \.self) { nutrient in
+                                HStack {
+                                    Image(systemName: getNutrientIcon(for: nutrient))
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 30, height: 30)
+                                        .foregroundColor(.blue)
+                                        .padding(.trailing, 8)
+
+                                    Text(nutrient.capitalized)
+                                        .font(.body)
+                                    Spacer()
+                                    Text("\(extractedNutrients[nutrient] ?? 0, specifier: "%.1f") \(getUnit(for: nutrient))")
+                                        .font(.body)
+                                        .foregroundColor(.blue)
+                                }
+                                .padding(.horizontal)
+                                Divider()
+                            }
+                        }
+                        .background(Color(.systemBackground))
+                        .cornerRadius(15)
+                        .shadow(radius: 5)
+                        .padding()
+                        }
                     }
                     
                     Button(action: saveToHealthKit) {
@@ -97,28 +125,51 @@ struct SearchView: View {
                     }
                     .padding()
                 }
-                .background(Color(.systemBackground))
-                .cornerRadius(15)
-                .shadow(radius: 5)
-                .padding()
+
+                
+                
+                Spacer()
             }
-            
-            Spacer()
-        }
-        .sheet(isPresented: $showingImportView) {
-            HealthKitImportView(nutrients: extractedNutrients.map { (name, value) in
-                let unit = name.lowercased() == "calories" ? "kcal" :
-                name.lowercased() == "water" ? "L" :
-                "g"
-                return NutrientData(
-                    name: name,
-                    value: value,
-                    unit: unit
-                )
-            })
-        }
-        .alert("Added to Health", isPresented: $showConfirmation) {
-            Button("OK", role: .cancel) { }
+            .sheet(isPresented: $showingImportView) {
+                HealthKitImportView(nutrients: extractedNutrients.map { (name, value) in
+                    let unit = name.lowercased() == "calories" ? "kcal" :
+                    name.lowercased() == "water" ? "mL" :
+                    "g"
+                    return NutrientData(
+                        name: name,
+                        value: value,
+                        unit: unit
+                    )
+                })
+            }
+            .alert("Added to Health", isPresented: $showConfirmation) {
+                Button("OK", role: .cancel) { }
+            }
+            .sheet(isPresented: $showingNutrientSheet) {
+                NavigationStack {
+                    List {
+                        ForEach(Array(extractedNutrients.keys.sorted()), id: \.self) { nutrient in
+                            HStack {
+                                Image(systemName: getNutrientIcon(for: nutrient))
+                                    .foregroundStyle(.blue)
+                                Text(nutrient.capitalized)
+                                Spacer()
+                                Text("\(extractedNutrients[nutrient] ?? 0, specifier: "%.1f") \(getUnit(for: nutrient))")
+                                    .foregroundStyle(.blue)
+                            }
+                        }
+                    }
+                    .navigationTitle("Detected Nutrients")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") {
+                                showingNutrientSheet = false
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -137,7 +188,7 @@ struct SearchView: View {
         switch nutrient.lowercased() {
         case "protein", "carbs", "fats", "fiber": return "g"
         case "calories": return "kcal"
-        case "water": return "L"
+        case "water": return "mL"  // Updated from "L" to "mL"
         default: return "g"
         }
     }
@@ -145,7 +196,7 @@ struct SearchView: View {
     private func saveToHealthKit() {
         nutrientData = extractedNutrients.map { (name, value) in
             let unit = name.lowercased() == "calories" ? "kcal" :
-                       name.lowercased() == "water" ? "L" :
+                       name.lowercased() == "water" ? "mL" :
                        "g"
             return NutrientData(
                 name: name,
@@ -180,7 +231,7 @@ class NLNaturalLanguageProcessor {
         "calories": ["calories", "calorie", "kcal", "cal"],
         "carbs": ["carbs", "carbohydrates", "carbohydrate"],
         "fats": ["fat", "fats", "lipids", "oil"],
-        "fiber": ["fiber", "fibre", "dietary fiber"],
+        "fiber": ["fiber", "fibre", "dietary fiber", "roughage"],
         "water": ["water", "h2o", "fluid"],
         "vitamins": ["vitamin", "vitamins", "vit"],
         "minerals": ["mineral", "minerals"]
@@ -245,4 +296,101 @@ class NLNaturalLanguageProcessor {
         return numberWords[word].map { Double($0) }
     }
 
+}
+
+struct BubblesView: View {
+    let activeNutrients: Set<String>
+    let rotationSpeed: Double
+    let nutrientValues: [String: Double]
+    
+    let symbolMapping = [
+        "calories": "flame",
+        "protein": "fork.knife",
+        "carbs": "carrot",
+        "fats": "drop",
+        "fiber": "leaf.fill",
+        "vitamins": "pill",
+        "minerals": "bolt",
+        "water": "drop.fill",
+        "phytochemicals": "leaf.arrow.triangle.circlepath",
+        "antioxidants": "shield",
+        "electrolytes": "battery.100"
+    ]
+    
+    var activeSymbols: [String] {
+        activeNutrients.isEmpty ? Array(symbolMapping.values) : activeNutrients.compactMap { symbolMapping[$0] }
+    }
+    
+    @State private var angle: Double = 0
+    let timer = Timer.publish(every: 1/120, on: .main, in: .common).autoconnect()
+    
+    var body: some View {
+        GeometryReader { geometry in
+            let minDimension = min(geometry.size.width, geometry.size.height)
+            let radius = minDimension / 3
+            let center = CGPoint(x: geometry.size.width/2, y: geometry.size.height/2)
+            
+            ZStack {
+                ForEach(Array(activeSymbols.enumerated()), id: \.offset) { index, symbol in
+                    let individualAngle = angle + (Double(index) * 2 * .pi / Double(activeSymbols.count))
+                    
+                    ZStack {
+                        Image(systemName: symbol)
+                            .font(.system(size: 45))
+                            .foregroundStyle(.blue)
+                            .animation(.linear(duration: 1/120), value: angle)
+                        
+                        if let nutrientKey = activeNutrients.first(where: { symbolMapping[$0] == symbol }),
+                           let value = nutrientValues[nutrientKey] {
+                            Text("\(value, specifier: "%.1f")")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .padding(4)
+                                .background(.blue)
+                                .clipShape(Circle())
+                                .offset(x: 20, y: -20)
+                                .animation(.linear(duration: 1/120), value: angle)
+                        }
+                    }
+                    .position(
+                        x: center.x + radius * cos(individualAngle),
+                        y: center.y + radius * sin(individualAngle)
+                    )
+                }
+            }
+            .onReceive(timer) { _ in
+                withAnimation(.linear(duration: 1/120)) {
+                    angle += rotationSpeed
+                }
+            }
+        }
+    }
+}
+
+
+struct FloatingBubble: View {
+    let symbol: String
+    let size: CGFloat
+    let position: CGPoint
+    
+    @State private var offset = CGSize.zero
+    
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: size))
+            .foregroundStyle(.blue)
+            .position(position)
+            .offset(offset)
+            .onAppear {
+                withAnimation(
+                    .easeInOut(duration: 3)
+                    .repeatForever(autoreverses: true)
+                ) {
+                    offset = CGSize(
+                        width: CGFloat.random(in: -10...10),
+                        height: CGFloat.random(in: -10...10)
+                    )
+                }
+            }
+    }
 }

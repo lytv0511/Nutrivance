@@ -213,10 +213,11 @@ struct AddMealView: View {
         }
     }
 
-    private func extractNutrient(from line: String) -> (name: String, value: Double)? {
+    private func extractNutrient(from line: String) -> NutritionScannerViewModel.NutritionDetection? {
         let patterns = [
-            "^(Calories|Protein|Carbs|Fats|Fiber)\\s*:?\\s*(\\d+\\.?\\d*)\\s*(g|kcal)?$",
-            "^Total\\s+(Fat|Carbohydrate|Protein)\\s*:?\\s*(\\d+\\.?\\d*)\\s*(g|kcal)?$"
+            "^(Calories|Protein|Carbs|Carb\\.|Fats|Fiber)\\s*:?\\s*(\\d+\\.?\\d*)\\s*(g|kcal)?$",
+            "^Total\\s+(Fat|Carbohydrate|Carbs|Carb\\.|Protein)\\s*:?\\s*(\\d+\\.?\\d*)\\s*(g|kcal)?$",
+            "^Total\\s+Carb\\.\\s*(\\d+\\.?\\d*)\\s*(g|kcal)?$"
         ]
         
         for pattern in patterns {
@@ -226,12 +227,33 @@ struct AddMealView: View {
                 let nsLine = line as NSString
                 let name = nsLine.substring(with: match.range(at: 1))
                 if let value = Double(nsLine.substring(with: match.range(at: 2))) {
-                    return (name, value)
+                    let unit = match.range(at: 3).location != NSNotFound ? nsLine.substring(with: match.range(at: 3)) : "g"
+                    let normalizedName = normalizeNutrientName(name)
+                    return NutritionScannerViewModel.NutritionDetection(name: normalizedName, value: value, unit: unit)
                 }
             }
         }
         return nil
     }
+
+    private func normalizeNutrientName(_ name: String) -> String {
+        switch name.lowercased() {
+        case "carb.", "carbohydrate", "total carb.", "total carbohydrate":
+            return "carbs"
+        case "fat", "total fat":
+            return "fats"
+        case "protein", "total protein":
+            return "protein"
+        case "calorie", "calories", "total calories":
+            return "calories"
+        case "fiber", "dietary fiber", "total fiber":
+            return "fiber"
+        default:
+            return name
+        }
+    }
+
+
 }
 
 struct ZoomableImage: View {

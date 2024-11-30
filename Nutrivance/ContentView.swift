@@ -17,7 +17,7 @@ struct ContentView: View {
         .onAppear {
             requestHealthDataPermissions()
         }
-    }
+    } 
     
     private func requestHealthDataPermissions() {
         healthKitManager.requestAuthorization { success, error in

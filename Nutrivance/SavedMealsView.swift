@@ -86,64 +86,66 @@ struct SavedMealsView: View {
     @State private var mealToEdit: SavedMeal?
     
     var body: some View {
-        VStack(spacing: 20) {
-            HStack {
-                Text("Saved Meals")
-                    .font(.largeTitle)
-                    .bold()
-                
-                Spacer()
-                
-                Button(action: { showingAddMeal = true }) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title2)
-                        .foregroundColor(.blue)
-                }
-                .buttonStyle(.plain)
-                .contentShape(Circle())
-                .hoverEffect(.lift)
-            }
-            .padding()
-            
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 15) {
-                    CategoryButton(title: "All", isSelected: selectedCategory == nil) {
-                        selectedCategory = nil
-                    }
+//        ScrollView {
+            VStack(spacing: 20) {
+                HStack {
+                    Text("Saved Meals")
+                        .font(.largeTitle)
+                        .bold()
                     
-                    ForEach(SavedMeal.MealCategory.allCases, id: \.self) { category in
-                        CategoryButton(title: category.rawValue,
-                                    isSelected: selectedCategory == category) {
-                            selectedCategory = category
-                        }
+                    Spacer()
+                    
+                    Button(action: { showingAddMeal = true }) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.blue)
                     }
+                    .buttonStyle(.plain)
+                    .contentShape(Circle())
+                    .hoverEffect(.lift)
                 }
                 .padding()
-            }
-            
-            ScrollView {
-                LazyVStack(spacing: 15) {
-                    ForEach(filteredMeals) { meal in
-                        MealCard(meal: meal) {
-                            mealsManager.logMeal(meal)
-                        } onEdit: {
-                            mealToEdit = meal
-                        } onDelete: {
-                            withAnimation {
-                                mealsManager.deleteMeal(meal)
+                
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 15) {
+                        CategoryButton(title: "All", isSelected: selectedCategory == nil) {
+                            selectedCategory = nil
+                        }
+                        
+                        ForEach(SavedMeal.MealCategory.allCases, id: \.self) { category in
+                            CategoryButton(title: category.rawValue,
+                                           isSelected: selectedCategory == category) {
+                                selectedCategory = category
                             }
                         }
                     }
+                    .padding()
                 }
-                .padding()
+                
+                ScrollView {
+                    LazyVStack(spacing: 15) {
+                        ForEach(filteredMeals) { meal in
+                            MealCard(meal: meal) {
+                                mealsManager.logMeal(meal)
+                            } onEdit: {
+                                mealToEdit = meal
+                            } onDelete: {
+                                withAnimation {
+                                    mealsManager.deleteMeal(meal)
+                                }
+                            }
+                        }
+                    }
+                    .padding()
+                }
             }
-        }
-        .sheet(isPresented: $showingAddMeal) {
-            AddMealView(mealsManager: mealsManager)
-        }
-        .sheet(item: $mealToEdit) { meal in
-            AddMealView(mealsManager: mealsManager, editingMeal: meal)
-        }
+            .sheet(isPresented: $showingAddMeal) {
+                AddMealView(mealsManager: mealsManager)
+            }
+            .sheet(item: $mealToEdit) { meal in
+                AddMealView(mealsManager: mealsManager, editingMeal: meal)
+            }
+//        }
     }
     
     private var filteredMeals: [SavedMeal] {

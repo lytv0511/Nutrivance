@@ -24,7 +24,8 @@ class HealthKitManager: ObservableObject {
             HKObjectType.quantityType(forIdentifier: .dietaryProtein)!,
             HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!,
             HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
-            HKObjectType.quantityType(forIdentifier: .dietaryWater)!
+            HKObjectType.quantityType(forIdentifier: .dietaryWater)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryFiber)!
         ])
         
         healthStore.requestAuthorization(toShare: types, read: types) { success, error in
@@ -49,14 +50,18 @@ class HealthKitManager: ObservableObject {
                                     quantitySamplePredicate: predicate,
                                     options: .cumulativeSum) { _, result, error in
             DispatchQueue.main.async {
-                let value = result?.sumQuantity()?.doubleValue(for: self.unit(for: nutrientType))
-                completion(value, error)
+                if error != nil {
+                    completion(nil, error)
+                } else {
+                    // If no data exists, return 0 instead of nil
+                    let value = result?.sumQuantity()?.doubleValue(for: self.unit(for: nutrientType)) ?? 0
+                    completion(value, nil)
+                }
             }
         }
         
         healthStore.execute(query)
     }
-
     
     func saveNutrients(_ nutrients: [NutrientData], completion: @escaping (Bool) -> Void) {
         let entryId = UUID()
@@ -107,7 +112,8 @@ class HealthKitManager: ObservableObject {
             (HKObjectType.quantityType(forIdentifier: .dietaryProtein)!, "protein"),
             (HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!, "fats"),
             (HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates)!, "carbs"),
-            (HKObjectType.quantityType(forIdentifier: .dietaryWater)!, "water")
+            (HKObjectType.quantityType(forIdentifier: .dietaryWater)!, "water"),
+            (HKObjectType.quantityType(forIdentifier: .dietaryFiber)!, "fiber")
         ]
         
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
@@ -171,7 +177,8 @@ class HealthKitManager: ObservableObject {
             HKObjectType.quantityType(forIdentifier: .dietaryProtein)!,
             HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!,
             HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
-            HKObjectType.quantityType(forIdentifier: .dietaryWater)!
+            HKObjectType.quantityType(forIdentifier: .dietaryWater)!,
+            HKObjectType.quantityType(forIdentifier: .dietaryFiber)!
         ]
         
         let group = DispatchGroup()
@@ -215,6 +222,8 @@ class HealthKitManager: ObservableObject {
             return HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)
         case "water":
             return HKQuantityType.quantityType(forIdentifier: .dietaryWater)
+        case "fiber":
+            return HKQuantityType.quantityType(forIdentifier: .dietaryFiber)
         default:
             return nil
         }
@@ -225,7 +234,7 @@ class HealthKitManager: ObservableObject {
         case "calories":
             return .kilocalorie()
         case "water":
-            return .literUnit(with: .milli)
+            return .literUnit(with: .milli)  // This is correct, keeping it
         default:
             return .gram()
         }

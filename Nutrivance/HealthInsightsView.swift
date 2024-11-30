@@ -78,9 +78,10 @@ struct HealthInsightsView: View {
                                     VStack(alignment: .leading) {
                                         Text(button.title)
                                             .font(.headline)
+                                            .foregroundColor(.primary)
                                         Text(button.description)
                                             .font(.caption)
-                                            .foregroundColor(.gray)
+                                            .foregroundColor(.secondary)
                                     }
                                 }
                                 .frame(maxWidth: .infinity)

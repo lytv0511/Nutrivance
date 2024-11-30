@@ -121,7 +121,7 @@ struct NutrientDetailView: View {
         "Protein": "g",
         "Fats": "g",
         "Calories": "kcal", // using kcal for calories
-        "Water": "L"
+        "Water": "mL"
     ]
     
 
@@ -132,21 +132,20 @@ struct NutrientDetailView: View {
         case "Calories":
             unit = "kcal"
         case "Water":
-            unit = "L"
+            unit = "mL"
         default:
             unit = "g"
         }
         
-        // Check if todayCurrentNutrient is nil, not zero
-        if let currentNutrient = todayCurrentNutrient {
-            return "\(String(format: "%.2f", currentNutrient)) \(unit)"
-        } else {
-            #if targetEnvironment(macCatalyst)
-            return "Please see Health data on iPhone or iPad."
-            #else
-            return "Fetching..." // Only when data is actually unavailable
-            #endif
-        }
+        #if targetEnvironment(macCatalyst)
+        return "Please see Health data on iPhone or iPad."
+        #else
+//        if todayCurrentNutrient == nil {
+//            return "Fetching..."
+//        } else {
+            return "\(String(format: "%.2f", todayCurrentNutrient ?? 0)) \(unit)"
+//        }
+        #endif
     }
     
     var body: some View {

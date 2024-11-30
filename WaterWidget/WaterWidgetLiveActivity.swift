@@ -45,7 +45,7 @@ struct WaterWidgetLiveActivity: Widget {
                     // more content
                 }
             } compactLeading: {
-                Text("L")
+                Text("mL")
             } compactTrailing: {
                 Text("T \(context.state.emoji)")
             } minimal: {

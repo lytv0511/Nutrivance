@@ -8,57 +8,57 @@ struct HomeView: View {
     var body: some View {
         let columns: Int = (horizontalSizeClass == .compact) ? 1 : 3 // 4 columns on compact, 3 on regular
         let gridItems = Array(repeating: GridItem(.flexible()), count: columns)
-        
-        ZStack {
-            LinearGradient(
-                gradient: Gradient(colors: [Color(red: 0.0, green: 0.2, blue: 0.0), Color(red: 0.0, green: 0.0, blue: 0.2), Color.black, Color.black, Color.black]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Spacer()
-                    HStack (spacing: 10) {
-                        Image(systemName: "leaf.fill")
-                            .symbolVariant(.fill)
-                            .foregroundColor(.green)
-                            .font(.largeTitle)
+        NavigationStack {
+            ZStack {
+                LinearGradient(
+                    gradient: Gradient(colors: [Color(red: 0.0, green: 0.2, blue: 0.0), Color(red: 0.0, green: 0.0, blue: 0.2), Color.black, Color.black, Color.black]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        HStack (spacing: 10) {
+                            Image(systemName: "leaf.fill")
+                                .symbolVariant(.fill)
+                                .foregroundColor(.green)
+                                .font(.largeTitle)
+                                .bold()
+                                .padding(.leading, 10)
+                                .padding(.trailing, 10)
+                            Text("Welcome to Nutrivance~")
+                                .font(.largeTitle)
+                                .bold()
+                        }
+                        Text(timeBasedGreeting() + ", learn more about your health")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        Text("Featured Articles")
+                            .font(.title)
+                            .foregroundColor(.primary)
                             .bold()
-                            .padding(.leading, 10)
-                            .padding(.trailing, 10)
-                        Text("Welcome to Nutrivance~")
-                            .font(.largeTitle)
-                            .bold()
-                    }
-                    Text(timeBasedGreeting() + ", learn more about your health")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                    Text("Featured Articles")
-                        .font(.title)
-                        .foregroundColor(.primary)
-                        .bold()
-                    
-                    // Card Grid
-                    LazyVGrid(columns: gridItems, spacing: 20) {
-                        ForEach(0..<titles.count, id: \.self) { index in
-                            VStack {
-                                Text(titles[index])
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                                Text(contents[index])
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
+                        
+                        // Card Grid
+                        LazyVGrid(columns: gridItems, spacing: 20) {
+                            ForEach(0..<titles.count, id: \.self) { index in
+                                VStack {
+                                    Text(titles[index])
+                                        .font(.headline)
+                                        .foregroundColor(.primary)
+                                    Text(contents[index])
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding()
+                                .frame(maxWidth: .infinity)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
                             }
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
                         }
                     }
+                    .padding()
                 }
-                .padding()
+                //            .navigationTitle("Home")
             }
-//            .navigationTitle("Home")
         }
     }
     

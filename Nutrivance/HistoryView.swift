@@ -13,6 +13,7 @@ struct HistoryView: View {
     @State private var selectedTimeFrame: TimeFrame = .daily
     @State private var entries: [HealthKitManager.NutritionEntry] = []
     @State private var selectedDate: Date = Date()
+    @State private var showingFullList = false
     
     enum TimeFrame {
         case daily, weekly, monthly, custom
@@ -29,7 +30,10 @@ struct HistoryView: View {
             VStack {
                 timeFramePicker
                 dateSelector
+                    .padding(.bottom)
                 entriesList
+                    .padding(.top)
+                    .padding(.top)
             }
             .navigationTitle("Nutrition History")
             .navigationBarTitleDisplayMode(.inline)
@@ -44,6 +48,7 @@ struct HistoryView: View {
             }
         }
     }
+
     
     private var timeFramePicker: some View {
         Picker("Time Frame", selection: $selectedTimeFrame) {
@@ -57,25 +62,77 @@ struct HistoryView: View {
     }
     
     private var dateSelector: some View {
-        DatePicker("Select Date", selection: $selectedDate, displayedComponents: [.date])
-            .datePickerStyle(.graphical)
-            .frame(maxHeight: 300)
-            .padding()
+        GeometryReader { geometry in
+//            if geometry.size.height < 300 {
+//                DatePicker("Select Date", selection: $selectedDate, displayedComponents: [.date])
+//                    .datePickerStyle(.compact)
+//                    .frame(maxHeight: 100)
+//                    .padding()
+//            } else {
+                DatePicker("Select Date", selection: $selectedDate, displayedComponents: [.date])
+                    .datePickerStyle(.graphical)
+                    .frame(minHeight: 300)
+                    .padding()
+//            }
+        }
     }
     
     private var entriesList: some View {
-        List {
-            let sortedDates = groupedEntries.keys.sorted(by: >)
-            ForEach(sortedDates, id: \.self) { date in
-                Section {
-                    let entries = groupedEntries[date] ?? []
-                    ForEach(entries) { entry in
-                        NutritionEntryRow(entry: entry) {
-                            deleteEntry(entry)
+        VStack {
+            HStack {
+                Spacer()
+                Button {
+                    showingFullList = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .foregroundStyle(.blue)
+                }
+                .padding()
+                
+                .hoverEffect(.automatic)
+            }
+            
+            List {
+                let sortedDates = groupedEntries.keys.sorted(by: >)
+                ForEach(sortedDates, id: \.self) { date in
+                    Section {
+                        let entries = groupedEntries[date] ?? []
+                        ForEach(entries) { entry in
+                            NutritionEntryRow(entry: entry) {
+                                deleteEntry(entry)
+                            }
+                        }
+                    } header: {
+                        Text(formatDate(date))
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingFullList) {
+            NavigationStack {
+                List {
+                    let sortedDates = groupedEntries.keys.sorted(by: >)
+                    ForEach(sortedDates, id: \.self) { date in
+                        Section {
+                            let entries = groupedEntries[date] ?? []
+                            ForEach(entries) { entry in
+                                NutritionEntryRow(entry: entry) {
+                                    deleteEntry(entry)
+                                }
+                            }
+                        } header: {
+                            Text(formatDate(date))
                         }
                     }
-                } header: {
-                    Text(formatDate(date))
+                }
+                .navigationTitle("All Entries")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            showingFullList = false
+                        }
+                    }
                 }
             }
         }
