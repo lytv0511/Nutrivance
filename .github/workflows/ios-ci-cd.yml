@@ -1,5 +1,6 @@
 name: iOS CI/CD
 
+# Triggers: Run the workflow on push and pull requests to the main branch
 on:
   push:
     branches:
@@ -10,19 +11,23 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    name: Build and Test iOS App
+    runs-on: macos-latest  # Use a macOS environment with the latest Xcode
 
     steps:
+      # Step 1: Checkout the code from the repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # Step 2: Install CocoaPods dependencies (if using CocoaPods)
       - name: Install Dependencies
         run: pod install --repo-update
 
+      # Step 3: Build and run tests with xcodebuild
       - name: Build and Test
         run: |
           xcodebuild clean test \
-          -workspace YourApp.xcworkspace \
-          -scheme YourApp \
-          -destination 'platform=iOS Simulator,name=iPhone 14,OS=17.0' \
+          -workspace YourApp.xcworkspace \  # Make sure this matches your actual workspace
+          -scheme YourApp \                 # Ensure this matches your scheme name
+          -destination 'platform=iOS Simulator,name=iPhone 14,OS=17.0' \  # Target device and OS
           CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
