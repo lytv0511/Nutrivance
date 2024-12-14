@@ -1,6 +1,5 @@
 name: iOS CI/CD Workflow
 
-# Trigger the workflow on push or pull request to the main branch
 on:
   push:
     branches:
@@ -12,23 +11,23 @@ on:
 jobs:
   build:
     name: Build and Test iOS App
-    runs-on: macos-latest  # Use the latest macOS runner with Xcode installed
+    runs-on: macos-latest
 
     steps:
-      # Step 1: Checkout the repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: List available schemes to verify the correct scheme name
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -switch /Applications/Xcode_16.2.app/Contents/Developer
+
       - name: List Available Schemes
         run: |
           xcodebuild -project Nutrivance.xcodeproj -list
 
-      # Step 3: Build and test the app on an iOS simulator
       - name: Build and Test
         run: |
           xcodebuild clean test \
           -project Nutrivance.xcodeproj \
           -scheme Nutrivance \
-          -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.0' \
+          -destination 'platform=iOS Simulator,name=iPhone 14,OS=17.0' \
           CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
