@@ -132,9 +132,7 @@ struct SearchView: View {
             }
             .sheet(isPresented: $showingImportView) {
                 HealthKitImportView(nutrients: extractedNutrients.map { (name, value) in
-                    let unit = name.lowercased() == "calories" ? "kcal" :
-                    name.lowercased() == "water" ? "mL" :
-                    "g"
+                    let unit = NutritionUnit.getUnit(for: name)
                     return NutrientData(
                         name: name,
                         value: value,
@@ -178,12 +176,6 @@ struct SearchView: View {
         isSearchBarFocused = false
     }
     
-//    private func saveToHealthKit() {
-//        showConfirmation = true
-//        extractedNutrients = [:]
-//        searchText = ""
-//    }
-    
     private func getUnit(for nutrient: String) -> String {
         switch nutrient.lowercased() {
         case "protein", "carbs", "fats", "fiber": return "g"
@@ -195,13 +187,10 @@ struct SearchView: View {
     
     private func saveToHealthKit() {
         nutrientData = extractedNutrients.map { (name, value) in
-            let unit = name.lowercased() == "calories" ? "kcal" :
-                       name.lowercased() == "water" ? "mL" :
-                       "g"
-            return NutrientData(
+            NutrientData(
                 name: name,
                 value: value,
-                unit: unit
+                unit: getUnit(for: name)
             )
         }
         showingImportView = true
@@ -227,14 +216,47 @@ struct SearchView: View {
 
 class NLNaturalLanguageProcessor {
     private let nutrientKeywords = [
-        "protein": ["protein", "proteins", "whey", "casein"],
-        "calories": ["calories", "calorie", "kcal", "cal"],
-        "carbs": ["carbs", "carbohydrates", "carbohydrate"],
-        "fats": ["fat", "fats", "lipids", "oil"],
-        "fiber": ["fiber", "fibre", "dietary fiber", "roughage"],
-        "water": ["water", "h2o", "fluid"],
-        "vitamins": ["vitamin", "vitamins", "vit"],
-        "minerals": ["mineral", "minerals"]
+        // Macronutrients
+        "protein": ["protein", "proteins", "whey", "casein", "amino acid", "amino acids"],
+        "calories": ["calories", "calorie", "kcal", "cal", "energy", "dietary energy"],
+        "carbs": ["carbs", "carbohydrates", "carbohydrate", "sugars", "starches", "glucose"],
+        "fats": ["fat", "fats", "lipids", "oil", "oils", "triglycerides"],
+        "fiber": ["fiber", "fibre", "dietary fiber", "roughage", "cellulose", "pectin"],
+        "water": ["water", "h2o", "fluid", "hydration"],
+        
+        // Vitamins
+        "vitamin a": ["vitamin a", "retinol", "beta-carotene"],
+        "vitamin c": ["vitamin c", "ascorbic acid"],
+        "vitamin d": ["vitamin d", "calciferol", "cholecalciferol"],
+        "vitamin e": ["vitamin e", "tocopherol"],
+        "vitamin k": ["vitamin k", "phylloquinone", "menaquinone"],
+        "thiamin": ["thiamin", "vitamin b1", "b1", "aneurin"],
+        "riboflavin": ["riboflavin", "vitamin b2", "b2"],
+        "niacin": ["niacin", "vitamin b3", "b3", "nicotinic acid", "niacinamide"],
+        "vitamin b6": ["vitamin b6", "b6", "pyridoxine", "pyridoxal", "pyridoxamine"],
+        "vitamin b12": ["vitamin b12", "b12", "cobalamin", "cyanocobalamin"],
+        "folate": ["folate", "folic acid", "vitamin b9", "b9"],
+        "biotin": ["biotin", "vitamin b7", "b7"],
+        "pantothenic acid": ["pantothenic acid", "vitamin b5", "b5"],
+        
+        // Minerals
+        "calcium": ["calcium", "ca"],
+        "iron": ["iron", "fe", "ferrous"],
+        "magnesium": ["magnesium", "mg"],
+        "phosphorus": ["phosphorus", "p", "phosphate"],
+        "potassium": ["potassium", "k"],
+        "sodium": ["sodium", "na", "salt"],
+        "zinc": ["zinc", "zn"],
+        "copper": ["copper", "cu"],
+        "manganese": ["manganese", "mn"],
+        "selenium": ["selenium", "se"],
+        "chromium": ["chromium", "cr"],
+        "molybdenum": ["molybdenum", "mo"],
+        "chloride": ["chloride", "cl"],
+        
+        // Additional Nutrients
+        "cholesterol": ["cholesterol"],
+        "caffeine": ["caffeine", "coffee", "stimulant"]
     ]
     
     func extractNutrients(from text: String) -> [String: Double] {

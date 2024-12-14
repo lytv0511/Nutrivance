@@ -13,6 +13,7 @@ struct HealthInsightsView: View {
     @StateObject private var analysisService = HealthAnalysisService()
     @State private var nutrientData: [String: Double] = [:]
     @State private var selectedTimeFrame: TimeFrame = .daily
+    @State private var nutrientValues: [String: Double] = [:]
     
     enum TimeFrame: String, CaseIterable {
         case daily = "Today"
@@ -162,11 +163,13 @@ struct HealthInsightsView: View {
         
         for nutrient in nutrients {
             group.enter()
+            // Update the fetchNutrientData calls
             healthStore.fetchNutrientData(for: nutrient) { value, error in
                 if let value = value {
-                    data[nutrient] = value
+                    DispatchQueue.main.async {
+                        nutrientValues[nutrient] = value
+                    }
                 }
-                group.leave()
             }
         }
         
@@ -200,9 +203,13 @@ struct HealthInsightsView: View {
         
         for nutrient in nutrients {
             group.enter()
-            healthStore.fetchNutrientData(for: nutrient) { value, error in
-                if let value = value {
-                    aggregatedData[nutrient] = value
+            // Update the fetchNutrientData calls
+            // Inside fetchHistoricalData function
+            healthStore.fetchNutrientData(for: nutrient) { result, error in
+                if let result = result {
+                    DispatchQueue.main.async {
+                        nutrientValues[nutrient] = result
+                    }
                 }
                 group.leave()
             }

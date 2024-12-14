@@ -115,36 +115,20 @@ struct NutrientDetailView: View {
         "Antioxidants": Color.indigo.opacity(0.7), // Darker indigo
         "Electrolytes": Color.mint.opacity(0.7)    // Darker mint
     ]
-    
-    let nutrientUnits: [String: String] = [
-        "Carbs": "g",
-        "Protein": "g",
-        "Fats": "g",
-        "Calories": "kcal", // using kcal for calories
-        "Water": "mL"
-    ]
-    
 
     // Computed property to determine the display value and unit
     private var displayValue: String {
-        let unit: String
-        switch nutrientName {
-        case "Calories":
-            unit = "kcal"
-        case "Water":
-            unit = "mL"
-        default:
-            unit = "g"
-        }
-        
+        print("NutrientDetailView: Computing displayValue with todayCurrentNutrient: \(String(describing: todayCurrentNutrient))")
+        let unit = NutritionUnit.getUnit(for: nutrientName)
+
         #if targetEnvironment(macCatalyst)
         return "Please see Health data on iPhone or iPad."
         #else
-//        if todayCurrentNutrient == nil {
-//            return "Fetching..."
-//        } else {
+    //    if todayCurrentNutrient == nil {
+    //        return "Fetching..."
+    //    } else {
             return "\(String(format: "%.2f", todayCurrentNutrient ?? 0)) \(unit)"
-//        }
+    //    }
         #endif
     }
     
@@ -152,7 +136,7 @@ struct NutrientDetailView: View {
         ZStack {
             LinearGradient(
                 gradient: Gradient(stops: [
-                    Gradient.Stop(color: themeColors[nutrientName] ?? .black, location: 0.0),
+                    Gradient.Stop(color: themeColors[nutrientName] ?? Color(.systemBackground), location: 0.0),
                     Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.9), location: 0.02),
                     Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.8), location: 0.04),
                     Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.7), location: 0.06),
@@ -161,80 +145,118 @@ struct NutrientDetailView: View {
                     Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.4), location: 0.12),
                     Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.3), location: 0.14),
                     Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.2), location: 0.16),
-                    Gradient.Stop(color: .black.opacity(0.5), location: 0.20),
-                    Gradient.Stop(color: .black, location: 1.0)
+                    Gradient.Stop(color: Color(.systemBackground).opacity(0.5), location: 0.20),
+                    Gradient.Stop(color: Color(.systemBackground), location: 1.0)
                 ]),
                 startPoint: .top,
                 endPoint: .bottom
             )
             .ignoresSafeArea()
-            
             GeometryReader { geometry in
                 ScrollView {
                     VStack(spacing: 10) {
-                        Spacer()
-                            .padding()
-                            .padding()
                         Text(nutrientName)
                             .font(.largeTitle)
                             .bold()
                             .padding()
-
-                        if let details = nutrientDetails[nutrientName] {
-                            NutrientCard(title: "Today's Consumption",
-                                         content: displayValue,
-                                         cardWidth: geometry.size.width * 0.9,
-                                         titleColor: .red,
-                                         symbolName: "doc.text.magnifyingglass")
-
-                            NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
-                            NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
-                            NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
-                            NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
-                            NutrientCard(title: "Benefits", content: details.benefits, cardWidth: geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
+                        
+                        if isGroupCategory(nutrientName) {
+                            // Category overview card
+                            if let details = nutrientDetails[nutrientName] {
+                                NutrientCard(title: "Category Overview",
+                                             content: details.todayConsumption,
+                                             cardWidth: geometry.size.width * 0.9,
+                                             titleColor: themeColors[nutrientName] ?? .red,
+                                             symbolName: "doc.text.magnifyingglass")
+                            }
+                            
+                            // Detailed breakdown of subcategories
+                            CategoryDetailView(for: nutrientName)
+                                .frame(width: geometry.size.width * 0.9)
+                            
+                            // Keep existing information cards for the category
+                            if let details = nutrientDetails[nutrientName] {
+                                NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
+                                NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
+                                NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
+                                NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
+                                NutrientCard(title: "Benefits", content: details.benefits, cardWidth: geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
+                            }
                         } else {
-                            Text("No details available.")
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center) // Center content
-                    .padding()
-                }
-                .edgesIgnoringSafeArea(.top)
-                .contentShape(Rectangle())
-                .onAppear {
-                    healthKitManager.fetchTodayNutrientData(for: nutrientName) { result, error in
-                        if let error = error {
-                            print("Error fetching nutrient data: \(error.localizedDescription)")
-                        } else {
-                            todayCurrentNutrient = result
-                            if let totalNutrient = result {
-                                nutrientDetails[nutrientName]?.todayConsumption = "\(totalNutrient) g"
+                            // Single nutrient view with all cards
+                            if let details = nutrientDetails[nutrientName] {
+                                NutrientCard(title: "Today's Consumption",
+                                             content: displayValue,
+                                             cardWidth: geometry.size.width * 0.9,
+                                             titleColor: themeColors[nutrientName] ?? .red,
+                                             symbolName: "doc.text.magnifyingglass")
+                                
+                                NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
+                                NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
+                                NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
+                                NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
+                                NutrientCard(title: "Benefits", content: details.benefits, cardWidth: geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity)
                 }
-                .onChange(of: nutrientName) { oldValue, newNutrient in
-                    todayCurrentNutrient = nil
-                    fetchNutrientData(for: newNutrient)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding()
+            }
+        }
+        .onAppear {
+            print("NutrientDetailView onAppear for: \(nutrientName)")
+            if isGroupCategory(nutrientName) {
+                fetchCategoryData(for: nutrientName)
+            } else {
+                fetchNutrientData(for: nutrientName)
+            }
+        }
+        .onChange(of: nutrientName) { oldValue, newNutrient in
+            todayCurrentNutrient = nil
+            if isGroupCategory(newNutrient) {
+                fetchCategoryData(for: newNutrient)
+            } else {
+                fetchNutrientData(for: newNutrient)
+            }
+        }
+    }
+    
+    private func fetchCategoryData(for category: String) {
+        healthKitManager.fetchCategoryAggregate(for: category) { totalValue, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("Debug: Error fetching category data: \(error.localizedDescription)")
+                    return
+                }
+                if let total = totalValue {
+                    self.nutrientDetails[category]?.todayConsumption = "\(total) \(NutritionUnit.getUnit(for: category))"
+                    print("Debug: Updated category \(category) with total: \(total)")
                 }
             }
         }
     }
     
+    private func isGroupCategory(_ category: String) -> Bool {
+        ["Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(category)
+    }
+    
     private func fetchNutrientData(for nutrient: String) {
+        print("NutrientDetailView: Starting fetch for \(nutrient)")
         healthKitManager.fetchTodayNutrientData(for: nutrient) { totalNutrient, error in
-            if let error = error {
-                print("Error fetching \(nutrient) data: \(error.localizedDescription)")
-                return
-            }
-            // Update today's current nutrient
-            todayCurrentNutrient = totalNutrient
-            // Update the nutrient's today consumption based on the fetched value
-            if let nutrientInfo = nutrientDetails[nutrient] {
-                nutrientDetails[nutrient]?.todayConsumption = "\(totalNutrient ?? 0) g" // Adjust for units if necessary
+            print("NutrientDetailView: Received value: \(String(describing: totalNutrient)) for \(nutrient)")
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("NutrientDetailView: Error fetching \(nutrient): \(error.localizedDescription)")
+                    return
+                }
+                self.todayCurrentNutrient = totalNutrient
+                print("NutrientDetailView: Updated todayCurrentNutrient to \(String(describing: totalNutrient))")
             }
         }
     }
+
     }
 
     struct NutrientInfo {
@@ -281,3 +303,132 @@ struct NutrientDetailView: View {
             NutrientDetailView(nutrientName: "Carbs")
         }
     }
+
+@ViewBuilder
+private func CategoryDetailView(for category: String) -> some View {
+    switch category {
+    case "Vitamins":
+        VStack(spacing: 15) {
+            NutrientSubcategoryCard(title: "B Complex", nutrients: [
+                "Thiamin", "Riboflavin", "Niacin",
+                "Vitamin B6", "Vitamin B12", "Folate", "Biotin", "Pantothenic Acid"
+            ])
+            NutrientSubcategoryCard(title: "Fat Soluble", nutrients: [
+                "Vitamin A", "Vitamin D", "Vitamin E", "Vitamin K"
+            ])
+            NutrientSubcategoryCard(title: "Water Soluble", nutrients: [
+                "Vitamin C"
+            ])
+        }
+        
+    case "Minerals":
+        VStack(spacing: 15) {
+            NutrientSubcategoryCard(title: "Electrolytes", nutrients: [
+                "Sodium", "Potassium", "Calcium", "Magnesium",
+                "Chloride", "Phosphorus"
+            ])
+            NutrientSubcategoryCard(title: "Trace Minerals", nutrients: [
+                "Iron", "Zinc", "Copper", "Manganese",
+                "Iodine", "Selenium", "Chromium", "Molybdenum"
+            ])
+        }
+        
+    case "Phytochemicals":
+        NutrientSubcategoryCard(title: "Plant Compounds", nutrients: [
+            "Flavonoids", "Carotenoids", "Glucosinolates",
+            "Phytosterols"
+        ])
+        
+    case "Antioxidants":
+        NutrientSubcategoryCard(title: "Antioxidant Compounds", nutrients: [
+            "Vitamin C", "Vitamin E", "Beta-carotene",
+            "Selenium", "Zinc"
+        ])
+        
+    case "Electrolytes":
+        NutrientSubcategoryCard(title: "Essential Electrolytes", nutrients: [
+            "Sodium", "Potassium", "Calcium", "Magnesium",
+            "Chloride", "Phosphorus"
+        ])
+        
+    default:
+        EmptyView()
+    }
+}
+
+struct NutrientSubcategoryCard: View {
+    let title: String
+    let nutrients: [String]
+    @StateObject private var healthStore = HealthKitManager()
+    @State private var values: [String: Double] = [:]
+    
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(title)
+                .font(.headline)
+                .padding(.bottom, 5)
+            
+            ForEach(nutrients, id: \.self) { nutrient in
+                HStack {
+                    Text(nutrient)
+                    Spacer()
+                    Text("\(formatValue(values[nutrient.lowercased()] ?? 0)) \(NutritionUnit.getUnit(for: nutrient))")
+                        .foregroundColor(.blue)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.1))
+        .cornerRadius(10)
+        .task {
+            await fetchNutrientValues()
+        }
+    }
+    
+    private func formatValue(_ value: Double) -> String {
+        if value >= 1 {
+            return String(format: "%.1f", value)  // 1 dp for regular numbers
+        } else if value > 0 {
+            return String(format: "%.3f", value)  // 3 dp for small numbers
+        } else {
+            return "0"  // Clean zero display
+        }
+    }
+    
+    private func normalizeNutrientName(_ name: String) -> String {
+        // Remove parentheses content and trim
+        let baseName = name.replacingOccurrences(of: "\\s*\\([^)]*\\)", with: "", options: .regularExpression)
+                          .trimmingCharacters(in: .whitespaces)
+                          .lowercased()
+        
+        switch baseName {
+        case "thiamin": return "thiamin"
+        case "riboflavin": return "riboflavin"
+        case "niacin": return "niacin"
+        case "b6": return "vitamin b6"
+        case "b12": return "vitamin b12"
+        case "folate": return "folate"
+        case "biotin": return "biotin"
+        case "pantothenic acid": return "pantothenic acid"
+        case let name where name.contains("vitamin"):
+            return name
+        default:
+            return baseName
+        }
+    }
+
+    // Update fetchNutrientValues to use normalized names
+    private func fetchNutrientValues() async {
+        for nutrient in nutrients {
+            let normalizedName = normalizeNutrientName(nutrient)
+            healthStore.fetchTodayNutrientData(for: normalizedName) { value, _ in
+                if let value = value {
+                    DispatchQueue.main.async {
+                        values[nutrient.lowercased()] = value
+                    }
+                }
+            }
+        }
+    }
+}

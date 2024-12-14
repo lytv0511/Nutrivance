@@ -137,7 +137,7 @@ struct AddMealView: View {
             ), format: .number)
             .keyboardType(.decimalPad)
             .multilineTextAlignment(.trailing)
-            Text(getUnit(for: nutrient))
+            Text(NutritionUnit.getUnit(for: nutrient))
         }
     }
 
@@ -173,14 +173,6 @@ struct AddMealView: View {
         
         mealsManager.addMeal(meal)
         dismiss()
-    }
-    
-    private func getUnit(for nutrient: String) -> String {
-        switch nutrient.lowercased() {
-        case "calories": return "kcal"
-        case "water": return "ml"
-        default: return "g"
-        }
     }
 
     private func processNutritionLabel(_ image: UIImage) {

@@ -5,7 +5,7 @@
 //  Created by Vincent Leong on 11/7/24.
 //
 
-#if canImport(ActivityKit) && os(iOS)  // Ensure it only compiles for iOS with ActivityKit support
+#if canImport(ActivityKit) && !targetEnvironment(macCatalyst)  // Ensure it only compiles for iOS with ActivityKit support
 import ActivityKit
 import WidgetKit
 import SwiftUI
