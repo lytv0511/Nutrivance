@@ -1,33 +1,23 @@
-name: iOS CI/CD Workflow
+name: Nutrivance
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
-    branches:
-      - main
 
 jobs:
-  build:
-    name: Build and Test iOS App
+  build_project:
     runs-on: macos-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Select Xcode 16.2
-        run: sudo xcode-select -switch /Applications/Xcode_16.2.app/Contents/Developer
-
-      - name: List Available Schemes
-        run: |
-          xcodebuild -project Nutrivance.xcodeproj -list
-
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: SwiftFormat
+        run: swiftformat . --lint
+      - name: SwiftLint
+        run: swiftlint lint --strict
       - name: Build and Test
         run: |
-          xcodebuild clean test \
-          -project Nutrivance.xcodeproj \
-          -scheme Nutrivance \
-          -destination 'platform=iOS Simulator,name=iPhone 14,OS=17.0' \
-          CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+          xcodebuild \
+           -project Nutrivance.xcodeproj \
+           -scheme Nutrivance \
+           -sdk iphonesimulator \
+           -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.2' \
+            test || exit 1
