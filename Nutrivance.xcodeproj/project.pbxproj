@@ -32,7 +32,6 @@
 		15C033F92D0DD504000EBCD2 /* commit-msg.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033C92D0DD504000EBCD2 /* commit-msg.sample */; };
 		15C033FA2D0DD504000EBCD2 /* packed-refs in Resources */ = {isa = PBXBuildFile; fileRef = 15C033F22D0DD504000EBCD2 /* packed-refs */; };
 		15C033FB2D0DD504000EBCD2 /* description in Resources */ = {isa = PBXBuildFile; fileRef = 15C033EF2D0DD504000EBCD2 /* description */; };
-		15C033FC2D0DD504000EBCD2 /* ios-ci-cd.yml in Resources */ = {isa = PBXBuildFile; fileRef = 15C033F42D0DD504000EBCD2 /* ios-ci-cd.yml */; };
 		15C033FD2D0DD504000EBCD2 /* main in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D82D0DD504000EBCD2 /* main */; };
 		15C033FE2D0DD504000EBCD2 /* main in Resources */ = {isa = PBXBuildFile; fileRef = 15C033E72D0DD504000EBCD2 /* main */; };
 		15C033FF2D0DD504000EBCD2 /* exclude in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D62D0DD504000EBCD2 /* exclude */; };
@@ -55,6 +54,7 @@
 		15C034102D0DD504000EBCD2 /* pre-applypatch.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CC2D0DD504000EBCD2 /* pre-applypatch.sample */; };
 		15C034112D0DD504000EBCD2 /* post-update.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CB2D0DD504000EBCD2 /* post-update.sample */; };
 		15C034122D0DD504000EBCD2 /* pre-receive.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D12D0DD504000EBCD2 /* pre-receive.sample */; };
+		15C034142D0DDA1B000EBCD2 /* ios.yml in Resources */ = {isa = PBXBuildFile; fileRef = 15C034132D0DDA1B000EBCD2 /* ios.yml */; };
 		15CB57042CEEB87100A6E970 /* TableDetection.metal in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57032CEEB86800A6E970 /* TableDetection.metal */; };
 		15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */; };
 		15CB570A2CEEBED000A6E970 /* NutritionScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57092CEEBED000A6E970 /* NutritionScannerView.swift */; };
@@ -172,7 +172,7 @@
 		15C033F02D0DD504000EBCD2 /* HEAD */ = {isa = PBXFileReference; lastKnownFileType = text; path = HEAD; sourceTree = "<group>"; };
 		15C033F12D0DD504000EBCD2 /* index */ = {isa = PBXFileReference; lastKnownFileType = file; path = index; sourceTree = "<group>"; };
 		15C033F22D0DD504000EBCD2 /* packed-refs */ = {isa = PBXFileReference; lastKnownFileType = text; path = "packed-refs"; sourceTree = "<group>"; };
-		15C033F42D0DD504000EBCD2 /* ios-ci-cd.yml */ = {isa = PBXFileReference; lastKnownFileType = text.yaml; path = "ios-ci-cd.yml"; sourceTree = "<group>"; };
+		15C034132D0DDA1B000EBCD2 /* ios.yml */ = {isa = PBXFileReference; lastKnownFileType = text.yaml; path = ios.yml; sourceTree = "<group>"; };
 		15CB57032CEEB86800A6E970 /* TableDetection.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = TableDetection.metal; sourceTree = "<group>"; };
 		15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionDetection.swift; sourceTree = "<group>"; };
 		15CB57092CEEBED000A6E970 /* NutritionScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionScannerView.swift; sourceTree = "<group>"; };
@@ -449,7 +449,7 @@
 		15C033F52D0DD504000EBCD2 /* workflows */ = {
 			isa = PBXGroup;
 			children = (
-				15C033F42D0DD504000EBCD2 /* ios-ci-cd.yml */,
+				15C034132D0DDA1B000EBCD2 /* ios.yml */,
 			);
 			path = workflows;
 			sourceTree = "<group>";
@@ -706,7 +706,6 @@
 				15C033F92D0DD504000EBCD2 /* commit-msg.sample in Resources */,
 				15C033FA2D0DD504000EBCD2 /* packed-refs in Resources */,
 				15C033FB2D0DD504000EBCD2 /* description in Resources */,
-				15C033FC2D0DD504000EBCD2 /* ios-ci-cd.yml in Resources */,
 				15C033FD2D0DD504000EBCD2 /* main in Resources */,
 				15C033FE2D0DD504000EBCD2 /* main in Resources */,
 				15C033FF2D0DD504000EBCD2 /* exclude in Resources */,
@@ -719,6 +718,7 @@
 				15C034062D0DD504000EBCD2 /* 7d5dd9314e016d3bb88f0a582e742184d66275 in Resources */,
 				15C034072D0DD504000EBCD2 /* push-to-checkout.sample in Resources */,
 				15C034082D0DD504000EBCD2 /* HEAD in Resources */,
+				15C034142D0DDA1B000EBCD2 /* ios.yml in Resources */,
 				15C034092D0DD504000EBCD2 /* applypatch-msg.sample in Resources */,
 				15C0340A2D0DD504000EBCD2 /* pre-commit.sample in Resources */,
 				15C0340B2D0DD504000EBCD2 /* HEAD in Resources */,
