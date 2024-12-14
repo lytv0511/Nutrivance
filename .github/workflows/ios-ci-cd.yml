@@ -1,0 +1,28 @@
+name: iOS CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: pod install --repo-update
+
+      - name: Build and Test
+        run: |
+          xcodebuild clean test \
+          -workspace YourApp.xcworkspace \
+          -scheme YourApp \
+          -destination 'platform=iOS Simulator,name=iPhone 14,OS=17.0' \
+          CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
