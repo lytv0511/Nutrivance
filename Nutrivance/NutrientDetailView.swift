@@ -103,17 +103,17 @@ struct NutrientDetailView: View {
     ]
     
     let themeColors: [String: Color] = [
-        "Carbs": Color.green.opacity(0.7),        // Darker green
-        "Protein": Color.orange.opacity(0.7),     // Darker orange
-        "Fats": Color.blue.opacity(0.7),          // Darker blue
-        "Calories": Color.red.opacity(0.7),       // Darker red
-        "Fiber": Color.purple.opacity(0.7),       // Darker purple
-        "Vitamins": Color.yellow.opacity(0.7),    // Darker yellow
-        "Minerals": Color.teal.opacity(0.7),      // Darker teal
-        "Water": Color.cyan.opacity(0.7),         // Darker cyan
-        "Phytochemicals": Color.pink.opacity(0.7), // Darker pink
-        "Antioxidants": Color.indigo.opacity(0.7), // Darker indigo
-        "Electrolytes": Color.mint.opacity(0.7)    // Darker mint
+        "Carbs": Color.green.opacity(0.4),        // Darker green
+        "Protein": Color.orange.opacity(0.4),     // Darker orange
+        "Fats": Color.blue.opacity(0.4),          // Darker blue
+        "Calories": Color.red.opacity(0.4),       // Darker red
+        "Fiber": Color.purple.opacity(0.4),       // Darker purple
+        "Vitamins": Color.yellow.opacity(0.4),    // Darker yellow
+        "Minerals": Color.teal.opacity(0.4),      // Darker teal
+        "Water": Color.cyan.opacity(0.4),         // Darker cyan
+        "Phytochemicals": Color.pink.opacity(0.4), // Darker pink
+        "Antioxidants": Color.indigo.opacity(0.4), // Darker indigo
+        "Electrolytes": Color.mint.opacity(0.4)    // Darker mint
     ]
 
     // Computed property to determine the display value and unit
@@ -133,19 +133,29 @@ struct NutrientDetailView: View {
     }
     
     var body: some View {
+        NavigationStack {
         ZStack {
             LinearGradient(
                 gradient: Gradient(stops: [
                     Gradient.Stop(color: themeColors[nutrientName] ?? Color(.systemBackground), location: 0.0),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.9), location: 0.02),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.8), location: 0.04),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.7), location: 0.06),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.6), location: 0.08),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.5), location: 0.10),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.4), location: 0.12),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.3), location: 0.14),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.2), location: 0.16),
-                    Gradient.Stop(color: Color(.systemBackground).opacity(0.5), location: 0.20),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.95), location: 0.02),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.90), location: 0.04),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.85), location: 0.06),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.80), location: 0.08),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.75), location: 0.10),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.70), location: 0.12),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.65), location: 0.14),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.60), location: 0.16),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.55), location: 0.20),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.50), location: 0.24),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.45), location: 0.28),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.40), location: 0.32),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.35), location: 0.36),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.30), location: 0.40),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.25), location: 0.44),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.20), location: 0.48),
+                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.15), location: 0.52),
+                    Gradient.Stop(color: Color(.systemBackground).opacity(0.10), location: 0.56),
                     Gradient.Stop(color: Color(.systemBackground), location: 1.0)
                 ]),
                 startPoint: .top,
@@ -154,55 +164,57 @@ struct NutrientDetailView: View {
             .ignoresSafeArea()
             GeometryReader { geometry in
                 ScrollView {
-                    VStack(spacing: 10) {
-                        Text(nutrientName)
-                            .font(.largeTitle)
-                            .bold()
-                            .padding()
-                        
+                    let columns = horizontalSizeClass == .regular ?
+                        Array(repeating: GridItem(.flexible(), spacing: 10), count: 3) :
+                        Array(repeating: GridItem(.flexible(), spacing: 10), count: 1)
+
+                    LazyVGrid(columns: columns, spacing: 10) {
                         if isGroupCategory(nutrientName) {
-                            // Category overview card
                             if let details = nutrientDetails[nutrientName] {
                                 NutrientCard(title: "Category Overview",
-                                             content: details.todayConsumption,
-                                             cardWidth: geometry.size.width * 0.9,
-                                             titleColor: themeColors[nutrientName] ?? .red,
-                                             symbolName: "doc.text.magnifyingglass")
+                                            content: details.todayConsumption,
+                                            cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9,
+                                            titleColor: .red,
+                                            symbolName: "doc.text.magnifyingglass")
                             }
                             
-                            // Detailed breakdown of subcategories
                             CategoryDetailView(for: nutrientName)
-                                .frame(width: geometry.size.width * 0.9)
+                                .frame(width: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9)
                             
-                            // Keep existing information cards for the category
                             if let details = nutrientDetails[nutrientName] {
-                                NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
-                                NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
-                                NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
-                                NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
-                                NutrientCard(title: "Benefits", content: details.benefits, cardWidth: geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
-                            }
-                        } else {
-                            // Single nutrient view with all cards
-                            if let details = nutrientDetails[nutrientName] {
-                                NutrientCard(title: "Today's Consumption",
-                                             content: displayValue,
-                                             cardWidth: geometry.size.width * 0.9,
-                                             titleColor: themeColors[nutrientName] ?? .red,
-                                             symbolName: "doc.text.magnifyingglass")
-                                
-                                NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
-                                NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
-                                NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
-                                NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
-                                NutrientCard(title: "Benefits", content: details.benefits, cardWidth: geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
+                                Group {
+                                    NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
+                                    NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
+                                    NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
+                                    NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
+                                    NutrientCard(title: "Benefits", content: details.benefits, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
+                                    }
+                                }
+                            } else {
+                                if let details = nutrientDetails[nutrientName] {
+                                    Group {
+                                        NutrientCard(title: "Today's Consumption",
+                                                    content: displayValue,
+                                                    cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9,
+                                                    titleColor: .red,
+                                                    symbolName: "doc.text.magnifyingglass")
+                                        
+                                        NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
+                                        NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
+                                        NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
+                                        NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
+                                        NutrientCard(title: "Benefits", content: details.benefits, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
+                                    }
+                                }
                             }
                         }
+
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+                    .navigationTitle(nutrientName)
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding()
             }
         }
         .onAppear {
@@ -268,35 +280,74 @@ struct NutrientDetailView: View {
         let benefits: String
     }
 
-    struct NutrientCard: View {
-        let title: String
-        let content: String
-        let cardWidth: CGFloat
-        let titleColor: Color
-        let symbolName: String
+struct NutrientCard: View {
+    let title: String
+    let content: String
+    let cardWidth: CGFloat
+    let titleColor: Color
+    let symbolName: String
 
-        var body: some View {
-            HStack {
-                Image(systemName: symbolName)
-                    .foregroundColor(titleColor)
-                    .font(.title)
-                    .padding(.trailing)
-
-                VStack(alignment: .leading) {
-                    Text(title)
-                        .font(.headline)
-                        .padding(.bottom, 5)
-                        .foregroundColor(titleColor)
-                    Text(content)
-                        .font(.body)
-                }
+    private func parseContent() -> [(String, Bool)] {
+        let pattern = "([0-9]+[.-]?[0-9]*)"
+        let regex = try! NSRegularExpression(pattern: pattern)
+        let nsString = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: nsString.length))
+        
+        var segments: [(String, Bool)] = []
+        var currentIndex = 0
+        
+        for match in matches {
+            let numberRange = match.range(at: 1)
+            
+            if currentIndex < numberRange.location {
+                segments.append((nsString.substring(with: NSRange(location: currentIndex, length: numberRange.location - currentIndex)), false))
             }
-            .padding()
-            .frame(width: cardWidth)
-            .background(Color.white.opacity(0.1))
-            .cornerRadius(10)
+            
+            segments.append((nsString.substring(with: numberRange), true))
+            currentIndex = numberRange.location + numberRange.length
+        }
+        
+        if currentIndex < nsString.length {
+            segments.append((nsString.substring(from: currentIndex), false))
+        }
+        
+        return segments
+    }
+
+    @ViewBuilder
+    private func formatContent() -> some View {
+        let segments = parseContent()
+        HStack(spacing: 0) {
+            ForEach(segments.indices, id: \.self) { index in
+                Text(segments[index].0)
+                    .font(segments[index].1 ? .title2 : .body)
+                    .fontWeight(segments[index].1 ? .bold : .bold)
+                    .foregroundColor(segments[index].1 ? .primary : .secondary)
+            }
         }
     }
+    var body: some View {
+        HStack {
+            Image(systemName: symbolName)
+                .foregroundColor(titleColor)
+                .font(.title)
+                .padding(.trailing)
+
+            VStack(alignment: .leading) {
+                Text(title)
+                    .font(.headline)
+                    .padding(.bottom, 5)
+                    .foregroundColor(titleColor)
+                formatContent()
+            }
+        }
+        .padding()
+        .frame(width: cardWidth, height: 125)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
+    }
+}
+
+
 
     struct NutrientDetailView_Previews: PreviewProvider {
         static var previews: some View {

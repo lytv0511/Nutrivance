@@ -27,33 +27,9 @@
 		15B273D12CECBB44004E6931 /* gpu_nms.mm in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D02CECBB44004E6931 /* gpu_nms.mm */; };
 		15B273D32CECBCB1004E6931 /* NutritionExtractorWrapper.mm in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D22CECBCA3004E6931 /* NutritionExtractorWrapper.mm */; };
 		15B273D62CECBD25004E6931 /* NutritionTableDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D52CECBD25004E6931 /* NutritionTableDetector.swift */; };
-		15C033F72D0DD504000EBCD2 /* fsmonitor-watchman.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CA2D0DD504000EBCD2 /* fsmonitor-watchman.sample */; };
-		15C033F82D0DD504000EBCD2 /* pack-53866348666c32e02e926a26138dced996fd0dbe.pack in Resources */ = {isa = PBXBuildFile; fileRef = 15C033E42D0DD504000EBCD2 /* pack-53866348666c32e02e926a26138dced996fd0dbe.pack */; };
-		15C033F92D0DD504000EBCD2 /* commit-msg.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033C92D0DD504000EBCD2 /* commit-msg.sample */; };
-		15C033FA2D0DD504000EBCD2 /* packed-refs in Resources */ = {isa = PBXBuildFile; fileRef = 15C033F22D0DD504000EBCD2 /* packed-refs */; };
-		15C033FB2D0DD504000EBCD2 /* description in Resources */ = {isa = PBXBuildFile; fileRef = 15C033EF2D0DD504000EBCD2 /* description */; };
-		15C033FD2D0DD504000EBCD2 /* main in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D82D0DD504000EBCD2 /* main */; };
-		15C033FE2D0DD504000EBCD2 /* main in Resources */ = {isa = PBXBuildFile; fileRef = 15C033E72D0DD504000EBCD2 /* main */; };
-		15C033FF2D0DD504000EBCD2 /* exclude in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D62D0DD504000EBCD2 /* exclude */; };
-		15C034002D0DD504000EBCD2 /* config in Resources */ = {isa = PBXBuildFile; fileRef = 15C033EE2D0DD504000EBCD2 /* config */; };
-		15C034012D0DD504000EBCD2 /* pre-rebase.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D02D0DD504000EBCD2 /* pre-rebase.sample */; };
-		15C034022D0DD504000EBCD2 /* HEAD in Resources */ = {isa = PBXBuildFile; fileRef = 15C033F02D0DD504000EBCD2 /* HEAD */; };
-		15C034032D0DD504000EBCD2 /* update.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D42D0DD504000EBCD2 /* update.sample */; };
-		15C034042D0DD504000EBCD2 /* HEAD in Resources */ = {isa = PBXBuildFile; fileRef = 15C033DA2D0DD504000EBCD2 /* HEAD */; };
-		15C034052D0DD504000EBCD2 /* index in Resources */ = {isa = PBXBuildFile; fileRef = 15C033F12D0DD504000EBCD2 /* index */; };
-		15C034062D0DD504000EBCD2 /* 7d5dd9314e016d3bb88f0a582e742184d66275 in Resources */ = {isa = PBXBuildFile; fileRef = 15C033E02D0DD504000EBCD2 /* 7d5dd9314e016d3bb88f0a582e742184d66275 */; };
-		15C034072D0DD504000EBCD2 /* push-to-checkout.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D32D0DD504000EBCD2 /* push-to-checkout.sample */; };
-		15C034082D0DD504000EBCD2 /* HEAD in Resources */ = {isa = PBXBuildFile; fileRef = 15C033E92D0DD504000EBCD2 /* HEAD */; };
-		15C034092D0DD504000EBCD2 /* applypatch-msg.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033C82D0DD504000EBCD2 /* applypatch-msg.sample */; };
-		15C0340A2D0DD504000EBCD2 /* pre-commit.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CD2D0DD504000EBCD2 /* pre-commit.sample */; };
-		15C0340B2D0DD504000EBCD2 /* HEAD in Resources */ = {isa = PBXBuildFile; fileRef = 15C033DE2D0DD504000EBCD2 /* HEAD */; };
-		15C0340C2D0DD504000EBCD2 /* prepare-commit-msg.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D22D0DD504000EBCD2 /* prepare-commit-msg.sample */; };
-		15C0340D2D0DD504000EBCD2 /* pack-53866348666c32e02e926a26138dced996fd0dbe.idx in Resources */ = {isa = PBXBuildFile; fileRef = 15C033E32D0DD504000EBCD2 /* pack-53866348666c32e02e926a26138dced996fd0dbe.idx */; };
-		15C0340E2D0DD504000EBCD2 /* pre-merge-commit.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CE2D0DD504000EBCD2 /* pre-merge-commit.sample */; };
-		15C0340F2D0DD504000EBCD2 /* pre-push.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CF2D0DD504000EBCD2 /* pre-push.sample */; };
-		15C034102D0DD504000EBCD2 /* pre-applypatch.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CC2D0DD504000EBCD2 /* pre-applypatch.sample */; };
-		15C034112D0DD504000EBCD2 /* post-update.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033CB2D0DD504000EBCD2 /* post-update.sample */; };
-		15C034122D0DD504000EBCD2 /* pre-receive.sample in Resources */ = {isa = PBXBuildFile; fileRef = 15C033D12D0DD504000EBCD2 /* pre-receive.sample */; };
+		15BFD16F2D0E252E00E7847E /* NutrientCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */; };
+		15BFD1712D106F9600E7847E /* GoalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD1702D106F9600E7847E /* GoalsView.swift */; };
+		15BFD1732D108D7500E7847E /* NutrientInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD1722D108D7500E7847E /* NutrientInfo.swift */; };
 		15C034142D0DDA1B000EBCD2 /* ios.yml in Resources */ = {isa = PBXBuildFile; fileRef = 15C034132D0DDA1B000EBCD2 /* ios.yml */; };
 		15CB57042CEEB87100A6E970 /* TableDetection.metal in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57032CEEB86800A6E970 /* TableDetection.metal */; };
 		15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */; };
@@ -145,6 +121,9 @@
 		15B273D22CECBCA3004E6931 /* NutritionExtractorWrapper.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = NutritionExtractorWrapper.mm; sourceTree = "<group>"; };
 		15B273D42CECBCBC004E6931 /* NutritionExtractorWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NutritionExtractorWrapper.h; sourceTree = "<group>"; };
 		15B273D52CECBD25004E6931 /* NutritionTableDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionTableDetector.swift; sourceTree = "<group>"; };
+		15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientCharts.swift; sourceTree = "<group>"; };
+		15BFD1702D106F9600E7847E /* GoalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalsView.swift; sourceTree = "<group>"; };
+		15BFD1722D108D7500E7847E /* NutrientInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientInfo.swift; sourceTree = "<group>"; };
 		15C033C82D0DD504000EBCD2 /* applypatch-msg.sample */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "applypatch-msg.sample"; sourceTree = "<group>"; };
 		15C033C92D0DD504000EBCD2 /* commit-msg.sample */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "commit-msg.sample"; sourceTree = "<group>"; };
 		15C033CA2D0DD504000EBCD2 /* fsmonitor-watchman.sample */ = {isa = PBXFileReference; lastKnownFileType = text.script.perl; path = "fsmonitor-watchman.sample"; sourceTree = "<group>"; };
@@ -500,12 +479,15 @@
 				159F516D2CD55871001F5FFC /* Nutrivance.entitlements */,
 				15D7FFA02CD142690048E050 /* NutrivanceApp.swift */,
 				15D7FFCC2CD148A00048E050 /* WheelPicker.swift */,
+				15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */,
 				15F5865C2CF783F3006D3A9C /* HealthInsightsView.swift */,
+				15BFD1702D106F9600E7847E /* GoalsView.swift */,
 				15F5865E2CF7840F006D3A9C /* HistoryView.swift */,
 				15F586602CF7845B006D3A9C /* SavedMealsView.swift */,
 				15F586622CF7846A006D3A9C /* AddMealView.swift */,
 				15D7FFA42CD142690048E050 /* Item.swift */,
 				15D7FFA62CD1426A0048E050 /* Assets.xcassets */,
+				15BFD1722D108D7500E7847E /* NutrientInfo.swift */,
 				15D7FFA82CD1426A0048E050 /* Preview Content */,
 				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
 				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
@@ -701,34 +683,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				15C033F72D0DD504000EBCD2 /* fsmonitor-watchman.sample in Resources */,
-				15C033F82D0DD504000EBCD2 /* pack-53866348666c32e02e926a26138dced996fd0dbe.pack in Resources */,
-				15C033F92D0DD504000EBCD2 /* commit-msg.sample in Resources */,
-				15C033FA2D0DD504000EBCD2 /* packed-refs in Resources */,
-				15C033FB2D0DD504000EBCD2 /* description in Resources */,
-				15C033FD2D0DD504000EBCD2 /* main in Resources */,
-				15C033FE2D0DD504000EBCD2 /* main in Resources */,
-				15C033FF2D0DD504000EBCD2 /* exclude in Resources */,
-				15C034002D0DD504000EBCD2 /* config in Resources */,
-				15C034012D0DD504000EBCD2 /* pre-rebase.sample in Resources */,
-				15C034022D0DD504000EBCD2 /* HEAD in Resources */,
-				15C034032D0DD504000EBCD2 /* update.sample in Resources */,
-				15C034042D0DD504000EBCD2 /* HEAD in Resources */,
-				15C034052D0DD504000EBCD2 /* index in Resources */,
-				15C034062D0DD504000EBCD2 /* 7d5dd9314e016d3bb88f0a582e742184d66275 in Resources */,
-				15C034072D0DD504000EBCD2 /* push-to-checkout.sample in Resources */,
-				15C034082D0DD504000EBCD2 /* HEAD in Resources */,
 				15C034142D0DDA1B000EBCD2 /* ios.yml in Resources */,
-				15C034092D0DD504000EBCD2 /* applypatch-msg.sample in Resources */,
-				15C0340A2D0DD504000EBCD2 /* pre-commit.sample in Resources */,
-				15C0340B2D0DD504000EBCD2 /* HEAD in Resources */,
-				15C0340C2D0DD504000EBCD2 /* prepare-commit-msg.sample in Resources */,
-				15C0340D2D0DD504000EBCD2 /* pack-53866348666c32e02e926a26138dced996fd0dbe.idx in Resources */,
-				15C0340E2D0DD504000EBCD2 /* pre-merge-commit.sample in Resources */,
-				15C0340F2D0DD504000EBCD2 /* pre-push.sample in Resources */,
-				15C034102D0DD504000EBCD2 /* pre-applypatch.sample in Resources */,
-				15C034112D0DD504000EBCD2 /* post-update.sample in Resources */,
-				15C034122D0DD504000EBCD2 /* pre-receive.sample in Resources */,
 				15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */,
 				15D7FFAA2CD1426A0048E050 /* Preview Assets.xcassets in Resources */,
 				15D7FFA72CD1426A0048E050 /* Assets.xcassets in Resources */,
@@ -763,6 +718,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				15BFD1712D106F9600E7847E /* GoalsView.swift in Sources */,
 				1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */,
 				15D7FFD12CD159010048E050 /* NutrientDetailView.swift in Sources */,
 				15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */,
@@ -792,7 +748,9 @@
 				15A70DA22CF0F5CC007FBC5D /* SearchView.swift in Sources */,
 				15CB57142CEEC25000A6E970 /* NutrientData.swift in Sources */,
 				159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */,
+				15BFD16F2D0E252E00E7847E /* NutrientCharts.swift in Sources */,
 				15FE8B902CE40B2F00495A2D /* CameraOCRView.swift in Sources */,
+				15BFD1732D108D7500E7847E /* NutrientInfo.swift in Sources */,
 				15B273D32CECBCB1004E6931 /* NutritionExtractorWrapper.mm in Sources */,
 				159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */,
 				156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */,
