@@ -13,7 +13,7 @@ struct ContentView_iPad: View {
             if showHome {
                 HomeView() // Show the home page by default
             } else if let nutrient = selectedNutrient {
-                NutrientDetailView(nutrientName: nutrient)
+//                NutrientDetailView(nutrientName: nutrient)
             } else {
                 Text("Select a nutrient")
                     .foregroundColor(.secondary)

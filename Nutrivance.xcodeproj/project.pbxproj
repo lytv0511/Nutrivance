@@ -18,6 +18,7 @@
 		159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51792CD70DBD001F5FFC /* NutrientModel.swift */; };
 		159F517C2CD715AA001F5FFC /* ContentView_iPad_alt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */; };
 		159F517E2CD7C8FB001F5FFC /* NutrientCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */; };
+		15A53B672D3AF4880043287C /* SubcategoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A53B662D3AF4880043287C /* SubcategoryDetailView.swift */; };
 		15A70DA22CF0F5CC007FBC5D /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A70DA12CF0F5CC007FBC5D /* SearchView.swift */; };
 		15A70DB52CF119AD007FBC5D /* CloudKitImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A70DB42CF119AD007FBC5D /* CloudKitImportView.swift */; };
 		15A70DB72CF119DE007FBC5D /* CloudKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A70DB62CF119DE007FBC5D /* CloudKitManager.swift */; };
@@ -109,6 +110,7 @@
 		159F51792CD70DBD001F5FFC /* NutrientModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientModel.swift; sourceTree = "<group>"; };
 		159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad_alt.swift; sourceTree = "<group>"; };
 		159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientCardView.swift; sourceTree = "<group>"; };
+		15A53B662D3AF4880043287C /* SubcategoryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubcategoryDetailView.swift; sourceTree = "<group>"; };
 		15A70DA12CF0F5CC007FBC5D /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		15A70DA32CF10814007FBC5D /* WaterWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WaterWidgetExtension.entitlements; sourceTree = "<group>"; };
 		15A70DB42CF119AD007FBC5D /* CloudKitImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitImportView.swift; sourceTree = "<group>"; };
@@ -495,6 +497,7 @@
 				159F516E2CD5591E001F5FFC /* HealthKitManager.swift */,
 				15FE8B8F2CE40B2F00495A2D /* CameraOCRView.swift */,
 				15D7FFD02CD159010048E050 /* NutrientDetailView.swift */,
+				15A53B662D3AF4880043287C /* SubcategoryDetailView.swift */,
 				15CB570F2CEEC22300A6E970 /* NutrientRow.swift */,
 				15CB57112CEEC22F00A6E970 /* HealthKitImportView.swift */,
 				15A70DB42CF119AD007FBC5D /* CloudKitImportView.swift */,
@@ -743,6 +746,7 @@
 				159F517C2CD715AA001F5FFC /* ContentView_iPad_alt.swift in Sources */,
 				15D7FFA12CD142690048E050 /* NutrivanceApp.swift in Sources */,
 				159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */,
+				15A53B672D3AF4880043287C /* SubcategoryDetailView.swift in Sources */,
 				1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */,
 				15CB57042CEEB87100A6E970 /* TableDetection.metal in Sources */,
 				15A70DA22CF0F5CC007FBC5D /* SearchView.swift in Sources */,
