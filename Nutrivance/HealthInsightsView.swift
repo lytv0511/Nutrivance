@@ -24,12 +24,12 @@ struct HealthInsightsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
-                    Text("Health Insights")
-                        .font(.largeTitle)
-                        .bold()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
+                VStack {
+//                    Text("Health Insights")
+//                        .font(.largeTitle)
+//                        .bold()
+//                        .frame(maxWidth: .infinity, alignment: .leading)
+//                        .padding(.horizontal)
                     
                     Picker("Time Frame", selection: $selectedTimeFrame) {
                         ForEach(TimeFrame.allCases, id: \.self) { timeFrame in
@@ -61,6 +61,7 @@ struct HealthInsightsView: View {
         .onAppear {
             fetchDataForTimeFrame()
         }
+        .navigationTitle(Text("Health Insights"))
     }
     
     struct QuickActionButtons: View {

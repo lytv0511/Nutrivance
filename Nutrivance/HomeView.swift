@@ -18,18 +18,18 @@ struct HomeView: View {
                 .ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        HStack (spacing: 10) {
-                            Image(systemName: "leaf.fill")
-                                .symbolVariant(.fill)
-                                .foregroundColor(.green)
-                                .font(.largeTitle)
-                                .bold()
-                                .padding(.leading, 10)
-                                .padding(.trailing, 10)
-                            Text("Welcome to Nutrivance~")
-                                .font(.largeTitle)
-                                .bold()
-                        }
+//                        HStack (spacing: 10) {
+//                            Image(systemName: "leaf.fill")
+//                                .symbolVariant(.fill)
+//                                .foregroundColor(.green)
+//                                .font(.largeTitle)
+//                                .bold()
+//                                .padding(.leading, 10)
+//                                .padding(.trailing, 10)
+//                            Text("Welcome to Nutrivance~")
+//                                .font(.largeTitle)
+//                                .bold()
+//                        }
                         Text(timeBasedGreeting() + ", learn more about your health")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
@@ -60,6 +60,7 @@ struct HomeView: View {
                 //            .navigationTitle("Home")
             }
         }
+        .navigationTitle("Welcome to Nutrivance~")
     }
     
     // Helper function to determine the greeting based on the current time

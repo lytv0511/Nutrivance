@@ -31,15 +31,15 @@ public struct NutritionScannerView: View {
     public var body: some View {
         NavigationStack {
             VStack {
-                HStack {
-                    Text("Labels")
-                        .font(.largeTitle)
-                        .bold()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                    Spacer()
-                }
-                
+//                HStack {
+//                    Text("Labels")
+//                        .font(.largeTitle)
+//                        .bold()
+//                        .frame(maxWidth: .infinity, alignment: .leading)
+//                        .padding(.horizontal)
+//                    Spacer()
+//                }
+//                
                 // Image preview or placeholder
                 ZStack {
                     if let image = selectedImage {
@@ -203,6 +203,7 @@ public struct NutritionScannerView: View {
                 processImage(image)
             }
         }
+        .navigationTitle(Text("Labels"))
     }
     
     // Nutrient Icon Mapping

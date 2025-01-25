@@ -25,12 +25,12 @@ struct SearchView: View {
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Text("Add Nutrients")
-                    .font(.largeTitle)
-                    .bold()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
+            VStack {
+//                Text("Add Nutrients")
+//                    .font(.largeTitle)
+//                    .bold()
+//                    .frame(maxWidth: .infinity, alignment: .leading)
+//                    .padding(.horizontal)
                 
                 // Enhanced search bar
                 HStack {
@@ -169,6 +169,7 @@ struct SearchView: View {
                 }
             }
         }
+        .navigationTitle("Add Nutrients")
     }
     
     private func processInput() {

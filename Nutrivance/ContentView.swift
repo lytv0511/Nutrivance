@@ -8,7 +8,7 @@ struct ContentView: View {
     var body: some View {
         Group { // Use Group to apply modifiers properly
             if horizontalSizeClass == .regular {
-                ContentView_iPad_alt()
+                ContentView_iPad()
             } else {
 //                ContentView_iPhone()
                 ContentView_iPhone_alt()
