@@ -110,6 +110,7 @@ struct ContentView_iPad_alt: View {
     
     var body: some View {
         TabView {
+            TabSection {
                 Tab("Home", systemImage: "house.fill") {
                     HomeView()
                 }
@@ -121,17 +122,25 @@ struct ContentView_iPad_alt: View {
                 }
                 .customizationID("iPad.tab.insights")
                 .defaultVisibility(.visible, for: .tabBar)
-            
+                
                 Tab("Labels", systemImage: "doc.text.viewfinder") {
                     NutritionScannerView()
                 }
                 .customizationID("iPad.tab.camera")
                 .defaultVisibility(.visible, for: .tabBar)
-            
+                
                 Tab(role: .search) {
                     SearchView()
                 }
                 .customizationID("iPad.tab.search")
+            } header: {
+                Text("Nutrition")
+                    .font(.headline)
+                    .padding(.leading, 16) // Add padding to the left
+                    .padding(.top, 8) // Add padding to the top
+            }
+            .defaultVisibility(.hidden, for: .tabBar)
+            .customizationID("iPad.tabsection.nutrition") // Custom ID for Micronutrient Section
             
             TabSection {
                 Tab("Calories", systemImage: "flame") {
