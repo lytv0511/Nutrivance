@@ -157,7 +157,8 @@ struct HealthInsightsView: View {
     
     private func fetchTodayData() {
         let nutrients = ["calories", "protein", "carbs", "fats", "water"]
-        var data: [String: Double] = [:]
+        let data = [String: Double]()
+        let _: [String: Double] = [:]
         
         let group = DispatchGroup()
         
@@ -197,28 +198,25 @@ struct HealthInsightsView: View {
     
     private func fetchHistoricalData(from startDate: Date, to endDate: Date) {
         let nutrients = ["calories", "protein", "carbs", "fats", "water"]
-        var aggregatedData: [String: Double] = [:]
-        
         let group = DispatchGroup()
         
         for nutrient in nutrients {
             group.enter()
-            // Update the fetchNutrientData calls
-            // Inside fetchHistoricalData function
-            healthStore.fetchNutrientData(for: nutrient) { result, error in
-                if let result = result {
+            healthStore.fetchNutrientData(for: nutrient) { value, error in
+                if value != nil {
                     DispatchQueue.main.async {
-                        nutrientValues[nutrient] = result
+                        // Update UI or data model here
+                        updateNutrientData(nutrient: nutrient, value: value!)
                     }
                 }
                 group.leave()
             }
         }
-        
-        group.notify(queue: .main) {
-            nutrientData = aggregatedData
-            analysisService.analyzeNutrientData(aggregatedData)
-        }
+    }
+
+    private func updateNutrientData(nutrient: String, value: Double) {
+        // Handle the nutrient value update
+        nutrientData[nutrient] = value
     }
 }
 

@@ -1,24 +1,28 @@
-//
-//  GoalsView.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 12/16/24.
-//
-
-import Foundation
 import SwiftUI
 import HealthKit
 
+struct NutritionGoal: Codable, Identifiable {
+    let id: UUID
+    let nutrient: String
+    let target: Double
+    var currentValue: Double
+    let unit: String
+    let deadline: Date
+}
+
+class GoalsViewModel: ObservableObject {
+    @Published var goals: [NutritionGoal] = []
+}
+
 struct GoalsView: View {
     @StateObject private var healthStore = HealthKitManager()
-    @State private var goals: [NutritionGoal] = []
+    @StateObject private var viewModel = GoalsViewModel()
     @State private var showingAddGoal = false
     
     var body: some View {
         NavigationStack {
-            
             List {
-                ForEach(goals) { goal in
+                ForEach(viewModel.goals) { goal in
                     GoalCard(goal: goal)
                 }
                 .onDelete(perform: deleteGoal)
@@ -27,36 +31,38 @@ struct GoalsView: View {
                     Label("Add New Goal", systemImage: "plus.circle.fill")
                 }
             }
-        }
-        .navigationTitle("Nutrition Goals")
-        .sheet(isPresented: $showingAddGoal) {
-            AddGoalView(goals: $goals)
-        }
-        .onAppear {
-            loadGoals()
-            updateGoalProgress()
+            .navigationTitle("Nutrition Goals")
+            .sheet(isPresented: $showingAddGoal) {
+                AddGoalView(goals: $viewModel.goals)
+            }
+            .onAppear {
+                loadGoals()
+                updateGoalProgress()
+            }
         }
     }
     
     private func loadGoals() {
         if let data = UserDefaults.standard.data(forKey: "savedGoals"),
            let savedGoals = try? JSONDecoder().decode([NutritionGoal].self, from: data) {
-            goals = savedGoals
+            viewModel.goals = savedGoals
         }
     }
     
     private func saveGoals() {
-        if let encoded = try? JSONEncoder().encode(goals) {
+        if let encoded = try? JSONEncoder().encode(viewModel.goals) {
             UserDefaults.standard.set(encoded, forKey: "savedGoals")
         }
     }
     
     private func updateGoalProgress() {
-        for (index, goal) in goals.enumerated() {
+        for (index, goal) in viewModel.goals.enumerated() {
             healthStore.fetchNutrientData(for: goal.nutrient.lowercased()) { value, error in
                 if let value = value {
                     DispatchQueue.main.async {
-                        goals[index].currentValue = value
+                        var updatedGoal = goal
+                        updatedGoal.currentValue = value
+                        viewModel.goals[index] = updatedGoal
                         saveGoals()
                     }
                 }
@@ -65,18 +71,9 @@ struct GoalsView: View {
     }
     
     private func deleteGoal(at offsets: IndexSet) {
-        goals.remove(atOffsets: offsets)
+        viewModel.goals.remove(atOffsets: offsets)
         saveGoals()
     }
-}
-
-struct NutritionGoal: Identifiable, Codable {
-    let id = UUID()
-    var nutrient: String
-    var target: Double
-    var currentValue: Double
-    var unit: String
-    var deadline: Date
 }
 
 struct GoalCard: View {
@@ -114,8 +111,10 @@ struct AddGoalView: View {
     @State private var deadline = Date()
     
     let nutrients = [
-        "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins", "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"
+        "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins", "Minerals",
+        "Water", "Phytochemicals", "Antioxidants", "Electrolytes"
     ]
+    
     var body: some View {
         NavigationStack {
             Form {
@@ -123,7 +122,6 @@ struct AddGoalView: View {
                     Picker("Select Nutrient", selection: $selectedNutrient) {
                         ForEach(nutrients, id: \.self) { nutrient in
                             Text(nutrient)
-                                .foregroundColor(getNutrientColor(for: nutrient))
                         }
                     }
                 }
@@ -145,24 +143,20 @@ struct AddGoalView: View {
             )
         }
     }
+    
     private func saveGoal() {
-       guard let target = Double(targetValue) else { return }
-       
-       let newGoal = NutritionGoal(
-           nutrient: selectedNutrient,
-           target: target,
-           currentValue: 0,
-           unit: NutritionUnit.getUnit(for: selectedNutrient),
-           deadline: deadline
-       )
-       
-       goals.append(newGoal)
-       
-       // Save to UserDefaults right after adding the new goal
-       if let encoded = try? JSONEncoder().encode(goals) {
-           UserDefaults.standard.set(encoded, forKey: "savedGoals")
-       }
-       
-       dismiss()
-   }
+        guard let target = Double(targetValue) else { return }
+        
+        let newGoal = NutritionGoal(
+            id: UUID(),
+            nutrient: selectedNutrient,
+            target: target,
+            currentValue: 0,
+            unit: NutritionUnit.getUnit(for: selectedNutrient),
+            deadline: deadline
+        )
+        
+        goals.append(newGoal)
+        dismiss()
+    }
 }

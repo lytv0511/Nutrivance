@@ -10,10 +10,8 @@ struct ContentView_iPad: View {
         NavigationSplitView {
             SidebarView(selectedNutrient: $selectedNutrient, showCamera: $showCamera, showHome: $showHome)
         } detail: {
-            if showHome {
+            if showHome && selectedNutrient == nil {
                 HomeView() // Show the home page by default
-            } else if let nutrient = selectedNutrient {
-//                NutrientDetailView(nutrientName: nutrient)
             } else {
                 Text("Select a nutrient")
                     .foregroundColor(.secondary)

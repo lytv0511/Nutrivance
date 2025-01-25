@@ -393,7 +393,7 @@ class HealthKitManager: ObservableObject {
                         }
                     }()
                     
-                    if var entry = entriesByID[entryId] {
+                    if let entry = entriesByID[entryId] {
                         var updatedNutrients = entry.nutrients
                         updatedNutrients[nutrientKey] = sample.quantity.doubleValue(for: self.unit(for: nutrientKey))
                         entriesByID[entryId] = NutritionEntry(
@@ -405,14 +405,6 @@ class HealthKitManager: ObservableObject {
                             category: self.determineCategory(for: nutrientKey)
                         )
                     } else {
-                        let entrySource: NutritionEntry.EntrySource = {
-                            switch source {
-                            case "scanner": return .scanner
-                            case "search": return .search
-                            default: return .savedMeal
-                            }
-                        }()
-                        
                         entriesByID[entryId] = NutritionEntry(
                             id: UUID(uuidString: entryId) ?? UUID(),
                             timestamp: sample.startDate,

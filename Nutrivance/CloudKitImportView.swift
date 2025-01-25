@@ -1,19 +1,9 @@
-//
-//  CloudKitImportView.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 11/22/24.
-//
-
-import Foundation
 import SwiftUI
 import CloudKit
 
-import SwiftUI
-
 struct CloudKitImportView_Mac: View {
     let nutrients: [NutrientData]
-    @StateObject private var cloudKitManager = CloudKitManager() // Using the CloudKitManager to manage CloudKit operations
+    @StateObject private var cloudKitManager = CloudKitManager()
     @Environment(\.dismiss) private var dismiss
     @State private var selectedNutrients: Set<String> = []
 

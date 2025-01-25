@@ -14,7 +14,7 @@ GPUNonMaxSuppression::GPUNonMaxSuppression() {
 
 std::vector<float> GPUNonMaxSuppression::process(const std::vector<float>& boxes, float thresh) {
     NSUInteger bufferSize = boxes.size() * sizeof(float);
-    id<MTLBuffer> inputBuffer = [_device newBufferWithBytes:boxes.data() length:bufferSize options:MTLResourceStorageModeShared];
+//    id<MTLBuffer> inputBuffer = [_device newBufferWithBytes:boxes.data() length:bufferSize options:MTLResourceStorageModeShared];
     id<MTLBuffer> outputBuffer = [_device newBufferWithLength:bufferSize options:MTLResourceStorageModeShared];
     
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];

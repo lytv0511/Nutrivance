@@ -80,7 +80,7 @@
 }
 
 - (id<MTLBuffer>)prepareInputBuffer:(CVPixelBufferRef)pixelBuffer {
-    size_t width = CVPixelBufferGetWidth(pixelBuffer);
+//    size_t width = CVPixelBufferGetWidth(pixelBuffer);
     size_t height = CVPixelBufferGetHeight(pixelBuffer);
     size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
     

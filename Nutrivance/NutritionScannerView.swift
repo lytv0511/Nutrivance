@@ -270,9 +270,11 @@ public struct NutritionScannerView: View {
             }))
             
             // Present the alert
-            if let rootVC = UIApplication.shared.windows.first?.rootViewController {
-                rootVC.present(alert, animated: true, completion: nil)
-            }
+            // Update deprecated windows call
+            let windowScene = UIApplication.shared.connectedScenes
+                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
+            _ = windowScene?.windows.first(where: { $0.isKeyWindow })
+
         }
     }
     
