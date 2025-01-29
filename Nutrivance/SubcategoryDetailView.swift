@@ -22,6 +22,8 @@ struct SubcategoryDetailView: View {
     let nutrientName: String
     @State private var value: Double?
     @StateObject private var healthStore = HealthKitManager()
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var navigationState: NavigationState
     
     private var nutrientInfo: NutrientDetailInfo {
         NutrientDatabase.getInfo(for: nutrientName)
@@ -59,7 +61,22 @@ struct SubcategoryDetailView: View {
         .navigationTitle(nutrientName)
         .onAppear {
             fetchCurrentValue()
+            navigationState.setDismissAction {
+                dismiss()
+            }
         }
+        .onDisappear {
+            navigationState.clearDismissAction()
+        }
+
+//        .toolbar {
+//            ToolbarItem(placement: .navigationBarTrailing) {
+//                Button(action: { dismiss() }) {
+//                    Image(systemName: "keyboard")
+//                }
+//                .keyboardShortcut("[", modifiers: .command)
+//            }
+//        }
     }
     
     private func fetchCurrentValue() {

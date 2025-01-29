@@ -450,7 +450,7 @@ struct NutrientSubcategoryCard: View {
                     ForEach(nutrients, id: \.self) { nutrient in
                         NavigationLink(
                             destination: SubcategoryDetailView(nutrientName: nutrient)
-                                .navigationTransition(.zoom(sourceID: nutrient, in: namespace))
+//                                .navigationTransition(.zoom(sourceID: nutrient, in: namespace))
                         ) {
                             HStack {
                                 Text(nutrient)

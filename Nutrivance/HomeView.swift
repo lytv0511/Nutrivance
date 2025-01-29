@@ -59,8 +59,8 @@ struct HomeView: View {
                 }
                 //            .navigationTitle("Home")
             }
+            .navigationTitle(Text("Home"))
         }
-        .navigationTitle("Welcome to Nutrivance~")
     }
     
     // Helper function to determine the greeting based on the current time

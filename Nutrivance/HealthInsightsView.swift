@@ -14,6 +14,8 @@ struct HealthInsightsView: View {
     @State private var nutrientData: [String: Double] = [:]
     @State private var selectedTimeFrame: TimeFrame = .daily
     @State private var nutrientValues: [String: Double] = [:]
+    @EnvironmentObject var navigationState: NavigationState
+    @Environment(\.dismiss) private var dismiss
     
     enum TimeFrame: String, CaseIterable {
         case daily = "Today"
@@ -23,45 +25,87 @@ struct HealthInsightsView: View {
     
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack {
-//                    Text("Health Insights")
-//                        .font(.largeTitle)
-//                        .bold()
-//                        .frame(maxWidth: .infinity, alignment: .leading)
-//                        .padding(.horizontal)
-                    
-                    Picker("Time Frame", selection: $selectedTimeFrame) {
-                        ForEach(TimeFrame.allCases, id: \.self) { timeFrame in
-                            Text(timeFrame.rawValue).tag(timeFrame)
+            ZStack {
+                // Mesh Gradient
+                RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.05, green: 0.1, blue: 0.2),  // Very dark blue
+                        Color(red: 0.02, green: 0.15, blue: 0.05), // Very dark green
+                        Color.black
+                    ]),
+                    center: .topLeading,
+                    startRadius: 200,
+                    endRadius: 1500
+                )
+                .opacity(0.9)
+                .ignoresSafeArea()
+                
+                // Overlay gradient for depth
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.0, green: 0.08, blue: 0.12).opacity(0.7),
+                        Color.clear
+                    ]),
+                    startPoint: .topTrailing,
+                    endPoint: .bottomLeading
+                )
+                .ignoresSafeArea()
+                ScrollView {
+                    VStack {
+                        Text(timeBasedGreeting() + ", learn more about your health")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 20)
+                        Picker("Time Frame", selection: $selectedTimeFrame) {
+                            ForEach(TimeFrame.allCases, id: \.self) { timeFrame in
+                                Text(timeFrame.rawValue).tag(timeFrame)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding()
-                    .onChange(of: selectedTimeFrame) { oldValue, newValue in
-                        fetchDataForTimeFrame()
-                    }
-                    
-                    if analysisService.isAnalyzing {
-                        ProgressView("Analyzing your nutrition data...")
-                            .frame(maxWidth: .infinity)
+                        .pickerStyle(.segmented)
+                        .padding()
+                        .onChange(of: selectedTimeFrame) { oldValue, newValue in
+                            fetchDataForTimeFrame()
+                        }
+                        
+                        if analysisService.isAnalyzing {
+                            ProgressView("Analyzing your nutrition data...")
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                        }
+                        
+                        if !analysisService.insights.isEmpty {
+                            InsightCard(insight: analysisService.insights)
+                        }
+                        
+                        QuickActionButtons(nutrientData: nutrientData)
+                        
+                        NutrientCharts(data: nutrientData)
                             .padding()
                     }
-                    
-                    if !analysisService.insights.isEmpty {
-                        InsightCard(insight: analysisService.insights)
-                    }
-                    
-                    QuickActionButtons(nutrientData: nutrientData)
-                    
-                    NutrientCharts(data: nutrientData)
                 }
+            }
+            .onAppear {
+                fetchDataForTimeFrame()
+            }
+            .navigationTitle(Text("Health Insights"))
+        }
+//        .toolbar {
+//           ToolbarItem(placement: .navigationBarTrailing) {
+//               Button(action: { dismiss() }) {
+//                   Image(systemName: "keyboard")
+//               }
+//               .keyboardShortcut("[", modifiers: .command)
+//           }
+//       }
+        .onDisappear {
+            navigationState.setDismissAction {
+                dismiss()
             }
         }
         .onAppear {
-            fetchDataForTimeFrame()
+            navigationState.clearDismissAction()
         }
-        .navigationTitle(Text("Health Insights"))
     }
     
     struct QuickActionButtons: View {
@@ -69,6 +113,11 @@ struct HealthInsightsView: View {
         @Environment(\.horizontalSizeClass) var horizontalSizeClass
         
         var body: some View {
+            Text("Action Buttons")
+                .font(.title2)
+                .bold()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 25)
             Group {
                 if horizontalSizeClass == .regular {
                     HStack(spacing: 20) {
@@ -123,8 +172,8 @@ struct HealthInsightsView: View {
         private var actionButtons: [(title: String, icon: String, description: String)] {
             [
                 ("Log Meal", "plus.circle.fill", "Quick access to saved meals"),
-                ("View History", "clock.fill", "Track your nutrition trends"),
-                ("Set Goals", "target", "Manage nutrition targets"),
+                ("View History", "clock.fill", "Easily track your nutrition trends"),
+                ("Set Goals", "target", "Effectively manage nutrition targets"),
                 ("Get Tips", "lightbulb.fill", "Personalized recommendations")
             ]
         }
@@ -242,5 +291,19 @@ struct InsightCard: View {
 struct TipsView: View {
     var body: some View {
         Text("Tips Coming Soon")
+    }
+}
+
+private func timeBasedGreeting() -> String {
+    let hour = Calendar.current.component(.hour, from: Date())
+    switch hour {
+    case 5..<12:
+        return "Good Morning"
+    case 12..<17:
+        return "Good Afternoon"
+    case 17..<21:
+        return "Good Evening"
+    default:
+        return "Good Night"
     }
 }

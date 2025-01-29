@@ -1,5 +1,5 @@
 //
-//  SearchView.swift
+//  LogView.swift
 //  Nutrivance
 //
 //  Created by Vincent Leong on 11/22/24.
@@ -10,7 +10,7 @@ import SwiftUI
 import NaturalLanguage
 import HealthKit
 
-struct SearchView: View {
+struct LogView: View {
     @State private var searchText = ""
     @State private var extractedNutrients: [String: Double] = [:]
     @State private var showConfirmation = false
@@ -25,151 +25,186 @@ struct SearchView: View {
     
     var body: some View {
         NavigationStack {
-            VStack {
-//                Text("Add Nutrients")
-//                    .font(.largeTitle)
-//                    .bold()
-//                    .frame(maxWidth: .infinity, alignment: .leading)
-//                    .padding(.horizontal)
+            ZStack {
+                // Mesh Gradient
+                RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.04, green: 0.15, blue: 0.18),  // Deep teal-blue
+                        Color(red: 0.02, green: 0.13, blue: 0.06),  // Rich dark green
+                        Color.black
+                    ]),
+                    center: .bottomLeading,  // Different position for unique feel
+                    startRadius: 500,
+                    endRadius: 1500
+                )
+                .opacity(0.9)
+                .ignoresSafeArea()
                 
-                // Enhanced search bar
-                HStack {
-                    Image(systemName: "text.bubble")
-                        .foregroundColor(.blue)
-                        .padding(.leading, 10)
-                    
-                    TextField("Describe what you ate...", text: $searchText)
-                        .focused($isSearchBarFocused)
-                        .foregroundColor(.primary)
-                        .padding(.vertical, 8)
-                        .padding(.horizontal)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color.gray.opacity(0.3))
-                        )
-                        .onSubmit {
-                            processInput()
-                        }
-                    
-                    Button(action: processInput) {
-                        Image(systemName: "arrow.right.circle.fill")
-                            .foregroundColor(.blue)
-                            .font(.title2)
-                    }
-                    .hoverEffect(.highlight)
-                }
-                .padding()
-                
-                if extractedNutrients.isEmpty && !isSearchBarFocused {
-                    BubblesView(activeNutrients: Set(), rotationSpeed: 0.001, nutrientValues: [:])
-                        .frame(minHeight: 300)
-                } else if !extractedNutrients.isEmpty && !isSearchBarFocused {
-                    BubblesView(activeNutrients: Set(extractedNutrients.keys), rotationSpeed: 0.005, nutrientValues: extractedNutrients)
-                        .frame(minHeight: 300)
-                }
-                
-                if !extractedNutrients.isEmpty {
-                    VStack(spacing: 15) {
+                // Overlay gradient for depth
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.01, green: 0.11, blue: 0.14).opacity(0.7),
+                        Color.clear
+                    ]),
+                    startPoint: .center,      // Centered fade
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                ScrollView {
+                    VStack {
+                        //                Text("Add Nutrients")
+                        //                    .font(.largeTitle)
+                        //                    .bold()
+                        //                    .frame(maxWidth: .infinity, alignment: .leading)
+                        //                    .padding(.horizontal)
+                        
+                        // Enhanced search bar
                         HStack {
-                            Text("Extracted Nutrients")
-                                .font(.headline)
-                            Spacer()
-                            Button {
-                                showingNutrientSheet = true
-                            } label: {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                    .foregroundStyle(.blue)
-                                    .padding()
+                            Image(systemName: "text.bubble")
+                                .foregroundColor(.blue)
+                                .padding(.leading, 10)
+                            
+                            TextField("Describe what you ate...", text: $searchText)
+                                .focused($isSearchBarFocused)
+                                .foregroundColor(.primary)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal)
+                                .autocorrectionDisabled(true)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color.gray.opacity(0.3))
+                                )
+                                .onSubmit {
+                                    processInput()
+                                }
+                            
+                            Button(action: processInput) {
+                                Image(systemName: "arrow.right.circle.fill")
+                                    .foregroundColor(.blue)
+                                    .font(.title2)
                             }
                             .hoverEffect(.highlight)
                         }
-                        .padding(.top)
-                        .padding(.horizontal)
-                        if horizontalSizeClass == .regular {
-                            ScrollView {
+                        .padding()
+                        
+                        if extractedNutrients.isEmpty && !isSearchBarFocused {
+                            BubblesView(activeNutrients: Set(), rotationSpeed: 0.001, nutrientValues: [:])
+                                .frame(minHeight: 500)
+                        } else if !extractedNutrients.isEmpty && !isSearchBarFocused {
+                            BubblesView(activeNutrients: Set(extractedNutrients.keys), rotationSpeed: 0.005, nutrientValues: extractedNutrients)
+                                .frame(minHeight: 500)
+                        }
+                        
+                        if !extractedNutrients.isEmpty {
+                            VStack(spacing: 15) {
+                                HStack {
+                                    Text("Extracted Nutrients")
+                                        .font(.headline)
+                                    Spacer()
+                                    Button {
+                                        showingNutrientSheet = true
+                                    } label: {
+                                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                            .foregroundStyle(.blue)
+                                            .padding()
+                                    }
+                                    .hoverEffect(.highlight)
+                                }
+                                .padding(.top)
+                                .padding(.horizontal)
+//                                if horizontalSizeClass == .regular {
+                                    ScrollView {
+                                        ForEach(Array(extractedNutrients.keys.sorted()), id: \.self) { nutrient in
+                                            Spacer()
+                                            Spacer()
+                                            Spacer()
+                                            HStack {
+                                                Image(systemName: getNutrientIcon(for: nutrient))
+                                                    .resizable()
+                                                    .scaledToFit()
+                                                    .frame(width: 30, height: 30)
+                                                    .foregroundColor(.blue)
+                                                    .padding(.trailing, 8)
+                                                
+                                                Text(nutrient.capitalized)
+                                                    .font(.body)
+                                                Spacer()
+                                                Text("\(extractedNutrients[nutrient] ?? 0, specifier: "%.1f") \(getUnit(for: nutrient))")
+                                                    .font(.body)
+                                                    .foregroundColor(.blue)
+                                            }
+                                            .padding(.horizontal)
+                                            Spacer()
+                                            Spacer()
+                                            Spacer()
+                                            Divider()
+                                        }
+                                    }
+                                    .background(Color(.systemBackground))
+                                    .cornerRadius(15)
+                                    .shadow(radius: 5)
+                                    .padding()
+//                                }
+                            }
+                            
+                            Button(action: saveToHealthKit) {
+                                Text("Add to Health")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.blue)
+                                    .cornerRadius(10)
+                            }
+                            .padding()
+                        }
+                        
+                        
+                        
+                        Spacer()
+                    }
+                }
+                .sheet(isPresented: $showingImportView) {
+                    HealthKitImportView(nutrients: extractedNutrients.map { (name, value) in
+                        let unit = NutritionUnit.getUnit(for: name)
+                        return NutrientData(
+                            name: name,
+                            value: value,
+                            unit: unit
+                        )
+                    })
+                }
+                .alert("Added to Health", isPresented: $showConfirmation) {
+                    Button("OK", role: .cancel) { }
+                }
+                .sheet(isPresented: $showingNutrientSheet) {
+                    NavigationStack {
+                        List {
                             ForEach(Array(extractedNutrients.keys.sorted()), id: \.self) { nutrient in
                                 HStack {
                                     Image(systemName: getNutrientIcon(for: nutrient))
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 30, height: 30)
-                                        .foregroundColor(.blue)
-                                        .padding(.trailing, 8)
-
+                                        .foregroundStyle(.blue)
                                     Text(nutrient.capitalized)
-                                        .font(.body)
                                     Spacer()
                                     Text("\(extractedNutrients[nutrient] ?? 0, specifier: "%.1f") \(getUnit(for: nutrient))")
-                                        .font(.body)
-                                        .foregroundColor(.blue)
+                                        .foregroundStyle(.blue)
                                 }
-                                .padding(.horizontal)
-                                Divider()
                             }
                         }
-                        .background(Color(.systemBackground))
-                        .cornerRadius(15)
-                        .shadow(radius: 5)
-                        .padding()
-                        }
-                    }
-                    
-                    Button(action: saveToHealthKit) {
-                        Text("Add to Health")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .cornerRadius(10)
-                    }
-                    .padding()
-                }
-
-                
-                
-                Spacer()
-            }
-            .sheet(isPresented: $showingImportView) {
-                HealthKitImportView(nutrients: extractedNutrients.map { (name, value) in
-                    let unit = NutritionUnit.getUnit(for: name)
-                    return NutrientData(
-                        name: name,
-                        value: value,
-                        unit: unit
-                    )
-                })
-            }
-            .alert("Added to Health", isPresented: $showConfirmation) {
-                Button("OK", role: .cancel) { }
-            }
-            .sheet(isPresented: $showingNutrientSheet) {
-                NavigationStack {
-                    List {
-                        ForEach(Array(extractedNutrients.keys.sorted()), id: \.self) { nutrient in
-                            HStack {
-                                Image(systemName: getNutrientIcon(for: nutrient))
-                                    .foregroundStyle(.blue)
-                                Text(nutrient.capitalized)
-                                Spacer()
-                                Text("\(extractedNutrients[nutrient] ?? 0, specifier: "%.1f") \(getUnit(for: nutrient))")
-                                    .foregroundStyle(.blue)
-                            }
-                        }
-                    }
-                    .navigationTitle("Detected Nutrients")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Done") {
-                                showingNutrientSheet = false
+                        .navigationTitle("Detected Nutrients")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") {
+                                    showingNutrientSheet = false
+                                }
                             }
                         }
                     }
                 }
             }
+            .navigationTitle(Text("Log Nutrients"))
         }
-        .navigationTitle("Add Nutrients")
     }
     
     private func processInput() {

@@ -45,7 +45,7 @@ struct ContentView_iPhone_alt: View {
             .customizationID("iPhone.tab.nutrients")
         
             Tab(role: .search) {
-                SearchView()
+                LogView()
             }
             .customizationID("iPhone.tab.search")
         }
@@ -59,24 +59,55 @@ struct NutrientListView: View {
 
     var body: some View {
         NavigationStack {
-            List(nutrients, id: \.self) { nutrient in
-                NavigationLink(
-                    destination: NutrientDetailView(nutrientName: nutrient)
-                        .navigationTransition(.zoom(sourceID: nutrient, in: namespace)) // Use `nutrient` as unique ID
-                ) {
-                    HStack {
-                        Image(systemName: getNutrientIcon(for: nutrient))
-                            .font(.system(size: 24)) // Larger icon size
-                            .foregroundColor(getNutrientColor(for: nutrient))
-                        
-                        Text(nutrient)
-                            .font(.system(size: 18, weight: .bold)) // Bold and larger text
-                            .foregroundColor(.primary)
-                            .padding()
+            ZStack {
+                // Mesh Gradient
+                RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.08, green: 0.12, blue: 0.2),  // Deeper blue
+                        Color(red: 0.03, green: 0.12, blue: 0.08), // Deep forest green
+                        Color.black
+                    ]),
+                    center: .bottomTrailing,  // Changed position for variety
+                    startRadius: 100,      // Tighter radius
+                    endRadius: 1500
+                )
+                .opacity(0.85)
+                .ignoresSafeArea()
+                
+                // Overlay gradient for depth
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.02, green: 0.1, blue: 0.15).opacity(0.8),
+                        Color.clear
+                    ]),
+                    startPoint: .bottomLeading,  // Different direction
+                    endPoint: .topTrailing
+                )
+                .ignoresSafeArea()
+                List(nutrients, id: \.self) { nutrient in
+                    NavigationLink(
+                        destination: NutrientDetailView(nutrientName: nutrient)
+                            .navigationTransition(.zoom(sourceID: nutrient, in: namespace))
+                    ) {
+                        HStack {
+                            Image(systemName: getNutrientIcon(for: nutrient))
+                                .font(.system(size: 24))
+                                .foregroundColor(getNutrientColor(for: nutrient))
+                            
+                            Text(nutrient)
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(.primary)
+                                .padding()
+                        }
                     }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .padding(.vertical, 20)
+                .navigationTitle("Nutrients")
             }
-            .navigationTitle("Nutrients")
         }
     }
 }

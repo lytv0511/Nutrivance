@@ -30,180 +30,206 @@ public struct NutritionScannerView: View {
     
     public var body: some View {
         NavigationStack {
-            VStack {
-//                HStack {
-//                    Text("Labels")
-//                        .font(.largeTitle)
-//                        .bold()
-//                        .frame(maxWidth: .infinity, alignment: .leading)
-//                        .padding(.horizontal)
-//                    Spacer()
-//                }
-//                
-                // Image preview or placeholder
-                ZStack {
-                    if let image = selectedImage {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .cornerRadius(12)
-                            .frame(height: 400)
-                    } else {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(height: 200)
-                            .overlay(
-                                VStack {
-                                    Image(systemName: "photo.on.rectangle.angled")
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 50, height: 50)
-                                        .foregroundColor(.gray)
-                                    Text("No Image Selected")
-                                        .foregroundColor(.gray)
-                                }
-                            )
-                    }
-                    
-                    // Overlay progress indicator
-                    if nutritionScanner.isProcessing {
-                        Color.black.opacity(0.5)
-                            .cornerRadius(12)
-                            .overlay(
-                                ProgressView("Analyzing...")
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .foregroundColor(.white)
-                            )
-                    }
-                }
-                .padding()
+            ZStack {
+                // Mesh Gradient
+                RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.08, green: 0.12, blue: 0.2),  // Deeper blue
+                        Color(red: 0.03, green: 0.12, blue: 0.08), // Deep forest green
+                        Color.black
+                    ]),
+                    center: .topTrailing,  // Changed position for variety
+                    startRadius: 300,      // Tighter radius
+                    endRadius: 1500
+                )
+                .opacity(0.85)
+                .ignoresSafeArea()
                 
-                // Scan Button with Source Selection
-                Button(action: {
-                    showingSourceSelection = true  // Trigger source selection dialog
-                }) {
-                    Label("Scan Nutrition Label", systemImage: "doc.text.viewfinder")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(LinearGradient(gradient: Gradient(colors: [Color.blue, Color.cyan]), startPoint: .leading, endPoint: .trailing))
-                        .cornerRadius(12)
-                        .shadow(radius: 5)
-                }
-                .padding(.horizontal)
-                .hoverEffect(.highlight)
-                .confirmationDialog("Choose Photo Source", isPresented: $showingSourceSelection) {
-                    Button("Camera") {
-                        sourceType = .camera
-                        showingImagePicker = true
-                    }
-                    Button("Photo Library") {
-                        sourceType = .photoLibrary
-                        showingImagePicker = true
-                    }
-                }
-                
-                // Detected Nutrients List
-                if !nutritionScanner.detectedNutrition.isEmpty {
-                    List {
-                        ForEach(nutritionScanner.detectedNutrition) { nutrient in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(nutrient.name.capitalized)
-                                        .font(.headline)
-                                    Text("\(nutrient.value, specifier: "%.1f") \(nutrient.unit)")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: nutrientIcon(for: nutrient.name))
-                                    .foregroundColor(.blue)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    deleteNutrient(nutrient)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                
-                                Button {
-                                    editNutrient(nutrient) // Trigger edit nutrient
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }
-                                .tint(.yellow)
-                            }
+                // Overlay gradient for depth
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.02, green: 0.1, blue: 0.15).opacity(0.8),
+                        Color.clear
+                    ]),
+                    startPoint: .bottomLeading,  // Different direction
+                    endPoint: .topTrailing
+                )
+                .ignoresSafeArea()
+                VStack {
+                    //                HStack {
+                    //                    Text("Labels")
+                    //                        .font(.largeTitle)
+                    //                        .bold()
+                    //                        .frame(maxWidth: .infinity, alignment: .leading)
+                    //                        .padding(.horizontal)
+                    //                    Spacer()
+                    //                }
+                    //
+                    // Image preview or placeholder
+                    ZStack {
+                        if let image = selectedImage {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .cornerRadius(12)
+                                .frame(height: 400)
+                        } else {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.gray.opacity(0.2))
+                                .frame(height: 200)
+                                .overlay(
+                                    VStack {
+                                        Image(systemName: "photo.on.rectangle.angled")
+                                            .resizable()
+                                            .scaledToFit()
+                                            .frame(width: 50, height: 50)
+                                            .foregroundColor(.gray)
+                                        Text("No Image Selected")
+                                            .foregroundColor(.gray)
+                                    }
+                                )
+                        }
+                        
+                        // Overlay progress indicator
+                        if nutritionScanner.isProcessing {
+                            Color.black.opacity(0.5)
+                                .cornerRadius(12)
+                                .overlay(
+                                    ProgressView("Analyzing...")
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .foregroundColor(.white)
+                                )
                         }
                     }
+                    .padding()
                     
-                    // Sheet for editing the nutrient value
-                    .sheet(isPresented: $showEditSheet) {
-                        VStack {
-                            Text("Edit \(selectedNutrient?.name ?? "")")
-                                .font(.title2)
-                                .bold()
-                                .padding()
-                            
-                            TextField("Enter new value", text: $newValue)
-                                .keyboardType(.decimalPad) // Allow decimal input
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .padding()
-                            
-                            Button(action: {
-                                if let newValue = Double(newValue), let nutrient = selectedNutrient {
-                                    updateNutrientValue(nutrient, newValue: newValue) // Update the nutrient value
-                                    showEditSheet = false // Close the sheet
-                                }
-                            }) {
-                                Text("Save")
-                                    .foregroundColor(.white)
-                                    .padding()
-                                    .background(Color.blue)
-                                    .cornerRadius(8)
-                            }
-                            
-                            Button(action: {
-                                showEditSheet = false // Close the sheet
-                            }) {
-                                Text("Cancel")
-                                    .foregroundColor(.red)
-                                    .padding()
-                                    .background(Color.white)
-                                    .cornerRadius(8)
-                            }
-                        }
-                        .padding()
-                    }
-                    .listStyle(InsetGroupedListStyle())
-                    
-                    // Import to Health Button
-                    Button(action: importToHealth) {
-                        Label("Import to Health", systemImage: "heart.fill")
+                    // Scan Button with Source Selection
+                    Button(action: {
+                        showingSourceSelection = true  // Trigger source selection dialog
+                    }) {
+                        Label("Scan Nutrition Label", systemImage: "doc.text.viewfinder")
                             .font(.headline)
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.green)
+                            .background(LinearGradient(gradient: Gradient(colors: [Color.blue, Color.cyan]), startPoint: .leading, endPoint: .trailing))
                             .cornerRadius(12)
                             .shadow(radius: 5)
                     }
                     .padding(.horizontal)
                     .hoverEffect(.highlight)
+                    .confirmationDialog("Choose Photo Source", isPresented: $showingSourceSelection) {
+                        Button("Camera") {
+                            sourceType = .camera
+                            showingImagePicker = true
+                        }
+                        Button("Photo Library") {
+                            sourceType = .photoLibrary
+                            showingImagePicker = true
+                        }
+                    }
+                    
+                    // Detected Nutrients List
+                    if !nutritionScanner.detectedNutrition.isEmpty {
+                        List {
+                            ForEach(nutritionScanner.detectedNutrition) { nutrient in
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(nutrient.name.capitalized)
+                                            .font(.headline)
+                                        Text("\(nutrient.value, specifier: "%.1f") \(nutrient.unit)")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: nutrientIcon(for: nutrient.name))
+                                        .foregroundColor(.blue)
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        deleteNutrient(nutrient)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                    
+                                    Button {
+                                        editNutrient(nutrient) // Trigger edit nutrient
+                                    } label: {
+                                        Label("Edit", systemImage: "pencil")
+                                    }
+                                    .tint(.yellow)
+                                }
+                            }
+                        }
+                        
+                        // Sheet for editing the nutrient value
+                        .sheet(isPresented: $showEditSheet) {
+                            VStack {
+                                Text("Edit \(selectedNutrient?.name ?? "")")
+                                    .font(.title2)
+                                    .bold()
+                                    .padding()
+                                
+                                TextField("Enter new value", text: $newValue)
+                                    .keyboardType(.decimalPad) // Allow decimal input
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .padding()
+                                
+                                Button(action: {
+                                    if let newValue = Double(newValue), let nutrient = selectedNutrient {
+                                        updateNutrientValue(nutrient, newValue: newValue) // Update the nutrient value
+                                        showEditSheet = false // Close the sheet
+                                    }
+                                }) {
+                                    Text("Save")
+                                        .foregroundColor(.white)
+                                        .padding()
+                                        .background(Color.blue)
+                                        .cornerRadius(8)
+                                }
+                                
+                                Button(action: {
+                                    showEditSheet = false // Close the sheet
+                                }) {
+                                    Text("Cancel")
+                                        .foregroundColor(.red)
+                                        .padding()
+                                        .background(Color.white)
+                                        .cornerRadius(8)
+                                }
+                            }
+                            .padding()
+                        }
+                        .listStyle(InsetGroupedListStyle())
+                        
+                        // Import to Health Button
+                        Button(action: importToHealth) {
+                            Label("Import to Health", systemImage: "heart.fill")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.green)
+                                .cornerRadius(12)
+                                .shadow(radius: 5)
+                        }
+                        .padding(.horizontal)
+                        .hoverEffect(.highlight)
+                    }
+                    
+                    Spacer()
                 }
-                
-                Spacer()
+                .sheet(isPresented: $showingImagePicker) {
+                    ImagePicker(selectedImage: $selectedImage, sourceType: sourceType)
+                }
+                .onChange(of: selectedImage) { _, newValue in
+                    guard let image = newValue else { return }
+                    nutritionScanner.isProcessing = true
+                    processImage(image)
+                }
             }
-            .sheet(isPresented: $showingImagePicker) {
-                ImagePicker(selectedImage: $selectedImage, sourceType: sourceType)
-            }
-            .onChange(of: selectedImage) { _, newValue in
-                guard let image = newValue else { return }
-                nutritionScanner.isProcessing = true
-                processImage(image)
-            }
+            .navigationTitle(Text("Scan Labels"))
         }
-        .navigationTitle(Text("Labels"))
     }
     
     // Nutrient Icon Mapping

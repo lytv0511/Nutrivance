@@ -1,11 +1,3 @@
-//
-//  HistoryView.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 11/27/24.
-//
-
-import Foundation
 import SwiftUI
 
 struct HistoryView: View {
@@ -14,41 +6,77 @@ struct HistoryView: View {
     @State private var entries: [HealthKitManager.NutritionEntry] = []
     @State private var selectedDate: Date = Date()
     @State private var showingFullList = false
+    @State private var animationPhase: Double = 0
     
     enum TimeFrame {
         case daily, weekly, monthly, custom
     }
     
+    // Break down the grouping logic
     private var groupedEntries: [Date: [HealthKitManager.NutritionEntry]] {
-        Dictionary(grouping: entries) { entry in
-            Calendar.current.startOfDay(for: entry.timestamp)
+        let calendar = Calendar.current
+        let groups = Dictionary(grouping: entries) { entry in
+            calendar.startOfDay(for: entry.timestamp)
         }
+        return groups
     }
     
     var body: some View {
         NavigationStack {
-            VStack {
-                timeFramePicker
-                dateSelector
-                    .padding(.bottom)
-                entriesList
-                    .padding(.top)
-                    .padding(.top)
+            ZStack {
+                gradientBackground
+                mainContent
             }
             .navigationTitle("Nutrition History")
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                loadData()
+            .sheet(isPresented: $showingFullList) {
+                FullListView(
+                    entries: groupedEntries,
+                    deleteEntry: deleteEntry,
+                    loadData: loadData
+                )
             }
-            .onChange(of: selectedTimeFrame) { oldValue, newValue in
-                loadData()
-            }
-            .onChange(of: selectedDate) { oldValue, newValue in
-                loadData()
+            .onAppear { loadData() }
+            .onChange(of: selectedTimeFrame) { _, _ in loadData() }
+            .onChange(of: selectedDate) { _, _ in loadData() }
+        }
+    }
+    
+    private var gradientBackground: some View {
+        MeshGradient(
+            width: 3, height: 3,
+            points: [
+                [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
+                [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
+                [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
+            ],
+            colors: [
+                .black, Color(red: 0, green: 0.2, blue: 0), .black,
+                Color(red: 0, green: 0, blue: 0.2),
+                Color(red: 0, green: 0.1, blue: 0.1),
+                Color(red: 0, green: 0.2, blue: 0),
+                .black, Color(red: 0, green: 0, blue: 0.2), .black
+            ]
+        )
+        .ignoresSafeArea()
+        .hueRotation(.degrees(animationPhase))
+        .onAppear {
+            withAnimation(.linear(duration: 15).repeatForever(autoreverses: true)) {
+                animationPhase = 360
             }
         }
     }
-
+    
+    private var mainContent: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                timeFramePicker
+                dateSelector
+                expandButton
+                entriesList
+            }
+            .padding(.vertical)
+        }
+    }
     
     private var timeFramePicker: some View {
         Picker("Time Frame", selection: $selectedTimeFrame) {
@@ -58,84 +86,57 @@ struct HistoryView: View {
             Text("Custom").tag(TimeFrame.custom)
         }
         .pickerStyle(.segmented)
-        .padding()
+        .padding(.horizontal)
     }
     
     private var dateSelector: some View {
-        GeometryReader { geometry in
-//            if geometry.size.height < 300 {
-//                DatePicker("Select Date", selection: $selectedDate, displayedComponents: [.date])
-//                    .datePickerStyle(.compact)
-//                    .frame(maxHeight: 100)
-//                    .padding()
-//            } else {
-                DatePicker("Select Date", selection: $selectedDate, displayedComponents: [.date])
-                    .datePickerStyle(.graphical)
-                    .frame(minHeight: 300)
-                    .padding()
-//            }
+        DatePicker("Select Date", selection: $selectedDate, displayedComponents: [.date])
+            .datePickerStyle(.graphical)
+            .padding(.horizontal)
+    }
+    
+    private var expandButton: some View {
+        HStack {
+            Button {
+                showingFullList = true
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .foregroundStyle(.blue)
+            }
+            .hoverEffect(.automatic)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
+        .padding(.horizontal)
     }
     
     private var entriesList: some View {
-        VStack {
-            HStack {
-                Spacer()
-                Button {
-                    showingFullList = true
-                } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .foregroundStyle(.blue)
-                }
-                .padding()
-                
-                .hoverEffect(.automatic)
+        LazyVStack(spacing: 16) {
+            let sortedDates = groupedEntries.keys.sorted(by: >)
+            ForEach(sortedDates, id: \.self) { date in
+                dateSection(for: date)
             }
+        }
+        .padding(.horizontal)
+    }
+    
+    private func dateSection(for date: Date) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(formatDate(date))
+                .font(.headline)
+                .foregroundStyle(.mint)
             
-            List {
-                let sortedDates = groupedEntries.keys.sorted(by: >)
-                ForEach(sortedDates, id: \.self) { date in
-                    Section {
-                        let entries = groupedEntries[date] ?? []
-                        ForEach(entries) { entry in
-                            NutritionEntryRow(entry: entry) {
-                                deleteEntry(entry)
-                            }
-                        }
-                    } header: {
-                        Text(formatDate(date))
-                    }
-                }
+            let entries = groupedEntries[date] ?? []
+            ForEach(entries) { entry in
+                NutritionEntryRow(
+                    entry: entry,
+                    onDelete: { deleteEntry(entry) },
+                    loadData: loadData
+                )
             }
         }
-        .sheet(isPresented: $showingFullList) {
-            NavigationStack {
-                List {
-                    let sortedDates = groupedEntries.keys.sorted(by: >)
-                    ForEach(sortedDates, id: \.self) { date in
-                        Section {
-                            let entries = groupedEntries[date] ?? []
-                            ForEach(entries) { entry in
-                                NutritionEntryRow(entry: entry) {
-                                    deleteEntry(entry)
-                                }
-                            }
-                        } header: {
-                            Text(formatDate(date))
-                        }
-                    }
-                }
-                .navigationTitle("All Entries")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") {
-                            showingFullList = false
-                        }
-                    }
-                }
-            }
-        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(12)
     }
     
     private func formatDate(_ date: Date) -> String {
@@ -157,22 +158,25 @@ struct HistoryView: View {
     
     private func loadData() {
         let calendar = Calendar.current
-        var startDate: Date
         let endDate = calendar.endOfDay(for: selectedDate)
-        
-        switch selectedTimeFrame {
-        case .daily:
-            startDate = calendar.startOfDay(for: selectedDate)
-        case .weekly:
-            startDate = calendar.date(byAdding: .day, value: -7, to: endDate)!
-        case .monthly:
-            startDate = calendar.date(byAdding: .month, value: -1, to: endDate)!
-        case .custom:
-            startDate = calendar.date(byAdding: .day, value: -14, to: endDate)!
-        }
+        let startDate = getStartDate(for: selectedTimeFrame, endDate: endDate)
         
         healthStore.fetchNutrientHistory(from: startDate, to: endDate) { fetchedEntries in
             entries = fetchedEntries
+        }
+    }
+    
+    private func getStartDate(for timeFrame: TimeFrame, endDate: Date) -> Date {
+        let calendar = Calendar.current
+        switch timeFrame {
+        case .daily:
+            return calendar.startOfDay(for: selectedDate)
+        case .weekly:
+            return calendar.date(byAdding: .day, value: -7, to: endDate)!
+        case .monthly:
+            return calendar.date(byAdding: .month, value: -1, to: endDate)!
+        case .custom:
+            return calendar.date(byAdding: .day, value: -14, to: endDate)!
         }
     }
 }
@@ -180,6 +184,10 @@ struct HistoryView: View {
 struct NutritionEntryRow: View {
     let entry: HealthKitManager.NutritionEntry
     let onDelete: () -> Void
+    @StateObject private var healthStore = HealthKitManager()
+    @State private var isEditing = false
+    let loadData: () -> Void
+
     
     var body: some View {
         VStack(alignment: .leading) {
@@ -205,14 +213,25 @@ struct NutritionEntryRow: View {
             .font(.caption)
             .foregroundColor(.secondary)
         }
-        .padding(.vertical, 8)
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+        .contextMenu {
+            Button {
+                isEditing = true
+            } label: {
+                Label("Edit Entry", systemImage: "pencil")
+            }
+            
             Button(role: .destructive) {
                 onDelete()
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label("Delete Entry", systemImage: "trash")
             }
         }
+        .sheet(isPresented: $isEditing) {
+           EditEntryView(entry: entry, onSave: onDelete, loadData: loadData)
+       }
     }
     
     private var sourceIcon: String {
@@ -232,6 +251,117 @@ struct NutritionEntryRow: View {
     }
 }
 
+struct EditEntryView: View {
+    @Environment(\.dismiss) var dismiss
+    @StateObject private var healthStore = HealthKitManager()
+    let entry: HealthKitManager.NutritionEntry
+    @State private var mealType: String
+    @State private var nutrients: [String: Double]
+    let onSave: () -> Void
+    
+    let loadData: () -> Void  // Add this
+
+    init(entry: HealthKitManager.NutritionEntry, onSave: @escaping () -> Void, loadData: @escaping () -> Void) {
+        self.entry = entry
+        self.onSave = onSave
+        self.loadData = loadData
+        _mealType = State(initialValue: entry.mealType ?? "")
+        _nutrients = State(initialValue: entry.nutrients)
+    }
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Meal Type") {
+                    TextField("Meal Type", text: $mealType)
+                }
+                
+                Section("Nutrients") {
+                    ForEach(Array(nutrients.keys.sorted()), id: \.self) { nutrient in
+                        HStack {
+                            Text(nutrient.capitalized)
+                            Spacer()
+                            TextField("Amount", value: Binding(
+                                get: { nutrients[nutrient] ?? 0 },
+                                set: { nutrients[nutrient] = $0 }
+                            ), format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Edit Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let nutrientDataArray = nutrients.map { (name, value) in
+                            NutrientData(name: name, value: value, unit: "g")
+                        }
+                        onSave() // Delete old entry
+                        healthStore.saveNutrients(nutrientDataArray) { success in
+                            if success {
+                                dismiss()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    loadData() // Refresh view after a slight delay to ensure deletion is processed
+                                }
+                            }
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+}
+
+struct FullListView: View {
+    let entries: [Date: [HealthKitManager.NutritionEntry]]
+        let deleteEntry: (HealthKitManager.NutritionEntry) -> Void
+        let loadData: () -> Void
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 16) {
+                    let sortedDates = entries.keys.sorted(by: >)
+                    ForEach(sortedDates, id: \.self) { date in
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(formatDate(date))
+                                .font(.headline)
+                                .foregroundStyle(.mint)
+                            
+                            let entries = entries[date] ?? []
+                            ForEach(entries) { entry in
+                                NutritionEntryRow(
+                                    entry: entry,
+                                    onDelete: { deleteEntry(entry) },
+                                    loadData: { loadData() }
+                                )
+                            }
+                        }
+                        .padding()
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(12)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("All Entries")
+        }
+    }
+    
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: date)
+    }
+}
+
 extension Calendar {
     func endOfDay(for date: Date) -> Date {
         var components = DateComponents()
@@ -240,4 +370,3 @@ extension Calendar {
         return self.date(byAdding: components, to: startOfDay(for: date))!
     }
 }
-

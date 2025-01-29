@@ -76,9 +76,11 @@ struct SavedMealsView: View {
     @State private var showingAddMeal = false
     @State private var selectedCategory: SavedMeal.MealCategory?
     @State private var mealToEdit: SavedMeal?
+    @State private var animationPhase: Double = 0
     
     var body: some View {
-//        ScrollView {
+        ZStack {
+            gradientBackground
             VStack(spacing: 20) {
                 HStack {
                     Text("Saved Meals")
@@ -137,7 +139,7 @@ struct SavedMealsView: View {
             .sheet(item: $mealToEdit) { meal in
                 AddMealView(mealsManager: mealsManager, editingMeal: meal)
             }
-//        }
+        }
     }
     
     private var filteredMeals: [SavedMeal] {
@@ -145,6 +147,33 @@ struct SavedMealsView: View {
             return mealsManager.savedMeals
         }
         return mealsManager.savedMeals.filter { $0.category == category }
+    }
+    
+    private var gradientBackground: some View {
+        MeshGradient(
+            width: 4, height: 4,
+            points: [
+                [0.0, 0.0], [0.33, 0.0], [0.66, 0.0], [1.0, 0.0],
+                [0.0, 0.33], [0.33, 0.33], [0.66, 0.33], [1.0, 0.33],
+                [0.0, 0.66], [0.33, 0.66], [0.66, 0.66], [1.0, 0.66],
+                [0.0, 1.0], [0.33, 1.0], [0.66, 1.0], [1.0, 1.0]
+            ],
+            colors: [
+                .black, Color(red: 0, green: 0.15, blue: 0.2), Color(red: 0, green: 0.2, blue: 0.15), .black,
+                Color(red: 0, green: 0.2, blue: 0.1), Color(red: 0, green: 0.15, blue: 0.2),
+                Color(red: 0, green: 0.2, blue: 0.15), Color(red: 0, green: 0.1, blue: 0.2),
+                Color(red: 0, green: 0.2, blue: 0.1), Color(red: 0, green: 0.15, blue: 0.15),
+                Color(red: 0, green: 0.2, blue: 0.2), Color(red: 0, green: 0.2, blue: 0.1),
+                .black, Color(red: 0, green: 0.1, blue: 0.2), Color(red: 0, green: 0.2, blue: 0.1), .black
+            ]
+        )
+        .ignoresSafeArea()
+        .hueRotation(.degrees(animationPhase))
+        .onAppear {
+            withAnimation(.linear(duration: 18).repeatForever(autoreverses: true)) {
+                animationPhase = 360
+            }
+        }
     }
 }
 

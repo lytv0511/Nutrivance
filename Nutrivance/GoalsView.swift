@@ -18,26 +18,59 @@ struct GoalsView: View {
     @StateObject private var healthStore = HealthKitManager()
     @StateObject private var viewModel = GoalsViewModel()
     @State private var showingAddGoal = false
+    @State private var animationPhase: Double = 0
+    
+    private var gradientBackground: some View {
+        MeshGradient(
+            width: 4, height: 4,
+            points: [
+                [0.0, 0.0], [0.33, 0.0], [0.66, 0.0], [1.0, 0.0],
+                [0.0, 0.33], [0.33, 0.33], [0.66, 0.33], [1.0, 0.33],
+                [0.0, 0.66], [0.33, 0.66], [0.66, 0.66], [1.0, 0.66],
+                [0.0, 1.0], [0.33, 1.0], [0.66, 1.0], [1.0, 1.0]
+            ],
+            colors: [
+                .black, Color(red: 0, green: 0.1, blue: 0.2), Color(red: 0, green: 0.2, blue: 0.1), .black,
+                Color(red: 0, green: 0.1, blue: 0.2), Color(red: 0, green: 0.2, blue: 0.2),
+                Color(red: 0, green: 0.15, blue: 0.15), Color(red: 0, green: 0.1, blue: 0.2),
+                Color(red: 0, green: 0.2, blue: 0.1), Color(red: 0, green: 0.15, blue: 0.15),
+                Color(red: 0, green: 0.2, blue: 0.2), Color(red: 0, green: 0.2, blue: 0.1),
+                .black, Color(red: 0, green: 0.1, blue: 0.2), Color(red: 0, green: 0.2, blue: 0.1), .black
+            ]
+        )
+        .ignoresSafeArea()
+        .hueRotation(.degrees(animationPhase))
+        .onAppear {
+            withAnimation(.linear(duration: 20).repeatForever(autoreverses: true)) {
+                animationPhase = 360
+            }
+        }
+    }
     
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(viewModel.goals) { goal in
-                    GoalCard(goal: goal)
+            ZStack {
+                gradientBackground
+                List {
+                    ForEach(viewModel.goals) { goal in
+                        GoalCard(goal: goal)
+                    }
+                    .onDelete(perform: deleteGoal)
+                    
+                    Button(action: { showingAddGoal = true }) {
+                        Label("Add New Goal", systemImage: "plus.circle.fill")
+                    }
                 }
-                .onDelete(perform: deleteGoal)
-                
-                Button(action: { showingAddGoal = true }) {
-                    Label("Add New Goal", systemImage: "plus.circle.fill")
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+                .navigationTitle("Nutrition Goals")
+                .sheet(isPresented: $showingAddGoal) {
+                    AddGoalView(goals: $viewModel.goals)
                 }
-            }
-            .navigationTitle("Nutrition Goals")
-            .sheet(isPresented: $showingAddGoal) {
-                AddGoalView(goals: $viewModel.goals)
-            }
-            .onAppear {
-                loadGoals()
-                updateGoalProgress()
+                .onAppear {
+                    loadGoals()
+                    updateGoalProgress()
+                }
             }
         }
     }

@@ -130,7 +130,7 @@ struct ContentView_iPad_alt: View {
                 .defaultVisibility(.visible, for: .tabBar)
                 
                 Tab(role: .search) {
-                    SearchView()
+                    LogView()
                 }
                 .customizationID("iPad.tab.search")
             } header: {

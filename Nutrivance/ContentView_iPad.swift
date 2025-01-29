@@ -1,16 +1,28 @@
 import SwiftUI
 
 struct ContentView_iPad: View {
-    @State private var selectedNutrient: String? = "Home"
+    @EnvironmentObject var navigationState: NavigationState
+    @EnvironmentObject var searchState: SearchState
     @State private var showCamera = false
     @State private var showHome: Bool = true
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
-    @State private var searchText = ""
-    @FocusState private var isSearchBarFocused: Bool
     private let detector = NutritionTableDetector()
     @State private var capturedImage: UIImage?
+    @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
+    @FocusState private var contentFocused: Bool
+    
+    private var navigationBinding: Binding<String?> {
+        Binding(
+            get: { navigationState.selectedView },
+            set: { newValue in
+                if let value = newValue {
+                    navigationState.selectedView = value
+                }
+            }
+        )
+    }
     
     private let searchKeywords = [
         "home": ["home", "main", "dashboard", "start", "welcome", "homepage"],
@@ -31,11 +43,11 @@ struct ContentView_iPad: View {
     ]
     
     var filteredItems: [String] {
-        let allItems = ["Home", "Insights", "Labels", "Search",
+        let allItems = ["Home", "Insights", "Labels", "Log",
                        "Calories", "Carbs", "Protein", "Fats", "Water",
                        "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
         
-        if searchText.isEmpty {
+        if searchState.searchText.isEmpty {
             return allItems
         }
         
@@ -43,157 +55,128 @@ struct ContentView_iPad: View {
             let lowercasedItem = item.lowercased()
             if let keywords = searchKeywords[lowercasedItem] {
                 return keywords.contains { keyword in
-                    keyword.localizedCaseInsensitiveContains(searchText)
-                } || lowercasedItem.localizedCaseInsensitiveContains(searchText)
+                    keyword.localizedCaseInsensitiveContains(searchState.searchText)
+                } || lowercasedItem.localizedCaseInsensitiveContains(searchState.searchText)
             }
-            return lowercasedItem.localizedCaseInsensitiveContains(searchText)
+            return lowercasedItem.localizedCaseInsensitiveContains(searchState.searchText)
         }
     }
-
+    
     var body: some View {
         NavigationSplitView {
-            List(selection: $selectedNutrient) {
-                SearchBar(text: $searchText)
-                    .listRowInsets(EdgeInsets())
-                
-                if filteredItems.contains("Home") {
-//                    Section(header: Text("Main")) {
-                        if filteredItems.contains("Home") {
-                            NavigationLink("Home", destination: HomeView())
-                                .keyboardShortcut("h", modifiers: .control)
-                                .focused($sidebarFocused)
-                        }
-                        if filteredItems.contains("Insights") {
-                            NavigationLink("Insights", destination: HealthInsightsView())
-                                .keyboardShortcut("i", modifiers: .control)
-                        }
-                        if filteredItems.contains("Labels") {
-                            NavigationLink("Labels", destination: NutritionScannerView())
-                                .keyboardShortcut("l", modifiers: .control)
-                        }
-                        if filteredItems.contains("Search") {
-                            NavigationLink("Search", destination: SearchView())
-                                .keyboardShortcut("s", modifiers: .control)
-                        }
-//                    }
-                }
-                
-                if filteredItems.contains(where: { ["Calories", "Carbs", "Protein", "Fats", "Water"].contains($0) }) {
-                    Section(header: Text("Macronutrients")) {
-                        if filteredItems.contains("Calories") {
-                            NavigationLink("Calories", destination: NutrientDetailView(nutrientName: "Calories"))
-                                .keyboardShortcut("c", modifiers: .control)
-                        }
-                        if filteredItems.contains("Carbs") {
-                            NavigationLink("Carbs", destination: NutrientDetailView(nutrientName: "Carbs"))
-                                .keyboardShortcut("a", modifiers: .control)
-                        }
-                        if filteredItems.contains("Protein") {
-                            NavigationLink("Protein", destination: NutrientDetailView(nutrientName: "Protein"))
-                                .keyboardShortcut("p", modifiers: .control)
-                        }
-                        if filteredItems.contains("Fats") {
-                            NavigationLink("Fats", destination: NutrientDetailView(nutrientName: "Fats"))
-                                .keyboardShortcut("f", modifiers: .control)
-                        }
-                        if filteredItems.contains("Water") {
-                            NavigationLink("Water", destination: NutrientDetailView(nutrientName: "Water"))
-                                .keyboardShortcut("w", modifiers: .control)
-                        }
-                    }
-                }
-                
-                if filteredItems.contains(where: { ["Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains($0) }) {
-                    Section(header: Text("Micronutrients")) {
-                        if filteredItems.contains("Fiber") {
-                            NavigationLink("Fiber", destination: NutrientDetailView(nutrientName: "Fiber"))
-                                .keyboardShortcut("b", modifiers: .control)
-                        }
-                        if filteredItems.contains("Vitamins") {
-                            NavigationLink("Vitamins", destination: NutrientDetailView(nutrientName: "Vitamins"))
-                                .keyboardShortcut("v", modifiers: .control)
-                        }
-                        if filteredItems.contains("Minerals") {
-                            NavigationLink("Minerals", destination: NutrientDetailView(nutrientName: "Minerals"))
-                                .keyboardShortcut("m", modifiers: .control)
-                        }
-                        if filteredItems.contains("Phytochemicals") {
-                            NavigationLink("Phytochemicals", destination: NutrientDetailView(nutrientName: "Phytochemicals"))
-                                .keyboardShortcut("y", modifiers: .control)
-                        }
-                        if filteredItems.contains("Antioxidants") {
-                            NavigationLink("Antioxidants", destination: NutrientDetailView(nutrientName: "Antioxidants"))
-                                .keyboardShortcut("x", modifiers: .control)
-                        }
-                        if filteredItems.contains("Electrolytes") {
-                            NavigationLink("Electrolytes", destination: NutrientDetailView(nutrientName: "Electrolytes"))
-                                .keyboardShortcut("e", modifiers: .control)
-                        }
-                    }
-                }
-            }
-            .onAppear {
-                sidebarFocused = true
-            }
-            .navigationTitle("Nutrivance")
-        } detail: {
-            HomeView()
-        }
-        .ignoresSafeArea(.keyboard)
-    }
-    
-}
-
-struct SearchBar: View {
-    @Binding var text: String
-    @FocusState private var isFocused: Bool
-    
-    var body: some View {
-        ZStack {
-            // "Find in list" Button
-            Button("Find in list") {
-                isFocused = true
-            }
-            .hidden()
-            .font(.system(size: 13))
-            .foregroundColor(.gray)
-            .buttonStyle(.plain)
-            .keyboardShortcut("f", modifiers: [.command, .option])
-                
-            HStack {
-                // Search Bar with Magnifying Glass
+            List(selection: navigationBinding) {
                 HStack {
                     Image(systemName: "magnifyingglass")
-                        .foregroundColor(Color(.systemGray2))
-                        .font(.system(size: 16))
-                        .padding(.leading)
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 8)
                     
-                    TextField("Search", text: $text)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .font(.system(size: 16))
-                        .autocorrectionDisabled()
-                        .focused($isFocused)
+                    TextField("Find in List", text: $searchState.searchText)
+                        .textFieldStyle(.plain)
+                        .focused($searchBarFocused)
+                        .autocorrectionDisabled(true)
                 }
-                .frame(height: 35)
-                .background(Color(.systemGray).opacity(0.15))
-                .cornerRadius(10)
+                .padding(8)
+                .background(Color(.systemGray5))
+                .cornerRadius(8)
+                .listRowBackground(Color.clear)
+                .onChange(of: searchBarFocused) { _, isFocused in
+                    searchState.isSearching = isFocused
+                }
+                .onChange(of: searchState.isSearching) { _, isSearching in
+                    searchBarFocused = isSearching
+                }
+
                 
-                Spacer()
-                
-                // "Cancel" Button
-                if isFocused /*|| !text.isEmpty*/ {
-                    Button("Cancel") {
-                        text = ""
-                        isFocused = false
+                Section(header: Text("Main")) {
+                    ForEach(["Home", "Insights", "Labels", "Log"], id: \.self) { item in
+                        if filteredItems.contains(item) {
+                            Text(item)
+                                .tag(item)
+                        }
                     }
-                    .font(.system(size: 13))
-                    .foregroundColor(Color(.systemGray))
-                    .keyboardShortcut(.escape, modifiers: [])
-                    .padding(8)
-                    .hoverEffect(.automatic)
+                }
+                
+                Section(header: Text("Macronutrients")) {
+                    ForEach(["Calories", "Carbs", "Protein", "Fats", "Water"], id: \.self) { item in
+                        if filteredItems.contains(item) {
+                            Text(item)
+                                .tag(item)
+                        }
+                    }
+                }
+                
+                Section(header: Text("Micronutrients")) {
+                    ForEach(["Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"], id: \.self) { item in
+                        if filteredItems.contains(item) {
+                            Text(item)
+                                .tag(item)
+                        }
+                    }
                 }
             }
+            .onChange(of: searchState.isSearching) { _, isSearching in
+                if isSearching {
+                    searchBarFocused = true
+                } else {
+                    searchBarFocused = false
+                    sidebarFocused = true
+                }
+            }
+            .focused($sidebarFocused)
+            .navigationTitle("Nutrivance")
+        } detail: {
+            Group {
+                switch navigationState.selectedView {
+                case "Home":
+                    HomeView()
+                case "Insights":
+                    HealthInsightsView()
+                case "Labels":
+                    NutritionScannerView()
+                case "Log":
+                    LogView()
+                case "Calories":
+                    NutrientDetailView(nutrientName: "Calories")
+                case "Carbs":
+                    NutrientDetailView(nutrientName: "Carbs")
+                case "Protein":
+                    NutrientDetailView(nutrientName: "Protein")
+                case "Fats":
+                    NutrientDetailView(nutrientName: "Fats")
+                case "Water":
+                    NutrientDetailView(nutrientName: "Water")
+                case "Fiber":
+                    NutrientDetailView(nutrientName: "Fiber")
+                case "Vitamins":
+                    NutrientDetailView(nutrientName: "Vitamins")
+                case "Minerals":
+                    NutrientDetailView(nutrientName: "Minerals")
+                case "Phytochemicals":
+                    NutrientDetailView(nutrientName: "Phytochemicals")
+                case "Antioxidants":
+                    NutrientDetailView(nutrientName: "Antioxidants")
+                case "Electrolytes":
+                    NutrientDetailView(nutrientName: "Electrolytes")
+                default:
+                    HomeView()
+                }
+            }
+            .focused($contentFocused)
+        }
+    }
+
+    
+    
+    private func cycleFocus() {
+        if searchBarFocused {
+            searchBarFocused = false
+            sidebarFocused = true
+        } else if sidebarFocused {
+            sidebarFocused = false
+            contentFocused = true
+        } else {
+            contentFocused = false
+            searchBarFocused = true
         }
     }
 }
-
