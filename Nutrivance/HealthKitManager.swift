@@ -292,7 +292,6 @@ class HealthKitManager: ObservableObject {
     }
     
     func fetchTodayNutrientData(for nutrientType: String, completion: @escaping (Double?, Error?) -> Void) {
-        // Map common names to HealthKit identifiers
         let mappedType = nutrientType.lowercased()
         
         print("HealthKitManager: Fetching \(nutrientType)")
@@ -319,16 +318,25 @@ class HealthKitManager: ObservableObject {
             print("HealthKitManager: Query completed for \(nutrientType)")
             print("HealthKitManager: Result: \(String(describing: result))")
             DispatchQueue.main.async {
-                let value = result?.sumQuantity()?.doubleValue(for: self.unit(for: nutrientType))
-                print("HealthKitManager: Final value: \(String(describing: value))")
-                print("Debug: Raw HealthKit result for \(nutrientType): \(String(describing: result))")
-                print("Debug: Converted value: \(String(describing: value)) \(self.unit(for: nutrientType))")
-                completion(value, error)
+                if let quantity = result?.sumQuantity() {
+                    let unit = self.unit(for: nutrientType)
+                    let value = quantity.doubleValue(for: unit)
+                    let unitString = unit.unitString
+                    
+                    print("HealthKitManager: Final value: \(value) \(unitString)")
+                    print("Debug: Raw HealthKit result for \(nutrientType): \(String(describing: result))")
+                    print("Debug: Converted value: \(value) \(unitString)")
+                    
+                    completion(value, error)
+                } else {
+                    completion(nil, error)
+                }
             }
         }
         
         healthStore.execute(query)
     }
+
     
     func saveNutrients(_ nutrients: [NutrientData], completion: @escaping (Bool) -> Void) {
         let entryId = UUID()
