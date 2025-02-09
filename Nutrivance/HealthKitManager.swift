@@ -50,6 +50,33 @@ let types = [
     (HKObjectType.quantityType(forIdentifier: .dietaryCaffeine)!, "caffeine")
 ]
 
+// Add these new types to the existing types array
+let additionalTypes: [(HKSampleType, String)] = [
+    // Physical Activity
+    (HKObjectType.quantityType(forIdentifier: .stepCount)!, "steps"),
+    (HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!, "distance"),
+    (HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!, "active_calories"),
+    (HKObjectType.workoutType(), "workouts"),
+    
+    // Vital Signs
+    (HKObjectType.quantityType(forIdentifier: .heartRate)!, "heart_rate"),
+    (HKObjectType.quantityType(forIdentifier: .restingHeartRate)!, "resting_heart_rate"),
+    (HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!, "hrv"),
+    (HKObjectType.quantityType(forIdentifier: .oxygenSaturation)!, "oxygen"),
+    (HKObjectType.quantityType(forIdentifier: .respiratoryRate)!, "respiratory_rate"),
+    
+    // Sleep
+    (HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!, "sleep"),
+    
+    // Mindfulness
+    (HKObjectType.categoryType(forIdentifier: .mindfulSession)!, "mindfulness"),
+    
+    // Mood & Symptoms
+    (HKObjectType.categoryType(forIdentifier: .moodChanges)!, "mood"),
+    (HKObjectType.categoryType(forIdentifier: .sleepChanges)!, "sleep_changes"),
+    (HKObjectType.categoryType(forIdentifier: .appetiteChanges)!, "appetite_changes")
+]
+
 class HealthKitManager: ObservableObject {
     private let healthStore = HKHealthStore()
     
@@ -595,6 +622,157 @@ class HealthKitManager: ObservableObject {
             // Default for most nutrients (proteins, carbs, fats, etc.)
             default: return .gram()
         }
+    }
+    
+    // Add inside HealthKitManager class
+
+    func fetchMentalHealthData(from startDate: Date, to endDate: Date, completion: @escaping ([String: Any]) -> Void) {
+        let group = DispatchGroup()
+        var results: [String: Any] = [:]
+        
+        // Fetch mindfulness minutes
+        group.enter()
+        fetchMindfulnessMinutes(from: startDate, to: endDate) { minutes in
+            results["mindfulness_minutes"] = minutes
+            group.leave()
+        }
+        
+        // Fetch mood data
+        group.enter()
+        fetchMoodData(from: startDate, to: endDate) { moodData in
+            results["mood_patterns"] = moodData
+            group.leave()
+        }
+        
+        group.notify(queue: .main) {
+            completion(results)
+        }
+    }
+
+    func fetchPhysicalActivityData(from startDate: Date, to endDate: Date, completion: @escaping ([String: Any]) -> Void) {
+        let group = DispatchGroup()
+        var results: [String: Any] = [:]
+        
+        // Fetch steps
+        group.enter()
+        fetchStepCount(from: startDate, to: endDate) { steps in
+            results["steps"] = steps
+            group.leave()
+        }
+        
+        // Fetch workouts
+        group.enter()
+        fetchWorkouts(from: startDate, to: endDate) { workouts in
+            results["workouts"] = workouts
+            group.leave()
+        }
+        
+        // Fetch heart rate data
+        group.enter()
+        fetchHeartRateData(from: startDate, to: endDate) { heartData in
+            results["heart_rate"] = heartData
+            group.leave()
+        }
+        
+        group.notify(queue: .main) {
+            completion(results)
+        }
+    }
+
+    private func fetchMindfulnessMinutes(from startDate: Date, to endDate: Date, completion: @escaping (Double) -> Void) {
+        guard let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let query = HKSampleQuery(sampleType: mindfulType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+            let totalMinutes = samples?.reduce(0.0) { total, sample in
+                let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
+                return total + duration
+            } ?? 0.0
+            
+            DispatchQueue.main.async {
+                completion(totalMinutes)
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    private func fetchStepCount(from startDate: Date, to endDate: Date, completion: @escaping (Int) -> Void) {
+        guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let query = HKStatisticsQuery(quantityType: stepType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+            let steps = Int(result?.sumQuantity()?.doubleValue(for: HKUnit.count()) ?? 0)
+            DispatchQueue.main.async {
+                completion(steps)
+            }
+        }
+        healthStore.execute(query)
+    }
+    
+    private func fetchMoodData(from startDate: Date, to endDate: Date, completion: @escaping ([String: Any]) -> Void) {
+        guard let moodType = HKObjectType.categoryType(forIdentifier: .moodChanges) else {
+            completion([:])
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let query = HKSampleQuery(sampleType: moodType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+            let moodData = samples?.reduce(into: [String: Int]()) { dict, sample in
+                if let categorySample = sample as? HKCategorySample {
+                    dict["\(categorySample.value)"] = (dict["\(categorySample.value)"] ?? 0) + 1
+                }
+            } ?? [:]
+            DispatchQueue.main.async {
+                completion(moodData)
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    private func fetchWorkouts(from startDate: Date, to endDate: Date, completion: @escaping ([HKWorkout]) -> Void) {
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        
+        let query = HKSampleQuery(sampleType: .workoutType(), predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDescriptor]) { _, samples, _ in
+            let workouts = samples as? [HKWorkout] ?? []
+            DispatchQueue.main.async {
+                completion(workouts)
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    private func fetchHeartRateData(from startDate: Date, to endDate: Date, completion: @escaping ([String: Double]) -> Void) {
+        guard let heartRateType = HKObjectType.quantityType(forIdentifier: .heartRate) else {
+            completion([:])
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let query = HKStatisticsQuery(quantityType: heartRateType, quantitySamplePredicate: predicate, options: [.discreteAverage, .discreteMin, .discreteMax]) { _, result, _ in
+            var heartData: [String: Double] = [:]
+            
+            if let avg = result?.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+                heartData["average"] = avg
+            }
+            if let min = result?.minimumQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+                heartData["minimum"] = min
+            }
+            if let max = result?.maximumQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+                heartData["maximum"] = max
+            }
+            
+            DispatchQueue.main.async {
+                completion(heartData)
+            }
+        }
+        healthStore.execute(query)
     }
 
 }
