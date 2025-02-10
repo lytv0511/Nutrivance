@@ -131,6 +131,106 @@ class HealthKitManager: ObservableObject {
             case requires
         }
     }
+    
+    func fetchAge(completion: @escaping (Double) -> Void) {
+        let birthdayComponents = Calendar.current.dateComponents([.year], from: Date())
+        completion(Double(birthdayComponents.year ?? 30))
+    }
+
+    func fetchTDEE(completion: @escaping (Double) -> Void) {
+        guard let tdeeType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else {
+            completion(2200.0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: Calendar.current.startOfDay(for: Date()), end: Date(), options: .strictStartDate)
+        let query = HKStatisticsQuery(quantityType: tdeeType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+            let tdee = result?.sumQuantity()?.doubleValue(for: HKUnit.kilocalorie()) ?? 2200.0
+            DispatchQueue.main.async {
+                completion(tdee)
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    func fetchVO2Max(completion: @escaping (Double) -> Void) {
+        guard let vo2Type = HKQuantityType.quantityType(forIdentifier: .vo2Max) else {
+            completion(40.0)
+            return
+        }
+        
+        let query = HKStatisticsQuery(quantityType: vo2Type, quantitySamplePredicate: nil, options: .discreteAverage) { _, result, _ in
+            let vo2max = result?.averageQuantity()?.doubleValue(for: HKUnit(from: "ml/kg*min")) ?? 40.0
+            DispatchQueue.main.async {
+                completion(vo2max)
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    func fetchRecoveryHeartRate(completion: @escaping (Double) -> Void) {
+        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
+            completion(70.0)
+            return
+        }
+        
+        let query = HKStatisticsQuery(quantityType: hrType, quantitySamplePredicate: nil, options: .discreteAverage) { _, result, _ in
+            let hr = result?.averageQuantity()?.doubleValue(for: HKUnit(from: "count/min")) ?? 70.0
+            DispatchQueue.main.async {
+                completion(hr)
+            }
+        }
+        healthStore.execute(query)
+    }
+    
+    func fetchSteps(completion: @escaping (Double) -> Void) {
+        guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: Calendar.current.startOfDay(for: Date()), end: Date(), options: .strictStartDate)
+        let query = HKStatisticsQuery(quantityType: stepType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+            let steps = result?.sumQuantity()?.doubleValue(for: HKUnit.count()) ?? 0
+            DispatchQueue.main.async {
+                completion(steps)
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    func fetchWalkingRunningMinutes(completion: @escaping (Double) -> Void) {
+        guard let walkingType = HKQuantityType.quantityType(forIdentifier: .appleExerciseTime) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: Calendar.current.startOfDay(for: Date()), end: Date(), options: .strictStartDate)
+        let query = HKStatisticsQuery(quantityType: walkingType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+            let minutes = result?.sumQuantity()?.doubleValue(for: HKUnit.minute()) ?? 0
+            DispatchQueue.main.async {
+                completion(minutes)
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    func fetchFlightsClimbed(completion: @escaping (Double) -> Void) {
+        guard let flightsType = HKQuantityType.quantityType(forIdentifier: .flightsClimbed) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: Calendar.current.startOfDay(for: Date()), end: Date(), options: .strictStartDate)
+        let query = HKStatisticsQuery(quantityType: flightsType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+            let flights = result?.sumQuantity()?.doubleValue(for: HKUnit.count()) ?? 0
+            DispatchQueue.main.async {
+                completion(flights)
+            }
+        }
+        healthStore.execute(query)
+    }
+
 
     func getNutrientInteractions(for nutrient: String) -> NutrientInteraction {
         switch nutrient.lowercased() {

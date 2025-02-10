@@ -1,11 +1,15 @@
 import SwiftUI
 import HealthKit
 import Combine
+import CoreML
+import CreateML
 
 struct NutrientDetailView: View {
     @StateObject private var healthKitManager = HealthKitManager()
     @State private var todayCurrentNutrient: Double?
+    @State private var recommendedIntake: String?
     let nutrientName: String
+    let mlModel = try? nutrition_prediction_model()
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -116,6 +120,61 @@ struct NutrientDetailView: View {
         "Electrolytes": Color.mint.opacity(0.4)    // Darker mint
     ]
 
+    private func standardize(_ value: Float, mean: Float, std: Float) -> Float {
+        return (value - mean) / std
+    }
+
+    private func getPredictedIntake() {
+        guard let model = mlModel else { return }
+        
+        healthKitManager.fetchSteps { steps in
+            healthKitManager.fetchWalkingRunningMinutes { walkingMinutes in
+                healthKitManager.fetchFlightsClimbed { flights in
+                    do {
+                        // Direct input of raw values - no standardization needed
+                        let inputArray = MLShapedArray<Float>(
+                            scalars: [
+//                                30.0,  // age
+//                                2000.0,  // tdee
+//                                Float(steps),  // steps
+//                                Float(walkingMinutes),  // walking_running_minutes
+//                                Float(flights),  // flights_climbed
+//                                40.0,  // cardio_vo2max
+//                                70.0   // cardio_recovery_bpm
+                                28.0,    // age
+                                   2400.0,  // tdee
+                                   12000.0, // steps
+                                   45.0,    // walking_running_minutes
+                                   15.0,    // flights_climbed
+                                   45.0,    // cardio_vo2max
+                                   65.0     // cardio_recovery_bpm
+                            ],
+                            shape: [1, 7]
+                        )
+                        
+                        let modelInput = nutrition_prediction_modelInput(lambda_input: inputArray)
+                        let prediction = try model.prediction(input: modelInput)
+                        
+                        let value = switch nutrientName.lowercased() {
+                            case "tdee": prediction.Identity[0].doubleValue
+                            case "protein": prediction.Identity[1].doubleValue
+                            case "fats": prediction.Identity[2].doubleValue
+                            case "carbs": prediction.Identity[3].doubleValue
+                            case "water": prediction.Identity[4].doubleValue * 1000  // Convert L to mL
+                            default: 0.0
+                        }
+                        
+                        DispatchQueue.main.async {
+                            recommendedIntake = "\(value) \(NutritionUnit.getUnit(for: nutrientName))"
+                        }
+                    } catch {
+                        print("Prediction error: \(error)")
+                    }
+                }
+            }
+        }
+    }
+
     // Computed property to determine the display value and unit
     private var displayValue: String {
         print("NutrientDetailView: Computing displayValue with todayCurrentNutrient: \(String(describing: todayCurrentNutrient))")
@@ -197,7 +256,13 @@ struct NutrientDetailView: View {
                                         
                                         NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
                                         NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
-                                        NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
+                                        NutrientCard(
+                                            title: "Recommended Intake",
+                                            content: recommendedIntake ?? "Calculating...",
+                                            cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9,
+                                            titleColor: .orange,
+                                            symbolName: "star"
+                                        )
                                         NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
                                         NutrientCard(title: "Benefits", content: details.benefits, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
                                     }
@@ -216,20 +281,25 @@ struct NutrientDetailView: View {
                 }
             }
         }
+        // Add to onAppear
         .onAppear {
             print("NutrientDetailView onAppear for: \(nutrientName)")
             if isGroupCategory(nutrientName) {
                 fetchCategoryData(for: nutrientName)
             } else {
                 fetchNutrientData(for: nutrientName)
+                getPredictedIntake()  // Add this
             }
         }
+
+        // Also add to onChange
         .onChange(of: nutrientName) { oldValue, newNutrient in
             todayCurrentNutrient = nil
             if isGroupCategory(newNutrient) {
                 fetchCategoryData(for: newNutrient)
             } else {
                 fetchNutrientData(for: newNutrient)
+                getPredictedIntake()  // Add this
             }
         }
     }
