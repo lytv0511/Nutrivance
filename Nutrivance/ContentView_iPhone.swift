@@ -169,6 +169,12 @@ struct BlankIconView: View {
     }
 }
 
+extension Double {
+    var radiansToDegrees: Double {
+        return self * 180 / .pi
+    }
+}
+
 struct WheelPicker: View {
     let choices: [String]
     @Binding var choice: String
@@ -176,105 +182,219 @@ struct WheelPicker: View {
     @State private var finalAngle: Double = 0
     @State private var initialTouchAngle: Double? = nil
     let numberOfTicks = 100
-    let onChange: (String) -> Void // Closure to notify about changes
-    @State private var buttonScale: CGFloat = 1.0 // State to manage button scale
-    @State private var showCamera: Bool = false // State for camera presentation
-    @State private var showDetails: Bool = false // State for showing details view
+    let onChange: (String) -> Void
+    @State private var buttonScale: CGFloat = 1.0
+    @State private var showRadialMenu = false
+    @State private var showHealthInsights = false
+    @State private var showNutritionScanner = false
+    @State private var showLogView = false
+    @State private var showHomeView = false
+    @State private var showDetails = false
+    @GestureState private var dragLocation: CGPoint?
 
-    // Computed property to reverse the choices array
     private var reversedChoices: [String] {
-        return choices.reversed()
+        choices.reversed()
     }
 
-    public var body: some View {
+    private let radialMenuIcons = [
+        "heart.text.square",
+        "text.viewfinder",
+        "square.and.pencil",
+        "house"
+    ]
+    
+    @ViewBuilder
+    func RadialMenuItems() -> some View {
+        let menuRadius = 80.0
+        ZStack {
+            ForEach(0..<4) { index in
+                let angle = Double(index) * .pi / 2
+                let xOffset = cos(angle) * menuRadius
+                let yOffset = sin(angle) * menuRadius
+                
+                Image(systemName: radialMenuIcons[index])
+                    .font(.title)
+                    .foregroundColor(.white)
+                    .frame(width: 44, height: 44)
+                    .opacity(dragLocation != nil ? 1.0 : 0.5)
+                    .offset(x: xOffset, y: yOffset)
+                    .transition(.scale)
+            }
+        }
+        .animation(.spring(), value: showRadialMenu)
+    }
+
+    var body: some View {
         ZStack {
             GeometryReader { geometry in
+                let wheelSize = geometry.size.width
                 ZStack {
                     Circle()
                         .stroke(lineWidth: 1)
                         .foregroundColor(.gray)
 
                     ForEach(0..<numberOfTicks, id: \.self) { index in
+                        let tickHeight = index % 5 == 0 ? 20.0 : 10.0
+                        let yOffset = -wheelSize / 2 + 15 + (index % 5 == 0 ? -5 : 0)
+                        let rotationAngle = 360.0 / Double(numberOfTicks) * Double(index)
+                        
                         Rectangle()
-                            .frame(width: 2, height: index % 5 == 0 ? 20 : 10)
-                            .offset(y: -geometry.size.width / 2 + 15 + (index % 5 == 0 ? -5 : 0))
-                            .rotationEffect(Angle(degrees: 360 / Double(numberOfTicks) * Double(index)))
+                            .frame(width: 2, height: tickHeight)
+                            .offset(y: yOffset)
+                            .rotationEffect(Angle(degrees: rotationAngle))
                     }
                 }
                 .contentShape(Circle())
                 .clipped()
-                .frame(width: geometry.size.width, height: geometry.size.width)
-                .rotationEffect(Angle(degrees: self.rotation))
+                .frame(width: wheelSize, height: wheelSize)
+                .rotationEffect(Angle(degrees: rotation))
                 .gesture(
                     DragGesture()
                         .onChanged { value in
-                            let vector = CGVector(dx: value.location.x - geometry.size.width / 2,
-                                                  dy: value.location.y - geometry.size.height / 2)
-                            let angle = atan2(vector.dy, vector.dx).radiansToDegrees
-                            if self.initialTouchAngle == nil {
-                                self.initialTouchAngle = angle
+                            let centerX = wheelSize / 2
+                            let centerY = wheelSize / 2
+                            let vector = CGVector(
+                                dx: value.location.x - centerX,
+                                dy: value.location.y - centerY
+                            )
+                            let angle = Double(atan2(vector.dy, vector.dx)).radiansToDegrees
+                            
+                            if initialTouchAngle == nil {
+                                initialTouchAngle = angle
                             }
-                            self.rotation = angle - (self.initialTouchAngle ?? 0)
-
-                            // Update the selection in real-time
-                            updateSelection()
+                            rotation = angle - (initialTouchAngle ?? 0)
+                            self.wheelSelectionUpdate()
                         }
                         .onEnded { _ in
-                            self.finalAngle += self.rotation
-                            self.rotation = 0
-                            self.initialTouchAngle = nil
+                            finalAngle += rotation
+                            rotation = 0
+                            initialTouchAngle = nil
                         }
                 )
             }
             .aspectRatio(1, contentMode: .fit)
             .padding(.horizontal)
 
-            Button(action: {
-                // Open the nutrient detail view when tapped
-                showDetails = true
-                let generator = UIImpactFeedbackGenerator(style: .heavy)
-                generator.prepare()
-                generator.impactOccurred()
-            }) {
-                Image(systemName: "arrow.right.circle.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 50, height: 50) // Frame size of the button
-                    .foregroundColor(.white) // Set icon color to white
-                    .padding(10) // Padding around the icon
-                    .background(Color.gray.opacity(0.5)) // Translucent gray background
-                    .clipShape(Circle())
-                    .shadow(radius: 10)
-                    .scaleEffect(buttonScale) // Scale the button
+            GeometryReader { geometry in
+                Button(action: {}) {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 50, height: 50)
+                        .foregroundColor(.white)
+                        .padding(10)
+                        .background(Color.gray.opacity(0.5))
+                        .clipShape(Circle())
+                        .shadow(radius: 10)
+                        .scaleEffect(buttonScale)
+                        .overlay(
+                            Group {
+                                if showRadialMenu {
+                                    RadialMenuItems()
+                                }
+                            }
+                        )
+                }
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .updating($dragLocation) { value, state, _ in
+                            state = value.location
+                        }
+                        .onChanged { _ in
+                            withAnimation(.spring()) {
+                                showRadialMenu = true
+                            }
+                            let generator = UIImpactFeedbackGenerator(style: .medium)
+                            generator.impactOccurred()
+                        }
+                        .onEnded { value in
+                            let buttonCenter = CGPoint(
+                                x: geometry.frame(in: .local).midX,
+                                y: geometry.frame(in: .local).midY
+                            )
+                            self.handleMenuSelection(at: value.location, center: buttonCenter)
+                            withAnimation(.spring()) {
+                                showRadialMenu = false
+                            }
+                        }
+                )
+                .gesture(
+                    LongPressGesture(minimumDuration: 0.3)
+                        .onEnded { _ in
+                            withAnimation(.spring()) {
+                                showRadialMenu = true
+                            }
+                            let generator = UIImpactFeedbackGenerator(style: .heavy)
+                            generator.impactOccurred()
+                        }
+                )
+                .onTapGesture {
+                    showDetails = true
+                    let generator = UIImpactFeedbackGenerator(style: .rigid)
+                    generator.impactOccurred()
+                }
             }
-            .rotationEffect(Angle(degrees: 0)) // Prevent rotation of the button
-
-            // Full Screen Cover for Nutrient Detail View
-            .sheet(isPresented: $showDetails) {
-                NutrientDetailView(nutrientName: choice)
-            }
+        }
+        .sheet(isPresented: $showDetails) {
+            NutrientDetailView(nutrientName: choice)
+        }
+        .sheet(isPresented: $showHealthInsights) {
+            HealthInsightsView()
+        }
+        .sheet(isPresented: $showNutritionScanner) {
+            NutritionScannerView()
+        }
+        .sheet(isPresented: $showLogView) {
+            LogView()
+        }
+        .sheet(isPresented: $showHomeView) {
+            HomeView()
         }
     }
 
-    private func updateSelection() {
-        let currentAngle = (self.finalAngle + self.rotation).truncatingRemainder(dividingBy: 360)
-        let normalizedAngle = (360 - currentAngle + 360 / Double(reversedChoices.count) / 2).truncatingRemainder(dividingBy: 360)
-        let sensitivityFactor = 1.0  // Lower values increase sensitivity
-        let index = Int((normalizedAngle / ((360 / Double(reversedChoices.count)) * sensitivityFactor)).truncatingRemainder(dividingBy: Double(reversedChoices.count)))
-        let newChoice = reversedChoices[index] // Use reversedChoices for selection
+    func wheelSelectionUpdate() {
+        let currentAngle = (finalAngle + rotation).truncatingRemainder(dividingBy: 360)
+        let normalizedAngle = (360 - currentAngle + 360 / Double(reversedChoices.count) / 2)
+            .truncatingRemainder(dividingBy: 360)
+        let sensitivityFactor = 1.0
+        let anglePerChoice = 360 / Double(reversedChoices.count)
+        let index = Int((normalizedAngle / (anglePerChoice * sensitivityFactor))
+            .truncatingRemainder(dividingBy: Double(reversedChoices.count)))
         
+        let newChoice = reversedChoices[index]
         if newChoice != choice {
-            choice = newChoice // Update the bound choice
-            onChange(newChoice) // Call the onChange closure
+            choice = newChoice
+            onChange(newChoice)
             let generator = UIImpactFeedbackGenerator(style: .rigid)
-            generator.prepare()
             generator.impactOccurred()
         }
     }
-}
 
-extension CGFloat {
-    var radiansToDegrees: Double {
-        return Double(self) * 180 / .pi
+    func handleMenuSelection(at location: CGPoint, center: CGPoint) {
+        let dx = location.x - center.x
+        let dy = location.y - center.y
+        let angle = atan2(dy, dx)
+        let normalizedAngle = (angle + .pi * 2).truncatingRemainder(dividingBy: .pi * 2)
+        
+        let distanceFromCenter = sqrt(pow(dx, 2) + pow(dy, 2))
+        if distanceFromCenter < 25 {
+            showDetails = true
+            return
+        }
+        
+        // Rest of the angle checks remain the same
+        switch normalizedAngle {
+            case (.pi * 1.75)...(2 * .pi), 0...(.pi * 0.25):  // Up
+                showHealthInsights = true
+            case (.pi * 0.25)...(.pi * 0.75):  // Right
+                showNutritionScanner = true
+            case (.pi * 0.75)...(.pi * 1.25):  // Down
+                showLogView = true
+            case (.pi * 1.25)...(.pi * 1.75):  // Left
+                showHomeView = true
+            default:
+                showDetails = true
+        }
     }
 }
