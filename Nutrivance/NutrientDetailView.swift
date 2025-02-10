@@ -2,7 +2,7 @@ import SwiftUI
 import HealthKit
 import Combine
 import CoreML
-import CreateML
+//import CreateML
 
 struct NutrientDetailView: View {
     @StateObject private var healthKitManager = HealthKitManager()
@@ -131,7 +131,6 @@ struct NutrientDetailView: View {
             healthKitManager.fetchWalkingRunningMinutes { walkingMinutes in
                 healthKitManager.fetchFlightsClimbed { flights in
                     do {
-                        // Direct input of raw values - no standardization needed
                         let inputArray = MLShapedArray<Float>(
                             scalars: [
 //                                30.0,  // age

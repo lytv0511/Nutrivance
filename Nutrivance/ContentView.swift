@@ -10,8 +10,8 @@ struct ContentView: View {
             if horizontalSizeClass == .regular {
                 ContentView_iPad()
             } else {
-                ContentView_iPhone_alt()
-//                ContentView_iPhone()
+//                ContentView_iPhone_alt()
+                ContentView_iPhone()
             }
         }
         .onAppear {

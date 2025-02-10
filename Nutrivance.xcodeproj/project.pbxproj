@@ -50,7 +50,6 @@
 		15D7FFB42CD1426A0048E050 /* NutrivanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFB32CD1426A0048E050 /* NutrivanceTests.swift */; };
 		15D7FFBE2CD1426A0048E050 /* NutrivanceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFBD2CD1426A0048E050 /* NutrivanceUITests.swift */; };
 		15D7FFC02CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFBF2CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift */; };
-		15D7FFCD2CD148A70048E050 /* WheelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFCC2CD148A00048E050 /* WheelPicker.swift */; };
 		15D7FFD12CD159010048E050 /* NutrientDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D7FFD02CD159010048E050 /* NutrientDetailView.swift */; };
 		15D8B5592CEEC73600E64AA3 /* Nutrivance-Bridging-Header.h in Sources */ = {isa = PBXBuildFile; fileRef = 15D8B5582CEEC6B000E64AA3 /* Nutrivance-Bridging-Header.h */; };
 		15F5865D2CF783F3006D3A9C /* HealthInsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F5865C2CF783F3006D3A9C /* HealthInsightsView.swift */; };
@@ -177,7 +176,6 @@
 		15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NutrivanceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		15D7FFBD2CD1426A0048E050 /* NutrivanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITests.swift; sourceTree = "<group>"; };
 		15D7FFBF2CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITestsLaunchTests.swift; sourceTree = "<group>"; };
-		15D7FFCC2CD148A00048E050 /* WheelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WheelPicker.swift; sourceTree = "<group>"; };
 		15D7FFD02CD159010048E050 /* NutrientDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientDetailView.swift; sourceTree = "<group>"; };
 		15D8B5582CEEC6B000E64AA3 /* Nutrivance-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Nutrivance-Bridging-Header.h"; sourceTree = "<group>"; };
 		15F5865C2CF783F3006D3A9C /* HealthInsightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthInsightsView.swift; sourceTree = "<group>"; };
@@ -484,7 +482,6 @@
 				159F51762CD6F2DD001F5FFC /* Info.plist */,
 				159F516D2CD55871001F5FFC /* Nutrivance.entitlements */,
 				15D7FFA02CD142690048E050 /* NutrivanceApp.swift */,
-				15D7FFCC2CD148A00048E050 /* WheelPicker.swift */,
 				15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */,
 				15F5865C2CF783F3006D3A9C /* HealthInsightsView.swift */,
 				15B9D5932D599DD000D2B629 /* nutrition_prediction_model.mlpackage */,
@@ -767,7 +764,6 @@
 				156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */,
 				15CB570A2CEEBED000A6E970 /* NutritionScannerView.swift in Sources */,
 				1593A59E2D40386A00FCD9CD /* NutrivanceIntents.swift in Sources */,
-				15D7FFCD2CD148A70048E050 /* WheelPicker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
