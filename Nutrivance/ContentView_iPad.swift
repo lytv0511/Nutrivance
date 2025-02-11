@@ -7,18 +7,11 @@ struct ContentView_iPad: View {
     @State private var showHome: Bool = true
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
-    @State private var appFocus: AppFocus = .nutrition
     private let detector = NutritionTableDetector()
     @State private var capturedImage: UIImage?
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
-    
-    enum AppFocus: String, CaseIterable {
-        case nutrition = "Nutrition"
-        case fitness = "Fitness"
-        case mentalHealth = "Mental Health"
-    }
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -49,21 +42,6 @@ struct ContentView_iPad: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     
-    private let fitnessSearchKeywords = [
-        "dashboard": ["dashboard", "overview", "summary", "home"],
-        "workouts": ["workout", "exercise", "training", "session"],
-        "progress": ["progress", "improvements", "gains", "tracking"],
-        "plans": ["plans", "programs", "routines", "schedules"],
-        "cardio": ["cardio", "running", "cycling", "swimming", "aerobic"],
-        "strength": ["strength", "weights", "resistance", "lifting"],
-        "flexibility": ["flexibility", "stretching", "yoga", "mobility"],
-        "sports": ["sports", "games", "activities", "athletics"],
-        "steps": ["steps", "walking", "pedometer", "distance"],
-        "heartrate": ["heart rate", "pulse", "bpm", "cardiovascular"],
-        "distance": ["distance", "miles", "kilometers", "travel"],
-        "caloriesburned": ["calories burned", "energy expenditure", "burn"]
-    ]
-    
     var filteredItems: [String] {
         let allItems = ["Home", "Insights", "Labels", "Log",
                        "Calories", "Carbs", "Protein", "Fats", "Water",
@@ -84,98 +62,163 @@ struct ContentView_iPad: View {
         }
     }
     
+    private func getAppTitle(_ focus: AppFocus) -> String {
+        switch focus {
+        case .nutrition:
+            return "Nutrivance"
+        case .fitness:
+            return "Movance"
+        case .mentalHealth:
+            return "Spirivance"
+        }
+    }
+    
+    private func getFocusIcon(_ focus: AppFocus) -> String {
+        switch focus {
+        case .nutrition:
+            return "leaf.fill"
+        case .fitness:
+            return "figure.run"
+        case .mentalHealth:
+            return "brain.head.profile"
+        }
+    }
+    
     var body: some View {
-        NavigationSplitView {
-            List(selection: navigationBinding) {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                        .padding(.leading, 8)
+        ZStack {
+            NavigationSplitView {
+                List(selection: navigationBinding) {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                            .padding(.leading, 8)
+                        
+                        TextField("Find in List", text: $searchState.searchText)
+                            .textFieldStyle(.plain)
+                            .focused($searchBarFocused)
+                            .autocorrectionDisabled(true)
+                    }
+                    .padding(8)
+                    .background(Color(.systemGray5))
+                    .cornerRadius(8)
+                    .listRowBackground(Color.clear)
+                    .onChange(of: searchBarFocused) { _, isFocused in
+                        searchState.isSearching = isFocused
+                    }
+                    .onChange(of: searchState.isSearching) { _, isSearching in
+                        searchBarFocused = isSearching
+                    }
                     
-                    TextField("Find in List", text: $searchState.searchText)
-                        .textFieldStyle(.plain)
-                        .focused($searchBarFocused)
-                        .autocorrectionDisabled(true)
-                }
-                .padding(8)
-                .background(Color(.systemGray5))
-                .cornerRadius(8)
-                .listRowBackground(Color.clear)
-                .onChange(of: searchBarFocused) { _, isFocused in
-                    searchState.isSearching = isFocused
+                    switch navigationState.appFocus {
+                    case .nutrition:
+                        nutritionSections
+                    case .fitness:
+                        fitnessSections
+                    case .mentalHealth:
+                        mentalHealthSections
+                    }
                 }
                 .onChange(of: searchState.isSearching) { _, isSearching in
-                    searchBarFocused = isSearching
-                }
-                
-                switch appFocus {
-                case .nutrition:
-                    nutritionSections
-                case .fitness:
-                    fitnessSections
-                case .mentalHealth:
-                    mentalHealthSections
-                }
-            }
-            .onChange(of: searchState.isSearching) { _, isSearching in
-                if isSearching {
-                    searchBarFocused = true
-                } else {
-                    searchBarFocused = false
-                    sidebarFocused = true
-                }
-            }
-            .focused($sidebarFocused)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Picker("App Focus", selection: $appFocus) {
-                        ForEach(AppFocus.allCases, id: \.self) { focus in
-                            Text(focus.rawValue)
-                                .tag(focus)
-                        }
+                    if isSearching {
+                        searchBarFocused = true
+                    } else {
+                        searchBarFocused = false
+                        sidebarFocused = true
                     }
-                    .pickerStyle(.navigationLink)
-                    .padding()
                 }
-            }
-        } detail: {
-            Group {
-                switch navigationState.selectedView {
-                case "Home":
-                    HomeView()
-                case "Insights":
-                    HealthInsightsView()
-                case "Labels":
-                    NutritionScannerView()
-                case "Log":
-                    LogView()
-                case "Calories":
-                    NutrientDetailView(nutrientName: "Calories")
-                case "Carbs":
-                    NutrientDetailView(nutrientName: "Carbs")
-                case "Protein":
-                    NutrientDetailView(nutrientName: "Protein")
-                case "Fats":
-                    NutrientDetailView(nutrientName: "Fats")
-                case "Water":
-                    NutrientDetailView(nutrientName: "Water")
-                case "Fiber":
-                    NutrientDetailView(nutrientName: "Fiber")
-                case "Vitamins":
-                    NutrientDetailView(nutrientName: "Vitamins")
-                case "Minerals":
-                    NutrientDetailView(nutrientName: "Minerals")
-                case "Phytochemicals":
-                    NutrientDetailView(nutrientName: "Phytochemicals")
-                case "Antioxidants":
-                    NutrientDetailView(nutrientName: "Antioxidants")
-                case "Electrolytes":
-                    NutrientDetailView(nutrientName: "Electrolytes")
-                default:
-                    HomeView()
+                .focused($sidebarFocused)
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Menu {
+                            ForEach(AppFocus.allCases, id: \.self) { focus in
+                                Button {
+                                    withAnimation(.spring()) {
+                                        navigationState.appFocus = focus
+                                    }
+                                } label: {
+                                    Label(focus.rawValue, systemImage: getFocusIcon(focus))
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: getFocusIcon(navigationState.appFocus))
+                                Text(navigationState.appFocus.rawValue)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(FocusPickerButtonStyle())
+                    }
                 }
+                .navigationTitle(getAppTitle(navigationState.appFocus))
+            } detail: {
+                Group {
+                    switch navigationState.selectedView {
+                    case "Home":
+                        HomeView()
+                    case "Insights":
+                        HealthInsightsView()
+                    case "Labels":
+                        NutritionScannerView()
+                    case "Log":
+                        LogView()
+                    case "Calories":
+                        NutrientDetailView(nutrientName: "Calories")
+                    case "Carbs":
+                        NutrientDetailView(nutrientName: "Carbs")
+                    case "Protein":
+                        NutrientDetailView(nutrientName: "Protein")
+                    case "Fats":
+                        NutrientDetailView(nutrientName: "Fats")
+                    case "Water":
+                        NutrientDetailView(nutrientName: "Water")
+                    case "Fiber":
+                        NutrientDetailView(nutrientName: "Fiber")
+                    case "Vitamins":
+                        NutrientDetailView(nutrientName: "Vitamins")
+                    case "Minerals":
+                        NutrientDetailView(nutrientName: "Minerals")
+                    case "Phytochemicals":
+                        NutrientDetailView(nutrientName: "Phytochemicals")
+                    case "Antioxidants":
+                        NutrientDetailView(nutrientName: "Antioxidants")
+                    case "Electrolytes":
+                        NutrientDetailView(nutrientName: "Electrolytes")
+                    default:
+                        HomeView()
+                    }
+                }
+                .focused($contentFocused)
             }
-            .focused($contentFocused)
+            
+            if navigationState.showFocusSwitcher {
+                Color.black.opacity(0.2)
+                    .ignoresSafeArea()
+                    .overlay {
+                        HStack(spacing: 20) {
+                            ForEach(AppFocus.allCases, id: \.self) { focus in
+                                VStack {
+                                    Image(systemName: getFocusIcon(focus))
+                                        .font(.system(size: 40))
+                                        .foregroundStyle(navigationState.tempFocus == focus ? .blue : .secondary)
+                                    Text(getAppTitle(focus))
+                                        .font(.caption)
+                                        .foregroundStyle(navigationState.tempFocus == focus ? .primary : .secondary)
+                                }
+                                .padding()
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .scaleEffect(navigationState.tempFocus == focus ? 1.1 : 0.9)
+                                .animation(.spring(response: 0.3), value: navigationState.tempFocus)
+                            }
+                        }
+                        .padding(40)
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                    }
+                    .transition(.opacity)
+            }
         }
     }
     
@@ -213,7 +256,7 @@ struct ContentView_iPad: View {
     private var fitnessSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Dashboard", "Workouts", "Progress", "Plans"], id: \.self) { item in
+                ForEach(["Dashboard", "Today's Plan", "Workout History", "Training Calendar"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Text(item)
                             .tag(item)
@@ -221,8 +264,17 @@ struct ContentView_iPad: View {
                 }
             }
             
-            Section(header: Text("Activities")) {
-                ForEach(["Cardio", "Strength", "Flexibility", "Sports"], id: \.self) { item in
+            Section(header: Text("Smart Training")) {
+                ForEach(["Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Recovery")) {
+                ForEach(["Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Text(item)
                             .tag(item)
@@ -231,7 +283,25 @@ struct ContentView_iPad: View {
             }
             
             Section(header: Text("Metrics")) {
-                ForEach(["Steps", "Heart Rate", "Distance", "Calories Burned"], id: \.self) { item in
+                ForEach(["Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Nutrition Impact")) {
+                ForEach(["Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Community")) {
+                ForEach(["Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Text(item)
                             .tag(item)
@@ -240,6 +310,7 @@ struct ContentView_iPad: View {
             }
         }
     }
+
     
     private var mentalHealthSections: some View {
         Group {
@@ -283,5 +354,16 @@ struct ContentView_iPad: View {
             contentFocused = false
             searchBarFocused = true
         }
+    }
+}
+
+struct FocusPickerButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(8)
+            .background(.ultraThinMaterial.opacity(configuration.isPressed ? 0.7 : 1))
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
     }
 }

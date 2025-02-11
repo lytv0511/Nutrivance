@@ -2,10 +2,20 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+enum AppFocus: String, CaseIterable {
+    case nutrition = "Nutrition"
+    case fitness = "Fitness"
+    case mentalHealth = "Mental Health"
+}
+
 class NavigationState: ObservableObject {
     @Published var selectedView: String = "Home"
     @Published var dismissAction: (() -> Void)?
     @Published var canGoBack: Bool = false
+    @Published var showFocusSwitcher = false
+    @Published var appFocus: AppFocus = .nutrition
+    @Published var tempFocus: AppFocus = .nutrition
+    @Published var isSearchBarFocused = false
     
     func setDismissAction(_ action: @escaping () -> Void) {
         dismissAction = action
@@ -15,6 +25,28 @@ class NavigationState: ObservableObject {
     func clearDismissAction() {
         dismissAction = nil
         canGoBack = false
+    }
+    
+    func cycleFocus() {
+        tempFocus = switch tempFocus {
+        case .nutrition: .fitness
+        case .fitness: .mentalHealth
+        case .mentalHealth: .nutrition
+        }
+        isSearchBarFocused = false
+    }
+    
+    func cycleBackwardFocus() {
+        tempFocus = switch tempFocus {
+        case .nutrition: .mentalHealth
+        case .fitness: .nutrition
+        case .mentalHealth: .fitness
+        }
+    }
+    
+    func commitFocusChange() {
+        appFocus = tempFocus
+        showFocusSwitcher = false
     }
 }
 
@@ -73,7 +105,28 @@ struct NutrivanceApp: App {
                 }
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(!navigationState.canGoBack)
+                Button("Cycle Focus Right") {
+                    withAnimation(.spring()) {
+                        navigationState.showFocusSwitcher = true
+                        navigationState.cycleFocus()
+                    }
+                }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
 
+                Button("Cycle Focus Left") {
+                    withAnimation(.spring()) {
+                        navigationState.showFocusSwitcher = true
+                        navigationState.cycleBackwardFocus()
+                    }
+                }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+
+                Button("Commit Focus Change") {
+                    withAnimation(.spring()) {
+                        navigationState.commitFocusChange()
+                    }
+                }
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
             }
             CommandMenu("Search") {
                 Button("Find in List") {
@@ -108,7 +161,7 @@ struct NutrivanceApp: App {
                     .keyboardShortcut("5", modifiers: [.control])
                 Button("Electrolytes") { navigationState.selectedView = "Electrolytes" }
                     .keyboardShortcut("6", modifiers: [.control])
-            }   
+            }
         }
     }
 }
