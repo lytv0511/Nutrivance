@@ -10,7 +10,9 @@ struct ContentView_iPhone: View {
     @State private var showCamera = false;
     @State private var showNutritionScanner = false
     @State private var isLongPressing = false
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass // Detects the device size class
+    @State private var selectedNutrientForDetail: String?
+    @State private var showingNutrientDetail = false
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass // Detects the device size
 
     private let nutrientChoices = [
         "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
@@ -65,7 +67,7 @@ struct ContentView_iPhone: View {
                                 .onTapGesture {
                                     withAnimation {
                                         if selectedNutrient == nutrient {
-                                            showNutrientDetail = true
+                                            showingNutrientDetail = true
                                             let generator = UIImpactFeedbackGenerator(style: .heavy)
                                             generator.prepare()
                                             generator.impactOccurred()
@@ -98,6 +100,9 @@ struct ContentView_iPhone: View {
                             scrollViewProxy.scrollTo(newValue, anchor: .center)
                         }
                     }
+                    .sheet(isPresented: $showingNutrientDetail) {
+                        NutrientDetailView(nutrientName: selectedNutrient)
+                    }
                 }
 
                     // WheelPicker at the bottom half of the screen
@@ -115,39 +120,39 @@ struct ContentView_iPhone: View {
                 // Camera button in bottom right corner
             // Update the camera button section with this code
 
-            Button(action: {}) {
-                Image(systemName: "text.viewfinder")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 30, height: 30)
-                    .foregroundColor(.white)
-                    .padding(10)
-                    .background(Color.blue.opacity(0.7))
-                    .clipShape(Circle())
-                    .shadow(radius: 10)
-                    .scaleEffect(isLongPressing ? 1.5 : 1.0)  // Larger scale effect
-                    .animation(.spring(response: 0.4, dampingFraction: 0.6), value: isLongPressing)
-            }
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.5)
-                    .onChanged { _ in
-                        isLongPressing = true
-                        let generator = UINotificationFeedbackGenerator()
-                        generator.notificationOccurred(.success)
-                    }
-                    .onEnded { _ in
-                        isLongPressing = false
-                        showNutritionScanner = true
-                        let generator = UIImpactFeedbackGenerator(style: .heavy)
-                        generator.impactOccurred(intensity: 1.0)
-                    }
-            )
-            .padding()
-            .position(x: UIScreen.main.bounds.width - 50, y: UIScreen.main.bounds.height - 100)
-
-            .sheet(isPresented: $showNutritionScanner) {
-                NutritionScannerView()
-            }
+//            Button(action: {}) {
+//                Image(systemName: "text.viewfinder")
+//                    .resizable()
+//                    .scaledToFit()
+//                    .frame(width: 30, height: 30)
+//                    .foregroundColor(.white)
+//                    .padding(10)
+//                    .background(Color.blue.opacity(0.7))
+//                    .clipShape(Circle())
+//                    .shadow(radius: 10)
+//                    .scaleEffect(isLongPressing ? 1.5 : 1.0)  // Larger scale effect
+//                    .animation(.spring(response: 0.4, dampingFraction: 0.6), value: isLongPressing)
+//            }
+//            .simultaneousGesture(
+//                LongPressGesture(minimumDuration: 0.5)
+//                    .onChanged { _ in
+//                        isLongPressing = true
+//                        let generator = UINotificationFeedbackGenerator()
+//                        generator.notificationOccurred(.success)
+//                    }
+//                    .onEnded { _ in
+//                        isLongPressing = false
+//                        showNutritionScanner = true
+//                        let generator = UIImpactFeedbackGenerator(style: .heavy)
+//                        generator.impactOccurred(intensity: 1.0)
+//                    }
+//            )
+//            .padding()
+//            .position(x: UIScreen.main.bounds.width - 50, y: UIScreen.main.bounds.height - 100)
+//
+//            .sheet(isPresented: $showNutritionScanner) {
+//                NutritionScannerView()
+//            }
 
 
             }
