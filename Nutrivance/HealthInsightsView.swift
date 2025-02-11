@@ -29,8 +29,8 @@ struct HealthInsightsView: View {
                 // Mesh Gradient
                 RadialGradient(
                     gradient: Gradient(colors: [
-                        Color(red: 0.05, green: 0.1, blue: 0.2),  // Very dark blue
-                        Color(red: 0.02, green: 0.15, blue: 0.05), // Very dark green
+                        Color(red: 0.05, green: 0.1, blue: 0.2),
+                        Color(red: 0.02, green: 0.15, blue: 0.05),
                         Color.black
                     ]),
                     center: .topLeading,
@@ -40,7 +40,6 @@ struct HealthInsightsView: View {
                 .opacity(0.9)
                 .ignoresSafeArea()
                 
-                // Overlay gradient for depth
                 LinearGradient(
                     gradient: Gradient(colors: [
                         Color(red: 0.0, green: 0.08, blue: 0.12).opacity(0.7),
@@ -90,14 +89,6 @@ struct HealthInsightsView: View {
             }
             .navigationTitle(Text("Health Insights"))
         }
-//        .toolbar {
-//           ToolbarItem(placement: .navigationBarTrailing) {
-//               Button(action: { dismiss() }) {
-//                   Image(systemName: "keyboard")
-//               }
-//               .keyboardShortcut("[", modifiers: .command)
-//           }
-//       }
         .onDisappear {
             navigationState.setDismissAction {
                 dismiss()
@@ -214,7 +205,6 @@ struct HealthInsightsView: View {
         
         for nutrient in nutrients {
             group.enter()
-            // Update the fetchNutrientData calls
             healthStore.fetchNutrientData(for: nutrient) { value, error in
                 if let value = value {
                     DispatchQueue.main.async {
@@ -255,7 +245,6 @@ struct HealthInsightsView: View {
             healthStore.fetchNutrientData(for: nutrient) { value, error in
                 if value != nil {
                     DispatchQueue.main.async {
-                        // Update UI or data model here
                         updateNutrientData(nutrient: nutrient, value: value!)
                     }
                 }
@@ -265,7 +254,6 @@ struct HealthInsightsView: View {
     }
 
     private func updateNutrientData(nutrient: String, value: Double) {
-        // Handle the nutrient value update
         nutrientData[nutrient] = value
     }
 }

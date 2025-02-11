@@ -2,7 +2,6 @@ import HealthKit
 import SwiftUI
 
 let types = [
-    // Existing
     (HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!, "calories"),
     (HKObjectType.quantityType(forIdentifier: .dietaryProtein)!, "protein"),
     (HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!, "fats"),
@@ -10,7 +9,6 @@ let types = [
     (HKObjectType.quantityType(forIdentifier: .dietaryWater)!, "water"),
     (HKObjectType.quantityType(forIdentifier: .dietaryFiber)!, "fiber"),
     
-    // Vitamins
     (HKObjectType.quantityType(forIdentifier: .dietaryVitaminA)!, "vitamin a"),
     (HKObjectType.quantityType(forIdentifier: .dietaryVitaminB6)!, "vitamin b6"),
     (HKObjectType.quantityType(forIdentifier: .dietaryVitaminB12)!, "vitamin b12"),
@@ -25,7 +23,6 @@ let types = [
     (HKObjectType.quantityType(forIdentifier: .dietaryBiotin)!, "biotin"),
     (HKObjectType.quantityType(forIdentifier: .dietaryPantothenicAcid)!, "pantothenic acid"),
     
-    // Minerals
     (HKObjectType.quantityType(forIdentifier: .dietaryCalcium)!, "calcium"),
     (HKObjectType.quantityType(forIdentifier: .dietaryIron)!, "iron"),
     (HKObjectType.quantityType(forIdentifier: .dietaryMagnesium)!, "magnesium"),
@@ -41,7 +38,6 @@ let types = [
     (HKObjectType.quantityType(forIdentifier: .dietaryMolybdenum)!, "molybdenum"),
     (HKObjectType.quantityType(forIdentifier: .dietaryChloride)!, "chloride"),
     
-    // Others
     (HKObjectType.quantityType(forIdentifier: .dietaryCholesterol)!, "cholesterol"),
     (HKObjectType.quantityType(forIdentifier: .dietarySugar)!, "sugar"),
     (HKObjectType.quantityType(forIdentifier: .dietaryFatMonounsaturated)!, "monounsaturated fat"),
@@ -50,28 +46,22 @@ let types = [
     (HKObjectType.quantityType(forIdentifier: .dietaryCaffeine)!, "caffeine")
 ]
 
-// Add these new types to the existing types array
 let additionalTypes: [(HKSampleType, String)] = [
-    // Physical Activity
     (HKObjectType.quantityType(forIdentifier: .stepCount)!, "steps"),
     (HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!, "distance"),
     (HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!, "active_calories"),
     (HKObjectType.workoutType(), "workouts"),
     
-    // Vital Signs
     (HKObjectType.quantityType(forIdentifier: .heartRate)!, "heart_rate"),
     (HKObjectType.quantityType(forIdentifier: .restingHeartRate)!, "resting_heart_rate"),
     (HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!, "hrv"),
     (HKObjectType.quantityType(forIdentifier: .oxygenSaturation)!, "oxygen"),
     (HKObjectType.quantityType(forIdentifier: .respiratoryRate)!, "respiratory_rate"),
     
-    // Sleep
     (HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!, "sleep"),
     
-    // Mindfulness
     (HKObjectType.categoryType(forIdentifier: .mindfulSession)!, "mindfulness"),
     
-    // Mood & Symptoms
     (HKObjectType.categoryType(forIdentifier: .moodChanges)!, "mood"),
     (HKObjectType.categoryType(forIdentifier: .sleepChanges)!, "sleep_changes"),
     (HKObjectType.categoryType(forIdentifier: .appetiteChanges)!, "appetite_changes")
@@ -700,14 +690,12 @@ class HealthKitManager: ObservableObject {
             case "calories": return .kilocalorie()
             case "water": return .literUnit(with: .milli)
             
-            // Vitamins (typically measured in micrograms or milligrams)
             case "vitamin a", "vitamin d", "vitamin k", "biotin", "folate":
                 return .gramUnit(with: .micro)
             case "vitamin b6", "vitamin b12", "vitamin c", "vitamin e",
                  "thiamin", "riboflavin", "niacin", "pantothenic acid":
                 return .gramUnit(with: .milli)
                 
-            // Minerals (various units)
             case "sodium", "potassium", "calcium", "phosphorus", "magnesium":
                 return .gramUnit(with: .milli)
             case "iron", "zinc", "copper", "manganese":
@@ -715,29 +703,23 @@ class HealthKitManager: ObservableObject {
             case "selenium", "chromium", "molybdenum", "iodine":
                 return .gramUnit(with: .micro)
                 
-            // Others
             case "cholesterol": return .gramUnit(with: .milli)
             case "caffeine": return .gramUnit(with: .milli)
             
-            // Default for most nutrients (proteins, carbs, fats, etc.)
             default: return .gram()
         }
     }
-    
-    // Add inside HealthKitManager class
 
     func fetchMentalHealthData(from startDate: Date, to endDate: Date, completion: @escaping ([String: Any]) -> Void) {
         let group = DispatchGroup()
         var results: [String: Any] = [:]
         
-        // Fetch mindfulness minutes
         group.enter()
         fetchMindfulnessMinutes(from: startDate, to: endDate) { minutes in
             results["mindfulness_minutes"] = minutes
             group.leave()
         }
         
-        // Fetch mood data
         group.enter()
         fetchMoodData(from: startDate, to: endDate) { moodData in
             results["mood_patterns"] = moodData
@@ -753,21 +735,18 @@ class HealthKitManager: ObservableObject {
         let group = DispatchGroup()
         var results: [String: Any] = [:]
         
-        // Fetch steps
         group.enter()
         fetchStepCount(from: startDate, to: endDate) { steps in
             results["steps"] = steps
             group.leave()
         }
         
-        // Fetch workouts
         group.enter()
         fetchWorkouts(from: startDate, to: endDate) { workouts in
             results["workouts"] = workouts
             group.leave()
         }
         
-        // Fetch heart rate data
         group.enter()
         fetchHeartRateData(from: startDate, to: endDate) { heartData in
             results["heart_rate"] = heartData
@@ -874,5 +853,4 @@ class HealthKitManager: ObservableObject {
         }
         healthStore.execute(query)
     }
-
 }

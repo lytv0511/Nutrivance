@@ -39,7 +39,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     override func buildMenu(with builder: UIMenuBuilder) {
         guard builder.system == .main else { return }
         
-        // Remove unwanted menus
         builder.remove(menu: .file)
         builder.remove(menu: .edit)
         builder.remove(menu: .format)
@@ -84,38 +83,32 @@ struct NutrivanceApp: App {
                 
                 Divider()
                 
-                // Macros (Option 1 to 9)
-                
-                    Button("Calories") { navigationState.selectedView = "Calories" }
-                        .keyboardShortcut("1", modifiers: [.option])
-                    Button("Carbs") { navigationState.selectedView = "Carbs" }
-                        .keyboardShortcut("2", modifiers: [.option])
-                    Button("Protein") { navigationState.selectedView = "Protein" }
-                        .keyboardShortcut("3", modifiers: [.option])
-                    Button("Fats") { navigationState.selectedView = "Fats" }
-                        .keyboardShortcut("4", modifiers: [.option])
-                    Button("Water") { navigationState.selectedView = "Water" }
-                        .keyboardShortcut("5", modifiers: [.option])
-                
+                Button("Calories") { navigationState.selectedView = "Calories" }
+                    .keyboardShortcut("1", modifiers: [.option])
+                Button("Carbs") { navigationState.selectedView = "Carbs" }
+                    .keyboardShortcut("2", modifiers: [.option])
+                Button("Protein") { navigationState.selectedView = "Protein" }
+                    .keyboardShortcut("3", modifiers: [.option])
+                Button("Fats") { navigationState.selectedView = "Fats" }
+                    .keyboardShortcut("4", modifiers: [.option])
+                Button("Water") { navigationState.selectedView = "Water" }
+                    .keyboardShortcut("5", modifiers: [.option])
                 
                 Divider()
                 
-                // Micros (Control 1 to 9)
-                
-                    Button("Fiber") { navigationState.selectedView = "Fiber" }
-                        .keyboardShortcut("1", modifiers: [.control])
-                    Button("Vitamins") { navigationState.selectedView = "Vitamins" }
-                        .keyboardShortcut("2", modifiers: [.control])
-                    Button("Minerals") { navigationState.selectedView = "Minerals" }
-                        .keyboardShortcut("3", modifiers: [.control])
-                    Button("Phytochemicals") { navigationState.selectedView = "Phytochemicals" }
-                        .keyboardShortcut("4", modifiers: [.control])
-                    Button("Antioxidants") { navigationState.selectedView = "Antioxidants" }
-                        .keyboardShortcut("5", modifiers: [.control])
-                    Button("Electrolytes") { navigationState.selectedView = "Electrolytes" }
-                        .keyboardShortcut("6", modifiers: [.control])
-                }
-            
+                Button("Fiber") { navigationState.selectedView = "Fiber" }
+                    .keyboardShortcut("1", modifiers: [.control])
+                Button("Vitamins") { navigationState.selectedView = "Vitamins" }
+                    .keyboardShortcut("2", modifiers: [.control])
+                Button("Minerals") { navigationState.selectedView = "Minerals" }
+                    .keyboardShortcut("3", modifiers: [.control])
+                Button("Phytochemicals") { navigationState.selectedView = "Phytochemicals" }
+                    .keyboardShortcut("4", modifiers: [.control])
+                Button("Antioxidants") { navigationState.selectedView = "Antioxidants" }
+                    .keyboardShortcut("5", modifiers: [.control])
+                Button("Electrolytes") { navigationState.selectedView = "Electrolytes" }
+                    .keyboardShortcut("6", modifiers: [.control])
+            }   
         }
     }
 }

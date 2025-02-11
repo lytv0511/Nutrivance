@@ -1,9 +1,6 @@
 import SwiftUI
 import SwiftData
 
-// ContentView
-import SwiftUI
-
 struct ContentView_iPhone: View {
     @State private var selectedNutrient: String = "Calories"
     @State private var showNutrientDetail: Bool = false
@@ -12,7 +9,7 @@ struct ContentView_iPhone: View {
     @State private var isLongPressing = false
     @State private var selectedNutrientForDetail: String?
     @State private var showingNutrientDetail = false
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass // Detects the device size
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
 
     private let nutrientChoices = [
         "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
@@ -39,14 +36,9 @@ struct ContentView_iPhone: View {
             VStack {
                 ScrollViewReader { scrollViewProxy in
                     ScrollView {
-                        // Add blank icons based on the device type
-//                        if horizontalSizeClass == .compact {
-                            BlankIconView()
-                            BlankIconView() // 2 blank views for compact (iOS)
-//                        } else {
-//                        }
+                        BlankIconView()
+                        BlankIconView()
 
-                        // Determine the number of columns based on device type
                         let columns = Array(repeating: GridItem(.flexible()), count: horizontalSizeClass == .compact ? 2 : 5)
 
                         LazyVGrid(columns: columns, spacing: 20) {
@@ -84,14 +76,8 @@ struct ContentView_iPhone: View {
                         }
                         .padding()
                         .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
-
-                        // Add blank icons based on the device type
-//                        if horizontalSizeClass == .compact {
-                            BlankIconView()
-                            BlankIconView() // 2 blank views for compact (iOS)
-//                        } else {
-//                            BlankIconView() // 1 blank view for regular (iPadOS)
-//                        }
+                        BlankIconView()
+                        BlankIconView()
                     }
                     .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
                     .padding(.bottom, 10)
@@ -104,21 +90,12 @@ struct ContentView_iPhone: View {
                         NutrientDetailView(nutrientName: selectedNutrient)
                     }
                 }
-
-                    // WheelPicker at the bottom half of the screen
-//                    if horizontalSizeClass == .compact {
-                        WheelPicker(choices: nutrientChoices, choice: $selectedNutrient) { newChoice in
-                            selectedNutrient = newChoice // Update the selected nutrient
-                        }
-                        .padding(.bottom)
-//                    } else {
-                        
-//                    }
+                    WheelPicker(choices: nutrientChoices, choice: $selectedNutrient) { newChoice in
+                        selectedNutrient = newChoice
+                    }
+                    .padding(.bottom)
                 }
-                .padding(.top, 10) // Optional: Add some padding at the top to give space from the top of the screen
-
-                // Camera button in bottom right corner
-            // Update the camera button section with this code
+                .padding(.top, 10)
 
 //            Button(action: {}) {
 //                Image(systemName: "text.viewfinder")
@@ -155,21 +132,20 @@ struct ContentView_iPhone: View {
 //            }
 
 
-            }
-//        }
+//            }
+        }
     }
 }
 
-// BlankIconView to represent empty icons
 struct BlankIconView: View {
     var body: some View {
         VStack {
-            Image(systemName: "circle.fill") // Use a circle or any other placeholder icon
+            Image(systemName: "circle.fill")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 60, height: 60)
-                .foregroundColor(.clear) // Make it transparent
-            Text("") // Empty text for spacing
+                .foregroundColor(.clear)
+            Text("")
         }
     }
 }
@@ -388,7 +364,6 @@ struct WheelPicker: View {
             return
         }
         
-        // Rest of the angle checks remain the same
         switch normalizedAngle {
             case (.pi * 1.75)...(2 * .pi), 0...(.pi * 0.25):  // Up
                 showHealthInsights = true

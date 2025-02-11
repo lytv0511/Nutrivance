@@ -32,28 +32,20 @@ struct SubcategoryDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Overview Section
                 InfoSection(title: "Overview", content: nutrientInfo.description)
                 
-                // Current Intake
                 IntakeSection(value: value ?? 0, unit: NutritionUnit.getUnit(for: nutrientName))
                 
-                // Daily Recommended Value
                 InfoSection(title: "Recommended Daily Intake", content: nutrientInfo.recommendedIntake)
                 
-                // Food Sources
                 FoodSourcesSection(sources: nutrientInfo.foodSources)
                 
-                // Health Benefits
                 InfoSection(title: "Health Benefits", content: nutrientInfo.benefits)
                 
-                // Deficiency Risks
                 InfoSection(title: "Deficiency Risks", content: nutrientInfo.deficiencyRisks)
                 
-                // Interactions
                 InfoSection(title: "Nutrient Interactions", content: nutrientInfo.interactions)
                 
-                // Historical Data Graph
                 HistoricalDataSection(nutrientName: nutrientName)
             }
             .padding()
@@ -68,15 +60,6 @@ struct SubcategoryDetailView: View {
         .onDisappear {
             navigationState.clearDismissAction()
         }
-
-//        .toolbar {
-//            ToolbarItem(placement: .navigationBarTrailing) {
-//                Button(action: { dismiss() }) {
-//                    Image(systemName: "keyboard")
-//                }
-//                .keyboardShortcut("[", modifiers: .command)
-//            }
-//        }
     }
     
     private func fetchCurrentValue() {
@@ -88,7 +71,6 @@ struct SubcategoryDetailView: View {
     }
 }
 
-// Supporting Views
 struct InfoSection: View {
     let title: String
     let content: String
@@ -193,7 +175,7 @@ struct HistoricalDataSection: View {
     }
     
     private func fetchHistoricalData() {
-        // We'll implement this next
+        // To-do
     }
 }
 
@@ -235,7 +217,6 @@ struct NutrientChart: View {
 
 struct NutrientDatabase {
     static let nutrientData: [String: NutrientDetailInfo] = [
-        // B Complex Vitamins
         "Thiamin": NutrientDetailInfo(
             description: "Thiamin (Vitamin B1) is crucial for energy metabolism and nerve function.",
             recommendedIntake: "Men: 1.2mg/day\nWomen: 1.1mg/day",
@@ -343,8 +324,6 @@ struct NutrientDatabase {
             deficiencyRisks: "Scurvy\nPoor wound healing\nWeakened immunity",
             interactions: "Enhances iron absorption\nMay interact with chemotherapy"
         ),
-        
-        // Minerals
 
         "Iron": NutrientDetailInfo(
             description: "Iron is essential for oxygen transport in blood and energy metabolism.",

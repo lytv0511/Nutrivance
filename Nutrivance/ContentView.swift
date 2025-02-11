@@ -6,12 +6,13 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     var body: some View {
-        Group { // Use Group to apply modifiers properly
+        Group {
             if horizontalSizeClass == .regular {
                 ContentView_iPad()
+//                ContentView_iPad_alt()
             } else {
-//                ContentView_iPhone_alt()
                 ContentView_iPhone()
+//                ContentView_iPhone_alt()
             }
         }
         .onAppear {
@@ -25,7 +26,6 @@ struct ContentView: View {
                 print("Error requesting health data permissions: \(error.localizedDescription)")
             } else if success {
                 print("Health data permissions granted.")
-                // Proceed to fetch data
             } else {
                 print("Health data permissions not granted.")
             }

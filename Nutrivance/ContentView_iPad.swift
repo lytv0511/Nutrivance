@@ -7,11 +7,18 @@ struct ContentView_iPad: View {
     @State private var showHome: Bool = true
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
+    @State private var appFocus: AppFocus = .nutrition
     private let detector = NutritionTableDetector()
     @State private var capturedImage: UIImage?
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
+    
+    enum AppFocus: String, CaseIterable {
+        case nutrition = "Nutrition"
+        case fitness = "Fitness"
+        case mentalHealth = "Mental Health"
+    }
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -40,6 +47,21 @@ struct ContentView_iPad: View {
         "phytochemicals": ["phytochemicals", "plant compounds", "bioactive compounds"],
         "antioxidants": ["antioxidants", "antioxidant", "free radicals"],
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
+    ]
+    
+    private let fitnessSearchKeywords = [
+        "dashboard": ["dashboard", "overview", "summary", "home"],
+        "workouts": ["workout", "exercise", "training", "session"],
+        "progress": ["progress", "improvements", "gains", "tracking"],
+        "plans": ["plans", "programs", "routines", "schedules"],
+        "cardio": ["cardio", "running", "cycling", "swimming", "aerobic"],
+        "strength": ["strength", "weights", "resistance", "lifting"],
+        "flexibility": ["flexibility", "stretching", "yoga", "mobility"],
+        "sports": ["sports", "games", "activities", "athletics"],
+        "steps": ["steps", "walking", "pedometer", "distance"],
+        "heartrate": ["heart rate", "pulse", "bpm", "cardiovascular"],
+        "distance": ["distance", "miles", "kilometers", "travel"],
+        "caloriesburned": ["calories burned", "energy expenditure", "burn"]
     ]
     
     var filteredItems: [String] {
@@ -85,33 +107,14 @@ struct ContentView_iPad: View {
                 .onChange(of: searchState.isSearching) { _, isSearching in
                     searchBarFocused = isSearching
                 }
-
                 
-                Section(header: Text("Main")) {
-                    ForEach(["Home", "Insights", "Labels", "Log"], id: \.self) { item in
-                        if filteredItems.contains(item) {
-                            Text(item)
-                                .tag(item)
-                        }
-                    }
-                }
-                
-                Section(header: Text("Macronutrients")) {
-                    ForEach(["Calories", "Carbs", "Protein", "Fats", "Water"], id: \.self) { item in
-                        if filteredItems.contains(item) {
-                            Text(item)
-                                .tag(item)
-                        }
-                    }
-                }
-                
-                Section(header: Text("Micronutrients")) {
-                    ForEach(["Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"], id: \.self) { item in
-                        if filteredItems.contains(item) {
-                            Text(item)
-                                .tag(item)
-                        }
-                    }
+                switch appFocus {
+                case .nutrition:
+                    nutritionSections
+                case .fitness:
+                    fitnessSections
+                case .mentalHealth:
+                    mentalHealthSections
                 }
             }
             .onChange(of: searchState.isSearching) { _, isSearching in
@@ -123,7 +126,18 @@ struct ContentView_iPad: View {
                 }
             }
             .focused($sidebarFocused)
-            .navigationTitle("Nutrivance")
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("App Focus", selection: $appFocus) {
+                        ForEach(AppFocus.allCases, id: \.self) { focus in
+                            Text(focus.rawValue)
+                                .tag(focus)
+                        }
+                    }
+                    .pickerStyle(.navigationLink)
+                    .padding()
+                }
+            }
         } detail: {
             Group {
                 switch navigationState.selectedView {
@@ -164,8 +178,99 @@ struct ContentView_iPad: View {
             .focused($contentFocused)
         }
     }
-
     
+    private var nutritionSections: some View {
+        Group {
+            Section(header: Text("Main")) {
+                ForEach(["Home", "Insights", "Labels", "Log"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Macronutrients")) {
+                ForEach(["Calories", "Carbs", "Protein", "Fats", "Water"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Micronutrients")) {
+                ForEach(["Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+        }
+    }
+    
+    private var fitnessSections: some View {
+        Group {
+            Section(header: Text("Main")) {
+                ForEach(["Dashboard", "Workouts", "Progress", "Plans"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Activities")) {
+                ForEach(["Cardio", "Strength", "Flexibility", "Sports"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Metrics")) {
+                ForEach(["Steps", "Heart Rate", "Distance", "Calories Burned"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+        }
+    }
+    
+    private var mentalHealthSections: some View {
+        Group {
+            Section(header: Text("Main")) {
+                ForEach(["Dashboard", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Wellness")) {
+                ForEach(["Meditation", "Breathing", "Sleep", "Stress"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+            
+            Section(header: Text("Support")) {
+                ForEach(["Community", "Professional Help", "Crisis Resources"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Text(item)
+                            .tag(item)
+                    }
+                }
+            }
+        }
+    }
     
     private func cycleFocus() {
         if searchBarFocused {

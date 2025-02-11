@@ -29,7 +29,7 @@
 		15B273D12CECBB44004E6931 /* gpu_nms.mm in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D02CECBB44004E6931 /* gpu_nms.mm */; };
 		15B273D32CECBCB1004E6931 /* NutritionExtractorWrapper.mm in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D22CECBCA3004E6931 /* NutritionExtractorWrapper.mm */; };
 		15B273D62CECBD25004E6931 /* NutritionTableDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B273D52CECBD25004E6931 /* NutritionTableDetector.swift */; };
-		15B9D5942D599DD000D2B629 /* nutrition_prediction_model.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 15B9D5932D599DD000D2B629 /* nutrition_prediction_model.mlpackage */; };
+		15B9D5962D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 15B9D5952D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage */; };
 		15BFD16F2D0E252E00E7847E /* NutrientCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */; };
 		15BFD1712D106F9600E7847E /* GoalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD1702D106F9600E7847E /* GoalsView.swift */; };
 		15BFD1732D108D7500E7847E /* NutrientInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD1722D108D7500E7847E /* NutrientInfo.swift */; };
@@ -125,7 +125,7 @@
 		15B273D22CECBCA3004E6931 /* NutritionExtractorWrapper.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = NutritionExtractorWrapper.mm; sourceTree = "<group>"; };
 		15B273D42CECBCBC004E6931 /* NutritionExtractorWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NutritionExtractorWrapper.h; sourceTree = "<group>"; };
 		15B273D52CECBD25004E6931 /* NutritionTableDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionTableDetector.swift; sourceTree = "<group>"; };
-		15B9D5932D599DD000D2B629 /* nutrition_prediction_model.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = nutrition_prediction_model.mlpackage; sourceTree = "<group>"; };
+		15B9D5952D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = nutrition_prediction_model.mlpackage; sourceTree = "<group>"; };
 		15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientCharts.swift; sourceTree = "<group>"; };
 		15BFD1702D106F9600E7847E /* GoalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalsView.swift; sourceTree = "<group>"; };
 		15BFD1722D108D7500E7847E /* NutrientInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientInfo.swift; sourceTree = "<group>"; };
@@ -484,9 +484,9 @@
 				15D7FFA02CD142690048E050 /* NutrivanceApp.swift */,
 				15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */,
 				15F5865C2CF783F3006D3A9C /* HealthInsightsView.swift */,
-				15B9D5932D599DD000D2B629 /* nutrition_prediction_model.mlpackage */,
 				15BFD1702D106F9600E7847E /* GoalsView.swift */,
 				15F5865E2CF7840F006D3A9C /* HistoryView.swift */,
+				15B9D5952D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage */,
 				15F586602CF7845B006D3A9C /* SavedMealsView.swift */,
 				15F586622CF7846A006D3A9C /* AddMealView.swift */,
 				15D7FFA42CD142690048E050 /* Item.swift */,
@@ -728,7 +728,6 @@
 				1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */,
 				15D7FFD12CD159010048E050 /* NutrientDetailView.swift in Sources */,
 				15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */,
-				15B9D5942D599DD000D2B629 /* nutrition_prediction_model.mlpackage in Sources */,
 				15CB570C2CEEBF4000A6E970 /* ImagePicker.swift in Sources */,
 				15D7FFA32CD142690048E050 /* ContentView.swift in Sources */,
 				15CB57102CEEC22300A6E970 /* NutrientRow.swift in Sources */,
@@ -744,6 +743,7 @@
 				15A70DB72CF119DE007FBC5D /* CloudKitManager.swift in Sources */,
 				15F586632CF7846A006D3A9C /* AddMealView.swift in Sources */,
 				15F586612CF7845B006D3A9C /* SavedMealsView.swift in Sources */,
+				15B9D5962D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage in Sources */,
 				15F5865D2CF783F3006D3A9C /* HealthInsightsView.swift in Sources */,
 				15F5865F2CF7840F006D3A9C /* HistoryView.swift in Sources */,
 				15B273D12CECBB44004E6931 /* gpu_nms.mm in Sources */,

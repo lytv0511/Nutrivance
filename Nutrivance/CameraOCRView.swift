@@ -29,7 +29,6 @@ public struct CameraOCRView: View {
                     Button("Process Nutrition Data") {
                         if let nutrientData = processNutritionData(from: recognizedText) {
                             healthStore.saveNutrients([nutrientData]) { success in
-                                // Handle success/failure
                             }
                         }
                     }
@@ -49,7 +48,6 @@ public struct CameraOCRView: View {
     }
     
     private func processNutritionData(from text: String) -> NutrientData? {
-        // Implement nutrition data processing logic
         return nil
     }
 }

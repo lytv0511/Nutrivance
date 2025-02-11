@@ -60,27 +60,25 @@ struct NutrientListView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // Mesh Gradient
                 RadialGradient(
                     gradient: Gradient(colors: [
-                        Color(red: 0.08, green: 0.12, blue: 0.2),  // Deeper blue
-                        Color(red: 0.03, green: 0.12, blue: 0.08), // Deep forest green
+                        Color(red: 0.08, green: 0.12, blue: 0.2),
+                        Color(red: 0.03, green: 0.12, blue: 0.08),
                         Color.black
                     ]),
-                    center: .bottomTrailing,  // Changed position for variety
-                    startRadius: 100,      // Tighter radius
+                    center: .bottomTrailing,
+                    startRadius: 100,
                     endRadius: 1500
                 )
                 .opacity(0.85)
                 .ignoresSafeArea()
                 
-                // Overlay gradient for depth
                 LinearGradient(
                     gradient: Gradient(colors: [
                         Color(red: 0.02, green: 0.1, blue: 0.15).opacity(0.8),
                         Color.clear
                     ]),
-                    startPoint: .bottomLeading,  // Different direction
+                    startPoint: .bottomLeading,
                     endPoint: .topTrailing
                 )
                 .ignoresSafeArea()

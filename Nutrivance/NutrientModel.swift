@@ -42,7 +42,6 @@ class NutrientModel: ObservableObject {
             foodsRichInNutrient: "All foods contribute calories",
             benefits: "Essential for energy."
         ),
-        // New categories
         "Fiber": NutrientInfo(
             todayConsumption: "25g",
             weeklyConsumption: "175g",

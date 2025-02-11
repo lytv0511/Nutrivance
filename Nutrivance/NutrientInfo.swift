@@ -8,7 +8,6 @@
 import Foundation
 import SwiftUI
 
-// Icon fetching function
 func getNutrientIcon(for nutrient: String) -> String {
     switch nutrient {
     case "Calories": return "flame"
@@ -26,7 +25,6 @@ func getNutrientIcon(for nutrient: String) -> String {
     }
 }
 
-// Color fetching function
 func getNutrientColor(for nutrient: String) -> Color {
     switch nutrient {
     case "Carbs": return Color.green.opacity(0.7)

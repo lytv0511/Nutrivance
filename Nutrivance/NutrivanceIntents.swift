@@ -25,7 +25,6 @@ struct LogNutrientIntent: AppIntent {
     
     func perform() async throws -> some IntentResult {
         _ = HealthKitManager()
-        // Add nutrient logging logic here
         return .result()
     }
 }
@@ -42,7 +41,6 @@ struct QueryNutrientIntent: AppIntent {
     
     func perform() async throws -> some IntentResult {
         _ = HealthKitManager()
-        // Add nutrient querying logic here
         return .result()
     }
 }

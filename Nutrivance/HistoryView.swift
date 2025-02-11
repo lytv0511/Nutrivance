@@ -12,7 +12,6 @@ struct HistoryView: View {
         case daily, weekly, monthly, custom
     }
     
-    // Break down the grouping logic
     private var groupedEntries: [Date: [HealthKitManager.NutritionEntry]] {
         let calendar = Calendar.current
         let groups = Dictionary(grouping: entries) { entry in
@@ -302,17 +301,16 @@ struct EditEntryView: View {
                         let nutrientDataArray = nutrients.map { (name, value) in
                             NutrientData(name: name, value: value, unit: "g")
                         }
-                        onSave() // Delete old entry
+                        onSave()
                         healthStore.saveNutrients(nutrientDataArray) { success in
                             if success {
                                 dismiss()
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    loadData() // Refresh view after a slight delay to ensure deletion is processed
+                                    loadData()
                                 }
                             }
                         }
                     }
-
                 }
             }
         }

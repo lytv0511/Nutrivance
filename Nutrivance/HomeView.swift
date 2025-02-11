@@ -18,18 +18,6 @@ struct HomeView: View {
                 .ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-//                        HStack (spacing: 10) {
-//                            Image(systemName: "leaf.fill")
-//                                .symbolVariant(.fill)
-//                                .foregroundColor(.green)
-//                                .font(.largeTitle)
-//                                .bold()
-//                                .padding(.leading, 10)
-//                                .padding(.trailing, 10)
-//                            Text("Welcome to Nutrivance~")
-//                                .font(.largeTitle)
-//                                .bold()
-//                        }
                         Text(timeBasedGreeting() + ", learn more about your health")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
@@ -38,7 +26,6 @@ struct HomeView: View {
                             .foregroundColor(.primary)
                             .bold()
                         
-                        // Card Grid
                         LazyVGrid(columns: gridItems, spacing: 20) {
                             ForEach(0..<titles.count, id: \.self) { index in
                                 VStack {
@@ -57,13 +44,11 @@ struct HomeView: View {
                     }
                     .padding()
                 }
-                //            .navigationTitle("Home")
             }
             .navigationTitle(Text("Home"))
         }
     }
     
-    // Helper function to determine the greeting based on the current time
     private func timeBasedGreeting() -> String {
         let hour = Calendar.current.component(.hour, from: Date())
         switch hour {

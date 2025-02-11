@@ -2,14 +2,21 @@ import SwiftUI
 import HealthKit
 import Combine
 import CoreML
-//import CreateML
 
 struct NutrientDetailView: View {
     @StateObject private var healthKitManager = HealthKitManager()
     @State private var todayCurrentNutrient: Double?
     @State private var recommendedIntake: String?
     let nutrientName: String
-    let mlModel = try? nutrition_prediction_model()
+    let mlModel: nutrition_prediction_model? = {
+        do {
+            let config = MLModelConfiguration()
+            return try nutrition_prediction_model(configuration: config)
+        } catch {
+            print("ML Model initialization failed: \(error)")
+            return nil
+        }
+    }()
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -133,33 +140,25 @@ struct NutrientDetailView: View {
                     do {
                         let inputArray = MLShapedArray<Float>(
                             scalars: [
-//                                30.0,  // age
-//                                2000.0,  // tdee
-//                                Float(steps),  // steps
-//                                Float(walkingMinutes),  // walking_running_minutes
-//                                Float(flights),  // flights_climbed
-//                                40.0,  // cardio_vo2max
-//                                70.0   // cardio_recovery_bpm
                                 28.0,    // age
-                                   2400.0,  // tdee
-                                   12000.0, // steps
-                                   45.0,    // walking_running_minutes
-                                   15.0,    // flights_climbed
-                                   45.0,    // cardio_vo2max
-                                   65.0     // cardio_recovery_bpm
+                                2400.0,  // tdee
+                                12000.0, // steps
+                                45.0,    // walking_running_minutes
+                                15.0,    // flights_climbed
+                                45.0,    // cardio_vo2max
+                                65.0     // cardio_recovery_bpm
                             ],
                             shape: [1, 7]
                         )
                         
-                        let modelInput = nutrition_prediction_modelInput(lambda_input: inputArray)
+                        let modelInput = nutrition_prediction_modelInput(inputs: inputArray)
                         let prediction = try model.prediction(input: modelInput)
                         
                         let value = switch nutrientName.lowercased() {
-                            case "tdee": prediction.Identity[0].doubleValue
-                            case "protein": prediction.Identity[1].doubleValue
-                            case "fats": prediction.Identity[2].doubleValue
-                            case "carbs": prediction.Identity[3].doubleValue
-                            case "water": prediction.Identity[4].doubleValue * 1000  // Convert L to mL
+                            case "protein": prediction.Identity[0].doubleValue
+                            case "fats": prediction.Identity[1].doubleValue
+                            case "carbs": prediction.Identity[2].doubleValue
+                            case "water": prediction.Identity[3].doubleValue * 1000
                             default: 0.0
                         }
                         
@@ -182,11 +181,7 @@ struct NutrientDetailView: View {
         #if targetEnvironment(macCatalyst)
         return "Please see Health data on iPhone or iPad."
         #else
-    //    if todayCurrentNutrient == nil {
-    //        return "Fetching..."
-    //    } else {
-            return "\(String(format: "%.2f", todayCurrentNutrient ?? 0)) \(unit)"
-    //    }
+        return "\(String(format: "%.2f", todayCurrentNutrient ?? 0)) \(unit)"
         #endif
     }
     
@@ -280,14 +275,13 @@ struct NutrientDetailView: View {
                 }
             }
         }
-        // Add to onAppear
         .onAppear {
             print("NutrientDetailView onAppear for: \(nutrientName)")
             if isGroupCategory(nutrientName) {
                 fetchCategoryData(for: nutrientName)
             } else {
                 fetchNutrientData(for: nutrientName)
-                getPredictedIntake()  // Add this
+                getPredictedIntake()
             }
         }
 
@@ -298,7 +292,7 @@ struct NutrientDetailView: View {
                 fetchCategoryData(for: newNutrient)
             } else {
                 fetchNutrientData(for: newNutrient)
-                getPredictedIntake()  // Add this
+                getPredictedIntake()
             }
         }
     }
@@ -429,63 +423,61 @@ struct CategoryDetailView: View {
     let CategoryDetailWidthScaling: CGFloat = 0.975
     
     var body: some View {
-//        GeometryReader { geometry in
-            LazyVGrid(columns: [GridItem(.flexible())], spacing: 10) {
-                switch category {
-                case "Vitamins":
-                    NutrientSubcategoryCard(title: "B Complex", nutrients: [
-                        "Thiamin", "Riboflavin", "Niacin",
-                        "Vitamin B6", "Vitamin B12", "Folate", "Biotin", "Pantothenic Acid"
-                    ])
-                    .frame(maxWidth: .infinity)
-                    
-                    NutrientSubcategoryCard(title: "Fat Soluble", nutrients: [
-                        "Vitamin A", "Vitamin D", "Vitamin E", "Vitamin K"
-                    ])
-                    .frame(maxWidth: .infinity)
-                    
-                    NutrientSubcategoryCard(title: "Water Soluble", nutrients: [
-                        "Vitamin C"
-                    ])
-                    .frame(maxWidth: .infinity)
-                    
-                case "Minerals":
-                    NutrientSubcategoryCard(title: "Electrolytes", nutrients: [
-                        "Sodium", "Potassium", "Calcium", "Magnesium",
-                        "Chloride", "Phosphorus"
-                    ])
-                    .frame(maxWidth: .infinity)
-                    
-                    NutrientSubcategoryCard(title: "Trace Minerals", nutrients: [
-                        "Iron", "Zinc", "Copper", "Manganese",
-                        "Iodine", "Selenium", "Chromium", "Molybdenum"
-                    ])
-                    .frame(maxWidth: .infinity)
-                    
-                case "Phytochemicals":
-                    NutrientSubcategoryCard(title: "Plant Compounds", nutrients: [
-                        "Flavonoids", "Carotenoids", "Glucosinolates",
-                        "Phytosterols"
-                    ])
-                    .frame(maxWidth: .infinity)
-                    
-                case "Antioxidants":
-                    NutrientSubcategoryCard(title: "Antioxidant Compounds", nutrients: [
-                        "Vitamin C", "Vitamin E", "Beta-carotene",
-                        "Selenium", "Zinc"
-                    ])
-                    .frame(maxWidth: .infinity)
-                    
-                case "Electrolytes":
-                    NutrientSubcategoryCard(title: "Essential Electrolytes", nutrients: [
-                        "Sodium", "Potassium", "Calcium", "Magnesium",
-                        "Chloride", "Phosphorus"
-                    ])
-                    .frame(maxWidth: .infinity)
-                default:
-                    EmptyView()
-                }
-//            }
+        LazyVGrid(columns: [GridItem(.flexible())], spacing: 10) {
+            switch category {
+            case "Vitamins":
+                NutrientSubcategoryCard(title: "B Complex", nutrients: [
+                    "Thiamin", "Riboflavin", "Niacin",
+                    "Vitamin B6", "Vitamin B12", "Folate", "Biotin", "Pantothenic Acid"
+                ])
+                .frame(maxWidth: .infinity)
+                
+                NutrientSubcategoryCard(title: "Fat Soluble", nutrients: [
+                    "Vitamin A", "Vitamin D", "Vitamin E", "Vitamin K"
+                ])
+                .frame(maxWidth: .infinity)
+                
+                NutrientSubcategoryCard(title: "Water Soluble", nutrients: [
+                    "Vitamin C"
+                ])
+                .frame(maxWidth: .infinity)
+                
+            case "Minerals":
+                NutrientSubcategoryCard(title: "Electrolytes", nutrients: [
+                    "Sodium", "Potassium", "Calcium", "Magnesium",
+                    "Chloride", "Phosphorus"
+                ])
+                .frame(maxWidth: .infinity)
+                
+                NutrientSubcategoryCard(title: "Trace Minerals", nutrients: [
+                    "Iron", "Zinc", "Copper", "Manganese",
+                    "Iodine", "Selenium", "Chromium", "Molybdenum"
+                ])
+                .frame(maxWidth: .infinity)
+                
+            case "Phytochemicals":
+                NutrientSubcategoryCard(title: "Plant Compounds", nutrients: [
+                    "Flavonoids", "Carotenoids", "Glucosinolates",
+                    "Phytosterols"
+                ])
+                .frame(maxWidth: .infinity)
+                
+            case "Antioxidants":
+                NutrientSubcategoryCard(title: "Antioxidant Compounds", nutrients: [
+                    "Vitamin C", "Vitamin E", "Beta-carotene",
+                    "Selenium", "Zinc"
+                ])
+                .frame(maxWidth: .infinity)
+                
+            case "Electrolytes":
+                NutrientSubcategoryCard(title: "Essential Electrolytes", nutrients: [
+                    "Sodium", "Potassium", "Calcium", "Magnesium",
+                    "Chloride", "Phosphorus"
+                ])
+                .frame(maxWidth: .infinity)
+            default:
+                EmptyView()
+            }
         }
     }
 }
@@ -519,7 +511,6 @@ struct NutrientSubcategoryCard: View {
                     ForEach(nutrients, id: \.self) { nutrient in
                         NavigationLink(
                             destination: SubcategoryDetailView(nutrientName: nutrient)
-//                                .navigationTransition(.zoom(sourceID: nutrient, in: namespace))
                         ) {
                             HStack {
                                 Text(nutrient)
@@ -567,16 +558,15 @@ struct NutrientSubcategoryCard: View {
     
     private func formatValue(_ value: Double) -> String {
         if value >= 1 {
-            return String(format: "%.1f", value)  // 1 dp for regular numbers
+            return String(format: "%.1f", value)
         } else if value > 0 {
-            return String(format: "%.3f", value)  // 3 dp for small numbers
+            return String(format: "%.3f", value)
         } else {
-            return "0"  // Clean zero display
+            return "0"
         }
     }
     
     private func normalizeNutrientName(_ name: String) -> String {
-        // Remove parentheses content and trim
         let baseName = name.replacingOccurrences(of: "\\s*\\([^)]*\\)", with: "", options: .regularExpression)
                           .trimmingCharacters(in: .whitespaces)
                           .lowercased()
@@ -597,7 +587,6 @@ struct NutrientSubcategoryCard: View {
         }
     }
 
-    // Update fetchNutrientValues to use normalized names
     private func fetchNutrientValues() async {
         for nutrient in nutrients {
             let normalizedName = normalizeNutrientName(nutrient)
