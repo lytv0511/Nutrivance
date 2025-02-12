@@ -22,6 +22,8 @@ public struct NutritionScannerView: View {
     @StateObject private var healthStore = HealthKitManager() // HealthKit integration
     @State private var showingImagePicker = false
     @State private var showingSourceSelection = false  // New state for source selection dialog
+    @State private var extractedNutrients: [String: Double] = [:]
+    @State private var showingConfirmation = false
     @State private var selectedImage: UIImage?
     @State private var newValue: String = ""
     @State private var showEditSheet: Bool = false
@@ -374,14 +376,17 @@ public struct NutritionScannerView: View {
 
     // Import to HealthKit
     private func importToHealth() {
-        let nutrientData = nutritionScanner.detectedNutrition.map { detection in
-            NutrientData(name: detection.name, value: detection.value, unit: detection.unit)
+        let healthKitNutrients = extractedNutrients.map { nutrient in
+            HealthKitManager.NutrientData(
+                name: nutrient.key,
+                value: nutrient.value,
+                unit: NutritionUnit.getUnit(for: nutrient.key)
+            )
         }
-        healthStore.saveNutrients(nutrientData) { success in
+
+        healthStore.saveNutrients(healthKitNutrients) { success in
             if success {
-                print("Data imported successfully to HealthKit")
-            } else {
-                print("Failed to import data")
+                showingConfirmation = true
             }
         }
     }

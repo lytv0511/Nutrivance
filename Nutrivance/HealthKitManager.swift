@@ -854,3 +854,203 @@ class HealthKitManager: ObservableObject {
         healthStore.execute(query)
     }
 }
+
+extension HealthKitManager {
+    func fetchMostRecentWorkout(completion: @escaping (HKWorkout?) -> Void) {
+        let workoutType = HKObjectType.workoutType()
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        let query = HKSampleQuery(
+            sampleType: workoutType,
+            predicate: nil,
+            limit: 1,
+            sortDescriptors: [sortDescriptor]
+        ) { _, samples, _ in
+            DispatchQueue.main.async {
+                completion(samples?.first as? HKWorkout)
+            }
+        }
+        healthStore.execute(query)
+    }
+    
+    func fetchHydration(completion: @escaping (Double) -> Void) {
+        guard let waterType = HKQuantityType.quantityType(forIdentifier: .dietaryWater) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(
+            withStart: Calendar.current.startOfDay(for: Date()),
+            end: Date(),
+            options: .strictStartDate
+        )
+        
+        let query = HKStatisticsQuery(
+            quantityType: waterType,
+            quantitySamplePredicate: predicate,
+            options: .cumulativeSum
+        ) { _, result, _ in
+            let waterAmount = result?.sumQuantity()?.doubleValue(for: .liter()) ?? 0
+            DispatchQueue.main.async {
+                completion(waterAmount)
+            }
+        }
+        healthStore.execute(query)
+    }
+    
+    func fetchHeartRateVariability(completion: @escaping (Double) -> Void) {
+        guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else {
+            completion(0)
+            return
+        }
+        
+        let query = HKStatisticsQuery(
+            quantityType: hrvType,
+            quantitySamplePredicate: nil,
+            options: .discreteAverage
+        ) { _, result, _ in
+            let hrv = result?.averageQuantity()?.doubleValue(for: HKUnit.secondUnit(with: .milli)) ?? 0
+            DispatchQueue.main.async {
+                completion(hrv)
+            }
+        }
+        healthStore.execute(query)
+    }
+    
+    func fetchBodyComposition(completion: @escaping ((fatPercentage: Double, leanMass: Double)) -> Void) {
+        guard let bodyFatType = HKQuantityType.quantityType(forIdentifier: .bodyFatPercentage),
+              let leanMassType = HKQuantityType.quantityType(forIdentifier: .leanBodyMass) else {
+            completion((0, 0))
+            return
+        }
+        
+        let bodyFatQuery = HKStatisticsQuery(
+            quantityType: bodyFatType,
+            quantitySamplePredicate: nil,
+            options: .discreteAverage
+        ) { _, result, _ in
+            let fatPercentage = result?.averageQuantity()?.doubleValue(for: .percent()) ?? 0
+            
+            let leanMassQuery = HKStatisticsQuery(
+                quantityType: leanMassType,
+                quantitySamplePredicate: nil,
+                options: .discreteAverage
+            ) { _, result, _ in
+                let leanMass = result?.averageQuantity()?.doubleValue(for: .gramUnit(with: .kilo)) ?? 0
+                DispatchQueue.main.async {
+                    completion((fatPercentage, leanMass))
+                }
+            }
+            self.healthStore.execute(leanMassQuery)
+        }
+        healthStore.execute(bodyFatQuery)
+    }
+    
+    func calculateWorkoutEnergy(workout: HKWorkout) async -> Double {
+        let energyType = HKQuantityType(.activeEnergyBurned)
+        let predicate = HKQuery.predicateForSamples(
+            withStart: workout.startDate,
+            end: workout.endDate,
+            options: .strictStartDate
+        )
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: energyType,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, result, _ in
+                let energy = result?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+                continuation.resume(returning: energy)
+            }
+            healthStore.execute(query)
+        }
+    }
+    
+    func calculateWorkoutStrain(completion: @escaping (Double) -> Void) {
+        fetchMostRecentWorkout { workout in
+            let energyBurned = workout?.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+            let strain = workout?.duration ?? 0 * energyBurned / 1000
+            completion(min(max(strain, 0), 10))
+        }
+    }
+}
+
+extension HealthKitManager {
+    struct NutrientData {
+        let name: String
+        let value: Double
+        let unit: String
+    }
+    
+    func fetchNutrients(for date: Date) async -> [NutrientData] {
+        let carbsType = HKQuantityType(.dietaryCarbohydrates)
+        let proteinType = HKQuantityType(.dietaryProtein)
+        let fatsType = HKQuantityType(.dietaryFatTotal)
+        
+        let predicate = HKQuery.predicateForSamples(
+            withStart: Calendar.current.startOfDay(for: date),
+            end: date,
+            options: .strictStartDate
+        )
+        
+        let carbs = await fetchNutrientValue(type: carbsType, unit: .gram(), predicate: predicate)
+        let protein = await fetchNutrientValue(type: proteinType, unit: .gram(), predicate: predicate)
+        let fats = await fetchNutrientValue(type: fatsType, unit: .gram(), predicate: predicate)
+        
+        return [
+            NutrientData(name: "carbs", value: carbs, unit: "g"),
+            NutrientData(name: "protein", value: protein, unit: "g"),
+            NutrientData(name: "fats", value: fats, unit: "g")
+        ]
+    }
+
+    private func fetchNutrientValue(type: HKQuantityType, unit: HKUnit, predicate: NSPredicate) async -> Double {
+        await withCheckedContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, result, _ in
+                continuation.resume(returning: result?.sumQuantity()?.doubleValue(for: unit) ?? 0)
+            }
+            healthStore.execute(query)
+        }
+    }
+    
+    private func fetchNutrientValue(type: HKQuantityType, predicate: NSPredicate) async -> Double {
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, result, error in
+                let value = result?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+                continuation.resume(returning: value)
+            }
+            healthStore.execute(query)
+        }
+    }
+}
+
+extension HealthKitManager {
+    func fetchWorkoutEnergy(for workout: HKWorkout) async -> Double {
+        let energyType = HKQuantityType(.activeEnergyBurned)
+        let predicate = HKQuery.predicateForSamples(
+            withStart: workout.startDate,
+            end: workout.endDate,
+            options: .strictStartDate
+        )
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: energyType,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, result, _ in
+                let energy = result?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+                continuation.resume(returning: energy)
+            }
+            healthStore.execute(query)
+        }
+    }
+}

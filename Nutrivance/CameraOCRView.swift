@@ -47,7 +47,14 @@ public struct CameraOCRView: View {
         }
     }
     
-    private func processNutritionData(from text: String) -> NutrientData? {
-        return nil
+    private func processNutritionData(from text: String) -> HealthKitManager.NutrientData? {
+        // Extract values from OCR text
+        let extractedValue = 0.0 // Replace with actual OCR parsing logic
+        
+        return HealthKitManager.NutrientData(
+            name: "protein", // Replace with detected nutrient name
+            value: extractedValue,
+            unit: "g"
+        )
     }
 }

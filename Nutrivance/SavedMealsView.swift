@@ -53,8 +53,12 @@ class SavedMealsManager: ObservableObject {
     
     func logMeal(_ meal: SavedMeal) {
         let healthStore = HealthKitManager()
-        healthStore.saveNutrients(meal.nutrients.map {
-            NutrientData(name: $0.key, value: $0.value, unit: NutritionUnit.getUnit(for: $0.key))
+        healthStore.saveNutrients(meal.nutrients.map { nutrient in
+            HealthKitManager.NutrientData(
+                name: nutrient.key,
+                value: nutrient.value,
+                unit: NutritionUnit.getUnit(for: nutrient.key)
+            )
         }) { success in
             if success {
                 if let index = self.savedMeals.firstIndex(where: { $0.id == meal.id }) {

@@ -49,18 +49,22 @@ struct HistoryView: View {
                 [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
             ],
             colors: [
-                .black, Color(red: 0, green: 0.2, blue: 0), .black,
-                Color(red: 0, green: 0, blue: 0.2),
-                Color(red: 0, green: 0.1, blue: 0.1),
-                Color(red: 0, green: 0.2, blue: 0),
-                .black, Color(red: 0, green: 0, blue: 0.2), .black
+                .black,
+                Color(red: 0, green: 0.25, blue: 0.3),  // Deeper blue
+                .black,
+                Color(red: 0, green: 0.3, blue: 0.2),   // Deeper green
+                Color(red: 0, green: 0.2, blue: 0.3),   // Rich blue
+                Color(red: 0, green: 0.25, blue: 0.25), // Deep teal
+                .black,
+                Color(red: 0, green: 0.22, blue: 0.28), // Dark blue-green
+                .black
             ]
         )
         .ignoresSafeArea()
         .hueRotation(.degrees(animationPhase))
         .onAppear {
-            withAnimation(.linear(duration: 15).repeatForever(autoreverses: true)) {
-                animationPhase = 360
+            withAnimation(.easeInOut(duration: 3).repeatForever(autoreverses: true)) {
+                animationPhase = 15
             }
         }
     }
@@ -269,53 +273,70 @@ struct EditEntryView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Meal Type") {
-                    TextField("Meal Type", text: $mealType)
+            NavigationStack {
+                Form {
+                    Section("Meal Type") {
+                        TextField("Meal Type", text: $mealType)
+                    }
+                    
+                    Section("Nutrients") {
+                        // Break down the nutrient list into a separate view
+                        NutrientEditList(nutrients: $nutrients)
+                    }
                 }
-                
-                Section("Nutrients") {
-                    ForEach(Array(nutrients.keys.sorted()), id: \.self) { nutrient in
-                        HStack {
-                            Text(nutrient.capitalized)
-                            Spacer()
-                            TextField("Amount", value: Binding(
-                                get: { nutrients[nutrient] ?? 0 },
-                                set: { nutrients[nutrient] = $0 }
-                            ), format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                        }
+                .navigationTitle("Edit Entry")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { saveChanges() }
                     }
                 }
             }
-            .navigationTitle("Edit Entry")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        let nutrientDataArray = nutrients.map { (name, value) in
-                            NutrientData(name: name, value: value, unit: "g")
-                        }
-                        onSave()
-                        healthStore.saveNutrients(nutrientDataArray) { success in
-                            if success {
-                                dismiss()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    loadData()
-                                }
-                            }
-                        }
+        }
+
+        private func saveChanges() {
+            let nutrientDataArray = nutrients.map { name, value in
+                HealthKitManager.NutrientData(
+                    name: name,
+                    value: value,
+                    unit: NutritionUnit.getUnit(for: name)
+                )
+            }
+            
+            onSave()
+            healthStore.saveNutrients(nutrientDataArray) { success in
+                if success {
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        loadData()
                     }
                 }
             }
         }
     }
-}
+
+    struct NutrientEditList: View {
+        @Binding var nutrients: [String: Double]
+        
+        var body: some View {
+            ForEach(Array(nutrients.keys.sorted()), id: \.self) { nutrient in
+                HStack {
+                    Text(nutrient.capitalized)
+                    Spacer()
+                    TextField("Amount", value: Binding(
+                        get: { nutrients[nutrient] ?? 0 },
+                        set: { nutrients[nutrient] = $0 }
+                    ), format: .number)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                }
+            }
+        }
+    }
+
 
 struct FullListView: View {
     let entries: [Date: [HealthKitManager.NutritionEntry]]
