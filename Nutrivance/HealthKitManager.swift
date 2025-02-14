@@ -378,7 +378,13 @@ class HealthKitManager: ObservableObject {
             HKObjectType.quantityType(forIdentifier: .dietaryFatMonounsaturated)!,
             HKObjectType.quantityType(forIdentifier: .dietaryFatPolyunsaturated)!,
             HKObjectType.quantityType(forIdentifier: .dietaryFatSaturated)!,
-            HKObjectType.quantityType(forIdentifier: .dietaryCaffeine)!
+            HKObjectType.quantityType(forIdentifier: .dietaryCaffeine)!,
+            
+            // Add workout and activity types
+            HKObjectType.workoutType(),
+            HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
+            HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!,
+            HKObjectType.quantityType(forIdentifier: .heartRate)!
         ])
         
         healthStore.requestAuthorization(toShare: types, read: types) { success, error in
@@ -856,7 +862,7 @@ class HealthKitManager: ObservableObject {
 }
 
 extension HealthKitManager {
-    func fetchMostRecentWorkout(completion: @escaping (HKWorkout?) -> Void) {
+func fetchMostRecentWorkout(completion: @escaping (HKWorkout?) -> Void) {
         let workoutType = HKObjectType.workoutType()
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
         let query = HKSampleQuery(
@@ -981,55 +987,21 @@ extension HealthKitManager {
         let value: Double
         let unit: String
     }
-    
-    func fetchNutrients(for date: Date) async -> [NutrientData] {
-        let carbsType = HKQuantityType(.dietaryCarbohydrates)
-        let proteinType = HKQuantityType(.dietaryProtein)
-        let fatsType = HKQuantityType(.dietaryFatTotal)
-        
-        let predicate = HKQuery.predicateForSamples(
-            withStart: Calendar.current.startOfDay(for: date),
-            end: date,
-            options: .strictStartDate
-        )
-        
-        let carbs = await fetchNutrientValue(type: carbsType, unit: .gram(), predicate: predicate)
-        let protein = await fetchNutrientValue(type: proteinType, unit: .gram(), predicate: predicate)
-        let fats = await fetchNutrientValue(type: fatsType, unit: .gram(), predicate: predicate)
-        
-        return [
-            NutrientData(name: "carbs", value: carbs, unit: "g"),
-            NutrientData(name: "protein", value: protein, unit: "g"),
-            NutrientData(name: "fats", value: fats, unit: "g")
-        ]
-    }
 
     private func fetchNutrientValue(type: HKQuantityType, unit: HKUnit, predicate: NSPredicate) async -> Double {
-        await withCheckedContinuation { continuation in
-            let query = HKStatisticsQuery(
-                quantityType: type,
-                quantitySamplePredicate: predicate,
-                options: .cumulativeSum
-            ) { _, result, _ in
-                continuation.resume(returning: result?.sumQuantity()?.doubleValue(for: unit) ?? 0)
-            }
-            healthStore.execute(query)
-        }
-    }
-    
-    private func fetchNutrientValue(type: HKQuantityType, predicate: NSPredicate) async -> Double {
         return await withCheckedContinuation { continuation in
             let query = HKStatisticsQuery(
                 quantityType: type,
                 quantitySamplePredicate: predicate,
                 options: .cumulativeSum
             ) { _, result, error in
-                let value = result?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+                let value = result?.sumQuantity()?.doubleValue(for: unit) ?? 0
                 continuation.resume(returning: value)
             }
             healthStore.execute(query)
         }
     }
+
 }
 
 extension HealthKitManager {
@@ -1052,5 +1024,28 @@ extension HealthKitManager {
             }
             healthStore.execute(query)
         }
+    }
+}
+extension HealthKitManager {
+    func createWorkout(configuration: HKWorkoutConfiguration, duration: Double, completion: @escaping (HKWorkout?, Error?) -> Void) {
+        let builder = HKWorkoutBuilder(healthStore: healthStore, configuration: configuration, device: .local())
+        
+        builder.beginCollection(withStart: Date()) { success, error in
+            if success {
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration * 60) {
+                    builder.endCollection(withEnd: Date()) { success, error in
+                        if success {
+                            builder.finishWorkout(completion: completion)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+extension HealthKitManager {
+    func executeQuery(_ query: HKQuery) {
+        healthStore.execute(query)
     }
 }

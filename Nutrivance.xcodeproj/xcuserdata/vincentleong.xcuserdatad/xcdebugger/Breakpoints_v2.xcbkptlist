@@ -20,51 +20,5 @@
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
-            uuid = "D34BEFC8-2408-4823-AB96-B3B239D9E713"
-            shouldBeEnabled = "Yes"
-            ignoreCount = "0"
-            continueAfterRunningActions = "No"
-            filePath = "Nutrivance/HealthKitManager.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "984"
-            endingLineNumber = "984"
-            landmarkName = "HealthKitManager"
-            landmarkType = "21">
-            <Locations>
-               <Location
-                  uuid = "D34BEFC8-2408-4823-AB96-B3B239D9E713 - 8e3636f760aef580"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "Nutrivance.HealthKitManager.fetchNutrients(for: Foundation.Date) async -&gt; Swift.Array&lt;Nutrivance.HealthKitManager.NutrientData&gt;"
-                  moduleName = "Nutrivance.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/vincentleong/Library/Mobile%20Documents/com~apple~CloudDocs/Xcode/Nutrivance/Nutrivance/HealthKitManager.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "985"
-                  endingLineNumber = "985">
-               </Location>
-               <Location
-                  uuid = "D34BEFC8-2408-4823-AB96-B3B239D9E713 - e4136b4a3a181e04"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(1) suspend resume partial function for Nutrivance.HealthKitManager.fetchNutrients(for: Foundation.Date) async -&gt; Swift.Array&lt;Nutrivance.HealthKitManager.NutrientData&gt;"
-                  moduleName = "Nutrivance.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/vincentleong/Library/Mobile%20Documents/com~apple~CloudDocs/Xcode/Nutrivance/Nutrivance/HealthKitManager.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "985"
-                  endingLineNumber = "985">
-               </Location>
-            </Locations>
-         </BreakpointContent>
-      </BreakpointProxy>
    </Breakpoints>
 </Bucket>
