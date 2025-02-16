@@ -47,25 +47,8 @@ struct ReadinessCheckView: View {
     }
     
     private func fetchHealthData() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchHeartRateVariability { value in
-                        hrvValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-            
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchRecoveryHeartRate { value in
-                        rhrValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-        }
+        hrvValue = await healthStore.fetchHRVAsync()
+        rhrValue = await healthStore.fetchRHRAsync()
     }
 }
 
@@ -85,14 +68,16 @@ struct ReadinessScoreCard: View {
             if isLoading {
                 ProgressView()
             } else {
-                HStack(alignment: .firstTextBaseline) {
+                HStack {
                     Text("\(Int(readinessScore))")
                         .font(.system(size: 64, weight: .bold))
                     Text("/100")
                         .font(.title2)
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    ReadinessGauge(score: readinessScore)
+                        .padding()
                 }
-                ReadinessGauge(score: readinessScore)
             }
         }
         .padding()
@@ -104,26 +89,8 @@ struct ReadinessScoreCard: View {
     }
     
     private func fetchHealthData() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchHeartRateVariability { value in
-                        hrvValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-            
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchRecoveryHeartRate { value in
-                        rhrValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-        }
-        
+        hrvValue = await healthStore.fetchHRVAsync()
+        rhrValue = await healthStore.fetchRHRAsync()
         calculateReadinessScore()
         isLoading = false
     }
@@ -192,10 +159,8 @@ struct SleepMetricsCard: View {
     private func fetchSleepData() async {
         let endDate = Date()
         let startDate = Calendar.current.date(byAdding: .day, value: -1, to: endDate)!
-        await healthStore.fetchMentalHealthData(from: startDate, to: endDate) { data in
-            sleepData = data
-            isLoading = false
-        }
+        sleepData = await healthStore.fetchMentalHealthDataAsync(from: startDate, to: endDate)
+        isLoading = false
     }
     
     private func formatDuration(_ hours: Double) -> String {
@@ -246,25 +211,8 @@ struct HRVTrendsCard: View {
     }
     
     private func fetchRecoveryMetrics() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchHeartRateVariability { value in
-                        hrvValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-            
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchRecoveryHeartRate { value in
-                        rhrValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-        }
+        hrvValue = await healthStore.fetchHRVAsync()
+        rhrValue = await healthStore.fetchRHRAsync()
         isLoading = false
     }
 }

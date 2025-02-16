@@ -41,7 +41,6 @@ struct HealthKitImportView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Import") {
-                        let selectedData = nutrients.filter { selectedNutrients.contains($0.name) }
                         healthStore.saveNutrients(nutrients.map { nutrient in
                             HealthKitManager.NutrientData(
                                 name: nutrient.name,

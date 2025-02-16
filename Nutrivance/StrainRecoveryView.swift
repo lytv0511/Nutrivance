@@ -120,27 +120,10 @@ struct RecoveryMetricsCard: View {
     }
     
     private func fetchRecoveryMetrics() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchHeartRateVariability { value in
-                        hrvValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-            
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchRecoveryHeartRate { value in
-                        rhrValue = value
-                        continuation.resume()
-                    }
-                }
-            }
-        }
-        isLoading = false
-    }
+       hrvValue = await healthStore.fetchHRVAsync()
+       rhrValue = await healthStore.fetchRHRAsync()
+       isLoading = false
+   }
 }
 
 struct WorkoutHistoryAnalysis: View {
@@ -223,17 +206,8 @@ struct OvertrainingRiskAssessment: View {
     }
     
     private func calculateRiskScore() async {
-        // Risk score calculation based on HRV trends, sleep quality, and workout intensity
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchHeartRateVariability { value in
-                        riskScore = value < 30 ? 8 : value < 50 ? 5 : 2
-                        continuation.resume()
-                    }
-                }
-            }
-        }
+        let hrv = await healthStore.fetchHRVAsync()
+        riskScore = hrv < 30 ? 8 : hrv < 50 ? 5 : 2
         isLoading = false
     }
 }
@@ -253,7 +227,8 @@ struct WorkoutRow: View {
             
             Spacer()
             
-            Text(String(format: "%.0f kcal", workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0))
+            let energyType = HKQuantityType(.activeEnergyBurned)
+            Text(String(format: "%.0f kcal", workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

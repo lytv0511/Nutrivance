@@ -206,8 +206,7 @@ class PerformanceFoodPredictor: ObservableObject {
         let energyIntensity = (energyBurned / duration) * 0.2
         let heartRateIntensity = (avgHeartRate - 60) / 12
         
-        let combinedIntensity = (energyIntensity + heartRateIntensity) / 2
-        return 0
+        return Int((energyIntensity + heartRateIntensity) / 2)
     }
     
     private func fetchWorkoutHeartRate(_ workout: HKWorkout) async -> Double {
@@ -496,7 +495,8 @@ struct SavedWorkoutCard: View {
             
             HStack {
                 Image(systemName: "flame.fill")
-                if let calories = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                let energyType = HKQuantityType(.activeEnergyBurned)
+                if let calories = workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()) {
                     Text("\(Int(calories)) kcal")
                 } else {
                     Text("-- kcal")

@@ -820,6 +820,38 @@ class HealthKitManager: ObservableObject {
         healthStore.execute(query)
     }
 
+    func fetchNutrientValueAsync(for nutrient: String) async -> Double {
+        return await withCheckedContinuation { continuation in
+            fetchNutrientData(for: nutrient) { value, _ in
+                continuation.resume(returning: value ?? 0)
+            }
+        }
+    }
+    
+    func fetchMentalHealthDataAsync(from startDate: Date, to endDate: Date) async -> [String: Any] {
+        return await withCheckedContinuation { continuation in
+            fetchMentalHealthData(from: startDate, to: endDate) { data in
+                continuation.resume(returning: data)
+            }
+        }
+    }
+    
+    func fetchHRVAsync() async -> Double {
+        return await withCheckedContinuation { continuation in
+            fetchHeartRateVariability { value in
+                continuation.resume(returning: value)
+            }
+        }
+    }
+
+    func fetchRHRAsync() async -> Double {
+        return await withCheckedContinuation { continuation in
+            fetchRecoveryHeartRate { value in
+                continuation.resume(returning: value)
+            }
+        }
+    }
+    
     func fetchWorkouts(from startDate: Date, to endDate: Date, completion: @escaping ([HKWorkout]) -> Void) {
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)

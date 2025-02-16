@@ -84,36 +84,18 @@ struct MacronutrientStatusCard: View {
             await fetchMacroData()
         }
     }
-    
+
     private func fetchMacroData() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchTodayNutrientData(for: "carbs") { value, _ in
-                        carbs = value ?? 0
-                        continuation.resume()
-                    }
-                }
-            }
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchTodayNutrientData(for: "protein") { value, _ in
-                        protein = value ?? 0
-                        continuation.resume()
-                    }
-                }
-            }
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    healthStore.fetchTodayNutrientData(for: "fats") { value, _ in
-                        fats = value ?? 0
-                        continuation.resume()
-                    }
-                }
-            }
-        }
+        let carbsValue = await healthStore.fetchNutrientValueAsync(for: "carbs")
+        let proteinValue = await healthStore.fetchNutrientValueAsync(for: "protein")
+        let fatsValue = await healthStore.fetchNutrientValueAsync(for: "fats")
+        
+        carbs = carbsValue
+        protein = proteinValue
+        fats = fatsValue
         isLoading = false
     }
+
 }
 
 struct HydrationLevelsCard: View {
