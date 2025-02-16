@@ -155,27 +155,149 @@ struct MovementQualityMetrics: View {
 }
 
 struct FormFeedbackCard: View {
-    var formTips: [(String, String)] = [
+    @AppStorage("formTipsAutoScroll") private var autoScrollEnabled = true
+    @State private var currentIndex = 0
+    @State private var showingDetail = false
+    @State private var selectedTip: (String, String)?
+    @State private var isUserInteracting = false
+    
+    let formTips: [(String, String)] = [
         ("Maintain Core Engagement", "Keep your core tight throughout movements"),
         ("Control the Eccentric", "Focus on the lowering phase"),
         ("Full Range of Motion", "Complete each rep through full range"),
         ("Breathing Pattern", "Exhale during exertion")
     ]
     
+    let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    let cardWidth: CGFloat = 300
+    let cardHeight: CGFloat = 150
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Form Tips")
-                .font(.title2.bold())
-            
-            ForEach(formTips, id: \.0) { tip in
-                FormTipRow(title: tip.0, description: tip.1)
+            HStack {
+                Text("Form Tips")
+                    .font(.title2.bold())
+                Spacer()
+                Toggle("Auto", isOn: $autoScrollEnabled)
+                    .toggleStyle(SwitchToggleStyle(tint: .orange))
+                    .labelsHidden()
             }
+            
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(formTips.indices, id: \.self) { index in
+                        TipCard(title: formTips[index].0, description: formTips[index].1)
+                            .frame(width: cardWidth, height: cardHeight)
+                            .scaleEffect(index == currentIndex ? 1.0 : 0.8)
+                            .opacity(getOpacity(for: index))
+                            .offset(x: getOffset(for: index, in: geometry))
+                            .zIndex(index == currentIndex ? 1 : 0)
+                            .onTapGesture {
+                                withAnimation(.spring()) {
+                                    currentIndex = index
+                                }
+                                selectedTip = formTips[index]
+                                showingDetail = true
+                            }
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { _ in
+                                        isUserInteracting = true
+                                    }
+                                    .onEnded { value in
+                                        let threshold: CGFloat = 50
+                                        if value.translation.width > threshold {
+                                            withAnimation(.spring()) {
+                                                currentIndex = (currentIndex - 1 + formTips.count) % formTips.count
+                                            }
+                                        } else if value.translation.width < -threshold {
+                                            withAnimation(.spring()) {
+                                                currentIndex = (currentIndex + 1) % formTips.count
+                                            }
+                                        }
+                                        
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                                            isUserInteracting = false
+                                        }
+                                    }
+                            )
+                    }
+                }
+            }
+            .frame(height: cardHeight + 20)
         }
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .onReceive(timer) { _ in
+            guard !isUserInteracting && autoScrollEnabled else { return }
+            withAnimation(.spring()) {
+                currentIndex = (currentIndex + 1) % formTips.count
+            }
+        }
+        .sheet(isPresented: $showingDetail) {
+                    if let tip = selectedTip {
+                        TipDetailView(title: tip.0, description: tip.1)
+                    }
+                }
+                .onChange(of: showingDetail) { _, isPresented in
+                    isUserInteracting = isPresented
+                    if !isPresented {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                            isUserInteracting = false
+                        }
+                    }
+                }
+    }
+    
+    private func getOpacity(for index: Int) -> Double {
+        let distance = abs(index - currentIndex)
+        return 1.0 - Double(distance) * 0.3
+    }
+    
+    private func getOffset(for index: Int, in geometry: GeometryProxy) -> CGFloat {
+        let centerOffset = (geometry.size.width - cardWidth) / 2
+        let baseOffset = cardWidth * 1.2
+        let distance = CGFloat(index - currentIndex)
+        return centerOffset + (distance * baseOffset)
     }
 }
+
+struct TipCard: View {
+    let title: String
+    let description: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+            Text(description)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+struct TipDetailView: View {
+    let title: String
+    let description: String
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text(title)
+                .font(.title.bold())
+            Text(description)
+                .font(.body)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+    }
+}
+
 
 struct PastWorkoutReview: View {
     @StateObject private var healthStore = HealthKitManager()

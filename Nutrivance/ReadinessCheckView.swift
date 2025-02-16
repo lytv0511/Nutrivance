@@ -32,10 +32,20 @@ struct ReadinessCheckView: View {
             
             ScrollView {
                 VStack(spacing: 20) {
-                    ReadinessScoreCard()
+                    HStack {
+                        ReadinessScoreCard()
+                            .frame(height: 125)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .padding(.vertical, 50)
+                        RecoveryRecommendationsCard(hrvValue: hrvValue, rhrValue: rhrValue)
+                            .frame(height: 125)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .padding(.vertical, 50)
+                    }
                     SleepMetricsCard()
                     HRVTrendsCard()
-                    RecoveryRecommendationsCard(hrvValue: hrvValue, rhrValue: rhrValue)
                 }
                 .padding()
             }
@@ -70,13 +80,13 @@ struct ReadinessScoreCard: View {
             } else {
                 HStack {
                     Text("\(Int(readinessScore))")
-                        .font(.system(size: 64, weight: .bold))
+                        .font(.system(size: 72, weight: .bold))
                     Text("/100")
                         .font(.title2)
                         .foregroundStyle(.secondary)
                     Spacer()
                     ReadinessGauge(score: readinessScore)
-                        .padding()
+                        .padding(.trailing, 16)
                 }
             }
         }
@@ -225,13 +235,17 @@ struct RecoveryRecommendationsCard: View {
         var recs: [(String, String, String)] = []
         
         if hrvValue < 30 {
-            recs.append(("Rest Day", "Low HRV indicates high stress", "bed.double.fill"))
+            recs.append(("Rest & Recharge", "Take this as an opportunity to focus on recovery and self-care", "bed.double.fill"))
         } else if hrvValue < 50 {
             recs.append(("Light Activity", "Moderate HRV suggests careful training", "figure.walk"))
+        } else {
+            recs.append(("Ready for Action", "Your stress resilience is strong - great time for a challenge!", "figure.run"))
         }
         
         if rhrValue > 65 {
-            recs.append(("Recovery Focus", "Elevated RHR detected", "heart.fill"))
+            recs.append(("Recovery Focus", "Let's prioritize rest to optimize performance", "heart.fill"))
+        } else {
+            recs.append(("Peak Condition", "Your heart rate is in an optimal range - you're primed for activity", "heart.text.square.fill"))
         }
         
         recs.append(("Hydration", "Maintain fluid balance", "drop.fill"))
@@ -301,6 +315,7 @@ struct RecommendationRow: View {
 
 struct ReadinessGauge: View {
     let score: Double
+    @State private var animatedScore: Double = 0
     
     var color: Color {
         switch score {
@@ -312,11 +327,26 @@ struct ReadinessGauge: View {
     }
     
     var body: some View {
-        Gauge(value: score, in: 0...100) {
+        ZStack {
+            Circle()
+                .stroke(color.opacity(0.2), lineWidth: 8)
+                .frame(width: 150, height: 150)
+            
+            Circle()
+                .trim(from: 0, to: animatedScore/100)
+                .stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .frame(width: 150, height: 150)
+                .rotationEffect(.degrees(-90))
+            
             Image(systemName: "bolt.heart.fill")
+                .font(.system(size: 30))
+                .foregroundColor(color)
         }
-        .gaugeStyle(.accessoryCircular)
-        .tint(color)
-        .scaleEffect(1.5)
+        .onAppear {
+            withAnimation(.spring(response: 1.5, dampingFraction: 0.8, blendDuration: 0.8)) {
+                animatedScore = score
+            }
+        }
     }
 }
+

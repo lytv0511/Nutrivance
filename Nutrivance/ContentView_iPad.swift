@@ -51,7 +51,7 @@ struct ContentView_iPad: View {
                        "Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery",
                        "Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records",
                        "Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance",
-                       "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards"]
+                       "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards", "Fuel Check"]
         
         if searchState.searchText.isEmpty {
             return allItems
@@ -202,6 +202,8 @@ struct ContentView_iPad: View {
                         AnyView(CoachView())
                     case "Movement Analysis":
                         AnyView(MovementAnalysisView())
+                    case "Fuel Check":
+                        AnyView(FuelCheckView())
                     case "Exercise Library":
                         AnyView(ComingSoonView(feature: "Exercise Library", description: "Explore a vast collection of exercises"))
                     case "Program Builder":
@@ -356,7 +358,7 @@ struct ContentView_iPad: View {
             }
             
             Section(header: Text("Nutrition Impact")) {
-                ForEach(["Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance"], id: \.self) { item in
+                ForEach(["Pre-Workout Timing", "Post-Workout Window", "Fuel Check", "Hydration Status", "Macro Balance"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Text(item)
                             .tag(item)
