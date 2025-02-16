@@ -51,6 +51,7 @@
 		159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51792CD70DBD001F5FFC /* NutrientModel.swift */; };
 		159F517C2CD715AA001F5FFC /* ContentView_iPad_alt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */; };
 		159F517E2CD7C8FB001F5FFC /* NutrientCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */; };
+		15A0F7552D6159C6004EC837 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A0F7542D6159C6004EC837 /* FuelCheckView.swift */; };
 		15A53B672D3AF4880043287C /* SubcategoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A53B662D3AF4880043287C /* SubcategoryDetailView.swift */; };
 		15A70DA22CF0F5CC007FBC5D /* LogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A70DA12CF0F5CC007FBC5D /* LogView.swift */; };
 		15A70DB52CF119AD007FBC5D /* CloudKitImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A70DB42CF119AD007FBC5D /* CloudKitImportView.swift */; };
@@ -176,6 +177,7 @@
 		159F51792CD70DBD001F5FFC /* NutrientModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientModel.swift; sourceTree = "<group>"; };
 		159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad_alt.swift; sourceTree = "<group>"; };
 		159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrientCardView.swift; sourceTree = "<group>"; };
+		15A0F7542D6159C6004EC837 /* FuelCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuelCheckView.swift; sourceTree = "<group>"; };
 		15A53B662D3AF4880043287C /* SubcategoryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubcategoryDetailView.swift; sourceTree = "<group>"; };
 		15A70DA12CF0F5CC007FBC5D /* LogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogView.swift; sourceTree = "<group>"; };
 		15A70DA32CF10814007FBC5D /* WaterWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WaterWidgetExtension.entitlements; sourceTree = "<group>"; };
@@ -512,6 +514,7 @@
 		15D7FF942CD142690048E050 = {
 			isa = PBXGroup;
 			children = (
+				15A0F7542D6159C6004EC837 /* FuelCheckView.swift */,
 				15C033F32D0DD504000EBCD2 /* .git */,
 				15C033F62D0DD504000EBCD2 /* .github */,
 				15A70DA32CF10814007FBC5D /* WaterWidgetExtension.entitlements */,
@@ -855,6 +858,7 @@
 				15CB57142CEEC25000A6E970 /* NutrientData.swift in Sources */,
 				159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */,
 				15BFD16F2D0E252E00E7847E /* NutrientCharts.swift in Sources */,
+				15A0F7552D6159C6004EC837 /* FuelCheckView.swift in Sources */,
 				15FE8B902CE40B2F00495A2D /* CameraOCRView.swift in Sources */,
 				15BFD1732D108D7500E7847E /* NutrientInfo.swift in Sources */,
 				15B273D32CECBCB1004E6931 /* NutritionExtractorWrapper.mm in Sources */,

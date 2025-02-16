@@ -191,65 +191,66 @@ struct ContentView_iPad: View {
                     case "Electrolytes":
                         AnyView(NutrientDetailView(nutrientName: "Electrolytes"))
                     case "Dashboard":
-                        AnyView(DashboardView())
+                        AnyView(ComingSoonView(feature: "Dashboard", description: "Track your fitness journey with comprehensive insights"))
                     case "Today's Plan":
-                        AnyView(TodaysPlanView())
+                        AnyView(ComingSoonView(feature: "Today's Plan", description: "Your personalized daily workout schedule"))
                     case "Workout History":
-                        AnyView(WorkoutHistoryView())
+                        AnyView(ComingSoonView(feature: "Workout History", description: "Review and analyze your past workouts"))
                     case "Training Calendar":
-                        AnyView(TrainingCalendarView())
+                        AnyView(ComingSoonView(feature: "Training Calendar", description: "Plan and schedule your workouts"))
                     case "Form Coach":
-                        AnyView(FormCoachView())
+                        AnyView(CoachView())
                     case "Movement Analysis":
                         AnyView(MovementAnalysisView())
                     case "Exercise Library":
-                        AnyView(ExerciseLibraryView())
+                        AnyView(ComingSoonView(feature: "Exercise Library", description: "Explore a vast collection of exercises"))
                     case "Program Builder":
-                        AnyView(ProgramBuilderView())
+                        AnyView(ComingSoonView(feature: "Program Builder", description: "Create custom workout programs"))
                     case "Workout Generator":
-                        AnyView(WorkoutGeneratorView())
+                        AnyView(ComingSoonView(feature: "Workout Generator", description: "Generate personalized workouts"))
                     case "Recovery Score":
-                        AnyView(RecoveryScoreView())
+                        AnyView(ComingSoonView(feature: "Recovery Score", description: "Track your recovery status"))
                     case "Sleep Analysis":
-                        AnyView(SleepAnalysisView())
+                        AnyView(ComingSoonView(feature: "Sleep Analysis", description: "Analyze your sleep patterns"))
                     case "Mobility Test":
-                        AnyView(MobilityTestView())
+                        AnyView(ComingSoonView(feature: "Mobility Test", description: "Assess your mobility and flexibility"))
                     case "Readiness Check":
                         AnyView(ReadinessCheckView())
                     case "Strain vs Recovery":
                         AnyView(StrainRecoveryView())
                     case "Activity Rings":
-                        AnyView(ActivityRingsView())
+                        AnyView(ComingSoonView(feature: "Activity Rings", description: "Track your daily activity goals"))
                     case "Heart Zones":
-                        AnyView(HeartZonesView())
+                        AnyView(ComingSoonView(feature: "Heart Zones", description: "Monitor your heart rate zones"))
                     case "Step Count":
-                        AnyView(StepCountView())
+                        AnyView(ComingSoonView(feature: "Step Count", description: "Track your daily steps"))
                     case "Distance":
-                        AnyView(DistanceView())
+                        AnyView(ComingSoonView(feature: "Distance", description: "Monitor your distance covered"))
                     case "Calories Burned":
-                        AnyView(CaloriesBurnedView())
+                        AnyView(ComingSoonView(feature: "Calories Burned", description: "Track your calorie expenditure"))
                     case "Personal Records":
-                        AnyView(PersonalRecordsView())
+                        AnyView(ComingSoonView(feature: "Personal Records", description: "Celebrate your achievements"))
                     case "Pre-Workout Timing":
-                        AnyView(PreWorkoutTimingView())
+                        AnyView(ComingSoonView(feature: "Pre-Workout Timing", description: "Optimize your pre-workout nutrition"))
                     case "Post-Workout Window":
-                        AnyView(PostWorkoutWindowView())
+                        AnyView(ComingSoonView(feature: "Post-Workout Window", description: "Maximize your recovery"))
                     case "Performance Foods":
-                        AnyView(PerformanceFoodsView())
+                        AnyView(ComingSoonView(feature: "Performance Foods", description: "Fuel your performance"))
                     case "Hydration Status":
-                        AnyView(HydrationStatusView())
+                        AnyView(ComingSoonView(feature: "Hydration Status", description: "Monitor your hydration levels"))
                     case "Macro Balance":
-                        AnyView(MacroBalanceView())
+                        AnyView(ComingSoonView(feature: "Macro Balance", description: "Track your macronutrient balance"))
                     case "Live Challenges":
-                        AnyView(LiveChallengesView())
+                        AnyView(ComingSoonView(feature: "Live Challenges", description: "Compete in real-time challenges"))
                     case "Friend Activity":
-                        AnyView(FriendActivityView())
+                        AnyView(ComingSoonView(feature: "Friend Activity", description: "See what your friends are up to"))
                     case "Achievements":
-                        AnyView(AchievementsView())
+                        AnyView(ComingSoonView(feature: "Achievements", description: "Track your fitness milestones"))
                     case "Share Workouts":
-                        AnyView(ShareWorkoutsView())
+                        AnyView(ComingSoonView(feature: "Share Workouts", description: "Share your workouts with friends"))
                     case "Leaderboards":
-                        AnyView(LeaderboardsView())
+                        AnyView(ComingSoonView(feature: "Leaderboards", description: "Compare your progress with others"))
+
                     default:
                         AnyView(HomeView())
                     }

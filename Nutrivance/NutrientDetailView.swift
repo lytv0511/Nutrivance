@@ -252,7 +252,7 @@ struct NutrientDetailView: View {
                                         NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
                                         NutrientCard(
                                             title: "Recommended Intake",
-                                            content: recommendedIntake ?? "Calculating...",
+                                            content: recommendedIntake != nil ? String(format: "%.2f %@", Double(recommendedIntake?.split(separator: " ")[0] ?? "0") ?? 0, NutritionUnit.getUnit(for: nutrientName)) : "Calculating...",
                                             cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9,
                                             titleColor: .orange,
                                             symbolName: "star"

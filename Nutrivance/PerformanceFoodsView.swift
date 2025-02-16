@@ -2,6 +2,7 @@ import SwiftUI
 import HealthKit
 
 struct ModelInput {
+    let workout: HKWorkout?
     let workout_type: String
     let duration_planned: Double
     let intensity_level: Int
@@ -32,6 +33,7 @@ class PerformanceFoodPredictor: ObservableObject {
     }
     
     func generateModelInput(for workout: HKWorkout) async -> ModelInput {
+        print("Generating model input for workout: \(workout.workoutActivityType.displayName), duration: \(workout.duration/60) min")
         lastWorkout = workout
         return await gatherHealthKitData()
     }
@@ -44,6 +46,14 @@ class PerformanceFoodPredictor: ObservableObject {
                 self.isPostWorkout = workout?.endDate ?? Date() > threeHoursAgo
                 self.requiresUserInput = workout == nil
                 continuation.resume()
+            }
+        }
+    }
+    
+    func fetchMostRecentWorkout() async -> HKWorkout? {
+        return await withCheckedContinuation { continuation in
+            healthKitManager.fetchMostRecentWorkout { workout in
+                continuation.resume(returning: workout)
             }
         }
     }
@@ -100,6 +110,8 @@ class PerformanceFoodPredictor: ObservableObject {
     }
     
     func gatherHealthKitData() async -> ModelInput {
+        print("Last workout type: \(lastWorkout?.workoutActivityType.displayName ?? "none")")
+        print("Last workout duration: \(lastWorkout?.duration ?? 0)")
         let duration = lastWorkout?.duration ?? 60
         let intensity = await calculateRealIntensity()
         let timeOfDay = getTimeOfDay(from: Date())
@@ -158,6 +170,7 @@ class PerformanceFoodPredictor: ObservableObject {
         }
         
         return ModelInput(
+            workout: lastWorkout,
             workout_type: lastWorkout?.workoutActivityType.displayName ?? "unknown",
             duration_planned: duration,
             intensity_level: intensity,
@@ -194,7 +207,7 @@ class PerformanceFoodPredictor: ObservableObject {
         let heartRateIntensity = (avgHeartRate - 60) / 12
         
         let combinedIntensity = (energyIntensity + heartRateIntensity) / 2
-        return min(max(Int(combinedIntensity), 1), 10)
+        return 0
     }
     
     private func fetchWorkoutHeartRate(_ workout: HKWorkout) async -> Double {
@@ -277,19 +290,17 @@ class PerformanceFoodPredictor: ObservableObject {
     }
 }
 
-
-
 struct PerformanceFoodsView: View {
     @StateObject private var predictor: PerformanceFoodPredictor
-    @State private var activeWorkout: HKWorkout?
-    @State private var recentWorkout: HKWorkout?
-    @State private var savedWorkouts: [HKWorkout] = []
-    @State private var modelInput: ModelInput?
-    @State private var isLoading = true
-    @State private var animationPhase: Double = 0
-    @State private var lastRefresh = Date()
-    private let refreshInterval: TimeInterval = 30
-    
+     @State private var activeWorkout: HKWorkout?
+     @State private var recentWorkout: HKWorkout?
+     @State private var savedWorkouts: [HKWorkout] = []
+     @State private var selectedWorkout: HKWorkout?
+     @State private var modelInput: ModelInput?
+     @State private var isLoading = true
+     @State private var animationPhase: Double = 0
+     @State private var lastRefresh = Date()
+     private let refreshInterval: TimeInterval = 30
     init() {
         _predictor = StateObject(wrappedValue: PerformanceFoodPredictor(healthStore: HealthKitManager()))
     }
@@ -323,6 +334,26 @@ struct PerformanceFoodsView: View {
                     if isLoading {
                         ProgressView("Loading workout data...")
                     } else {
+                        LazyVGrid(columns: [
+                                GridItem(.adaptive(minimum: 200, maximum: 220), spacing: 16)
+                            ], spacing: 16) {
+                                ForEach(savedWorkouts, id: \.uuid) { workout in
+                                    SavedWorkoutCard(workout: workout)
+                                        .onTapGesture {
+                                            selectedWorkout = workout
+                                            Task {
+                                                modelInput = await predictor.generateModelInput(for: workout)
+                                            }
+                                        }
+                                        .overlay {
+                                            if selectedWorkout?.uuid == workout.uuid {
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .stroke(Color.blue, lineWidth: 2)
+                                            }
+                                        }
+                                }
+                            }
+                            .padding()
                         if let activeWorkout = activeWorkout {
                             LiveWorkoutPanel(
                                 workout: activeWorkout,
@@ -334,18 +365,19 @@ struct PerformanceFoodsView: View {
                         
                         SavedWorkoutsPanel(
                             workouts: savedWorkouts,
-                            modelInput: modelInput
+                            predictor: predictor
                         )
                         
                         if let recentWorkout = recentWorkout {
                             PostWorkoutPanel(
                                 workout: recentWorkout,
-                                modelInput: modelInput
+                                predictor: predictor
                             )
                         } else {
                             WorkoutEstimationPanel(
                                 modelInput: $modelInput,
-                                isLoading: $isLoading
+                                isLoading: $isLoading,
+                                predictor: predictor
                             )
                         }
                     }
@@ -356,18 +388,18 @@ struct PerformanceFoodsView: View {
         .navigationTitle("Performance Foods")
         .navigationBarTitleDisplayMode(.large)
         .task {
-           await loadWorkoutData()
-           for await _ in AsyncStream(unfolding: {
-               try? await Task.sleep(nanoseconds: UInt64(refreshInterval * 1_000_000_000))
-               return true
-           }) {
-               let now = Date()
-               if now.timeIntervalSince(lastRefresh) >= refreshInterval {
-                   await loadWorkoutData()
-                   lastRefresh = now
-               }
-           }
-       }
+            await loadWorkoutData()
+            for await _ in AsyncStream(unfolding: {
+                try? await Task.sleep(nanoseconds: UInt64(refreshInterval * 1_000_000_000))
+                return true
+            }) {
+                let now = Date()
+                if now.timeIntervalSince(lastRefresh) >= refreshInterval {
+                    await loadWorkoutData()
+                    lastRefresh = now
+                }
+            }
+        }
     }
     
     private func loadWorkoutData() async {
@@ -385,16 +417,202 @@ struct PerformanceFoodsView: View {
     }
 }
 
+struct WorkoutEstimationPanel: View {
+    @Binding var modelInput: ModelInput?
+    @Binding var isLoading: Bool
+    @State private var selectedWorkout: HKWorkout?
+    let predictor: PerformanceFoodPredictor
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Label("Workout Estimation", systemImage: "figure.run")
+                    .font(.title2.bold())
+                Spacer()
+            }
+            
+            if let workout = selectedWorkout, let input = modelInput {
+                WorkoutSummaryCard(workout: workout, input: input)
+                NutrientRecommendationsCard(workout: workout, input: input)
+                TimingGuideCard(workout: workout, input: input)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .task {
+            if let workout = await predictor.fetchMostRecentWorkout() {
+                selectedWorkout = workout
+                modelInput = await predictor.generateModelInput(for: workout)
+            }
+            isLoading = false
+        }
+    }
+}
+
+struct SavedWorkoutCard: View {
+    let workout: HKWorkout
+    
+    var workoutIcon: String {
+        switch workout.workoutActivityType {
+        case .running: return "figure.run"
+        case .cycling: return "figure.cycling"
+        case .swimming: return "figure.pool.swim"
+        case .hiking: return "figure.hiking"
+        case .yoga: return "figure.mind.and.body"
+        case .functionalStrengthTraining: return "figure.strengthtraining.functional"
+        case .traditionalStrengthTraining: return "figure.strengthtraining.traditional"
+        case .soccer: return "figure.soccer"
+        case .basketball: return "figure.basketball"
+        case .tennis: return "figure.tennis"
+        case .golf: return "figure.golf"
+        case .baseball: return "figure.baseball"
+        case .dance: return "figure.dance"
+        case .waterPolo: return "figure.waterpolo"
+        default: return "figure.mixed.cardio"
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: workoutIcon)
+                    .font(.title2)
+                Text(workout.workoutActivityType.name)
+                    .font(.headline)
+            }
+            
+            HStack {
+                Image(systemName: "clock")
+                Text("\(Int(workout.duration / 60)) min")
+            }
+            .font(.subheadline)
+            
+            HStack {
+                Image(systemName: "calendar")
+                Text(workout.startDate, style: .date)
+            }
+            .font(.subheadline)
+            
+            HStack {
+                Image(systemName: "flame.fill")
+                if let calories = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                    Text("\(Int(calories)) kcal")
+                } else {
+                    Text("-- kcal")
+                }
+            }
+            .font(.subheadline)
+            
+            HStack {
+                Image(systemName: "figure.walk")
+                if let distance = workout.totalDistance?.doubleValue(for: .meter()) {
+                    Text(String(format: "%.1f km", distance/1000))
+                } else {
+                    Text("-- km")
+                }
+            }
+            .font(.subheadline)
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .frame(width: 200)
+    }
+}
+
+extension HKWorkoutActivityType {
+    var name: String {
+        switch self {
+        case .americanFootball: return "American Football"
+        case .archery: return "Archery"
+        case .australianFootball: return "Australian Football"
+        case .badminton: return "Badminton"
+        case .baseball: return "Baseball"
+        case .basketball: return "Basketball"
+        case .bowling: return "Bowling"
+        case .boxing: return "Boxing"
+        case .climbing: return "Climbing"
+        case .crossTraining: return "Cross Training"
+        case .curling: return "Curling"
+        case .cycling: return "Cycling"
+        case .dance: return "Dance"
+        case .danceInspiredTraining: return "Dance Training"
+        case .elliptical: return "Elliptical"
+        case .equestrianSports: return "Equestrian Sports"
+        case .fencing: return "Fencing"
+        case .fishing: return "Fishing"
+        case .functionalStrengthTraining: return "Functional Strength"
+        case .golf: return "Golf"
+        case .gymnastics: return "Gymnastics"
+        case .handball: return "Handball"
+        case .hiking: return "Hiking"
+        case .hockey: return "Hockey"
+        case .hunting: return "Hunting"
+        case .lacrosse: return "Lacrosse"
+        case .martialArts: return "Martial Arts"
+        case .mindAndBody: return "Mind and Body"
+        case .paddleSports: return "Paddle Sports"
+        case .play: return "Play"
+        case .preparationAndRecovery: return "Prep & Recovery"
+        case .racquetball: return "Racquetball"
+        case .rowing: return "Rowing"
+        case .rugby: return "Rugby"
+        case .running: return "Running"
+        case .sailing: return "Sailing"
+        case .skatingSports: return "Skating Sports"
+        case .snowSports: return "Snow Sports"
+        case .soccer: return "Soccer"
+        case .softball: return "Softball"
+        case .squash: return "Squash"
+        case .stairClimbing: return "Stair Climbing"
+        case .surfingSports: return "Surfing Sports"
+        case .swimming: return "Swimming"
+        case .tableTennis: return "Table Tennis"
+        case .tennis: return "Tennis"
+        case .trackAndField: return "Track and Field"
+        case .traditionalStrengthTraining: return "Strength Training"
+        case .volleyball: return "Volleyball"
+        case .walking: return "Walking"
+        case .waterFitness: return "Water Fitness"
+        case .waterPolo: return "Water Polo"
+        case .waterSports: return "Water Sports"
+        case .wrestling: return "Wrestling"
+        case .yoga: return "Yoga"
+        case .barre: return "Barre"
+        case .coreTraining: return "Core Training"
+        case .crossCountrySkiing: return "Cross Country Skiing"
+        case .downhillSkiing: return "Downhill Skiing"
+        case .flexibility: return "Flexibility"
+        case .highIntensityIntervalTraining: return "HIIT"
+        case .jumpRope: return "Jump Rope"
+        case .kickboxing: return "Kickboxing"
+        case .pilates: return "Pilates"
+        case .stairs: return "Stairs"
+        case .stepTraining: return "Step Training"
+        case .wheelchairRunPace: return "Wheelchair Run"
+        case .wheelchairWalkPace: return "Wheelchair Walk"
+        case .cardioDance: return "Cardio Dance"
+        case .socialDance: return "Social Dance"
+        case .pickleball: return "Pickleball"
+        case .cooldown: return "Cooldown"
+        case .swimBikeRun: return "Triathlon"
+        case .transition: return "Transition"
+        default: return "Workout"
+        }
+    }
+}
+
+
+
 struct LiveWorkoutPanel: View {
     let workout: HKWorkout
     let modelInput: ModelInput?
+    let predictor: PerformanceFoodPredictor
     @State private var heartRate: Double = 0
     @State private var calories: Double = 0
     @State private var duration: TimeInterval = 0
     @State private var hydrationStatus: Double = 0
-    @State private var showHydrationAlert = false
-    @EnvironmentObject private var healthKit: HealthKitManager
-    let predictor: PerformanceFoodPredictor
     
     var body: some View {
         VStack(spacing: 16) {
@@ -410,122 +628,29 @@ struct LiveWorkoutPanel: View {
                     .cornerRadius(8)
             }
             
-            // Live Metrics Section
-            HStack {
-                MetricCard(
-                    title: "Heart Rate",
-                    value: "\(Int(heartRate))",
-                    unit: "BPM",
-                    icon: "heart.fill",
-                    color: .red
-                )
-                MetricCard(
-                    title: "Calories",
-                    value: "\(Int(calories))",
-                    unit: "kcal",
-                    icon: "flame.fill",
-                    color: .orange
-                )
-                MetricCard(
-                    title: "Duration",
-                    value: duration.formattedString,
-                    unit: "",
-                    icon: "clock.fill",
-                    color: .blue
-                )
-            }
-            
-            // Hydration Status
-            HStack {
-                Image(systemName: "drop.fill")
-                    .foregroundColor(.blue)
-                Text("Hydration Status")
-                Spacer()
-                Text("\(hydrationStatus, specifier: "%.1f")L")
-                    .foregroundColor(hydrationStatus < 1.5 ? .orange : .green)
-            }
-            .padding()
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(12)
-            .onTapGesture {
-                showHydrationAlert = hydrationStatus < 1.5
-            }
+            LiveMetricsView(
+                heartRate: heartRate,
+                calories: calories,
+                duration: duration
+            )
             
             if let input = modelInput {
-                WorkoutSummaryCard(input: input)
-                NutrientRecommendationsCard(input: input)
-                TimingGuideCard(input: input)
+                WorkoutSummaryCard(workout: workout, input: input)
+                NutrientRecommendationsCard(workout: workout, input: input)
+                TimingGuideCard(workout: workout, input: input)
             }
         }
         .padding()
         .background(.ultraThinMaterial)
         .cornerRadius(16)
-        .alert("Hydration Reminder", isPresented: $showHydrationAlert) {
-            Button("OK") { }
-        } message: {
-            Text("Remember to stay hydrated during your workout!")
-        }
-        .task {
-            await monitorWorkoutMetrics()
-        }
-    }
-    
-    private func monitorWorkoutMetrics() async {
-        let workoutStart = workout.startDate
-        let energyBurned = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0
-        
-        // Update metrics every second
-        for await _ in AsyncStream(unfolding: { try? await Task.sleep(nanoseconds: 1_000_000_000) }) {
-            duration = Date().timeIntervalSince(workoutStart)
-            calories = energyBurned * (duration / workout.duration)
-            
-            // Fetch latest heart rate
-            let latestHeartRate = await fetchLatestHeartRate()
-            if latestHeartRate > 0 {
-                heartRate = latestHeartRate
-            }
-            
-            // Update hydration status
-            hydrationStatus = await fetchHydrationStatus()
-        }
-    }
-    
-    private func fetchLatestHeartRate() async -> Double {
-        await withCheckedContinuation { continuation in
-            let heartRateType = HKQuantityType(.heartRate)
-            let predicate = HKQuery.predicateForSamples(
-                withStart: Date().addingTimeInterval(-10),
-                end: Date(),
-                options: .strictEndDate
-            )
-            
-            let query = HKStatisticsQuery(
-                quantityType: heartRateType,
-                quantitySamplePredicate: predicate,
-                options: .mostRecent
-            ) { _, result, _ in
-                let heartRate = result?.mostRecentQuantity()?.doubleValue(for: HKUnit(from: "count/min")) ?? 0
-                continuation.resume(returning: heartRate)
-            }
-            
-            predictor.healthKitManager.executeQuery(query)
-        }
-    }
-    
-    private func fetchHydrationStatus() async -> Double {
-        await withCheckedContinuation { continuation in
-            predictor.healthKitManager.fetchHydration { value in
-                continuation.resume(returning: value)
-            }
-        }
     }
 }
 
-
 struct SavedWorkoutsPanel: View {
     let workouts: [HKWorkout]
-    let modelInput: ModelInput?
     @State private var selectedWorkout: HKWorkout?
+    @State private var selectedWorkoutInput: ModelInput?
+    let predictor: PerformanceFoodPredictor
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -538,6 +663,9 @@ struct SavedWorkoutsPanel: View {
                         SavedWorkoutCard(workout: workout)
                             .onTapGesture {
                                 selectedWorkout = workout
+                                Task {
+                                    selectedWorkoutInput = await predictor.generateModelInput(for: workout)
+                                }
                             }
                             .overlay {
                                 if selectedWorkout?.uuid == workout.uuid {
@@ -549,9 +677,10 @@ struct SavedWorkoutsPanel: View {
                 }
             }
             
-            if let input = modelInput, selectedWorkout != nil {
-                WorkoutSummaryCard(input: input)
-                NutrientRecommendationsCard(input: input)
+            if let workout = selectedWorkout, let input = selectedWorkoutInput {
+                WorkoutSummaryCard(workout: workout, input: input)
+                NutrientRecommendationsCard(workout: workout, input: input)
+                TimingGuideCard(workout: workout, input: input)
             }
         }
         .padding()
@@ -560,10 +689,11 @@ struct SavedWorkoutsPanel: View {
     }
 }
 
-
 struct PostWorkoutPanel: View {
     let workout: HKWorkout
-    let modelInput: ModelInput?
+    @State private var selectedWorkout: HKWorkout?
+    @State private var modelInput: ModelInput?
+    let predictor: PerformanceFoodPredictor
     
     var body: some View {
         VStack(spacing: 16) {
@@ -574,38 +704,42 @@ struct PostWorkoutPanel: View {
             }
             
             if let input = modelInput {
-                WorkoutSummaryCard(input: input)
-                NutrientRecommendationsCard(input: input)
-                TimingGuideCard(input: input)
+                WorkoutSummaryCard(workout: workout, input: input)
+                NutrientRecommendationsCard(workout: workout, input: input)
+                TimingGuideCard(workout: workout, input: input)
             }
         }
         .padding()
         .background(.ultraThinMaterial)
         .cornerRadius(16)
+        .task {
+            selectedWorkout = workout
+            modelInput = await predictor.generateModelInput(for: workout)
+        }
     }
 }
 
-struct WorkoutEstimationPanel: View {
-    @Binding var modelInput: ModelInput?
-    @Binding var isLoading: Bool
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Plan Your Workout")
-                .font(.title2.bold())
-            
-            WorkoutInputForm(modelInput: $modelInput, isLoading: $isLoading)
-            
-            if let input = modelInput {
-                WorkoutSummaryCard(input: input)
-                NutrientRecommendationsCard(input: input)
-            }
-        }
-        .padding()
-        .background(.ultraThinMaterial)
-        .cornerRadius(16)
-    }
-}
+//struct SavedWorkoutCard: View {
+//    let workout: HKWorkout
+//    
+//    var body: some View {
+//        VStack(alignment: .leading, spacing: 8) {
+//            Text(workout.workoutActivityType.displayName)
+//                .font(.headline)
+//            
+//            Text("\(Int(workout.duration / 60)) minutes")
+//                .font(.subheadline)
+//            
+//            Text(workout.startDate, style: .date)
+//                .font(.caption)
+//                .foregroundStyle(.secondary)
+//        }
+//        .padding()
+//        .background(.ultraThinMaterial)
+//        .clipShape(RoundedRectangle(cornerRadius: 12))
+//        .frame(width: 160)
+//    }
+//}
 
 struct LiveMetricsView: View {
     let heartRate: Double
@@ -613,27 +747,26 @@ struct LiveMetricsView: View {
     let duration: TimeInterval
     
     var body: some View {
-        HStack {
+        HStack(spacing: 20) {
             MetricCard(
                 title: "Heart Rate",
-                value: "\(Int(heartRate))",
-                unit: "BPM",
-                icon: "heart.fill",
-                color: .red
+                value: String(format: "%.0f", heartRate),
+                unit: "bpm",
+                icon: "heart.fill"
             )
+            
             MetricCard(
                 title: "Calories",
-                value: "\(Int(calories))",
+                value: String(format: "%.0f", calories),
                 unit: "kcal",
-                icon: "flame.fill",
-                color: .orange
+                icon: "flame.fill"
             )
+            
             MetricCard(
                 title: "Duration",
-                value: duration.formattedString,
-                unit: "",
-                icon: "clock.fill",
-                color: .blue
+                value: String(format: "%.0f", duration/60),
+                unit: "min",
+                icon: "clock.fill"
             )
         }
     }
@@ -644,45 +777,28 @@ struct MetricCard: View {
     let value: String
     let unit: String
     let icon: String
-    let color: Color
     
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .foregroundColor(color)
-            Text(title)
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon)
                 .font(.caption)
-                .foregroundColor(.secondary)
-            Text(value)
-                .font(.title3.bold())
-            Text(unit)
-                .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
+            
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value)
+                    .font(.title2.bold())
+                Text(unit)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(Color.secondary.opacity(0.1))
+        .background(.ultraThinMaterial)
         .cornerRadius(12)
     }
 }
 
-struct SavedWorkoutCard: View {
-    let workout: HKWorkout
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(workout.workoutActivityType.displayName)
-                .font(.headline)
-            Text("\(Int(workout.duration / 60)) min")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-        .frame(width: 120)
-        .padding()
-        .background(Color.secondary.opacity(0.1))
-        .cornerRadius(12)
-    }
-}
 
 extension TimeInterval {
     var formattedString: String {
@@ -694,11 +810,22 @@ extension TimeInterval {
 }
 
 struct WorkoutSummaryCard: View {
+    let workout: HKWorkout
     let input: ModelInput
     
     var formattedDuration: String {
-        let minutes = Int(input.duration_planned / 60)
+        let minutes = Int(workout.duration / 60)
         return "\(minutes) min"
+    }
+    
+    var workoutTimeOfDay: String {
+        let hour = Calendar.current.component(.hour, from: workout.startDate)
+        switch hour {
+        case 5..<12: return "morning"
+        case 12..<17: return "afternoon"
+        case 17..<22: return "evening"
+        default: return "night"
+        }
     }
     
     var body: some View {
@@ -708,7 +835,7 @@ struct WorkoutSummaryCard: View {
                 .bold()
             
             HStack {
-                Label(input.workout_type.capitalized, systemImage: "figure.run")
+                Label(workout.workoutActivityType.displayName, systemImage: "figure.run")
                 Spacer()
                 Label(formattedDuration, systemImage: "clock")
             }
@@ -716,7 +843,7 @@ struct WorkoutSummaryCard: View {
             HStack {
                 Label("Intensity: \(input.intensity_level)/10", systemImage: "flame")
                 Spacer()
-                Label(input.time_of_day.capitalized, systemImage: "sun.max")
+                Label(workoutTimeOfDay.capitalized, systemImage: "sun.max")
             }
         }
         .padding()
@@ -725,8 +852,8 @@ struct WorkoutSummaryCard: View {
     }
 }
 
-
 struct NutrientRecommendationsCard: View {
+    let workout: HKWorkout
     let input: ModelInput
     
     var body: some View {
@@ -735,9 +862,26 @@ struct NutrientRecommendationsCard: View {
                 .font(.title2)
                 .bold()
             
-            MacronutrientRow(name: "Carbs", current: input.current_macronutrients_carbs, target: input.target_carbs)
-            MacronutrientRow(name: "Protein", current: input.current_macronutrients_proteins, target: input.target_protein)
-            MacronutrientRow(name: "Fats", current: input.current_macronutrients_fats, target: input.target_fats)
+            MacronutrientRow(
+                name: "Carbs",
+                current: input.current_macronutrients_carbs,
+                target: input.target_carbs,
+                unit: "g"
+            )
+            
+            MacronutrientRow(
+                name: "Protein",
+                current: input.current_macronutrients_proteins,
+                target: input.target_protein,
+                unit: "g"
+            )
+            
+            MacronutrientRow(
+                name: "Fats",
+                current: input.current_macronutrients_fats,
+                target: input.target_fats,
+                unit: "g"
+            )
             
             HStack {
                 Label("Hydration", systemImage: "drop.fill")
@@ -752,6 +896,7 @@ struct NutrientRecommendationsCard: View {
 }
 
 struct TimingGuideCard: View {
+    let workout: HKWorkout
     let input: ModelInput
     
     var body: some View {
@@ -760,19 +905,11 @@ struct TimingGuideCard: View {
                 .font(.title2)
                 .bold()
             
-            ForEach(input.recommended_foods, id: \.category) { recommendation in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(recommendation.category)
-                        .font(.headline)
-                    Text("When: \(recommendation.timing_window)")
-                        .foregroundColor(.secondary)
-                    Text("Foods: \(recommendation.items.joined(separator: ", "))")
-                        .foregroundColor(.secondary)
-                }
-            }
+            Text("Optimal time: \(getOptimalTime())")
+            Text("Recovery status: \(getRecoveryStatus())")
             
-            if input.heart_rate_variability < 50 {
-                Text("Recovery status: Additional rest recommended")
+            if input.previous_workout_strain > 7 {
+                Text("High previous strain detected - consider lighter intensity")
                     .foregroundColor(.orange)
             }
         }
@@ -780,7 +917,26 @@ struct TimingGuideCard: View {
         .background(.ultraThinMaterial)
         .cornerRadius(12)
     }
+    
+    private func getOptimalTime() -> String {
+        let hour = Calendar.current.component(.hour, from: workout.startDate)
+        switch hour {
+        case 5..<12: return "30-60 minutes after breakfast"
+        case 12..<17: return "2-3 hours after lunch"
+        case 17..<22: return "1-2 hours before dinner"
+        default: return "Based on your last meal"
+        }
+    }
+    
+    private func getRecoveryStatus() -> String {
+        switch input.heart_rate_variability {
+        case ..<30: return "Recovery needed"
+        case 30..<50: return "Moderate recovery"
+        default: return "Well recovered"
+        }
+    }
 }
+
 
 struct WorkoutInputForm: View {
     @State private var selectedWorkoutType = "Strength"
@@ -813,16 +969,27 @@ struct WorkoutInputForm: View {
     }
 }
 
+
 struct MacronutrientRow: View {
     let name: String
     let current: Double
     let target: Double
+    let unit: String
+    
+    var percentageOfTarget: Double {
+        guard target > 0 else { return 0 }
+        return min(current / target * 100, 100)
+    }
     
     var body: some View {
-        HStack {
-            Text(name)
-            Spacer()
-            Text("\(Int(current))g / \(Int(target))g")
+        VStack(alignment: .leading) {
+            HStack {
+                Text(name)
+                Spacer()
+                Text("\(Int(current))\(unit) / \(Int(target))\(unit)")
+            }
+            ProgressView(value: percentageOfTarget, total: 100)
+                .tint(percentageOfTarget >= 100 ? .green : .blue)
         }
     }
 }

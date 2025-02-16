@@ -820,7 +820,7 @@ class HealthKitManager: ObservableObject {
         healthStore.execute(query)
     }
 
-    private func fetchWorkouts(from startDate: Date, to endDate: Date, completion: @escaping ([HKWorkout]) -> Void) {
+    func fetchWorkouts(from startDate: Date, to endDate: Date, completion: @escaping ([HKWorkout]) -> Void) {
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
         
@@ -1046,6 +1046,27 @@ extension HealthKitManager {
 
 extension HealthKitManager {
     func executeQuery(_ query: HKQuery) {
+        healthStore.execute(query)
+    }
+}
+
+extension HealthKitManager {
+    func fetchCurrentHeartRate(completion: @escaping (Double) -> Void) {
+        guard let heartRateType = HKObjectType.quantityType(forIdentifier: .heartRate) else {
+            completion(0)
+            return
+        }
+        
+        let query = HKStatisticsQuery(
+            quantityType: heartRateType,
+            quantitySamplePredicate: nil,
+            options: .discreteAverage
+        ) { _, result, _ in
+            let heartRate = result?.averageQuantity()?.doubleValue(for: HKUnit(from: "count/min")) ?? 0
+            DispatchQueue.main.async {
+                completion(heartRate)
+            }
+        }
         healthStore.execute(query)
     }
 }
