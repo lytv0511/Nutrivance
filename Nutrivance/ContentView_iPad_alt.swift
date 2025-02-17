@@ -110,6 +110,7 @@ struct ContentView_iPad_alt: View {
     
     var body: some View {
         TabView {
+            // Nutrivance Section
             TabSection {
                 Tab("Home", systemImage: "house.fill") {
                     HomeView()
@@ -136,52 +137,48 @@ struct ContentView_iPad_alt: View {
             } header: {
                 Text("Nutrition")
                     .font(.headline)
-                    .padding(.leading, 16) // Add padding to the left
-                    .padding(.top, 8) // Add padding to the top
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
             }
             .defaultVisibility(.hidden, for: .tabBar)
-            .customizationID("iPad.tabsection.nutrition") // Custom ID for Micronutrient Section
+            .customizationID("iPad.tabsection.nutrition")
             
+            // Macronutrients Section
             TabSection {
                 Tab("Calories", systemImage: "flame") {
                     NutrientDetailView(nutrientName: "Calories")
                 }
                 .customizationID("iPad.tab.calories")
-                .defaultVisibility(.hidden, for: .tabBar)
                 
                 Tab("Carbs", systemImage: "carrot") {
                     NutrientDetailView(nutrientName: "Carbs")
                 }
                 .customizationID("iPad.tab.carbs")
-                .defaultVisibility(.hidden, for: .tabBar)
                 
                 Tab("Protein", systemImage: "fork.knife") {
                     NutrientDetailView(nutrientName: "Protein")
                 }
                 .customizationID("iPad.tab.protein")
-                .defaultVisibility(.hidden, for: .tabBar)
                 
                 Tab("Fats", systemImage: "drop") {
                     NutrientDetailView(nutrientName: "Fats")
                 }
                 .customizationID("iPad.tab.fats")
-                .defaultVisibility(.hidden, for: .tabBar)
                 
                 Tab("Water", systemImage: "drop.fill") {
                     NutrientDetailView(nutrientName: "Water")
                 }
                 .customizationID("iPad.tab.water")
-                .defaultVisibility(.visible, for: .tabBar)
-                
             } header: {
                 Text("Macronutrients")
                     .font(.headline)
-                    .padding(.leading, 16) // Add padding to the left
-                    .padding(.top, 8) // Add padding to the top
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
             }
             .defaultVisibility(.hidden, for: .tabBar)
-            .customizationID("iPad.tabsection.macronutrients") // Custom ID for Micronutrient Section
+            .customizationID("iPad.tabsection.macronutrients")
             
+            // Micronutrients Section
             TabSection {
                 Tab("Fiber", systemImage: "leaf.fill") {
                     NutrientDetailView(nutrientName: "Fiber")
@@ -215,11 +212,120 @@ struct ContentView_iPad_alt: View {
             } header: {
                 Text("Micronutrients")
                     .font(.headline)
-                    .padding(.leading, 16) // Add padding to the left
-                    .padding(.top, 8) // Add padding to the top
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
             }
             .defaultVisibility(.hidden, for: .tabBar)
-            .customizationID("iPad.tabsection.micronutrients") // Custom ID for Micronutrient Section
+            .customizationID("iPad.tabsection.micronutrients")
+            
+            // Training Section
+            TabSection {
+                Tab("Dashboard", systemImage: "gauge.medium") {
+                    DashboardView()
+                }
+                Tab("Today's Plan", systemImage: "calendar") {
+                    TodaysPlanView()
+                }
+                Tab("Workout History", systemImage: "clock.arrow.circlepath") {
+                    WorkoutHistoryView()
+                }
+                Tab("Training Calendar", systemImage: "calendar.badge.clock") {
+                    TrainingCalendarView()
+                }
+                Tab("Form Coach", systemImage: "figure.strengthtraining.traditional") {
+                    CoachView()
+                }
+                Tab("Movement Analysis", systemImage: "figure.run") {
+                    MovementAnalysisView()
+                }
+                Tab("Exercise Library", systemImage: "books.vertical.fill") {
+                    ExerciseLibraryView()
+                }
+                Tab("Program Builder", systemImage: "rectangle.stack.fill.badge.plus") {
+                    ProgramBuilderView()
+                }
+                Tab("Workout Generator", systemImage: "wand.and.stars") {
+                    WorkoutGeneratorView()
+                }
+            } header: {
+                Text("Training")
+                    .font(.headline)
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
+            }
+
+            // Recovery Section
+            TabSection {
+                Tab("Recovery Score", systemImage: "chart.bar.fill") {
+                    RecoveryScoreView()
+                }
+                Tab("Sleep Analysis", systemImage: "bed.double.fill") {
+                    SleepAnalysisView()
+                }
+                Tab("Mobility Test", systemImage: "figure.walk") {
+                    MobilityTestView()
+                }
+                Tab("Readiness", systemImage: "heart.fill") {
+                    ReadinessCheckView()
+                }
+                Tab("Strain vs Recovery", systemImage: "gauge.with.dots.needle.bottom.50percent") {
+                    StrainRecoveryView()
+                }
+                Tab("Fuel Check", systemImage: "fork.knife") {
+                    FuelCheckView()
+                }
+            } header: {
+                Text("Recovery")
+                    .font(.headline)
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
+            }
+
+            
+            // Spirivance Section
+            TabSection {
+                Tab("Mood Tracker", systemImage: "brain.head.profile") {
+                    ComingSoonView(feature: "Mood Tracking", description: "Track and analyze your emotional well-being")
+                }
+                .customizationID("iPad.tab.mood")
+                
+                Tab("Journal", systemImage: "book.fill") {
+                    ComingSoonView(feature: "Journaling", description: "Document your mental health journey")
+                }
+                .customizationID("iPad.tab.journal")
+                
+                Tab("Resources", systemImage: "questionmark.circle.fill") {
+                    ComingSoonView(feature: "Mental Health Resources", description: "Access helpful information and support")
+                }
+                .customizationID("iPad.tab.resources")
+                
+                Tab("Meditation", systemImage: "sparkles") {
+                    ComingSoonView(feature: "Meditation", description: "Guided sessions for mental wellness")
+                }
+                .customizationID("iPad.tab.meditation")
+                
+                Tab("Breathing", systemImage: "wind") {
+                    ComingSoonView(feature: "Breathing Exercises", description: "Guided breathing techniques")
+                }
+                .customizationID("iPad.tab.breathing")
+                
+                Tab("Sleep", systemImage: "moon.zzz.fill") {
+                    ComingSoonView(feature: "Sleep Tracking", description: "Monitor and improve your sleep quality")
+                }
+                .customizationID("iPad.tab.sleep")
+                
+                Tab("Stress", systemImage: "waveform.path.ecg") {
+                    ComingSoonView(feature: "Stress Management", description: "Track and manage stress levels")
+                }
+                .customizationID("iPad.tab.stress")
+            } header: {
+                Text("Mental Health")
+                    .font(.headline)
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
+            }
+            .defaultVisibility(.hidden, for: .tabBar)
+            .customizationID("iPad.tabsection.mentalhealth")
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)

@@ -32,27 +32,24 @@ struct ReadinessCheckView: View {
             
             ScrollView {
                 VStack(spacing: 20) {
-                    HStack {
+                    HStack(spacing: 20) {
                         ReadinessScoreCard()
-                            .frame(height: 125)
                             .frame(maxWidth: .infinity)
-                            .padding()
-                            .padding(.vertical, 50)
                         RecoveryRecommendationsCard(hrvValue: hrvValue, rhrValue: rhrValue)
-                            .frame(height: 125)
                             .frame(maxWidth: .infinity)
-                            .padding()
-                            .padding(.vertical, 50)
                     }
                     SleepMetricsCard()
+                        .padding(.horizontal)
                     HRVTrendsCard()
+                        .padding(.horizontal)
                 }
                 .padding()
+                
             }
-        }
-        .navigationTitle("Readiness Check")
-        .task {
-            await fetchHealthData()
+            .navigationTitle("Readiness Check")
+            .task {
+                await fetchHealthData()
+            }
         }
     }
     
@@ -81,6 +78,7 @@ struct ReadinessScoreCard: View {
                 HStack {
                     Text("\(Int(readinessScore))")
                         .font(.system(size: 72, weight: .bold))
+                        .padding(.leading, 16)
                     Text("/100")
                         .font(.title2)
                         .foregroundStyle(.secondary)
@@ -88,6 +86,7 @@ struct ReadinessScoreCard: View {
                     ReadinessGauge(score: readinessScore)
                         .padding(.trailing, 16)
                 }
+                .frame(width: 430, height: 257)
             }
         }
         .padding()
@@ -266,6 +265,7 @@ struct RecoveryRecommendationsCard: View {
                 )
             }
         }
+        .frame(width: 430, height: 300)
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -330,16 +330,16 @@ struct ReadinessGauge: View {
         ZStack {
             Circle()
                 .stroke(color.opacity(0.2), lineWidth: 8)
-                .frame(width: 150, height: 150)
+                .frame(width: 225, height: 225)
             
             Circle()
                 .trim(from: 0, to: animatedScore/100)
                 .stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                .frame(width: 150, height: 150)
+                .frame(width: 225, height: 225)
                 .rotationEffect(.degrees(-90))
             
             Image(systemName: "bolt.heart.fill")
-                .font(.system(size: 30))
+                .font(.system(size: 45))
                 .foregroundColor(color)
         }
         .onAppear {

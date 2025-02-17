@@ -60,13 +60,16 @@ struct MotivationalMessageCard: View {
             Text("Daily Motivation")
                 .font(.title2.bold())
             
-            Text(dailyMessage)
-                .font(.headline)
-                .padding(.vertical)
-            
-            Image(systemName: "flame.fill")
-                .font(.title)
-                .foregroundStyle(.orange)
+            HStack {
+                Text(dailyMessage)
+                    .font(.headline)
+                    .padding(.vertical)
+             Spacer()
+                Image(systemName: "flame.fill")
+                    .font(.system(size: 45))
+                    .foregroundStyle(.orange)
+                    .padding(.trailing)
+            }
         }
         .padding()
         .background(.ultraThinMaterial)

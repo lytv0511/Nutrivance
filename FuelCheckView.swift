@@ -30,11 +30,18 @@ struct FuelCheckView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     MacronutrientStatusCard()
+                        .padding(.horizontal)
+                        .padding(.top)
                     HydrationLevelsCard()
-                    NutrientTimingCard()
-                    PerformanceRecommendations()
+                        .padding(.horizontal)
+                    HStack(spacing: 20) {
+                        NutrientTimingCard()
+                            .frame(maxWidth: .infinity)
+                        PerformanceRecommendations()
+                            .frame(maxWidth: .infinity)
+                    }
+                    .padding(.horizontal)
                 }
-                .padding()
             }
         }
         .navigationTitle("Fuel Check")
@@ -140,9 +147,39 @@ struct HydrationLevelsCard: View {
 }
 
 struct NutrientTimingCard: View {
-    @StateObject private var healthStore = HealthKitManager()
-    @State private var lastMealTime: Date?
-    @State private var isLoading = true
+    @State private var currentTime = Date()
+    @State private var lastMealTime: Date? = Calendar.current.date(byAdding: .hour, value: -3, to: Date())
+    @State private var isLoading = false
+    
+    let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    
+    // This will set the optimal window to start at 10 AM (2 hours after meal)
+    var optimalWindowStart: Date {
+        Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: Date()) ?? Date()
+    }
+    
+    // Window ends at 12 PM
+    var optimalWindowEnd: Date {
+        Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date()) ?? Date()
+    }
+    
+    var timeUntilWindow: TimeInterval {
+        optimalWindowStart.timeIntervalSince(currentTime)
+    }
+    
+    var progressValue: Double {
+        let hours = Calendar.current.component(.hour, from: currentTime)
+        return Double(hours) / 24.0
+    }
+    
+    var windowColor: Color {
+        if timeUntilWindow <= 0 && timeUntilWindow > -3600 { // Within window
+            return .green
+        } else if abs(timeUntilWindow) <= 7200 { // Within 2 hours
+            return .yellow
+        }
+        return .red
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -152,37 +189,118 @@ struct NutrientTimingCard: View {
             if isLoading {
                 ProgressView()
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let lastMeal = lastMealTime {
-                        TimingRow(
-                            title: "Last Meal",
-                            time: lastMeal,
-                            icon: "clock.fill"
-                        )
+                HStack(spacing: 20) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let lastMeal = lastMealTime {
+                            TimingRow(title: "Last Meal",
+                                    time: lastMeal,
+                                    icon: "clock.fill")
+                        }
+                        
+                        TimingRow(title: "Optimal Window",
+                                 time: optimalWindowStart,
+                                 icon: "target")
                     }
-                    TimingRow(
-                        title: "Optimal Window",
-                        time: Date().addingTimeInterval(7200),
-                        icon: "target"
-                    )
+                    
+                    Spacer()
+                    
+                    CircularTimingView(progress: progressValue,
+                                     windowStart: optimalWindowStart,
+                                     currentTime: currentTime,
+                                     color: windowColor)
+                        .frame(width: 175, height: 175)
+                        .padding()
+                        .padding(.trailing)
                 }
             }
         }
+        .frame(width: 465, height: 300)
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .task {
-            await fetchNutrientTiming()
+        .onReceive(timer) { time in
+            currentTime = time
         }
     }
+}
+
+struct CircularTimingView: View {
+    let progress: Double
+    let windowStart: Date
+    let currentTime: Date
+    let color: Color
     
-    private func fetchNutrientTiming() async {
-        let endDate = Date()
-        let startDate = Calendar.current.date(byAdding: .day, value: -1, to: endDate)!
-        
-        healthStore.fetchNutrientHistory(from: startDate, to: endDate) { entries in
-            lastMealTime = entries.first?.timestamp
-            isLoading = false
+    private var windowStartProgress: Double {
+        let startHour = Calendar.current.component(.hour, from: windowStart)
+        return Double(startHour) / 24.0
+    }
+    
+    private var windowEndProgress: Double {
+        let endHour = Calendar.current.component(.hour, from: windowStart.addingTimeInterval(3600 * 2))
+        return Double(endHour) / 24.0
+    }
+    
+    private var isInWindow: Bool {
+        progress >= windowStartProgress && progress <= windowEndProgress
+    }
+    
+    private var timeUntilWindow: String {
+        if isInWindow {
+            return "Optimal Time"
+        }
+        let interval = windowStart.timeIntervalSince(currentTime)
+        let hours = Int(abs(interval) / 3600)
+        let minutes = Int((abs(interval).truncatingRemainder(dividingBy: 3600)) / 60)
+        return interval > 0 ? "\(hours)h \(minutes)m" : "Next window in 22h"
+    }
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.gray.opacity(0.2), lineWidth: 10)
+            
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(color, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            
+            // Window start indicator
+            if !isInWindow {
+                Circle()
+                    .fill(color)
+                    .frame(width: 10, height: 10)
+                    .offset(y: -70)
+                    .rotationEffect(.degrees(360 * windowStartProgress))
+            }
+            
+            // Window end indicator
+            if !isInWindow {
+                Circle()
+                    .fill(color)
+                    .frame(width: 10, height: 10)
+                    .offset(y: -70)
+                    .rotationEffect(.degrees(360 * windowEndProgress))
+            }
+            
+            // Current time indicator
+            Image(systemName: "arrowtriangle.up.fill")
+                .foregroundColor(isInWindow ? color : .primary)
+                .offset(y: -70)
+                .rotationEffect(.degrees(360 * progress))
+            
+            // Center status
+            VStack(spacing: 4) {
+                if isInWindow {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.title2)
+                }
+                Text(timeUntilWindow)
+                    .font(.system(size: 14, weight: .medium))
+                Text(currentTime.formatted(date: .omitted, time: .shortened))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -208,6 +326,7 @@ struct PerformanceRecommendations: View {
                 )
             }
         }
+        .frame(width: 465, height: 300)
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
