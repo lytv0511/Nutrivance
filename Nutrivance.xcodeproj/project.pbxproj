@@ -43,6 +43,8 @@
 		156814572D5C0F2D003C861E /* SleepAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814332D5C0F2D003C861E /* SleepAnalysisView.swift */; };
 		156814632D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 156814622D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage */; };
 		156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */; };
+		15701F582D67A13D0044DB01 /* libmlc_llm.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 15701F572D67A13D0044DB01 /* libmlc_llm.dylib */; };
+		15701F5A2D67A29C0044DB01 /* libmlc_llm.dylib in CopyFiles */ = {isa = PBXBuildFile; fileRef = 15701F572D67A13D0044DB01 /* libmlc_llm.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
 		1593A59E2D40386A00FCD9CD /* NutrivanceIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1593A59D2D40386A00FCD9CD /* NutrivanceIntents.swift */; };
 		159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F516E2CD5591E001F5FFC /* HealthKitManager.swift */; };
@@ -117,6 +119,16 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		15701F592D67A2890044DB01 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				15701F5A2D67A29C0044DB01 /* libmlc_llm.dylib in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -167,6 +179,7 @@
 		156814392D5C0F2D003C861E /* WorkoutHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutHistoryView.swift; sourceTree = "<group>"; };
 		156814622D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = movement_prediction_sequential_model.mlpackage; sourceTree = "<group>"; };
 		156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionUnit.swift; sourceTree = "<group>"; };
+		15701F572D67A13D0044DB01 /* libmlc_llm.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = libmlc_llm.dylib; sourceTree = "<group>"; };
 		15741EA42CEFE2F400CDE4F9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		1593A59D2D40386A00FCD9CD /* NutrivanceIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceIntents.swift; sourceTree = "<group>"; };
 		159F516D2CD55871001F5FFC /* Nutrivance.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Nutrivance.entitlements; sourceTree = "<group>"; };
@@ -271,6 +284,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				15AC8E8D2CDCF4FC0002101A /* SwiftUI.framework in Frameworks */,
+				15701F582D67A13D0044DB01 /* libmlc_llm.dylib in Frameworks */,
 				15AC8E8B2CDCF4FC0002101A /* WidgetKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -304,6 +318,7 @@
 			children = (
 				15AC8E8A2CDCF4FC0002101A /* WidgetKit.framework */,
 				15AC8E8C2CDCF4FC0002101A /* SwiftUI.framework */,
+				15701F572D67A13D0044DB01 /* libmlc_llm.dylib */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -681,6 +696,7 @@
 				15D7FF9A2CD142690048E050 /* Frameworks */,
 				15D7FF9B2CD142690048E050 /* Resources */,
 				15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */,
+				15701F592D67A2890044DB01 /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -956,6 +972,10 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)",
+				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.WaterWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -985,6 +1005,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.WaterWidget;
@@ -1159,7 +1183,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "'/Users/vincentleong/Library/Mobile Documents/com~apple~CloudDocs/Xcode/Nutrivance/mlc-llm/build'";
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lmlc_llm";
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1201,7 +1227,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "'/Users/vincentleong/Library/Mobile Documents/com~apple~CloudDocs/Xcode/Nutrivance/mlc-llm/build'";
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lmlc_llm";
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

@@ -71,8 +71,8 @@ struct StrainScoreCard: View {
             .task {
                 await fetchStrainData()
             }
-            Spacer()
         }
+        Spacer()
     }
     
     private func fetchStrainData() async {
