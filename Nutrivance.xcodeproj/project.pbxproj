@@ -23,7 +23,7 @@
 		156814432D5C0F2D003C861E /* WorkoutGeneratorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814382D5C0F2D003C861E /* WorkoutGeneratorView.swift */; };
 		156814442D5C0F2D003C861E /* PersonalRecordsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568142C2D5C0F2D003C861E /* PersonalRecordsView.swift */; };
 		156814452D5C0F2D003C861E /* MovementAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568142A2D5C0F2D003C861E /* MovementAnalysisView.swift */; };
-		156814462D5C0F2D003C861E /* FormCoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814222D5C0F2D003C861E /* FormCoachView.swift */; };
+		156814462D5C0F2D003C861E /* CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814222D5C0F2D003C861E /* CoachView.swift */; };
 		156814472D5C0F2D003C861E /* HeartZonesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814242D5C0F2D003C861E /* HeartZonesView.swift */; };
 		156814482D5C0F2D003C861E /* PreWorkoutTimingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568142E2D5C0F2D003C861E /* PreWorkoutTimingView.swift */; };
 		156814492D5C0F2D003C861E /* StrainRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814352D5C0F2D003C861E /* StrainRecoveryView.swift */; };
@@ -141,7 +141,7 @@
 		1568141F2D5C0F2D003C861E /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		156814202D5C0F2D003C861E /* DistanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DistanceView.swift; sourceTree = "<group>"; };
 		156814212D5C0F2D003C861E /* ExerciseLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseLibraryView.swift; sourceTree = "<group>"; };
-		156814222D5C0F2D003C861E /* FormCoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormCoachView.swift; sourceTree = "<group>"; };
+		156814222D5C0F2D003C861E /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
 		156814232D5C0F2D003C861E /* FriendActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendActivityView.swift; sourceTree = "<group>"; };
 		156814242D5C0F2D003C861E /* HeartZonesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartZonesView.swift; sourceTree = "<group>"; };
 		156814252D5C0F2D003C861E /* HydrationStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HydrationStatusView.swift; sourceTree = "<group>"; };
@@ -577,7 +577,7 @@
 				1568141F2D5C0F2D003C861E /* DashboardView.swift */,
 				156814202D5C0F2D003C861E /* DistanceView.swift */,
 				156814212D5C0F2D003C861E /* ExerciseLibraryView.swift */,
-				156814222D5C0F2D003C861E /* FormCoachView.swift */,
+				156814222D5C0F2D003C861E /* CoachView.swift */,
 				156814232D5C0F2D003C861E /* FriendActivityView.swift */,
 				156814242D5C0F2D003C861E /* HeartZonesView.swift */,
 				156814252D5C0F2D003C861E /* HydrationStatusView.swift */,
@@ -877,7 +877,7 @@
 				156814432D5C0F2D003C861E /* WorkoutGeneratorView.swift in Sources */,
 				156814442D5C0F2D003C861E /* PersonalRecordsView.swift in Sources */,
 				156814452D5C0F2D003C861E /* MovementAnalysisView.swift in Sources */,
-				156814462D5C0F2D003C861E /* FormCoachView.swift in Sources */,
+				156814462D5C0F2D003C861E /* CoachView.swift in Sources */,
 				156814472D5C0F2D003C861E /* HeartZonesView.swift in Sources */,
 				156814482D5C0F2D003C861E /* PreWorkoutTimingView.swift in Sources */,
 				156814492D5C0F2D003C861E /* StrainRecoveryView.swift in Sources */,

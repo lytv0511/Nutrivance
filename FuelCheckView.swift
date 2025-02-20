@@ -34,13 +34,14 @@ struct FuelCheckView: View {
                         .padding(.top)
                     HydrationLevelsCard()
                         .padding(.horizontal)
-                    HStack(spacing: 20) {
+//                    HStack(spacing: 20) {
                         NutrientTimingCard()
                             .frame(maxWidth: .infinity)
+                            .padding(.horizontal)
                         PerformanceRecommendations()
                             .frame(maxWidth: .infinity)
-                    }
-                    .padding(.horizontal)
+                            .padding(.horizontal)
+//                    }
                 }
             }
         }
@@ -208,13 +209,13 @@ struct NutrientTimingCard: View {
                                      windowStart: optimalWindowStart,
                                      currentTime: currentTime,
                                      color: windowColor)
-                        .frame(width: 175, height: 175)
+                        .frame(width: 150, height: 150)
                         .padding()
                         .padding(.trailing)
                 }
             }
         }
-        .frame(width: 465, height: 300)
+//        .frame(width: 465, height: 300)
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -317,16 +318,20 @@ struct PerformanceRecommendations: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Performance Nutrition")
                 .font(.title2.bold())
-            
-            ForEach(recommendations, id: \.0) { rec in
-                RecommendationRow(
-                    title: rec.0,
-                    description: rec.1,
-                    icon: rec.2
-                )
+            HStack {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(recommendations, id: \.0) { rec in
+                        RecommendationRow(
+                            title: rec.0,
+                            description: rec.1,
+                            icon: rec.2
+                        )
+                    }
+                }
+                Spacer()
             }
         }
-        .frame(width: 465, height: 300)
+//        .frame(width: 465, height: 300)
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))

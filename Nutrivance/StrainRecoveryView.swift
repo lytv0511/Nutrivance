@@ -48,27 +48,30 @@ struct StrainScoreCard: View {
     @State private var isLoading = true
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Daily Strain")
-                .font(.title2.bold())
-            
-            if isLoading {
-                ProgressView()
-            } else {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("\(Int(strainScore))")
-                        .font(.system(size: 64, weight: .bold))
-                    Text("/10")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
+        HStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Daily Strain")
+                    .font(.title2.bold())
+                
+                if isLoading {
+                    ProgressView()
+                } else {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("\(Int(strainScore))")
+                            .font(.system(size: 64, weight: .bold))
+                        Text("/10")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-        }
-        .padding()
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .task {
-            await fetchStrainData()
+            .padding()
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .task {
+                await fetchStrainData()
+            }
+            Spacer()
         }
     }
     
