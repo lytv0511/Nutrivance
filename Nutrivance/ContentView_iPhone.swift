@@ -9,20 +9,51 @@ struct ContentView_iPhone: View {
     @State private var isLongPressing = false
     @State private var selectedNutrientForDetail: String?
     @State private var showingNutrientDetail = false
+    @State private var wheelPickerItems: [String] = []
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
 
-    private let nutrientChoices = [
-        "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
-        "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"
-    ]
-
-    private let nutrientIcons: [String: String] = [
-        "Calories": "flame", "Protein": "fork.knife", "Carbs": "carrot",
-        "Fats": "drop.fill", "Fiber": "leaf", "Vitamins": "pills",
-        "Minerals": "bolt", "Water": "drop.fill",
-        "Phytochemicals": "leaf.arrow.triangle.circlepath",
-        "Antioxidants": "shield", "Electrolytes": "battery.100"
-    ]
+    @State private var choices: [String] = [
+            "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
+            "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"
+        ]
+        
+        @State private var icons: [String: String] = [
+            "Calories": "flame", "Protein": "fork.knife", "Carbs": "carrot",
+            "Fats": "drop.fill", "Fiber": "leaf", "Vitamins": "pills",
+            "Minerals": "bolt", "Water": "drop.fill",
+            "Phytochemicals": "leaf.arrow.triangle.circlepath",
+            "Antioxidants": "shield", "Electrolytes": "battery.100"
+        ]
+        
+        func updateChoicesAndIcons(for focus: AppFocus) {
+            switch focus {
+            case .nutrition:
+                choices = ["Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
+                          "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"]
+                icons = ["Calories": "flame", "Protein": "fork.knife", "Carbs": "carrot",
+                        "Fats": "drop.fill", "Fiber": "leaf", "Vitamins": "pills",
+                        "Minerals": "bolt", "Water": "drop.fill",
+                        "Phytochemicals": "leaf.arrow.triangle.circlepath",
+                        "Antioxidants": "shield", "Electrolytes": "battery.100"]
+                
+            case .fitness:
+                choices = ["Form Coach", "Movement Analysis", "Fuel Check",
+                          "Readiness Check", "Strain vs Recovery"]
+                icons = ["Form Coach": "figure.mind.and.body",
+                        "Movement Analysis": "figure.walk.motion",
+                        "Fuel Check": "fuelpump.fill",
+                        "Readiness Check": "checkmark.seal.fill",
+                        "Strain vs Recovery": "arrow.left.arrow.right"]
+                
+            case .mentalHealth:
+                choices = ["Meditation", "Breathing", "Sleep", "Stress Management", "Focus"]
+                icons = ["Meditation": "brain.head.profile",
+                        "Breathing": "lungs.fill",
+                        "Sleep": "moon.zzz.fill",
+                        "Stress Management": "heart.text.square.fill",
+                        "Focus": "scope"]
+            }
+        }
 
     var body: some View {
         ZStack {
@@ -36,15 +67,17 @@ struct ContentView_iPhone: View {
             VStack {
                 ScrollViewReader { scrollViewProxy in
                     ScrollView {
-                        BlankIconView()
-                        BlankIconView()
+                        if navigationState.appFocus == .nutrition {
+                            BlankIconView()
+                            BlankIconView()
+                        }
 
                         let columns = Array(repeating: GridItem(.flexible()), count: horizontalSizeClass == .compact ? 2 : 5)
 
                         LazyVGrid(columns: columns, spacing: 20) {
-                            ForEach(nutrientChoices, id: \.self) { nutrient in
+                            ForEach(choices, id: \.self) { nutrient in
                                 VStack {
-                                    Image(systemName: nutrientIcons[nutrient] ?? "leaf.fill")
+                                    Image(systemName: icons[nutrient] ?? "leaf.fill")
                                         .resizable()
                                         .scaledToFit()
                                         .frame(width: 60, height: 60)
@@ -76,8 +109,10 @@ struct ContentView_iPhone: View {
                         }
                         .padding()
                         .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
-                        BlankIconView()
-                        BlankIconView()
+                        if navigationState.appFocus == .nutrition {
+                            BlankIconView()
+                            BlankIconView()
+                        }
                     }
                     .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
                     .padding(.bottom, 10)
@@ -90,12 +125,15 @@ struct ContentView_iPhone: View {
                         NutrientDetailView(nutrientName: selectedNutrient)
                     }
                 }
-                    WheelPicker(choices: nutrientChoices, choice: $selectedNutrient) { newChoice in
+                    WheelPicker(choices: choices, choice: $selectedNutrient) { newChoice in
                         selectedNutrient = newChoice
                     }
                     .padding(.bottom)
                 }
                 .padding(.top, 10)
+            
+            FocusModeSelectorButton(wheelPickerItems: $wheelPickerItems, updateChoicesAndIcons: updateChoicesAndIcons)
+                .position(x: UIScreen.main.bounds.width - 50, y: UIScreen.main.bounds.height - 100)
 
 //            Button(action: {}) {
 //                Image(systemName: "text.viewfinder")
@@ -156,6 +194,13 @@ extension Double {
     }
 }
 
+private func calculateAngle(from location: CGPoint, in geometry: GeometryProxy) -> Double {
+    let dx = location.x - geometry.size.width/2
+    let dy = location.y - geometry.size.height/2
+    let angle = atan2(dy, dx)
+    return (angle + .pi * 2).truncatingRemainder(dividingBy: .pi * 2)
+}
+
 struct WheelPicker: View {
     let choices: [String]
     @Binding var choice: String
@@ -184,27 +229,150 @@ struct WheelPicker: View {
         "house"
     ]
     
-    @ViewBuilder
-    func RadialMenuItems() -> some View {
-        let menuRadius = 80.0
-        ZStack {
-            ForEach(0..<4) { index in
-                let angle = Double(index) * .pi / 2
-                let xOffset = cos(angle) * menuRadius
-                let yOffset = sin(angle) * menuRadius
-                
-                Image(systemName: radialMenuIcons[index])
-                    .font(.title)
-                    .foregroundColor(.white)
-                    .frame(width: 44, height: 44)
-                    .opacity(dragLocation != nil ? 1.0 : 0.5)
-                    .offset(x: xOffset, y: yOffset)
-                    .transition(.scale)
-            }
-        }
-        .animation(.spring(), value: showRadialMenu)
+    private func calculateDistance(_ location: CGPoint, in geometry: GeometryProxy) -> CGFloat {
+        let dx = location.x - geometry.size.width/2
+        let dy = location.y - geometry.size.height/2
+        return sqrt(pow(dx, 2) + pow(dy, 2))
     }
 
+    private func MenuItem(index: Int, geometry: GeometryProxy, menuRadius: CGFloat) -> some View {
+        let angle = Double(index) * .pi / 2
+        let xOffset = cos(angle) * menuRadius
+        let yOffset = sin(angle) * menuRadius
+        
+        let isWithinCenterRange = dragLocation.map { location in
+            calculateDistance(location, in: geometry) < 25
+        } ?? false
+        
+        let currentAngle = dragLocation.map { calculateAngle(from: $0, in: geometry) } ?? 0
+        
+        let isSelected = !isWithinCenterRange && getSelectedIndex(for: currentAngle) == index
+        
+        return Image(systemName: radialMenuIcons[index])
+            .font(.title)
+            .foregroundColor(.white)
+            .frame(width: 20, height: 20)
+            .offset(x: xOffset, y: yOffset)
+            .transition(.scale)
+    }
+
+    private func calculateAngleFromLocation(_ location: CGPoint, in geometry: GeometryProxy, offsetX: CGFloat, offsetY: CGFloat) -> Double {
+        let dx = location.x - (geometry.size.width/2 + offsetX)
+        let dy = location.y - (geometry.size.height/2 + offsetY)
+        return (atan2(dy, dx) + .pi * 2).truncatingRemainder(dividingBy: .pi * 2)
+    }
+
+    private func calculateDistanceFromLocation(_ location: CGPoint, in geometry: GeometryProxy, offsetX: CGFloat, offsetY: CGFloat) -> CGFloat {
+        let dx = location.x - (geometry.size.width/2 + offsetX)
+        let dy = location.y - (geometry.size.height/2 + offsetY)
+        return sqrt(pow(dx, 2) + pow(dy, 2))
+    }
+    
+    private func MenuIcon(index: Int, geometry: GeometryProxy, menuRadius: CGFloat) -> some View {
+        let angle = Double(index) * .pi / 2
+        let xOffset = cos(angle) * menuRadius  // No centerOffset for visual position
+        let yOffset = sin(angle) * menuRadius
+        
+        let centerOffsetX: CGFloat = 20
+        let centerOffsetY: CGFloat = 30
+        
+        let distance = dragLocation.map { calculateDistanceFromLocation($0, in: geometry, offsetX: centerOffsetX, offsetY: centerOffsetY) } ?? 0
+        let currentAngle = dragLocation.map { calculateAngleFromLocation($0, in: geometry, offsetX: centerOffsetX, offsetY: centerOffsetY) } ?? 0
+        
+        let isWithinCenter = distance < 20
+        let highlightedAction = getHighlightedAction(angle: currentAngle, distance: distance)
+        let isHighlighted = !isWithinCenter && highlightedAction == index
+        
+        return Image(systemName: radialMenuIcons[index])
+            .font(.system(size: 32))
+            .foregroundColor(.white)
+            .frame(width: 80, height: 80)
+//            .opacity(isWithinCenter ? 0.3 : (distance > 100 ? 1.0 : 0.5))
+            .scaleEffect(isWithinCenter ? 1.0 : (isHighlighted ? 1.4 : 1.2))
+            .offset(x: xOffset, y: yOffset)
+            .transition(.scale)
+    }
+
+    private func DebugInfo(geometry: GeometryProxy, centerOffsetX: CGFloat, centerOffsetY: CGFloat) -> some View {
+        let distance = dragLocation.map { location in
+            let dx = location.x - (geometry.size.width/2 + centerOffsetX)
+            let dy = location.y - (geometry.size.height/2 + centerOffsetY)
+            return sqrt(pow(dx, 2) + pow(dy, 2))
+        } ?? 0
+        
+        let currentAngle = dragLocation.map { calculateAngleFromLocation($0, in: geometry, offsetX: centerOffsetX, offsetY: centerOffsetY) } ?? 0
+        
+        let highlightedAction = getHighlightedAction(angle: currentAngle, distance: distance)
+        let isWithinCenter = distance < 20
+        
+        return VStack {
+            Text("Distance: \(Int(distance))")
+                .foregroundColor(.white)
+            Text("IsWithinCenter: \(isWithinCenter.description)")
+                .foregroundColor(.white)
+            Text("Angle: \(currentAngle)")
+                .foregroundColor(.white)
+            Text("HighlightedAction: \(highlightedAction)")
+                .foregroundColor(.white)
+        }
+        .offset(y: 100)
+    }
+
+    func RadialMenuItems(distance: CGFloat, highlightedAction: Int) -> some View {
+        GeometryReader { geometry in
+            let menuRadius: CGFloat = 100
+            ZStack {
+                ForEach(0..<4) { index in
+                    let angle = Double(index) * .pi / 2
+                    let xOffset = cos(angle) * menuRadius
+                    let yOffset = sin(angle) * menuRadius
+                    let isWithinCenter = distance < 20
+                    let isHighlighted = highlightedAction == index
+                    
+                    Image(systemName: radialMenuIcons[index])
+                        .font(.title)
+                        .foregroundColor(.white)
+                        .frame(width: 20, height: 20)
+                        .opacity(isWithinCenter ? 0.3 : (isHighlighted ? 1.0 : 0.5))
+                        .scaleEffect(isWithinCenter ? 1.0 : (isHighlighted ? 1.6 : 1.2))
+                        .offset(x: xOffset, y: yOffset)
+                        .transition(.scale)
+                        .onChange(of: isHighlighted) { newValue in
+                            if newValue {
+                                let generator = UIImpactFeedbackGenerator(style: .heavy)
+                                generator.impactOccurred()
+                            }
+                        }
+                }
+            }
+            .position(x: geometry.size.width/2, y: geometry.size.height/2)
+        }
+    }
+
+    private func getSelectedIndex(for angle: Double) -> Int {
+        switch angle {
+            case (.pi * 1.75)...(2 * .pi), 0...(.pi * 0.25): return 0  // Up - Health Insights
+            case (.pi * 0.25)...(.pi * 0.75): return 1      // Right - Scanner
+            case (.pi * 0.75)...(.pi * 1.25): return 2      // Down - Log
+            case (.pi * 1.25)...(.pi * 1.75): return 3      // Left - Home
+            default: return -1
+        }
+    }
+
+    private func getHighlightedAction(angle: Double, distance: CGFloat) -> Int {
+        // For highlighting, require being further out (60-70 pixels)
+        if distance < 100 {
+            return -1
+        }
+        
+        // Angle-based selection remains the same
+        if angle >= .pi * 0.25 && angle <= .pi * 0.75 { return 1 }  // Right
+        if angle >= .pi * 0.75 && angle <= .pi * 1.25 { return 2 }  // Down
+        if angle >= .pi * 1.25 && angle <= .pi * 1.75 { return 3 }  // Left
+        if angle >= .pi * 1.75 || angle <= .pi * 0.25 { return 0 }  // Up
+        return -1
+    }
+    
     var body: some View {
         ZStack {
             GeometryReader { geometry in
@@ -257,26 +425,32 @@ struct WheelPicker: View {
             .padding(.horizontal)
 
             GeometryReader { geometry in
-                Button(action: {}) {
-                    Image(systemName: "arrow.right.circle.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 50, height: 50)
-                        .foregroundColor(.white)
-                        .padding(10)
-                        .background(Color.gray.opacity(0.5))
-                        .clipShape(Circle())
-                        .shadow(radius: 10)
-                        .scaleEffect(buttonScale)
-                        .overlay(
-                            Group {
-                                if showRadialMenu {
-                                    RadialMenuItems()
-                                }
-                            }
-                        )
+                ZStack {
+                    let distance = dragLocation.map { calculateDistance($0, in: geometry) } ?? 0
+                    let currentAngle = dragLocation.map { calculateAngle(from: $0, in: geometry) } ?? 0
+                    let highlightedAction = getHighlightedAction(angle: currentAngle, distance: distance)
+
+                    if showRadialMenu {
+                        RadialMenuItems(distance: distance, highlightedAction: highlightedAction)
+                    }
+                    // Button for center control
+                    Button(action: {}) {
+                        let distance = dragLocation.map { calculateDistance($0, in: geometry) } ?? 0
+                        
+                        Image(systemName: distance < 50 ? "arrow.right.circle.fill" :
+                                         (distance < 100 ? "xmark" : "info.circle.fill"))
+                            .resizable()
+                            .frame(width: 50, height: 50)
+                            .padding(showRadialMenu ? 10 : 0)
+                            .foregroundColor(.white)
+                            .padding(10)
+                            .clipShape(Circle())
+                            .shadow(radius: 10)
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
                 }
-                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                .buttonStyle(BorderlessButtonStyle())
+                .position(x: UIScreen.main.bounds.width / 2, y: geometry.size.height / 2)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .updating($dragLocation) { value, state, _ in
@@ -286,7 +460,7 @@ struct WheelPicker: View {
                             withAnimation(.spring()) {
                                 showRadialMenu = true
                             }
-                            let generator = UIImpactFeedbackGenerator(style: .medium)
+                            let generator = UIImpactFeedbackGenerator(style: .soft)
                             generator.impactOccurred()
                         }
                         .onEnded { value in
@@ -347,7 +521,7 @@ struct WheelPicker: View {
         if newChoice != choice {
             choice = newChoice
             onChange(newChoice)
-            let generator = UIImpactFeedbackGenerator(style: .rigid)
+            let generator = UIImpactFeedbackGenerator(style: .heavy)
             generator.impactOccurred()
         }
     }
@@ -358,23 +532,182 @@ struct WheelPicker: View {
         let angle = atan2(dy, dx)
         let normalizedAngle = (angle + .pi * 2).truncatingRemainder(dividingBy: .pi * 2)
         
-        let distanceFromCenter = sqrt(pow(dx, 2) + pow(dy, 2))
-        if distanceFromCenter < 25 {
+        let distance = sqrt(pow(dx, 2) + pow(dy, 2))
+        if distance < 100 && distance > 50{
+            return
+        } else if distance < 50 {
+            let generator = UIImpactFeedbackGenerator(style: .heavy)
+            generator.prepare()
+            generator.impactOccurred()
             showDetails = true
             return
         }
         
-        switch normalizedAngle {
-            case (.pi * 1.75)...(2 * .pi), 0...(.pi * 0.25):  // Up
-                showHealthInsights = true
-            case (.pi * 0.25)...(.pi * 0.75):  // Right
-                showNutritionScanner = true
-            case (.pi * 0.75)...(.pi * 1.25):  // Down
-                showLogView = true
-            case (.pi * 1.25)...(.pi * 1.75):  // Left
-                showHomeView = true
-            default:
-                showDetails = true
+        let highlightedAction = getHighlightedAction(angle: normalizedAngle, distance: distance)
+        switch highlightedAction {
+            case 0: showHealthInsights = true
+            case 1: showNutritionScanner = true
+            case 2: showLogView = true
+            case 3: showHomeView = true
+            default: break
         }
+    }
+}
+
+struct FocusModeSelectorButton: View {
+    @EnvironmentObject var navigationState: NavigationState
+    @State private var isExpanded = false
+    @State private var rotation: Double = 0
+    @Binding var wheelPickerItems: [String]
+    let updateChoicesAndIcons: (AppFocus) -> Void
+
+    var body: some View {
+        ZStack {
+            ForEach(AppFocus.allCases.reversed(), id: \.self) { focus in
+                FocusModeOption(focus: focus, onFocusChange: { _ in
+                    updateChoicesAndIcons(focus)
+                })
+                .offset(y: isExpanded ? -CGFloat(AppFocus.allCases.firstIndex(of: focus)! + 1) * 70 : 0)
+                .opacity(isExpanded ? 1 : 0)
+                .scaleEffect(isExpanded ? 1 : 0.5)
+            }
+            
+            // Main button stays fixed at bottom
+            Button {
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.impactOccurred()
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isExpanded.toggle()
+                    rotation = isExpanded ? 45 : 0
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 70, height: 70)
+                    .background(Color.blue)
+                    .clipShape(Circle())
+                    .rotationEffect(.degrees(rotation))
+                    .shadow(radius: 5)
+            }
+        }
+    }
+}
+
+struct FocusModeOption: View {
+    @EnvironmentObject var navigationState: NavigationState
+    @State private var wheelPickerItems: [String] = []
+    @State private var showHomeView = false
+    @State private var showHealthInsights = false
+    @State private var showNutritionScanner = false
+    @State private var showLogView = false
+    @State private var showNutrientDetail = false
+    @State private var selectedNutrient = ""
+    let focus: AppFocus
+    let onFocusChange: ([String]) -> Void
+    
+    var icon: String {
+        switch focus {
+        case .nutrition: return "leaf.fill"
+        case .fitness: return "figure.run"
+        case .mentalHealth: return "brain.head.profile"
+        }
+    }
+    
+    var body: some View {
+        Button {
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
+            
+            withAnimation(.spring()) {
+                navigationState.appFocus = focus
+                onFocusChange([])  // This calls the passed function
+            }
+        } label: {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(.white)
+                .frame(width: 50, height: 50)
+                .background(focus == navigationState.appFocus ? Color.blue : Color.blue.opacity(0.8))
+                .clipShape(Circle())
+        }
+        .sheet(isPresented: $showHomeView) { HomeView() }
+        .sheet(isPresented: $showHealthInsights) { HealthInsightsView() }
+        .sheet(isPresented: $showNutritionScanner) { NutritionScannerView() }
+        .sheet(isPresented: $showLogView) { LogView() }
+        .sheet(isPresented: $showNutrientDetail) {
+            NutrientDetailView(nutrientName: selectedNutrient)
+        }
+    }
+    
+    private func updateWheelPickerItems(for focus: AppFocus) {
+        switch focus {
+        case .nutrition:
+            wheelPickerItems = ["Home", "Insights", "Labels", "Log",
+                              "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
+                              "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"]
+        case .fitness:
+            wheelPickerItems = ["Form Coach", "Movement Analysis", "Fuel Check",
+                              "Readiness Check", "Strain vs Recovery", "Dashboard",
+                              "Today's Plan", "Workout History", "Training Calendar"]
+        case .mentalHealth:
+            wheelPickerItems = ["Pre-Workout Timing", "Post-Workout Window",
+                              "Performance Foods", "Hydration Status", "Macro Balance"]
+        }
+    }
+    
+    func getItemsForFocus(_ focus: AppFocus) -> [String] {
+        switch focus {
+        case .nutrition:
+            return ["Home", "Insights", "Labels", "Log",
+                   "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
+                   "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"]
+        case .fitness:
+            return ["Form Coach", "Movement Analysis", "Fuel Check",
+                   "Readiness Check", "Strain vs Recovery", "Dashboard",
+                   "Today's Plan", "Workout History", "Training Calendar"]
+        case .mentalHealth:
+            return ["Pre-Workout Timing", "Post-Workout Window",
+                   "Performance Foods", "Hydration Status", "Macro Balance"]
+        }
+    }
+    
+    private func handleWheelSelection(for item: String) {
+        switch navigationState.appFocus {
+        case .nutrition:
+            switch item {
+            case "Home": showHomeView = true
+            case "Insights": showHealthInsights = true
+            case "Labels": showNutritionScanner = true
+            case "Log": showLogView = true
+            case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber",
+                 "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+                selectedNutrient = item
+                showNutrientDetail = true
+            default: break
+            }
+            
+        case .fitness:
+            switch item {
+            case "Form Coach": showView("Form Coach")
+            case "Movement Analysis": showView("Movement Analysis")
+            case "Fuel Check": showView("Fuel Check")
+            case "Readiness Check": showView("Readiness Check")
+            case "Strain vs Recovery": showView("Strain vs Recovery")
+            default:
+                showComingSoon(feature: item)
+            }
+            
+        case .mentalHealth:
+            showComingSoon(feature: item)
+        }
+    }
+    
+    private func showView(_ viewName: String) {
+        navigationState.selectedView = viewName
+    }
+
+    private func showComingSoon(feature: String) {
+        navigationState.selectedView = feature
     }
 }

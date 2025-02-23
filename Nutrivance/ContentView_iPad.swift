@@ -294,7 +294,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Main")) {
                 ForEach(["Home", "Insights", "Labels", "Log"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -303,7 +303,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Macronutrients")) {
                 ForEach(["Calories", "Carbs", "Protein", "Fats", "Water"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -312,7 +312,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Micronutrients")) {
                 ForEach(["Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -324,7 +324,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Main")) {
                 ForEach(["Dashboard", "Today's Plan", "Workout History", "Training Calendar"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -333,7 +333,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Smart Training")) {
                 ForEach(["Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -342,7 +342,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Recovery")) {
                 ForEach(["Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -351,7 +351,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Metrics")) {
                 ForEach(["Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -360,7 +360,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Nutrition Impact")) {
                 ForEach(["Pre-Workout Timing", "Post-Workout Window", "Fuel Check", "Hydration Status", "Macro Balance"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -369,7 +369,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Community")) {
                 ForEach(["Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -381,7 +381,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Main")) {
                 ForEach(["Dashboard", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -390,7 +390,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Wellness")) {
                 ForEach(["Meditation", "Breathing", "Sleep", "Stress"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -399,7 +399,7 @@ struct ContentView_iPad: View {
             Section(header: Text("Support")) {
                 ForEach(["Community", "Professional Help", "Crisis Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
-                        Text(item)
+                        Label(item, systemImage: getIconName(for: item))
                             .tag(item)
                     }
                 }
@@ -454,5 +454,71 @@ struct FocusPickerButtonStyle: ButtonStyle {
             .clipShape(Capsule())
             .contentShape(Capsule())
             .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+    }
+}
+
+private func getIconName(for item: String) -> String {
+    switch item {
+    // Main section
+    case "Home": return "house.fill"
+    case "Insights": return "chart.bar.fill"
+    case "Labels": return "barcode.viewfinder"
+    case "Log": return "square.and.pencil"
+    
+    // Nutrition
+    case "Calories": return "flame.fill"
+    case "Carbs": return "leaf.fill"
+    case "Protein": return "fish.fill"
+    case "Fats": return "drop.fill"
+    case "Water": return "drop.circle.fill"
+    case "Fiber": return "circle.grid.cross.fill"
+    case "Vitamins": return "pills.fill"
+    case "Minerals": return "sparkles"
+    case "Phytochemicals": return "leaf.arrow.circlepath"
+    case "Antioxidants": return "shield.fill"
+    case "Electrolytes": return "bolt.fill"
+    
+    // Fitness
+    case "Dashboard": return "gauge.medium"
+    case "Today's Plan": return "calendar.badge.clock"
+    case "Workout History": return "clock.arrow.circlepath"
+    case "Training Calendar": return "calendar.badge.plus"
+    case "Form Coach": return "figure.mind.and.body"
+    case "Movement Analysis": return "figure.walk.motion"
+    case "Fuel Check": return "fuelpump.fill"
+    case "Exercise Library": return "books.vertical.fill"
+    case "Program Builder": return "hammer.fill"
+    case "Workout Generator": return "wand.and.stars"
+    
+    // Recovery & Analysis
+    case "Recovery Score": return "heart.text.square.fill"
+    case "Sleep Analysis": return "moon.zzz.fill"
+    case "Mobility Test": return "figure.walk.arrival"
+    case "Readiness Check": return "checkmark.seal.fill"
+    case "Strain vs Recovery": return "arrow.left.arrow.right"
+    
+    // Metrics
+    case "Activity Rings": return "circle.circle.fill"
+    case "Heart Zones": return "heart.circle.fill"
+    case "Step Count": return "figure.walk"
+    case "Distance": return "location.fill"
+    case "Calories Burned": return "flame.circle.fill"
+    case "Personal Records": return "trophy.fill"
+    
+    // Nutrition Timing
+    case "Pre-Workout Timing": return "timer"
+    case "Post-Workout Window": return "clock.badge.checkmark"
+    case "Performance Foods": return "leaf.circle.fill"
+    case "Hydration Status": return "drop.triangle.fill"
+    case "Macro Balance": return "scale.3d"
+    
+    // Social
+    case "Live Challenges": return "flag.fill"
+    case "Friend Activity": return "person.2.fill"
+    case "Achievements": return "medal.fill"
+    case "Share Workouts": return "square.and.arrow.up.fill"
+    case "Leaderboards": return "list.number"
+    
+    default: return "circle.fill"
     }
 }
