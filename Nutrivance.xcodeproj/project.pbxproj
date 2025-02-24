@@ -8,6 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		152C743A2CF79BE300DB118D /* HealthAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152C74392CF79BE300DB118D /* HealthAnalysisService.swift */; };
+		15561A432D6AE865006B8741 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A422D6AE865006B8741 /* SearchView.swift */; };
+		15561A612D6B755E006B8741 /* NutrivanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A602D6B755E006B8741 /* NutrivanceView.swift */; };
+		15561A632D6B7580006B8741 /* MovanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A622D6B7580006B8741 /* MovanceView.swift */; };
+		15561A652D6B758D006B8741 /* SpirivanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A642D6B758D006B8741 /* SpirivanceView.swift */; };
+		15561A672D6B78FB006B8741 /* GradientBackgrounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A662D6B78FB006B8741 /* GradientBackgrounds.swift */; };
+		15561A692D6B8718006B8741 /* PlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A682D6B8718006B8741 /* PlaygroundView.swift */; };
+		15561A6B2D6B88B0006B8741 /* PresetButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A6A2D6B88B0006B8741 /* PresetButton.swift */; };
+		15561A6D2D6B88BF006B8741 /* ConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */; };
+		15561A6F2D6B88EC006B8741 /* ResizableWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A6E2D6B88EC006B8741 /* ResizableWidgetView.swift */; };
+		15561A712D6B8945006B8741 /* PlaygroundTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A702D6B8945006B8741 /* PlaygroundTypes.swift */; };
 		1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */; };
 		1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0592CD26FA6004E1D13 /* HomeView.swift */; };
 		1568141B2D5C0E80003C861E /* ComingSoonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568141A2D5C0E80003C861E /* ComingSoonView.swift */; };
@@ -43,8 +53,6 @@
 		156814572D5C0F2D003C861E /* SleepAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814332D5C0F2D003C861E /* SleepAnalysisView.swift */; };
 		156814632D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 156814622D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage */; };
 		156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */; };
-		15701F582D67A13D0044DB01 /* libmlc_llm.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 15701F572D67A13D0044DB01 /* libmlc_llm.dylib */; };
-		15701F5A2D67A29C0044DB01 /* libmlc_llm.dylib in CopyFiles */ = {isa = PBXBuildFile; fileRef = 15701F572D67A13D0044DB01 /* libmlc_llm.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1570E2662D67B75300F42CB5 /* FuelCheckView.swift */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
 		1593A59E2D40386A00FCD9CD /* NutrivanceIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1593A59D2D40386A00FCD9CD /* NutrivanceIntents.swift */; };
@@ -119,16 +127,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		15701F592D67A2890044DB01 /* CopyFiles */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				15701F5A2D67A29C0044DB01 /* libmlc_llm.dylib in CopyFiles */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -144,6 +142,16 @@
 
 /* Begin PBXFileReference section */
 		152C74392CF79BE300DB118D /* HealthAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthAnalysisService.swift; sourceTree = "<group>"; };
+		15561A422D6AE865006B8741 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		15561A602D6B755E006B8741 /* NutrivanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceView.swift; sourceTree = "<group>"; };
+		15561A622D6B7580006B8741 /* MovanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovanceView.swift; sourceTree = "<group>"; };
+		15561A642D6B758D006B8741 /* SpirivanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpirivanceView.swift; sourceTree = "<group>"; };
+		15561A662D6B78FB006B8741 /* GradientBackgrounds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradientBackgrounds.swift; sourceTree = "<group>"; };
+		15561A682D6B8718006B8741 /* PlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundView.swift; sourceTree = "<group>"; };
+		15561A6A2D6B88B0006B8741 /* PresetButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetButton.swift; sourceTree = "<group>"; };
+		15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsView.swift; sourceTree = "<group>"; };
+		15561A6E2D6B88EC006B8741 /* ResizableWidgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResizableWidgetView.swift; sourceTree = "<group>"; };
+		15561A702D6B8945006B8741 /* PlaygroundTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundTypes.swift; sourceTree = "<group>"; };
 		1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone.swift; sourceTree = "<group>"; };
 		1557A0592CD26FA6004E1D13 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		1568141A2D5C0E80003C861E /* ComingSoonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComingSoonView.swift; sourceTree = "<group>"; };
@@ -284,7 +292,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				15AC8E8D2CDCF4FC0002101A /* SwiftUI.framework in Frameworks */,
-				15701F582D67A13D0044DB01 /* libmlc_llm.dylib in Frameworks */,
 				15AC8E8B2CDCF4FC0002101A /* WidgetKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -569,6 +576,16 @@
 				15F5865E2CF7840F006D3A9C /* HistoryView.swift */,
 				15B9D5952D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage */,
 				15F586602CF7845B006D3A9C /* SavedMealsView.swift */,
+				15561A702D6B8945006B8741 /* PlaygroundTypes.swift */,
+				15561A6A2D6B88B0006B8741 /* PresetButton.swift */,
+				15561A6E2D6B88EC006B8741 /* ResizableWidgetView.swift */,
+				15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */,
+				15561A682D6B8718006B8741 /* PlaygroundView.swift */,
+				15561A662D6B78FB006B8741 /* GradientBackgrounds.swift */,
+				15561A602D6B755E006B8741 /* NutrivanceView.swift */,
+				15561A622D6B7580006B8741 /* MovanceView.swift */,
+				15561A642D6B758D006B8741 /* SpirivanceView.swift */,
+				15561A422D6AE865006B8741 /* SearchView.swift */,
 				156814622D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage */,
 				15F586622CF7846A006D3A9C /* AddMealView.swift */,
 				15D7FFA42CD142690048E050 /* Item.swift */,
@@ -696,7 +713,6 @@
 				15D7FF9A2CD142690048E050 /* Frameworks */,
 				15D7FF9B2CD142690048E050 /* Resources */,
 				15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */,
-				15701F592D67A2890044DB01 /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -848,8 +864,10 @@
 				15CB57102CEEC22300A6E970 /* NutrientRow.swift in Sources */,
 				15D8B5592CEEC73600E64AA3 /* Nutrivance-Bridging-Header.h in Sources */,
 				159F51732CD6E82B001F5FFC /* ContentView_iPhone_alt.swift in Sources */,
+				15561A612D6B755E006B8741 /* NutrivanceView.swift in Sources */,
 				15D7FFA52CD142690048E050 /* Item.swift in Sources */,
 				152C743A2CF79BE300DB118D /* HealthAnalysisService.swift in Sources */,
+				15561A6F2D6B88EC006B8741 /* ResizableWidgetView.swift in Sources */,
 				15CB57122CEEC22F00A6E970 /* HealthKitImportView.swift in Sources */,
 				156814632D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage in Sources */,
 				159F517E2CD7C8FB001F5FFC /* NutrientCardView.swift in Sources */,
@@ -857,6 +875,7 @@
 				15A70DB52CF119AD007FBC5D /* CloudKitImportView.swift in Sources */,
 				15B273D62CECBD25004E6931 /* NutritionTableDetector.swift in Sources */,
 				15A70DB72CF119DE007FBC5D /* CloudKitManager.swift in Sources */,
+				15561A672D6B78FB006B8741 /* GradientBackgrounds.swift in Sources */,
 				15F586632CF7846A006D3A9C /* AddMealView.swift in Sources */,
 				15F586612CF7845B006D3A9C /* SavedMealsView.swift in Sources */,
 				15B9D5962D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage in Sources */,
@@ -866,19 +885,24 @@
 				15B273D12CECBB44004E6931 /* gpu_nms.mm in Sources */,
 				159F517C2CD715AA001F5FFC /* ContentView_iPad_alt.swift in Sources */,
 				15D7FFA12CD142690048E050 /* NutrivanceApp.swift in Sources */,
+				15561A652D6B758D006B8741 /* SpirivanceView.swift in Sources */,
+				15561A712D6B8945006B8741 /* PlaygroundTypes.swift in Sources */,
 				159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */,
 				15A53B672D3AF4880043287C /* SubcategoryDetailView.swift in Sources */,
+				15561A692D6B8718006B8741 /* PlaygroundView.swift in Sources */,
 				1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */,
 				15CB57042CEEB87100A6E970 /* TableDetection.metal in Sources */,
 				15A70DA22CF0F5CC007FBC5D /* LogView.swift in Sources */,
 				15CB57142CEEC25000A6E970 /* NutrientData.swift in Sources */,
 				159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */,
 				15BFD16F2D0E252E00E7847E /* NutrientCharts.swift in Sources */,
+				15561A6D2D6B88BF006B8741 /* ConnectionsView.swift in Sources */,
 				1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */,
 				15FE8B902CE40B2F00495A2D /* CameraOCRView.swift in Sources */,
 				15BFD1732D108D7500E7847E /* NutrientInfo.swift in Sources */,
 				15B273D32CECBCB1004E6931 /* NutritionExtractorWrapper.mm in Sources */,
 				159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */,
+				15561A6B2D6B88B0006B8741 /* PresetButton.swift in Sources */,
 				156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */,
 				15CB570A2CEEBED000A6E970 /* NutritionScannerView.swift in Sources */,
 				1568143A2D5C0F2D003C861E /* ProgramBuilderView.swift in Sources */,
@@ -894,11 +918,13 @@
 				156814442D5C0F2D003C861E /* PersonalRecordsView.swift in Sources */,
 				156814452D5C0F2D003C861E /* MovementAnalysisView.swift in Sources */,
 				156814462D5C0F2D003C861E /* CoachView.swift in Sources */,
+				15561A632D6B7580006B8741 /* MovanceView.swift in Sources */,
 				156814472D5C0F2D003C861E /* HeartZonesView.swift in Sources */,
 				156814482D5C0F2D003C861E /* PreWorkoutTimingView.swift in Sources */,
 				156814492D5C0F2D003C861E /* StrainRecoveryView.swift in Sources */,
 				1568144A2D5C0F2D003C861E /* DashboardView.swift in Sources */,
 				1568144B2D5C0F2D003C861E /* MobilityTestView.swift in Sources */,
+				15561A432D6AE865006B8741 /* SearchView.swift in Sources */,
 				1568144C2D5C0F2D003C861E /* AchievementsView.swift in Sources */,
 				1568144D2D5C0F2D003C861E /* PostWorkoutWindowView.swift in Sources */,
 				1568144E2D5C0F2D003C861E /* MacroBalanceView.swift in Sources */,
@@ -972,10 +998,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)",
-				);
+				LIBRARY_SEARCH_PATHS = "";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.WaterWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1006,10 +1029,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)",
-				);
+				LIBRARY_SEARCH_PATHS = "";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.WaterWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1183,9 +1203,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "'/Users/vincentleong/Library/Mobile Documents/com~apple~CloudDocs/Xcode/Nutrivance/mlc-llm/build'";
+				LIBRARY_SEARCH_PATHS = "";
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = "-lmlc_llm";
+				OTHER_LDFLAGS = "";
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1227,9 +1247,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "'/Users/vincentleong/Library/Mobile Documents/com~apple~CloudDocs/Xcode/Nutrivance/mlc-llm/build'";
+				LIBRARY_SEARCH_PATHS = "";
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = "-lmlc_llm";
+				OTHER_LDFLAGS = "";
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

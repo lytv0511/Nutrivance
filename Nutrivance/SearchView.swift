@@ -1,7 +1,7 @@
 import SwiftUI
 import HealthKit
 
-struct ContentView_iPad: View {
+struct SearchView: View {
     @EnvironmentObject var navigationState: NavigationState
     @EnvironmentObject var searchState: SearchState
     @State private var showCamera = false
@@ -89,206 +89,212 @@ struct ContentView_iPad: View {
             return "brain.head.profile"
         }
     }
+        
     var body: some View {
-        ZStack {
-            NavigationSplitView {
-                List(selection: navigationBinding) {
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
-                            .padding(.leading, 8)
-                        
-                        TextField("Find in List", text: $searchState.searchText)
-                            .textFieldStyle(.plain)
-                            .focused($searchBarFocused)
-                            .autocorrectionDisabled(true)
-                    }
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(8)
-                    .listRowBackground(Color.clear)
-                    .onChange(of: searchBarFocused) { _, isFocused in
-                        searchState.isSearching = isFocused
-                    }
-                    .onChange(of: searchState.isSearching) { _, isSearching in
-                        searchBarFocused = isSearching
-                    }
+        NavigationStack {
+            VStack {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 8)
                     
-                    switch navigationState.appFocus {
-                    case .nutrition:
-                        nutritionSections
-                    case .fitness:
-                        fitnessSections
-                    case .mentalHealth:
-                        mentalHealthSections
-                    }
+                    TextField("Find in List", text: $searchState.searchText)
+                        .textFieldStyle(.plain)
+                        .focused($searchBarFocused)
+                        .autocorrectionDisabled(true)
                 }
-                .toolbar(id: "mainToolbar") {
-                    ToolbarItem(id: "focusSelector", placement: .automatic) {
-                        Menu {
-                            ForEach(AppFocus.allCases, id: \.self) { focus in
-                                Button {
-                                    withAnimation(.spring()) {
-                                        navigationState.appFocus = focus
-                                    }
-                                } label: {
-                                    Label(focus.rawValue, systemImage: getFocusIcon(focus))
+                .padding(8)
+                .background(Color(.systemGray5))
+                .cornerRadius(8)
+                .padding()
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 20) {
+                        ForEach(filteredItems, id: \.self) { item in
+                            NavigationLink {
+                                switch item {
+                                case "Home":
+                                    HomeView()
+                                case "Insights":
+                                    HealthInsightsView()
+                                case "Labels":
+                                    NutritionScannerView()
+                                case "Log":
+                                    LogView()
+                                case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+                                    NutrientDetailView(nutrientName: item)
+                                case "Dashboard":
+                                    DashboardView()
+                                case "Today's Plan":
+                                    TodaysPlanView()
+                                case "Workout History":
+                                    WorkoutHistoryView()
+                                case "Training Calendar":
+                                    TrainingCalendarView()
+                                case "Form Coach":
+                                    CoachView()
+                                case "Movement Analysis":
+                                    MovementAnalysisView()
+                                case "Exercise Library":
+                                    ExerciseLibraryView()
+                                case "Program Builder":
+                                    ProgramBuilderView()
+                                case "Workout Generator":
+                                    WorkoutGeneratorView()
+                                case "Recovery Score":
+                                    RecoveryScoreView()
+                                case "Sleep Analysis":
+                                    SleepAnalysisView()
+                                case "Mobility Test":
+                                    MobilityTestView()
+                                case "Readiness Check":
+                                    ReadinessCheckView()
+                                case "Strain vs Recovery":
+                                    StrainRecoveryView()
+                                case "Activity Rings":
+                                    ActivityRingsView()
+                                case "Heart Zones":
+                                    HeartZonesView()
+                                case "Step Count":
+                                    StepCountView()
+                                case "Distance":
+                                    DistanceView()
+                                case "Calories Burned":
+                                    CaloriesBurnedView()
+                                case "Personal Records":
+                                    PersonalRecordsView()
+                                case "Pre-Workout Timing":
+                                    PreWorkoutTimingView()
+                                case "Post-Workout Window":
+                                    PostWorkoutWindowView()
+                                case "Performance Foods":
+                                    PerformanceFoodsView()
+                                case "Hydration Status":
+                                    HydrationStatusView()
+                                case "Macro Balance":
+                                    MacroBalanceView()
+                                case "Live Challenges":
+                                    LiveChallengesView()
+                                case "Friend Activity":
+                                    FriendActivityView()
+                                case "Achievements":
+                                    AchievementsView()
+                                case "Share Workouts":
+                                    ShareWorkoutsView()
+                                case "Leaderboards":
+                                    LeaderboardsView()
+                                case "Fuel Check":
+                                    FuelCheckView()
+                                default:
+                                    HomeView()
                                 }
-                            }
-                        } label: {
-                            HStack {
-                                Image(systemName: getFocusIcon(navigationState.appFocus))
-                                Text(navigationState.appFocus.rawValue)
-                                Image(systemName: "chevron.down")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .buttonStyle(FocusPickerButtonStyle())
-                    }
-                }
-                .navigationTitle(getAppTitle(navigationState.appFocus))
-                .onChange(of: searchState.isSearching) { _, isSearching in
-                    if isSearching {
-                        searchBarFocused = true
-                    } else {
-                        searchBarFocused = false
-                        sidebarFocused = true
-                    }
-                }
-                .focused($sidebarFocused)
-            } detail: {
-                Group {
-                    switch navigationState.selectedView {
-                    case "Home":
-                        AnyView(HomeView())
-                    case "Insights":
-                        AnyView(HealthInsightsView())
-                    case "Labels":
-                        AnyView(NutritionScannerView())
-                    case "Log":
-                        AnyView(LogView())
-                    case "Calories":
-                        AnyView(NutrientDetailView(nutrientName: "Calories"))
-                    case "Carbs":
-                        AnyView(NutrientDetailView(nutrientName: "Carbs"))
-                    case "Protein":
-                        AnyView(NutrientDetailView(nutrientName: "Protein"))
-                    case "Fats":
-                        AnyView(NutrientDetailView(nutrientName: "Fats"))
-                    case "Water":
-                        AnyView(NutrientDetailView(nutrientName: "Water"))
-                    case "Fiber":
-                        AnyView(NutrientDetailView(nutrientName: "Fiber"))
-                    case "Vitamins":
-                        AnyView(NutrientDetailView(nutrientName: "Vitamins"))
-                    case "Minerals":
-                        AnyView(NutrientDetailView(nutrientName: "Minerals"))
-                    case "Phytochemicals":
-                        AnyView(NutrientDetailView(nutrientName: "Phytochemicals"))
-                    case "Antioxidants":
-                        AnyView(NutrientDetailView(nutrientName: "Antioxidants"))
-                    case "Electrolytes":
-                        AnyView(NutrientDetailView(nutrientName: "Electrolytes"))
-                    case "Dashboard":
-                        AnyView(DashboardView())
-                    case "Today's Plan":
-                        AnyView(TodaysPlanView())
-                    case "Workout History":
-                        AnyView(WorkoutHistoryView())
-                    case "Training Calendar":
-                        AnyView(TrainingCalendarView())
-                    case "Form Coach":
-                        AnyView(CoachView())
-                    case "Movement Analysis":
-                        AnyView(MovementAnalysisView())
-                    case "Fuel Check":
-                        AnyView(FuelCheckView())
-                    case "Exercise Library":
-                        AnyView(ExerciseLibraryView())
-                    case "Program Builder":
-                        AnyView(ProgramBuilderView())
-                    case "Workout Generator":
-                        AnyView(WorkoutGeneratorView())
-                    case "Recovery Score":
-                        AnyView(RecoveryScoreView())
-                    case "Sleep Analysis":
-                        AnyView(SleepAnalysisView())
-                    case "Mobility Test":
-                         AnyView(MobilityTestView())
-                    case "Readiness Check":
-                        AnyView(ReadinessCheckView())
-                    case "Strain vs Recovery":
-                        AnyView(StrainRecoveryView())
-                    case "Activity Rings":
-                        AnyView(ActivityRingsView())
-                    case "Heart Zones":
-                        AnyView(HeartZonesView())
-                    case "Step Count":
-                        AnyView(StepCountView())
-                    case "Distance":
-                        AnyView(DistanceView())
-                    case "Calories Burned":
-                        AnyView(CaloriesBurnedView())
-                    case "Personal Records":
-                        AnyView(PersonalRecordsView())
-                    case "Pre-Workout Timing":
-                        AnyView(PreWorkoutTimingView())
-                    case "Post-Workout Window":
-                        AnyView(PostWorkoutWindowView())
-                    case "Performance Foods":
-                        AnyView(PerformanceFoodsView())
-                    case "Hydration Status":
-                        AnyView(HydrationStatusView())
-                    case "Macro Balance":
-                        AnyView(MacroBalanceView())
-                    case "Live Challenges":
-                        AnyView(LiveChallengesView())
-                    case "Friend Activity":
-                        AnyView(FriendActivityView())
-                    case "Achievements":
-                        AnyView(AchievementsView())
-                    case "Share Workouts":
-                        AnyView(ShareWorkoutsView())
-                    case "Leaderboards":
-                        AnyView(LeaderboardsView())
-
-                    default:
-                        AnyView(HomeView())
-                    }
-                }
-                .focused($contentFocused)
-            }
-            
-            if navigationState.showFocusSwitcher {
-                Color.black.opacity(0.2)
-                    .ignoresSafeArea()
-                    .overlay {
-                        HStack(spacing: 20) {
-                            ForEach(AppFocus.allCases, id: \.self) { focus in
+                            } label: {
                                 VStack {
-                                    Image(systemName: getFocusIcon(focus))
+                                    Image(systemName: getIconName(for: item))
                                         .font(.system(size: 40))
-                                        .foregroundStyle(navigationState.tempFocus == focus ? .blue : .secondary)
-                                    Text(getAppTitle(focus))
+                                        .foregroundColor(.primary)
+                                        .frame(width: 80, height: 80)
+                                        .background(.ultraThinMaterial)
+                                        .clipShape(Circle())
+                                    
+                                    Text(item)
                                         .font(.caption)
-                                        .foregroundStyle(navigationState.tempFocus == focus ? .primary : .secondary)
+                                        .multilineTextAlignment(.center)
                                 }
                                 .padding()
                                 .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .scaleEffect(navigationState.tempFocus == focus ? 1.1 : 0.9)
-                                .animation(.spring(response: 0.3), value: navigationState.tempFocus)
+                                .cornerRadius(12)
                             }
                         }
-                        .padding(40)
-                        .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                        
                     }
-                    .transition(.opacity)
+                    .padding()
+                }
+//                .searchable(text: $searchState.searchText)
+                .navigationTitle("Search")
             }
         }
     }
+    
+    private func destinationView(for item: String) -> some View {
+        switch item {
+        case "Home":
+            return AnyView(HomeView())
+        case "Insights":
+            return AnyView(HealthInsightsView())
+        case "Labels":
+            return AnyView(NutritionScannerView())
+        case "Log":
+            return AnyView(LogView())
+        case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+            return AnyView(NutrientDetailView(nutrientName: item))
+        case "Dashboard":
+            return AnyView(DashboardView())
+        case "Today's Plan":
+            return AnyView(TodaysPlanView())
+        case "Workout History":
+            return AnyView(WorkoutHistoryView())
+        case "Training Calendar":
+            return AnyView(TrainingCalendarView())
+        case "Form Coach":
+            return AnyView(CoachView())
+        case "Movement Analysis":
+            return AnyView(MovementAnalysisView())
+        case "Exercise Library":
+            return AnyView(ExerciseLibraryView())
+        case "Program Builder":
+            return AnyView(ProgramBuilderView())
+        case "Workout Generator":
+            return AnyView(WorkoutGeneratorView())
+        case "Recovery Score":
+            return AnyView(RecoveryScoreView())
+        case "Sleep Analysis":
+            return AnyView(SleepAnalysisView())
+        case "Mobility Test":
+            return AnyView(MobilityTestView())
+        case "Readiness Check":
+            return AnyView(ReadinessCheckView())
+        case "Strain vs Recovery":
+            return AnyView(StrainRecoveryView())
+        case "Activity Rings":
+            return AnyView(ActivityRingsView())
+        case "Heart Zones":
+            return AnyView(HeartZonesView())
+        case "Step Count":
+            return AnyView(StepCountView())
+        case "Distance":
+            return AnyView(DistanceView())
+        case "Calories Burned":
+            return AnyView(CaloriesBurnedView())
+        case "Personal Records":
+            return AnyView(PersonalRecordsView())
+        case "Pre-Workout Timing":
+            return AnyView(PreWorkoutTimingView())
+        case "Post-Workout Window":
+            return AnyView(PostWorkoutWindowView())
+        case "Performance Foods":
+            return AnyView(PerformanceFoodsView())
+        case "Hydration Status":
+            return AnyView(HydrationStatusView())
+        case "Macro Balance":
+            return AnyView(MacroBalanceView())
+        case "Live Challenges":
+            return AnyView(LiveChallengesView())
+        case "Friend Activity":
+            return AnyView(FriendActivityView())
+        case "Achievements":
+            return AnyView(AchievementsView())
+        case "Share Workouts":
+            return AnyView(ShareWorkoutsView())
+        case "Leaderboards":
+            return AnyView(LeaderboardsView())
+        case "Fuel Check":
+            return AnyView(FuelCheckView())
+        default:
+            return AnyView(HomeView())
+        }
+    }
+
+    
     private var nutritionSections: some View {
         Group {
             Section(header: Text("Main")) {
@@ -443,17 +449,6 @@ struct ContentView_iPad: View {
             sidebarFocused = false
             searchBarFocused = true
         }
-    }
-}
-
-struct FocusPickerButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(8)
-            .background(.ultraThinMaterial.opacity(configuration.isPressed ? 0.7 : 1))
-            .clipShape(Capsule())
-            .contentShape(Capsule())
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
     }
 }
 

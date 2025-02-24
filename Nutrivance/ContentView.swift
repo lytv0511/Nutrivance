@@ -8,11 +8,12 @@ struct ContentView: View {
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
-                ContentView_iPad()
-//                ContentView_iPad_alt()
+//                ContentView_iPad()
+                ContentView_iPad_alt()
             } else {
-                ContentView_iPhone()
-//                ContentView_iPhone_alt()
+//                ContentView_iPhone()
+                ContentView_iPhone_alt()
+//                ContentView_iPad_alt()
             }
         }
         .onAppear {

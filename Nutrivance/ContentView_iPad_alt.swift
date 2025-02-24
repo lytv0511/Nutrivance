@@ -111,221 +111,241 @@ struct ContentView_iPad_alt: View {
     var body: some View {
         TabView {
             // Nutrivance Section
-            TabSection {
-                Tab("Home", systemImage: "house.fill") {
-                    HomeView()
+//                Tab("Home", systemImage: "house.fill") {
+//                    HomeView()
+//                }
+//                .customizationID("iPad.tab.home")
+//                .defaultVisibility(.visible, for: .tabBar)
+                
+//                Tab("Insights", systemImage: "chart.line.uptrend.xyaxis") {
+//                    HealthInsightsView()
+//                }
+//                .customizationID("iPad.tab.insights")
+//                .defaultVisibility(.visible, for: .tabBar)
+                Tab("Nutrivance", systemImage: "leaf.fill") {
+                    NutrivanceView()
                 }
-                .customizationID("iPad.tab.home")
+                .customizationID( "iPad.tab.nutrivance")
                 .defaultVisibility(.visible, for: .tabBar)
                 
-                Tab("Insights", systemImage: "chart.line.uptrend.xyaxis") {
-                    HealthInsightsView()
+                Tab("Movance", systemImage: "figure.run") {
+                    MovanceView()
                 }
-                .customizationID("iPad.tab.insights")
+                .customizationID( "iPad.tab.movance")
                 .defaultVisibility(.visible, for: .tabBar)
                 
-                Tab("Labels", systemImage: "doc.text.viewfinder") {
-                    NutritionScannerView()
+                Tab("Spirivance", systemImage: "brain.head.profile") {
+                    SpirivanceView()
                 }
-                .customizationID("iPad.tab.camera")
+                .customizationID("iPad.tab.spririvance")
                 .defaultVisibility(.visible, for: .tabBar)
+                
+//                Tab("Labels", systemImage: "doc.text.viewfinder") {
+//                    NutritionScannerView()
+//                }
+//                .customizationID("iPad.tab.camera")
+//                .defaultVisibility(.visible, for: .tabBar)
+                
+                Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
+                    PlaygroundView()
+                }
+                .customizationID("iPad.tab.playground")
+                .defaultVisibility(.visible, for: .tabBar)
+            
+//                Tab("Log", systemImage: "square.and.pencil") {
+//                    LogView()
+//                }
+//                .customizationID("iPad.tab.log")
+//                .defaultVisibility(.visible, for: .tabBar)
                 
                 Tab(role: .search) {
-                    LogView()
+                    SearchView()
                 }
                 .customizationID("iPad.tab.search")
-            } header: {
-                Text("Nutrition")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-            .defaultVisibility(.hidden, for: .tabBar)
-            .customizationID("iPad.tabsection.nutrition")
             
             // Macronutrients Section
-            TabSection {
-                Tab("Calories", systemImage: "flame") {
-                    NutrientDetailView(nutrientName: "Calories")
-                }
-                .customizationID("iPad.tab.calories")
-                
-                Tab("Carbs", systemImage: "carrot") {
-                    NutrientDetailView(nutrientName: "Carbs")
-                }
-                .customizationID("iPad.tab.carbs")
-                
-                Tab("Protein", systemImage: "fork.knife") {
-                    NutrientDetailView(nutrientName: "Protein")
-                }
-                .customizationID("iPad.tab.protein")
-                
-                Tab("Fats", systemImage: "drop") {
-                    NutrientDetailView(nutrientName: "Fats")
-                }
-                .customizationID("iPad.tab.fats")
-                
-                Tab("Water", systemImage: "drop.fill") {
-                    NutrientDetailView(nutrientName: "Water")
-                }
-                .customizationID("iPad.tab.water")
-            } header: {
-                Text("Macronutrients")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-            .defaultVisibility(.hidden, for: .tabBar)
-            .customizationID("iPad.tabsection.macronutrients")
-            
-            // Micronutrients Section
-            TabSection {
-                Tab("Fiber", systemImage: "leaf.fill") {
-                    NutrientDetailView(nutrientName: "Fiber")
-                }
-                .customizationID("iPad.tab.fiber")
-                
-                Tab("Vitamins", systemImage: "pill") {
-                    NutrientDetailView(nutrientName: "Vitamins")
-                }
-                .customizationID("iPad.tab.vitamins")
-                
-                Tab("Minerals", systemImage: "bolt") {
-                    NutrientDetailView(nutrientName: "Minerals")
-                }
-                .customizationID("iPad.tab.minerals")
-                
-                Tab("Phytochemicals", systemImage: "leaf.arrow.triangle.circlepath") {
-                    NutrientDetailView(nutrientName: "Phytochemicals")
-                }
-                .customizationID("iPad.tab.phytochemicals")
-                
-                Tab("Antioxidants", systemImage: "shield") {
-                    NutrientDetailView(nutrientName: "Antioxidants")
-                }
-                .customizationID("iPad.tab.antioxidants")
-                
-                Tab("Electrolytes", systemImage: "battery.100") {
-                    NutrientDetailView(nutrientName: "Electrolytes")
-                }
-                .customizationID("iPad.tab.electrolytes")
-            } header: {
-                Text("Micronutrients")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-            .defaultVisibility(.hidden, for: .tabBar)
-            .customizationID("iPad.tabsection.micronutrients")
-            
-            // Training Section
-            TabSection {
-                Tab("Dashboard", systemImage: "gauge.medium") {
-                    DashboardView()
-                }
-                Tab("Today's Plan", systemImage: "calendar") {
-                    TodaysPlanView()
-                }
-                Tab("Workout History", systemImage: "clock.arrow.circlepath") {
-                    WorkoutHistoryView()
-                }
-                Tab("Training Calendar", systemImage: "calendar.badge.clock") {
-                    TrainingCalendarView()
-                }
-                Tab("Form Coach", systemImage: "figure.strengthtraining.traditional") {
-                    CoachView()
-                }
-                Tab("Movement Analysis", systemImage: "figure.run") {
-                    MovementAnalysisView()
-                }
-                Tab("Exercise Library", systemImage: "books.vertical.fill") {
-                    ExerciseLibraryView()
-                }
-                Tab("Program Builder", systemImage: "rectangle.stack.fill.badge.plus") {
-                    ProgramBuilderView()
-                }
-                Tab("Workout Generator", systemImage: "wand.and.stars") {
-                    WorkoutGeneratorView()
-                }
-            } header: {
-                Text("Training")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-
-            // Recovery Section
-            TabSection {
-                Tab("Recovery Score", systemImage: "chart.bar.fill") {
-                    RecoveryScoreView()
-                }
-                Tab("Sleep Analysis", systemImage: "bed.double.fill") {
-                    SleepAnalysisView()
-                }
-                Tab("Mobility Test", systemImage: "figure.walk") {
-                    MobilityTestView()
-                }
-                Tab("Readiness", systemImage: "heart.fill") {
-                    ReadinessCheckView()
-                }
-                Tab("Strain vs Recovery", systemImage: "gauge.with.dots.needle.bottom.50percent") {
-                    StrainRecoveryView()
-                }
-                Tab("Fuel Check", systemImage: "fork.knife") {
-                    FuelCheckView()
-                }
-            } header: {
-                Text("Recovery")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-
-            
-            // Spirivance Section
-            TabSection {
-                Tab("Mood Tracker", systemImage: "brain.head.profile") {
-                    ComingSoonView(feature: "Mood Tracking", description: "Track and analyze your emotional well-being")
-                }
-                .customizationID("iPad.tab.mood")
-                
-                Tab("Journal", systemImage: "book.fill") {
-                    ComingSoonView(feature: "Journaling", description: "Document your mental health journey")
-                }
-                .customizationID("iPad.tab.journal")
-                
-                Tab("Resources", systemImage: "questionmark.circle.fill") {
-                    ComingSoonView(feature: "Mental Health Resources", description: "Access helpful information and support")
-                }
-                .customizationID("iPad.tab.resources")
-                
-                Tab("Meditation", systemImage: "sparkles") {
-                    ComingSoonView(feature: "Meditation", description: "Guided sessions for mental wellness")
-                }
-                .customizationID("iPad.tab.meditation")
-                
-                Tab("Breathing", systemImage: "wind") {
-                    ComingSoonView(feature: "Breathing Exercises", description: "Guided breathing techniques")
-                }
-                .customizationID("iPad.tab.breathing")
-                
-                Tab("Sleep", systemImage: "moon.zzz.fill") {
-                    ComingSoonView(feature: "Sleep Tracking", description: "Monitor and improve your sleep quality")
-                }
-                .customizationID("iPad.tab.sleep")
-                
-                Tab("Stress", systemImage: "waveform.path.ecg") {
-                    ComingSoonView(feature: "Stress Management", description: "Track and manage stress levels")
-                }
-                .customizationID("iPad.tab.stress")
-            } header: {
-                Text("Mental Health")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-            .defaultVisibility(.hidden, for: .tabBar)
-            .customizationID("iPad.tabsection.mentalhealth")
+//            TabSection {
+//                Tab("Calories", systemImage: "flame") {
+//                    NutrientDetailView(nutrientName: "Calories")
+//                }
+//                .customizationID("iPad.tab.calories")
+//                
+//                Tab("Carbs", systemImage: "carrot") {
+//                    NutrientDetailView(nutrientName: "Carbs")
+//                }
+//                .customizationID("iPad.tab.carbs")
+//                
+//                Tab("Protein", systemImage: "fork.knife") {
+//                    NutrientDetailView(nutrientName: "Protein")
+//                }
+//                .customizationID("iPad.tab.protein")
+//                
+//                Tab("Fats", systemImage: "drop") {
+//                    NutrientDetailView(nutrientName: "Fats")
+//                }
+//                .customizationID("iPad.tab.fats")
+//                
+//                Tab("Water", systemImage: "drop.fill") {
+//                    NutrientDetailView(nutrientName: "Water")
+//                }
+//                .customizationID("iPad.tab.water")
+//            } header: {
+//                Text("Macronutrients")
+//                    .font(.headline)
+//                    .padding(.leading, 16)
+//                    .padding(.top, 8)
+//            }
+//            .defaultVisibility(.hidden, for: .tabBar)
+//            .customizationID("iPad.tabsection.macronutrients")
+//            
+//            // Micronutrients Section
+//            TabSection {
+//                Tab("Fiber", systemImage: "leaf.fill") {
+//                    NutrientDetailView(nutrientName: "Fiber")
+//                }
+//                .customizationID("iPad.tab.fiber")
+//                
+//                Tab("Vitamins", systemImage: "pill") {
+//                    NutrientDetailView(nutrientName: "Vitamins")
+//                }
+//                .customizationID("iPad.tab.vitamins")
+//                
+//                Tab("Minerals", systemImage: "bolt") {
+//                    NutrientDetailView(nutrientName: "Minerals")
+//                }
+//                .customizationID("iPad.tab.minerals")
+//                
+//                Tab("Phytochemicals", systemImage: "leaf.arrow.triangle.circlepath") {
+//                    NutrientDetailView(nutrientName: "Phytochemicals")
+//                }
+//                .customizationID("iPad.tab.phytochemicals")
+//                
+//                Tab("Antioxidants", systemImage: "shield") {
+//                    NutrientDetailView(nutrientName: "Antioxidants")
+//                }
+//                .customizationID("iPad.tab.antioxidants")
+//                
+//                Tab("Electrolytes", systemImage: "battery.100") {
+//                    NutrientDetailView(nutrientName: "Electrolytes")
+//                }
+//                .customizationID("iPad.tab.electrolytes")
+//            } header: {
+//                Text("Micronutrients")
+//                    .font(.headline)
+//                    .padding(.leading, 16)
+//                    .padding(.top, 8)
+//            }
+//            .defaultVisibility(.hidden, for: .tabBar)
+//            .customizationID("iPad.tabsection.micronutrients")
+//            
+//            // Training Section
+//            TabSection {
+//                Tab("Dashboard", systemImage: "gauge.medium") {
+//                    DashboardView()
+//                }
+//                Tab("Today's Plan", systemImage: "calendar") {
+//                    TodaysPlanView()
+//                }
+//                Tab("Workout History", systemImage: "clock.arrow.circlepath") {
+//                    WorkoutHistoryView()
+//                }
+//                Tab("Training Calendar", systemImage: "calendar.badge.clock") {
+//                    TrainingCalendarView()
+//                }
+//                Tab("Form Coach", systemImage: "figure.strengthtraining.traditional") {
+//                    CoachView()
+//                }
+//                Tab("Movement Analysis", systemImage: "figure.run") {
+//                    MovementAnalysisView()
+//                }
+//                Tab("Exercise Library", systemImage: "books.vertical.fill") {
+//                    ExerciseLibraryView()
+//                }
+//                Tab("Program Builder", systemImage: "rectangle.stack.fill.badge.plus") {
+//                    ProgramBuilderView()
+//                }
+//                Tab("Workout Generator", systemImage: "wand.and.stars") {
+//                    WorkoutGeneratorView()
+//                }
+//            } header: {
+//                Text("Training")
+//                    .font(.headline)
+//                    .padding(.leading, 16)
+//                    .padding(.top, 8)
+//            }
+//            .defaultVisibility(.hidden, for: .tabBar)
+//            
+//            // Recovery Section
+//            TabSection {
+//                Tab("Recovery Score", systemImage: "chart.bar.fill") {
+//                    RecoveryScoreView()
+//                }
+//                Tab("Sleep Analysis", systemImage: "bed.double.fill") {
+//                    SleepAnalysisView()
+//                }
+//                Tab("Mobility Test", systemImage: "figure.walk") {
+//                    MobilityTestView()
+//                }
+//                Tab("Readiness", systemImage: "heart.fill") {
+//                    ReadinessCheckView()
+//                }
+//                Tab("Strain vs Recovery", systemImage: "gauge.with.dots.needle.bottom.50percent") {
+//                    StrainRecoveryView()
+//                }
+//                Tab("Fuel Check", systemImage: "fork.knife") {
+//                    FuelCheckView()
+//                }
+//            } header: {
+//                Text("Recovery")
+//                    .font(.headline)
+//                    .padding(.leading, 16)
+//                    .padding(.top, 8)
+//            }
+//            .defaultVisibility(.hidden, for: .tabBar)
+//            
+//            // Spirivance Section
+//            TabSection {
+//                Tab("Mood Tracker", systemImage: "brain.head.profile") {
+//                    ComingSoonView(feature: "Mood Tracking", description: "Track and analyze your emotional well-being")
+//                }
+//                .customizationID("iPad.tab.mood")
+//                
+//                Tab("Journal", systemImage: "book.fill") {
+//                    ComingSoonView(feature: "Journaling", description: "Document your mental health journey")
+//                }
+//                .customizationID("iPad.tab.journal")
+//                
+//                Tab("Resources", systemImage: "questionmark.circle.fill") {
+//                    ComingSoonView(feature: "Mental Health Resources", description: "Access helpful information and support")
+//                }
+//                .customizationID("iPad.tab.resources")
+//                
+//                Tab("Meditation", systemImage: "sparkles") {
+//                    ComingSoonView(feature: "Meditation", description: "Guided sessions for mental wellness")
+//                }
+//                .customizationID("iPad.tab.meditation")
+//                
+//                Tab("Breathing", systemImage: "wind") {
+//                    ComingSoonView(feature: "Breathing Exercises", description: "Guided breathing techniques")
+//                }
+//                .customizationID("iPad.tab.breathing")
+//                
+//                Tab("Sleep", systemImage: "moon.zzz.fill") {
+//                    ComingSoonView(feature: "Sleep Tracking", description: "Monitor and improve your sleep quality")
+//                }
+//                .customizationID("iPad.tab.sleep")
+//                
+//                Tab("Stress", systemImage: "waveform.path.ecg") {
+//                    ComingSoonView(feature: "Stress Management", description: "Track and manage stress levels")
+//                }
+//                .customizationID("iPad.tab.stress")
+//            } header: {
+//                Text("Mental Health")
+//                    .font(.headline)
+//                    .padding(.leading, 16)
+//                    .padding(.top, 8)
+//            }
+//            .defaultVisibility(.hidden, for: .tabBar)
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)

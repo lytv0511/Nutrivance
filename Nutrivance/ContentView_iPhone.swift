@@ -2,175 +2,258 @@ import SwiftUI
 import SwiftData
 
 struct ContentView_iPhone: View {
-    @State private var selectedNutrient: String = "Calories"
-    @State private var showNutrientDetail: Bool = false
-    @State private var showCamera = false;
-    @State private var showNutritionScanner = false
-    @State private var isLongPressing = false
-    @State private var selectedNutrientForDetail: String?
-    @State private var showingNutrientDetail = false
-    @State private var wheelPickerItems: [String] = []
+    @EnvironmentObject var navigationState: NavigationState
+    @State private var selectedView: String = "Home"
+    @State private var choices: [String] = []
+    @State private var icons: [String: String] = [:]
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
-
-    @State private var choices: [String] = [
-            "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
-            "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"
-        ]
-        
-        @State private var icons: [String: String] = [
-            "Calories": "flame", "Protein": "fork.knife", "Carbs": "carrot",
-            "Fats": "drop.fill", "Fiber": "leaf", "Vitamins": "pills",
-            "Minerals": "bolt", "Water": "drop.fill",
-            "Phytochemicals": "leaf.arrow.triangle.circlepath",
-            "Antioxidants": "shield", "Electrolytes": "battery.100"
-        ]
-        
-        func updateChoicesAndIcons(for focus: AppFocus) {
-            switch focus {
-            case .nutrition:
-                choices = ["Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
-                          "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"]
-                icons = ["Calories": "flame", "Protein": "fork.knife", "Carbs": "carrot",
-                        "Fats": "drop.fill", "Fiber": "leaf", "Vitamins": "pills",
-                        "Minerals": "bolt", "Water": "drop.fill",
-                        "Phytochemicals": "leaf.arrow.triangle.circlepath",
-                        "Antioxidants": "shield", "Electrolytes": "battery.100"]
-                
-            case .fitness:
-                choices = ["Form Coach", "Movement Analysis", "Fuel Check",
-                          "Readiness Check", "Strain vs Recovery"]
-                icons = ["Form Coach": "figure.mind.and.body",
-                        "Movement Analysis": "figure.walk.motion",
-                        "Fuel Check": "fuelpump.fill",
-                        "Readiness Check": "checkmark.seal.fill",
-                        "Strain vs Recovery": "arrow.left.arrow.right"]
-                
-            case .mentalHealth:
-                choices = ["Meditation", "Breathing", "Sleep", "Stress Management", "Focus"]
-                icons = ["Meditation": "brain.head.profile",
-                        "Breathing": "lungs.fill",
-                        "Sleep": "moon.zzz.fill",
-                        "Stress Management": "heart.text.square.fill",
-                        "Focus": "scope"]
-            }
+    @State private var navigationPath = NavigationPath()
+    @State var choice: String = "Home"
+    @State var selectedNutrient: String = "Calories"
+    @State private var showDetails = false
+    
+    var currentViewChoices: [String] {
+        switch navigationState.appFocus {
+        case .nutrition:
+            return ["Home", "Insights", "Labels", "Log",
+                   "Calories", "Carbs", "Protein", "Fats", "Water",
+                   "Fiber", "Vitamins", "Minerals", "Phytochemicals",
+                   "Antioxidants", "Electrolytes"]
+        case .fitness:
+            return ["Dashboard", "Today's Plan", "Workout History", "Training Calendar",
+                   "Form Coach", "Movement Analysis", "Exercise Library",
+                   "Program Builder", "Workout Generator", "Recovery Score",
+                   "Sleep Analysis", "Mobility Test", "Readiness Check",
+                   "Strain vs Recovery", "Activity Rings", "Heart Zones",
+                   "Step Count", "Distance", "Calories Burned", "Personal Records",
+                   "Pre-Workout Timing", "Post-Workout Window", "Performance Foods",
+                   "Hydration Status", "Macro Balance"]
+        case .mentalHealth:
+            return ["Live Challenges", "Friend Activity", "Achievements",
+                   "Share Workouts", "Leaderboards"]
         }
-
+    }
+    
     var body: some View {
-        ZStack {
-            LinearGradient(
-                gradient: Gradient(colors: [Color.black, Color.blue, Color(red: 0.0, green: 0.5, blue: 0.0)]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            VStack {
-                ScrollViewReader { scrollViewProxy in
-                    ScrollView {
-                        if navigationState.appFocus == .nutrition {
-                            BlankIconView()
-                            BlankIconView()
-                        }
-
-                        let columns = Array(repeating: GridItem(.flexible()), count: horizontalSizeClass == .compact ? 2 : 5)
-
-                        LazyVGrid(columns: columns, spacing: 20) {
-                            ForEach(choices, id: \.self) { nutrient in
-                                VStack {
-                                    Image(systemName: icons[nutrient] ?? "leaf.fill")
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 60, height: 60)
-                                        .foregroundColor(selectedNutrient == nutrient ? .blue : .white)
-                                        .scaleEffect(selectedNutrient == nutrient ? 1.2 : 1.0)
-                                        .animation(.easeInOut(duration: 0.1), value: selectedNutrient)
-
-                                    Text(nutrient)
-                                        .foregroundColor(.white)
-                                }
-                                .id(nutrient)
-                                .onTapGesture {
-                                    withAnimation {
-                                        if selectedNutrient == nutrient {
-                                            showingNutrientDetail = true
-                                            let generator = UIImpactFeedbackGenerator(style: .heavy)
-                                            generator.prepare()
-                                            generator.impactOccurred()
-                                        } else {
-                                            selectedNutrient = nutrient
-                                            scrollViewProxy.scrollTo(nutrient, anchor: .center)
-                                            let generator = UIImpactFeedbackGenerator(style: .heavy)
-                                            generator.prepare()
-                                            generator.impactOccurred()
+        NavigationStack {
+            ZStack {
+                LinearGradient(
+                    gradient: Gradient(colors: [Color.black, Color.blue, Color(red: 0.0, green: 0.5, blue: 0.0)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+                
+                VStack {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            let columns = Array(repeating: GridItem(.flexible()), count: horizontalSizeClass == .compact ? 2 : 5)
+                            
+                            LazyVGrid(columns: columns, spacing: 20) {
+                                ForEach(currentViewChoices, id: \.self) { view in
+                                    ViewGridItem(viewName: view, isSelected: selectedView == view)
+                                        .onTapGesture {
+                                            navigationState.selectedView = view
                                         }
-                                    }
                                 }
                             }
+                            .padding()
                         }
-                        .padding()
-                        .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
-                        if navigationState.appFocus == .nutrition {
-                            BlankIconView()
-                            BlankIconView()
-                        }
-                    }
-                    .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
-                    .padding(.bottom, 10)
-                    .onChange(of: selectedNutrient) { oldValue, newValue in
-                        withAnimation {
-                            scrollViewProxy.scrollTo(newValue, anchor: .center)
+                        .onChange(of: selectedView) { _, newValue in
+                            withAnimation {
+                                proxy.scrollTo(newValue, anchor: .center)
+                            }
                         }
                     }
-                    .sheet(isPresented: $showingNutrientDetail) {
-                        NutrientDetailView(nutrientName: selectedNutrient)
-                    }
-                }
-                    WheelPicker(choices: choices, choice: $selectedNutrient) { newChoice in
-                        selectedNutrient = newChoice
-                    }
+                    
+                    WheelPicker(
+                        choices: currentViewChoices,
+                        choice: $selectedNutrient,
+                        onChange: { newChoice in
+                            selectedNutrient = newChoice
+                        },
+                        selectedNutrient: $selectedNutrient
+                    )
                     .padding(.bottom)
                 }
-                .padding(.top, 10)
+            }
+            .navigationDestination(for: String.self) { view in
+                switch view {
+                case "Home": HomeView()
+                case "Insights": HealthInsightsView()
+                case "Labels": NutritionScannerView()
+                case "Log": LogView()
+                case "Calories": NutrientDetailView(nutrientName: "Calories")
+                case "Carbs": NutrientDetailView(nutrientName: "Carbs")
+                case "Protein": NutrientDetailView(nutrientName: "Protein")
+                case "Fats": NutrientDetailView(nutrientName: "Fats")
+                case "Water": NutrientDetailView(nutrientName: "Water")
+                case "Fiber": NutrientDetailView(nutrientName: "Fiber")
+                case "Vitamins": NutrientDetailView(nutrientName: "Vitamins")
+                case "Minerals": NutrientDetailView(nutrientName: "Minerals")
+                case "Phytochemicals": NutrientDetailView(nutrientName: "Phytochemicals")
+                case "Antioxidants": NutrientDetailView(nutrientName: "Antioxidants")
+                case "Electrolytes": NutrientDetailView(nutrientName: "Electrolytes")
+                case "Dashboard": DashboardView()
+                case "Today's Plan": TodaysPlanView()
+                case "Workout History": WorkoutHistoryView()
+                case "Training Calendar": TrainingCalendarView()
+                case "Form Coach": CoachView()
+                case "Movement Analysis": MovementAnalysisView()
+                case "Fuel Check": FuelCheckView()
+                case "Exercise Library": ExerciseLibraryView()
+                case "Program Builder": ProgramBuilderView()
+                case "Workout Generator": WorkoutGeneratorView()
+                case "Recovery Score": RecoveryScoreView()
+                case "Sleep Analysis": SleepAnalysisView()
+                case "Mobility Test": MobilityTestView()
+                case "Readiness Check": ReadinessCheckView()
+                case "Strain vs Recovery": StrainRecoveryView()
+                case "Activity Rings": ActivityRingsView()
+                case "Heart Zones": HeartZonesView()
+                case "Step Count": StepCountView()
+                case "Distance": DistanceView()
+                case "Calories Burned": CaloriesBurnedView()
+                case "Personal Records": PersonalRecordsView()
+                case "Pre-Workout Timing": PreWorkoutTimingView()
+                case "Post-Workout Window": PostWorkoutWindowView()
+                case "Performance Foods": PerformanceFoodsView()
+                case "Hydration Status": HydrationStatusView()
+                case "Macro Balance": MacroBalanceView()
+                case "Live Challenges": LiveChallengesView()
+                case "Friend Activity": FriendActivityView()
+                case "Achievements": AchievementsView()
+                case "Share Workouts": ShareWorkoutsView()
+                case "Leaderboards": LeaderboardsView()
+                default: HomeView()
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                FocusModeSelectorButton(wheelPickerItems: $choices, updateChoicesAndIcons: updateChoicesAndIcons)
+                    .padding()
+            }
+        }
+    }
+
+        
+    private func getFocusIcon(_ focus: AppFocus) -> String {
+        switch focus {
+        case .nutrition: return "leaf.fill"
+        case .fitness: return "figure.run"
+        case .mentalHealth: return "brain.head.profile"
+        }
+    }
+    
+    private func updateChoicesAndIcons(for focus: AppFocus) {
+        switch focus {
+        case .nutrition:
+            choices = ["Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
+                       "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"]
+            icons = ["Calories": "flame", "Protein": "fork.knife", "Carbs": "carrot",
+                     "Fats": "drop.fill", "Fiber": "leaf", "Vitamins": "pills",
+                     "Minerals": "bolt", "Water": "drop.fill",
+                     "Phytochemicals": "leaf.arrow.triangle.circlepath",
+                     "Antioxidants": "shield", "Electrolytes": "battery.100"]
+        case .fitness:
+            choices = ["Form Coach", "Movement Analysis", "Fuel Check",
+                       "Readiness Check", "Strain vs Recovery"]
+            icons = ["Form Coach": "figure.mind.and.body",
+                     "Movement Analysis": "figure.walk.motion",
+                     "Fuel Check": "fuelpump.fill",
+                     "Readiness Check": "checkmark.seal.fill",
+                     "Strain vs Recovery": "arrow.left.arrow.right"]
+        case .mentalHealth:
+            choices = ["Meditation", "Breathing", "Sleep", "Stress Management", "Focus"]
+            icons = ["Meditation": "brain.head.profile",
+                     "Breathing": "lungs.fill",
+                     "Sleep": "moon.zzz.fill",
+                     "Stress Management": "heart.text.square.fill",
+                     "Focus": "scope"]
+        }
+    }
+    
+    private func isNutrientView(_ view: String) -> Bool {
+        ["Calories", "Protein", "Carbs", "Fats", "Water", "Fiber",
+         "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(view)
+    }
+}
+    
+struct ViewGridItem: View {
+    let viewName: String
+    let isSelected: Bool
+    
+    var icon: String {
+        switch viewName {
+            // Nutrition
+        case "Home": return "house.fill"
+        case "Insights": return "chart.bar.fill"
+        case "Labels": return "text.viewfinder"
+        case "Log": return "square.and.pencil"
+        case "Calories": return "flame"
+        case "Protein": return "fork.knife"
+        case "Carbs": return "carrot"
+        case "Fats": return "drop.fill"
+        case "Fiber": return "leaf"
+        case "Vitamins": return "pills"
+        case "Minerals": return "bolt"
+        case "Water": return "drop.fill"
+        case "Phytochemicals": return "leaf.arrow.triangle.circlepath"
+        case "Antioxidants": return "shield"
+        case "Electrolytes": return "battery.100"
             
-            FocusModeSelectorButton(wheelPickerItems: $wheelPickerItems, updateChoicesAndIcons: updateChoicesAndIcons)
-                .position(x: UIScreen.main.bounds.width - 50, y: UIScreen.main.bounds.height - 100)
-
-//            Button(action: {}) {
-//                Image(systemName: "text.viewfinder")
-//                    .resizable()
-//                    .scaledToFit()
-//                    .frame(width: 30, height: 30)
-//                    .foregroundColor(.white)
-//                    .padding(10)
-//                    .background(Color.blue.opacity(0.7))
-//                    .clipShape(Circle())
-//                    .shadow(radius: 10)
-//                    .scaleEffect(isLongPressing ? 1.5 : 1.0)  // Larger scale effect
-//                    .animation(.spring(response: 0.4, dampingFraction: 0.6), value: isLongPressing)
-//            }
-//            .simultaneousGesture(
-//                LongPressGesture(minimumDuration: 0.5)
-//                    .onChanged { _ in
-//                        isLongPressing = true
-//                        let generator = UINotificationFeedbackGenerator()
-//                        generator.notificationOccurred(.success)
-//                    }
-//                    .onEnded { _ in
-//                        isLongPressing = false
-//                        showNutritionScanner = true
-//                        let generator = UIImpactFeedbackGenerator(style: .heavy)
-//                        generator.impactOccurred(intensity: 1.0)
-//                    }
-//            )
-//            .padding()
-//            .position(x: UIScreen.main.bounds.width - 50, y: UIScreen.main.bounds.height - 100)
-//
-//            .sheet(isPresented: $showNutritionScanner) {
-//                NutritionScannerView()
-//            }
-
-
-//            }
+            // Fitness
+        case "Dashboard": return "gauge"
+        case "Today's Plan": return "calendar"
+        case "Workout History": return "clock.arrow.circlepath"
+        case "Training Calendar": return "calendar.badge.clock"
+        case "Form Coach": return "figure.mixed.cardio"
+        case "Movement Analysis": return "figure.walk.motion"
+        case "Exercise Library": return "books.vertical"
+        case "Program Builder": return "building.2"
+        case "Workout Generator": return "gear"
+        case "Recovery Score": return "heart.text.square"
+        case "Sleep Analysis": return "bed.double"
+        case "Mobility Test": return "figure.walk"
+        case "Readiness Check": return "checkmark.circle"
+        case "Strain vs Recovery": return "chart.xyaxis.line"
+        case "Activity Rings": return "circle.circle"
+        case "Heart Zones": return "heart.circle"
+        case "Step Count": return "figure.walk"
+        case "Distance": return "location.north"
+        case "Calories Burned": return "flame"
+        case "Personal Records": return "trophy"
+        case "Pre-Workout Timing": return "timer"
+        case "Post-Workout Window": return "clock.badge"
+        case "Performance Foods": return "leaf"
+        case "Hydration Status": return "drop"
+        case "Macro Balance": return "scale.3d"
+            
+            // Community
+        case "Live Challenges": return "flame"
+        case "Friend Activity": return "person.2"
+        case "Achievements": return "star"
+        case "Share Workouts": return "square.and.arrow.up"
+        case "Leaderboards": return "list.number"
+            
+        default: return "questionmark"
+        }
+    }
+    
+    var body: some View {
+        VStack {
+            Image(systemName: icon)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 60, height: 60)
+                .foregroundColor(isSelected ? .blue : .white)
+                .scaleEffect(isSelected ? 1.2 : 1.0)
+                .animation(.easeInOut(duration: 0.1), value: isSelected)
+            
+            Text(viewName)
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.5)
         }
     }
 }
@@ -217,6 +300,8 @@ struct WheelPicker: View {
     @State private var showHomeView = false
     @State private var showDetails = false
     @GestureState private var dragLocation: CGPoint?
+    @EnvironmentObject var navigationState: NavigationState
+    @Binding var selectedNutrient: String
 
     private var reversedChoices: [String] {
         choices.reversed()
@@ -381,7 +466,7 @@ struct WheelPicker: View {
                     Circle()
                         .stroke(lineWidth: 1)
                         .foregroundColor(.gray)
-
+                    
                     ForEach(0..<numberOfTicks, id: \.self) { index in
                         let tickHeight = index % 5 == 0 ? 20.0 : 10.0
                         let yOffset = -wheelSize / 2 + 15 + (index % 5 == 0 ? -5 : 0)
@@ -423,13 +508,13 @@ struct WheelPicker: View {
             }
             .aspectRatio(1, contentMode: .fit)
             .padding(.horizontal)
-
+            
             GeometryReader { geometry in
                 ZStack {
                     let distance = dragLocation.map { calculateDistance($0, in: geometry) } ?? 0
                     let currentAngle = dragLocation.map { calculateAngle(from: $0, in: geometry) } ?? 0
                     let highlightedAction = getHighlightedAction(angle: currentAngle, distance: distance)
-
+                    
                     if showRadialMenu {
                         RadialMenuItems(distance: distance, highlightedAction: highlightedAction)
                     }
@@ -438,19 +523,19 @@ struct WheelPicker: View {
                         let distance = dragLocation.map { calculateDistance($0, in: geometry) } ?? 0
                         
                         Image(systemName: distance < 50 ? "arrow.right.circle.fill" :
-                                         (distance < 100 ? "xmark" : "info.circle.fill"))
-                            .resizable()
-                            .frame(width: 50, height: 50)
-                            .padding(showRadialMenu ? 10 : 0)
-                            .foregroundColor(.white)
-                            .padding(10)
-                            .clipShape(Circle())
-                            .shadow(radius: 10)
+                                (distance < 100 ? "xmark" : "info.circle.fill"))
+                        .resizable()
+                        .frame(width: 50, height: 50)
+                        .padding(showRadialMenu ? 10 : 0)
+                        .foregroundColor(.white)
+                        .padding(10)
+                        .clipShape(Circle())
+                        .shadow(radius: 10)
                     }
                     .buttonStyle(BorderlessButtonStyle())
                 }
                 .buttonStyle(BorderlessButtonStyle())
-                .position(x: UIScreen.main.bounds.width / 2, y: geometry.size.height / 2)
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .updating($dragLocation) { value, state, _ in
@@ -460,8 +545,8 @@ struct WheelPicker: View {
                             withAnimation(.spring()) {
                                 showRadialMenu = true
                             }
-                            let generator = UIImpactFeedbackGenerator(style: .soft)
-                            generator.impactOccurred()
+//                            let generator = UIImpactFeedbackGenerator(style: .soft)
+//                            generator.impactOccurred()
                         }
                         .onEnded { value in
                             let buttonCenter = CGPoint(
@@ -485,26 +570,15 @@ struct WheelPicker: View {
                         }
                 )
                 .onTapGesture {
-                    showDetails = true
-                    let generator = UIImpactFeedbackGenerator(style: .rigid)
-                    generator.impactOccurred()
+                    if choice == selectedNutrient {
+                        showDetails = true
+                        let generator = UIImpactFeedbackGenerator(style: .rigid)
+                        generator.impactOccurred()
+                    } else {
+                        selectedNutrient = choice
+                    }
                 }
             }
-        }
-        .sheet(isPresented: $showDetails) {
-            NutrientDetailView(nutrientName: choice)
-        }
-        .sheet(isPresented: $showHealthInsights) {
-            HealthInsightsView()
-        }
-        .sheet(isPresented: $showNutritionScanner) {
-            NutritionScannerView()
-        }
-        .sheet(isPresented: $showLogView) {
-            LogView()
-        }
-        .sheet(isPresented: $showHomeView) {
-            HomeView()
         }
     }
 
@@ -512,10 +586,8 @@ struct WheelPicker: View {
         let currentAngle = (finalAngle + rotation).truncatingRemainder(dividingBy: 360)
         let normalizedAngle = (360 - currentAngle + 360 / Double(reversedChoices.count) / 2)
             .truncatingRemainder(dividingBy: 360)
-        let sensitivityFactor = 1.0
         let anglePerChoice = 360 / Double(reversedChoices.count)
-        let index = Int((normalizedAngle / (anglePerChoice * sensitivityFactor))
-            .truncatingRemainder(dividingBy: Double(reversedChoices.count)))
+        let index = Int((normalizedAngle / anglePerChoice).truncatingRemainder(dividingBy: Double(reversedChoices.count)))
         
         let newChoice = reversedChoices[index]
         if newChoice != choice {
@@ -536,11 +608,11 @@ struct WheelPicker: View {
         if distance < 100 && distance > 50{
             return
         } else if distance < 50 {
-            let generator = UIImpactFeedbackGenerator(style: .heavy)
-            generator.prepare()
+            print(navigationState.selectedView)
+            navigationState.selectedView = choice
+            print(navigationState.selectedView)
+            let generator = UIImpactFeedbackGenerator(style: .rigid)
             generator.impactOccurred()
-            showDetails = true
-            return
         }
         
         let highlightedAction = getHighlightedAction(angle: normalizedAngle, distance: distance)
