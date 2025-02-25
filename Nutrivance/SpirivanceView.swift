@@ -44,7 +44,7 @@ struct SpirivanceView: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     var filteredItems: [String] {
-           let mentalHealthItems = ["Dashboard", "Mood Tracker", "Journal", "Resources",
+           let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Resources",
                                  "Meditation", "Breathing", "Sleep", "Stress"]
         
         if searchState.searchText.isEmpty {
