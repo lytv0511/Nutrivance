@@ -17,18 +17,6 @@ struct ResizableWidgetView: View {
         widget.view
             .frame(width: widget.size.width, height: widget.size.height)
             .position(widget.position)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        widget.position = value.location
-                    }
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? .blue : .clear, lineWidth: 2)
-            )
-            .onTapGesture {
-                onSelect()
-            }
+            .onTapGesture(perform: onSelect)
     }
 }

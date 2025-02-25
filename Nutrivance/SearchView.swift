@@ -13,6 +13,24 @@ struct SearchView: View {
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
+    @State private var animationPhase: Double = 0
+    private let gradients = GradientBackgrounds()
+    
+    // Update items when needed
+    private let nutritionItems = ["Insights", "Labels", "Log",
+                                  "Calories", "Carbs", "Protein", "Fats", "Water",
+                                  "Fiber", "Vitamins", "Minerals", "Phytochemicals",
+                                  "Antioxidants", "Electrolytes"]
+    
+    private let fitnessItems = ["Dashboard", "Today's Plan", "Workout History", "Training Calendar",
+                                "Form Coach", "Movement Analysis", "Exercise Library", "Program Builder",
+                                "Workout Generator", "Recovery Score", "Sleep Analysis", "Mobility Test",
+                                "Readiness Check", "Strain vs Recovery", "Activity Rings", "Heart Zones",
+                                "Step Count", "Distance", "Calories Burned", "Personal Records",
+                                "Pre-Workout Timing", "Post-Workout Window", "Performance Foods",
+                                "Hydration Status", "Macro Balance"]
+    
+    private let mentalHealthItems = ["Dashboard", "Mood Tracker", "Journal", "Resources", "Meditation", "Breathing", "Sleep", "Stress"]
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -26,7 +44,7 @@ struct SearchView: View {
     }
     
     private let searchKeywords = [
-        "home": ["home", "main", "dashboard", "start", "welcome", "homepage"],
+        "home": ["home", "main", "start", "welcome", "homepage"],
         "insights": ["insights", "health insights", "analysis", "trends", "statistics", "data", "reports", "overview"],
         "labels": ["labels", "scan", "camera", "photo", "nutrition facts", "food label", "scanner", "capture"],
         "search": ["search", "find", "lookup", "nutrients", "add nutrients", "input", "track"],
@@ -89,128 +107,167 @@ struct SearchView: View {
             return "brain.head.profile"
         }
     }
+    
+    private var currentGradient: AnyView {
+        guard !searchState.searchText.isEmpty,
+              let firstResult = filteredItems.first else {
+            return AnyView(gradients.boldGradient(animationPhase: $animationPhase))
+        }
         
+        if nutritionItems.contains(firstResult) {
+            return AnyView(gradients.forestGradient(animationPhase: $animationPhase))
+        } else if fitnessItems.contains(firstResult) {
+            return AnyView(gradients.burningGradient(animationPhase: $animationPhase))
+        } else if mentalHealthItems.contains(firstResult) {
+            return AnyView(gradients.spiritGradient(animationPhase: $animationPhase))
+        }
+        
+        return AnyView(gradients.boldGradient(animationPhase: $animationPhase))
+    }
+    
     var body: some View {
         NavigationStack {
-            VStack {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                        .padding(.leading, 8)
-                    
-                    TextField("Find in List", text: $searchState.searchText)
-                        .textFieldStyle(.plain)
-                        .focused($searchBarFocused)
-                        .autocorrectionDisabled(true)
-                }
-                .padding(8)
-                .background(Color(.systemGray5))
-                .cornerRadius(8)
-                .padding()
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 20) {
-                        ForEach(filteredItems, id: \.self) { item in
-                            NavigationLink {
-                                switch item {
-                                case "Home":
-                                    HomeView()
-                                case "Insights":
-                                    HealthInsightsView()
-                                case "Labels":
-                                    NutritionScannerView()
-                                case "Log":
-                                    LogView()
-                                case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                    NutrientDetailView(nutrientName: item)
-                                case "Dashboard":
-                                    DashboardView()
-                                case "Today's Plan":
-                                    TodaysPlanView()
-                                case "Workout History":
-                                    WorkoutHistoryView()
-                                case "Training Calendar":
-                                    TrainingCalendarView()
-                                case "Form Coach":
-                                    CoachView()
-                                case "Movement Analysis":
-                                    MovementAnalysisView()
-                                case "Exercise Library":
-                                    ExerciseLibraryView()
-                                case "Program Builder":
-                                    ProgramBuilderView()
-                                case "Workout Generator":
-                                    WorkoutGeneratorView()
-                                case "Recovery Score":
-                                    RecoveryScoreView()
-                                case "Sleep Analysis":
-                                    SleepAnalysisView()
-                                case "Mobility Test":
-                                    MobilityTestView()
-                                case "Readiness Check":
-                                    ReadinessCheckView()
-                                case "Strain vs Recovery":
-                                    StrainRecoveryView()
-                                case "Activity Rings":
-                                    ActivityRingsView()
-                                case "Heart Zones":
-                                    HeartZonesView()
-                                case "Step Count":
-                                    StepCountView()
-                                case "Distance":
-                                    DistanceView()
-                                case "Calories Burned":
-                                    CaloriesBurnedView()
-                                case "Personal Records":
-                                    PersonalRecordsView()
-                                case "Pre-Workout Timing":
-                                    PreWorkoutTimingView()
-                                case "Post-Workout Window":
-                                    PostWorkoutWindowView()
-                                case "Performance Foods":
-                                    PerformanceFoodsView()
-                                case "Hydration Status":
-                                    HydrationStatusView()
-                                case "Macro Balance":
-                                    MacroBalanceView()
-                                case "Live Challenges":
-                                    LiveChallengesView()
-                                case "Friend Activity":
-                                    FriendActivityView()
-                                case "Achievements":
-                                    AchievementsView()
-                                case "Share Workouts":
-                                    ShareWorkoutsView()
-                                case "Leaderboards":
-                                    LeaderboardsView()
-                                case "Fuel Check":
-                                    FuelCheckView()
-                                default:
-                                    HomeView()
-                                }
-                            } label: {
-                                VStack {
-                                    Image(systemName: getIconName(for: item))
-                                        .font(.system(size: 40))
-                                        .foregroundColor(.primary)
-                                        .frame(width: 80, height: 80)
-                                        .background(.ultraThinMaterial)
-                                        .clipShape(Circle())
-                                    
-                                    Text(item)
-                                        .font(.caption)
-                                        .multilineTextAlignment(.center)
-                                }
-                                .padding()
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(12)
-                            }
-                        }
+            ZStack {
+                currentGradient
+                    .animation(
+                        .spring(
+                            response: 0.8,
+                            dampingFraction: 0.8,
+                            blendDuration: 0.6
+                        )
+                        .speed(0.8)
+                        .repeatCount(1),
+                        value: searchState.searchText
+                    )
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 1.1)),
+                        removal: .opacity.combined(with: .scale(scale: 0.9))
+                    ))
+                VStack {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                            .padding(.leading, 8)
                         
+                        TextField("Find in List", text: $searchState.searchText)
+                            .textFieldStyle(.plain)
+                            .focused($searchBarFocused)
+                            .autocorrectionDisabled(true)
                     }
+                    .padding(8)
+                    .background(Color(.systemGray5))
+                    .cornerRadius(8)
                     .padding()
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 20) {
+                            ForEach(filteredItems, id: \.self) { item in
+                                NavigationLink {
+                                    switch item {
+                                    case "Home":
+                                        HomeView()
+                                    case "Insights":
+                                        HealthInsightsView()
+                                    case "Labels":
+                                        NutritionScannerView()
+                                    case "Log":
+                                        LogView()
+                                    case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+                                        NutrientDetailView(nutrientName: item)
+                                    case "Dashboard":
+                                        DashboardView()
+                                    case "Today's Plan":
+                                        TodaysPlanView()
+                                    case "Workout History":
+                                        WorkoutHistoryView()
+                                    case "Training Calendar":
+                                        TrainingCalendarView()
+                                    case "Form Coach":
+                                        CoachView()
+                                    case "Movement Analysis":
+                                        MovementAnalysisView()
+                                    case "Exercise Library":
+                                        ExerciseLibraryView()
+                                    case "Program Builder":
+                                        ProgramBuilderView()
+                                    case "Workout Generator":
+                                        WorkoutGeneratorView()
+                                    case "Recovery Score":
+                                        RecoveryScoreView()
+                                    case "Sleep Analysis":
+                                        SleepAnalysisView()
+                                    case "Mobility Test":
+                                        MobilityTestView()
+                                    case "Readiness Check":
+                                        ReadinessCheckView()
+                                    case "Strain vs Recovery":
+                                        StrainRecoveryView()
+                                    case "Activity Rings":
+                                        ActivityRingsView()
+                                    case "Heart Zones":
+                                        HeartZonesView()
+                                    case "Step Count":
+                                        StepCountView()
+                                    case "Distance":
+                                        DistanceView()
+                                    case "Calories Burned":
+                                        CaloriesBurnedView()
+                                    case "Personal Records":
+                                        PersonalRecordsView()
+                                    case "Pre-Workout Timing":
+                                        PreWorkoutTimingView()
+                                    case "Post-Workout Window":
+                                        PostWorkoutWindowView()
+                                    case "Performance Foods":
+                                        PerformanceFoodsView()
+                                    case "Hydration Status":
+                                        HydrationStatusView()
+                                    case "Macro Balance":
+                                        MacroBalanceView()
+                                    case "Live Challenges":
+                                        LiveChallengesView()
+                                    case "Friend Activity":
+                                        FriendActivityView()
+                                    case "Achievements":
+                                        AchievementsView()
+                                    case "Share Workouts":
+                                        ShareWorkoutsView()
+                                    case "Leaderboards":
+                                        LeaderboardsView()
+                                    case "Fuel Check":
+                                        FuelCheckView()
+                                    default:
+                                        HomeView()
+                                    }
+                                } label: {
+                                    VStack {
+                                        Image(systemName: getIconName(for: item))
+                                            .font(.system(size: 40))
+                                            .foregroundColor(.primary)
+                                            .frame(width: 80, height: 80)
+                                            .background(.ultraThinMaterial)
+                                            .clipShape(Circle())
+                                        
+                                        Text(item)
+                                            .font(.caption)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    .padding()
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(12)
+                                }
+                            }
+                            
+                        }
+                        .padding()
+                    }
+                    //                .searchable(text: $searchState.searchText)
+                    .navigationTitle("Search")
                 }
-//                .searchable(text: $searchState.searchText)
-                .navigationTitle("Search")
+            }
+            .onChange(of: searchState.searchText) { _, _ in
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    animationPhase += 0.2
+                }
             }
         }
     }

@@ -55,6 +55,7 @@
 		156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */; };
 		1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1570E2662D67B75300F42CB5 /* FuelCheckView.swift */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
+		157C20A62D6E1FF100D1FA9A /* WidgetType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A52D6E1FF100D1FA9A /* WidgetType.swift */; };
 		1593A59E2D40386A00FCD9CD /* NutrivanceIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1593A59D2D40386A00FCD9CD /* NutrivanceIntents.swift */; };
 		159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F516E2CD5591E001F5FFC /* HealthKitManager.swift */; };
 		159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */; };
@@ -190,6 +191,7 @@
 		15701F572D67A13D0044DB01 /* libmlc_llm.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = libmlc_llm.dylib; sourceTree = "<group>"; };
 		1570E2662D67B75300F42CB5 /* FuelCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuelCheckView.swift; sourceTree = "<group>"; };
 		15741EA42CEFE2F400CDE4F9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		157C20A52D6E1FF100D1FA9A /* WidgetType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetType.swift; sourceTree = "<group>"; };
 		1593A59D2D40386A00FCD9CD /* NutrivanceIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceIntents.swift; sourceTree = "<group>"; };
 		159F516D2CD55871001F5FFC /* Nutrivance.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Nutrivance.entitlements; sourceTree = "<group>"; };
 		159F516E2CD5591E001F5FFC /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
@@ -536,6 +538,7 @@
 		15D7FF942CD142690048E050 = {
 			isa = PBXGroup;
 			children = (
+				157C20A52D6E1FF100D1FA9A /* WidgetType.swift */,
 				15C033F32D0DD504000EBCD2 /* .git */,
 				15C033F62D0DD504000EBCD2 /* .github */,
 				15A70DA32CF10814007FBC5D /* WaterWidgetExtension.entitlements */,
@@ -908,6 +911,7 @@
 				1568143A2D5C0F2D003C861E /* ProgramBuilderView.swift in Sources */,
 				1568143B2D5C0F2D003C861E /* LiveChallengesView.swift in Sources */,
 				1568143C2D5C0F2D003C861E /* LeaderboardsView.swift in Sources */,
+				157C20A62D6E1FF100D1FA9A /* WidgetType.swift in Sources */,
 				1568143D2D5C0F2D003C861E /* TrainingCalendarView.swift in Sources */,
 				1568143E2D5C0F2D003C861E /* DistanceView.swift in Sources */,
 				1568143F2D5C0F2D003C861E /* ExerciseLibraryView.swift in Sources */,

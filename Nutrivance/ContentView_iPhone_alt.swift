@@ -34,7 +34,7 @@ struct ContentView_iPhone_alt: View {
             .defaultVisibility(.visible, for: .tabBar)
             
             Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
-                ContentView_iPhone()
+                PlaygroundView()
             }
             .customizationID("iPhone.tab.alt")
             .defaultVisibility(.visible, for: .tabBar)

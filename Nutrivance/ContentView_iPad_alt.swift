@@ -111,9 +111,11 @@ struct ContentView_iPad_alt: View {
     var body: some View {
         TabView {
             // Nutrivance Section
-//                Tab("Home", systemImage: "house.fill") {
-//                    HomeView()
-//                }
+                Tab("Home", systemImage: "house.fill") {
+                    HomeView()
+                }
+                .customizationID( "iPad.tab.home")
+                .defaultVisibility(.visible, for: .tabBar)
 //                .customizationID("iPad.tab.home")
 //                .defaultVisibility(.visible, for: .tabBar)
                 
@@ -122,6 +124,7 @@ struct ContentView_iPad_alt: View {
 //                }
 //                .customizationID("iPad.tab.insights")
 //                .defaultVisibility(.visible, for: .tabBar)
+            TabSection {
                 Tab("Nutrivance", systemImage: "leaf.fill") {
                     NutrivanceView()
                 }
@@ -139,6 +142,14 @@ struct ContentView_iPad_alt: View {
                 }
                 .customizationID("iPad.tab.spririvance")
                 .defaultVisibility(.visible, for: .tabBar)
+            } header: {
+                Text("Focus Modes")
+                    .font(.headline)
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
+            }
+            .defaultVisibility(.visible, for: .tabBar)
+            .customizationID("iPad.tabsection.focusModes")
                 
 //                Tab("Labels", systemImage: "doc.text.viewfinder") {
 //                    NutritionScannerView()
@@ -165,6 +176,7 @@ struct ContentView_iPad_alt: View {
             
             // Macronutrients Section
 //            TabSection {
+            
 //                Tab("Calories", systemImage: "flame") {
 //                    NutrientDetailView(nutrientName: "Calories")
 //                }

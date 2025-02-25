@@ -1,15 +1,5 @@
 import SwiftUI
 
-enum WidgetType: String, Codable {
-    case view
-    case tool
-    case container
-    case equation
-    case chart
-    case input
-    case output
-}
-
 struct Connection: Codable, Identifiable {
     let id: UUID
     let sourceWidget: UUID
@@ -53,17 +43,15 @@ struct EquationBox: Codable, Identifiable {
     }
 }
 
-struct ResizableWidget: Codable, Identifiable {
+struct ResizableWidget: Identifiable, Codable {
     let id: UUID
     var type: WidgetType
     var position: CGPoint
     var size: CGSize
-    var connections: Set<UUID>
-    var value: Double?
     var view: AnyView
     
-    private enum CodingKeys: String, CodingKey {
-        case id, type, position, size, connections, value
+    enum CodingKeys: String, CodingKey {
+        case id, type, position, size
     }
     
     init(type: WidgetType, position: CGPoint, size: CGSize, view: AnyView) {
@@ -71,22 +59,24 @@ struct ResizableWidget: Codable, Identifiable {
         self.type = type
         self.position = position
         self.size = size
-        self.connections = []
-        self.value = nil
         self.view = view
     }
     
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
-        type = try WidgetType(rawValue: container.decode(String.self, forKey: .type))!
-        let positionArray = try container.decode([CGFloat].self, forKey: .position)
-        let sizeArray = try container.decode([CGFloat].self, forKey: .size)
-        position = CGPoint(x: positionArray[0], y: positionArray[1])
-        size = CGSize(width: sizeArray[0], height: sizeArray[1])
-        connections = try container.decode(Set<UUID>.self, forKey: .connections)
-        value = try container.decodeIfPresent(Double.self, forKey: .value)
-        view = AnyView(EmptyView()) // Default view that will be set after decoding
+        type = try container.decode(WidgetType.self, forKey: .type)
+        position = try container.decode(CGPoint.self, forKey: .position)
+        size = try container.decode(CGSize.self, forKey: .size)
+        view = AnyView(EmptyView()) // Default view, will be set after decoding
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(type, forKey: .type)
+        try container.encode(position, forKey: .position)
+        try container.encode(size, forKey: .size)
     }
 }
 

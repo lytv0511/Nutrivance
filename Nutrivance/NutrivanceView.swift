@@ -6,7 +6,6 @@ struct NutrivanceView: View {
     @EnvironmentObject var navigationState: NavigationState
     @EnvironmentObject var searchState: SearchState
     @State private var showCamera = false
-    @State private var showHome: Bool = true
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
     private let detector = NutritionTableDetector()
@@ -27,7 +26,6 @@ struct NutrivanceView: View {
     }
     
     private let searchKeywords = [
-        "home": ["home", "main", "dashboard", "start", "welcome", "homepage"],
         "insights": ["insights", "health insights", "analysis", "trends", "statistics", "data", "reports", "overview"],
         "labels": ["labels", "scan", "camera", "photo", "nutrition facts", "food label", "scanner", "capture"],
         "search": ["search", "find", "lookup", "nutrients", "add nutrients", "input", "track"],
@@ -44,7 +42,7 @@ struct NutrivanceView: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     var filteredItems: [String] {
-           let nutritionItems = ["Home", "Insights", "Labels", "Log",
+           let nutritionItems = ["Insights", "Labels", "Log",
                               "Calories", "Carbs", "Protein", "Fats", "Water",
                               "Fiber", "Vitamins", "Minerals", "Phytochemicals",
                               "Antioxidants", "Electrolytes"]
@@ -115,8 +113,6 @@ struct NutrivanceView: View {
                             ForEach(filteredItems, id: \.self) { item in
                                 NavigationLink {
                                     switch item {
-                                    case "Home":
-                                        HomeView()
                                     case "Insights":
                                         HealthInsightsView()
                                     case "Labels":
@@ -188,7 +184,7 @@ struct NutrivanceView: View {
                                     case "Fuel Check":
                                         FuelCheckView()
                                     default:
-                                        HomeView()
+                                        HealthInsightsView()
                                     }
                                 } label: {
                                     VStack {
@@ -221,8 +217,6 @@ struct NutrivanceView: View {
     
     private func destinationView(for item: String) -> some View {
         switch item {
-        case "Home":
-            return AnyView(HomeView())
         case "Insights":
             return AnyView(HealthInsightsView())
         case "Labels":
@@ -294,7 +288,7 @@ struct NutrivanceView: View {
         case "Fuel Check":
             return AnyView(FuelCheckView())
         default:
-            return AnyView(HomeView())
+            return AnyView(HealthInsightsView())
         }
     }
 
@@ -302,7 +296,7 @@ struct NutrivanceView: View {
     private var nutritionSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Home", "Insights", "Labels", "Log"], id: \.self) { item in
+                ForEach(["Insights", "Labels", "Log"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -459,7 +453,6 @@ struct NutrivanceView: View {
 private func getIconName(for item: String) -> String {
     switch item {
     // Main section
-    case "Home": return "house.fill"
     case "Insights": return "chart.bar.fill"
     case "Labels": return "barcode.viewfinder"
     case "Log": return "square.and.pencil"

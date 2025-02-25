@@ -4,18 +4,19 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private let titles = Array(repeating: "Win 50% of Your Day in the First Few Hours", count: 12)
     private let contents = Array(repeating: "Have you ever woken up feeling frustrated, irritated, or even rushed? Reflecting on the ensuing events of a bad morning, it’s likely that your tasks felt more draining than usual. This isn’t to say you should let a rough start dictate the whole day, but it highlights the power of those early moments. Our bodies follow circadian rhythms, which regulate sleep-wake cycles and alertness levels. Upon waking, your brain is still transitioning from rest to wake, like warming up a car engine. This is the perfect time to do something productive—something small but meaningful, like brushing your teeth or making your bed.", count: 12)
+    @State private var animationPhase: Double = 0
 
     var body: some View {
         let columns: Int = (horizontalSizeClass == .compact) ? 1 : 3 // 4 columns on compact, 3 on regular
         let gridItems = Array(repeating: GridItem(.flexible()), count: columns)
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    gradient: Gradient(colors: [Color(red: 0.0, green: 0.2, blue: 0.0), Color(red: 0.0, green: 0.0, blue: 0.2), Color.black, Color.black, Color.black]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+                GradientBackgrounds().natureGradient(animationPhase: $animationPhase)
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                                animationPhase = 20
+                            }
+                        }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         Text(timeBasedGreeting() + ", learn more about your health")
