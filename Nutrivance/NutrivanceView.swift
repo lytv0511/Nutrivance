@@ -129,7 +129,7 @@ struct NutrivanceView: View {
                                         WorkoutHistoryView()
                                     case "Training Calendar":
                                         TrainingCalendarView()
-                                    case "Form Coach":
+                                    case "Coach":
                                         CoachView()
                                     case "Movement Analysis":
                                         MovementAnalysisView()
@@ -233,7 +233,7 @@ struct NutrivanceView: View {
             return AnyView(WorkoutHistoryView())
         case "Training Calendar":
             return AnyView(TrainingCalendarView())
-        case "Form Coach":
+        case "Coach":
             return AnyView(CoachView())
         case "Movement Analysis":
             return AnyView(MovementAnalysisView())
@@ -335,7 +335,7 @@ struct NutrivanceView: View {
             }
             
             Section(header: Text("Smart Training")) {
-                ForEach(["Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -475,7 +475,7 @@ private func getIconName(for item: String) -> String {
     case "Today's Plan": return "calendar.badge.clock"
     case "Workout History": return "clock.arrow.circlepath"
     case "Training Calendar": return "calendar.badge.plus"
-    case "Form Coach": return "figure.mind.and.body"
+    case "Coach": return "figure.mind.and.body"
     case "Movement Analysis": return "figure.walk.motion"
     case "Fuel Check": return "fuelpump.fill"
     case "Exercise Library": return "books.vertical.fill"

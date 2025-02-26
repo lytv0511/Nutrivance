@@ -13,8 +13,11 @@ struct SleepView: View {
     private let gradients = GradientBackgrounds()
     
     var body: some View {
-        ZStack {
-            gradients.spiritGradient(animationPhase: $animationPhase)
+        NavigationStack {
+            ZStack {
+                gradients.spiritGradient(animationPhase: $animationPhase)
+            }
+            .navigationTitle("Sleep")
         }
     }
 }

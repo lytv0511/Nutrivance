@@ -88,11 +88,11 @@ struct SpirivanceView: View {
         NavigationStack {
             ZStack {
                 GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
-                            .onAppear {
-                                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                                    animationPhase = 20
-                                }
-                            }
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
+                        }
+                    }
                 VStack {
                     HStack {
                         Image(systemName: "magnifyingglass")
@@ -131,7 +131,7 @@ struct SpirivanceView: View {
                                         WorkoutHistoryView()
                                     case "Training Calendar":
                                         TrainingCalendarView()
-                                    case "Form Coach":
+                                    case "Coach":
                                         CoachView()
                                     case "Movement Analysis":
                                         MovementAnalysisView()
@@ -185,37 +185,53 @@ struct SpirivanceView: View {
                                         LeaderboardsView()
                                     case "Fuel Check":
                                         FuelCheckView()
+                                    case "Mindfulness Realm":
+                                        MindfulnessRealmView()
+                                    case "Mood Tracker":
+                                        MoodTrackerView()
+                                    case "Journal":
+                                        JournalView()
+                                    case "Resources":
+                                        ResourcesView()
+                                    case "Meditation":
+                                        MeditationView()
+                                    case "Breathing":
+                                        BreathingView()
+                                    case "Sleep":
+                                        SleepView()
+                                    case "Stress":
+                                        StressView()
                                     default:
                                         HomeView()
                                     }
-                                } label: {
-                                    VStack {
-                                        Image(systemName: getIconName(for: item))
-                                            .font(.system(size: 40))
-                                            .foregroundColor(.primary)
-                                            .frame(width: 80, height: 80)
-                                            .background(.ultraThinMaterial)
-                                            .clipShape(Circle())
-                                        
-                                        Text(item)
-                                            .font(.caption)
-                                            .multilineTextAlignment(.center)
+                                    } label: {
+                                        VStack {
+                                            Image(systemName: getIconName(for: item))
+                                                .font(.system(size: 40))
+                                                .foregroundColor(.primary)
+                                                .frame(width: 80, height: 80)
+                                                .background(.ultraThinMaterial)
+                                                .clipShape(Circle())
+                                            
+                                            Text(item)
+                                                .font(.caption)
+                                                .multilineTextAlignment(.center)
+                                        }
+                                        .padding()
+                                        .background(.ultraThinMaterial)
+                                        .cornerRadius(12)
                                     }
-                                    .padding()
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(12)
                                 }
+                                
                             }
-                            
+                            .padding()
                         }
-                        .padding()
+                        //                .searchable(text: $searchState.searchText)
+                        .navigationTitle("Spirivance")
                     }
-                    //                .searchable(text: $searchState.searchText)
-                    .navigationTitle("Spirivance")
                 }
             }
         }
-    }
     
     private func destinationView(for item: String) -> some View {
         switch item {
@@ -237,7 +253,7 @@ struct SpirivanceView: View {
             return AnyView(WorkoutHistoryView())
         case "Training Calendar":
             return AnyView(TrainingCalendarView())
-        case "Form Coach":
+        case "Coach":
             return AnyView(CoachView())
         case "Movement Analysis":
             return AnyView(MovementAnalysisView())
@@ -291,6 +307,22 @@ struct SpirivanceView: View {
             return AnyView(LeaderboardsView())
         case "Fuel Check":
             return AnyView(FuelCheckView())
+        case "Mindfulness Realm":
+            return AnyView(MindfulnessRealmView())
+        case "Mood Tracker":
+            return AnyView(MoodTrackerView())
+        case "Journal":
+            return AnyView(JournalView())
+        case "Resources":
+            return AnyView(ResourcesView())
+        case "Meditation":
+            return AnyView(MeditationView())
+        case "Breathing":
+            return AnyView(BreathingView())
+        case "Sleep":
+            return AnyView(SleepView())
+        case "Stress":
+            return AnyView(StressView())
         default:
             return AnyView(HomeView())
         }
@@ -339,7 +371,7 @@ struct SpirivanceView: View {
             }
             
             Section(header: Text("Smart Training")) {
-                ForEach(["Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -480,7 +512,7 @@ private func getIconName(for item: String) -> String {
     case "Today's Plan": return "calendar.badge.clock"
     case "Workout History": return "clock.arrow.circlepath"
     case "Training Calendar": return "calendar.badge.plus"
-    case "Form Coach": return "figure.mind.and.body"
+    case "Coach": return "figure.mind.and.body"
     case "Movement Analysis": return "figure.walk.motion"
     case "Fuel Check": return "fuelpump.fill"
     case "Exercise Library": return "books.vertical.fill"
@@ -515,6 +547,15 @@ private func getIconName(for item: String) -> String {
     case "Achievements": return "medal.fill"
     case "Share Workouts": return "square.and.arrow.up.fill"
     case "Leaderboards": return "list.number"
+        
+    case "Mindfulness Realm": return "eye.fill"
+    case "Mood Tracker": return "sun.max"
+    case "Journal": return "book.fill"
+    case "Resources": return "folder.fill"
+    case "Meditation": return "sparkles"
+    case "Breathing": return "wind"
+    case "Sleep": return "moon.zzz.fill"
+    case "Stress": return "waveform.path.ecg"
     
     default: return "circle.fill"
     }

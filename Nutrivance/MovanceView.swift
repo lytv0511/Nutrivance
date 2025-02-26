@@ -45,7 +45,7 @@ struct MovanceView: View {
     ]
     var filteredItems: [String] {
             let fitnessItems = ["Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                             "Form Coach", "Movement Analysis", "Exercise Library", "Program Builder",
+                             "Coach", "Movement Analysis", "Exercise Library", "Program Builder",
                              "Workout Generator", "Recovery Score", "Sleep Analysis", "Mobility Test",
                              "Readiness Check", "Strain vs Recovery", "Activity Rings", "Heart Zones",
                              "Step Count", "Distance", "Calories Burned", "Personal Records",
@@ -135,7 +135,7 @@ struct MovanceView: View {
                                         WorkoutHistoryView()
                                     case "Training Calendar":
                                         TrainingCalendarView()
-                                    case "Form Coach":
+                                    case "Coach":
                                         CoachView()
                                     case "Movement Analysis":
                                         MovementAnalysisView()
@@ -241,7 +241,7 @@ struct MovanceView: View {
             return AnyView(WorkoutHistoryView())
         case "Training Calendar":
             return AnyView(TrainingCalendarView())
-        case "Form Coach":
+        case "Coach":
             return AnyView(CoachView())
         case "Movement Analysis":
             return AnyView(MovementAnalysisView())
@@ -343,7 +343,7 @@ struct MovanceView: View {
             }
             
             Section(header: Text("Smart Training")) {
-                ForEach(["Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -484,7 +484,7 @@ private func getIconName(for item: String) -> String {
     case "Today's Plan": return "calendar.badge.clock"
     case "Workout History": return "clock.arrow.circlepath"
     case "Training Calendar": return "calendar.badge.plus"
-    case "Form Coach": return "figure.mind.and.body"
+    case "Coach": return "figure.mind.and.body"
     case "Movement Analysis": return "figure.walk.motion"
     case "Fuel Check": return "fuelpump.fill"
     case "Exercise Library": return "books.vertical.fill"

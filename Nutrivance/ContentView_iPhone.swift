@@ -21,7 +21,7 @@ struct ContentView_iPhone: View {
                    "Antioxidants", "Electrolytes"]
         case .fitness:
             return ["Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                   "Form Coach", "Movement Analysis", "Exercise Library",
+                   "Coach", "Movement Analysis", "Exercise Library",
                    "Program Builder", "Workout Generator", "Recovery Score",
                    "Sleep Analysis", "Mobility Test", "Readiness Check",
                    "Strain vs Recovery", "Activity Rings", "Heart Zones",
@@ -98,7 +98,7 @@ struct ContentView_iPhone: View {
                 case "Today's Plan": TodaysPlanView()
                 case "Workout History": WorkoutHistoryView()
                 case "Training Calendar": TrainingCalendarView()
-                case "Form Coach": CoachView()
+                case "Coach": CoachView()
                 case "Movement Analysis": MovementAnalysisView()
                 case "Fuel Check": FuelCheckView()
                 case "Exercise Library": ExerciseLibraryView()
@@ -155,9 +155,9 @@ struct ContentView_iPhone: View {
                      "Phytochemicals": "leaf.arrow.triangle.circlepath",
                      "Antioxidants": "shield", "Electrolytes": "battery.100"]
         case .fitness:
-            choices = ["Form Coach", "Movement Analysis", "Fuel Check",
+            choices = ["Coach", "Movement Analysis", "Fuel Check",
                        "Readiness Check", "Strain vs Recovery"]
-            icons = ["Form Coach": "figure.mind.and.body",
+            icons = ["Coach": "figure.mind.and.body",
                      "Movement Analysis": "figure.walk.motion",
                      "Fuel Check": "fuelpump.fill",
                      "Readiness Check": "checkmark.seal.fill",
@@ -206,7 +206,7 @@ struct ViewGridItem: View {
         case "Today's Plan": return "calendar"
         case "Workout History": return "clock.arrow.circlepath"
         case "Training Calendar": return "calendar.badge.clock"
-        case "Form Coach": return "figure.mixed.cardio"
+        case "Coach": return "figure.mixed.cardio"
         case "Movement Analysis": return "figure.walk.motion"
         case "Exercise Library": return "books.vertical"
         case "Program Builder": return "building.2"
@@ -719,7 +719,7 @@ struct FocusModeOption: View {
                               "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
                               "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"]
         case .fitness:
-            wheelPickerItems = ["Form Coach", "Movement Analysis", "Fuel Check",
+            wheelPickerItems = ["Coach", "Movement Analysis", "Fuel Check",
                               "Readiness Check", "Strain vs Recovery", "Dashboard",
                               "Today's Plan", "Workout History", "Training Calendar"]
         case .mentalHealth:
@@ -735,7 +735,7 @@ struct FocusModeOption: View {
                    "Calories", "Protein", "Carbs", "Fats", "Fiber", "Vitamins",
                    "Minerals", "Water", "Phytochemicals", "Antioxidants", "Electrolytes"]
         case .fitness:
-            return ["Form Coach", "Movement Analysis", "Fuel Check",
+            return ["Coach", "Movement Analysis", "Fuel Check",
                    "Readiness Check", "Strain vs Recovery", "Dashboard",
                    "Today's Plan", "Workout History", "Training Calendar"]
         case .mentalHealth:
@@ -761,7 +761,7 @@ struct FocusModeOption: View {
             
         case .fitness:
             switch item {
-            case "Form Coach": showView("Form Coach")
+            case "Coach": showView("Coach")
             case "Movement Analysis": showView("Movement Analysis")
             case "Fuel Check": showView("Fuel Check")
             case "Readiness Check": showView("Readiness Check")

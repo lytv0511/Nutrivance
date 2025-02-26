@@ -5,40 +5,42 @@ struct MovementAnalysisView: View {
     @State private var animationPhase: Double = 0
     
     var body: some View {
-        ZStack {
-            MeshGradient(
-                width: 3, height: 3,
-                points: [
-                    [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                    [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
-                    [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
-                ],
-                colors: [
-                    Color(red: 0.75, green: 0.0, blue: 0),
-                    Color(red: 1.0, green: 0.4, blue: 0),
-                    Color(red: 0.95, green: 0.6, blue: 0),
-                    Color(red: 0.8, green: 0.2, blue: 0),
-                    Color(red: 1.0, green: 0.5, blue: 0),
-                    Color(red: 0.9, green: 0.3, blue: 0),
-                    Color(red: 0.8, green: 0.1, blue: 0),
-                    Color(red: 1.0, green: 0.45, blue: 0),
-                    Color(red: 0.85, green: 0.25, blue: 0)
-                ]
-            )
-            .ignoresSafeArea()
-            .hueRotation(.degrees(animationPhase))
-            
-            ScrollView {
-                VStack(spacing: 20) {
-                    CurrentWorkoutAnalysis()
-                    MovementQualityMetrics()
-                    FormFeedbackCard()
-                    PastWorkoutReview()
+        NavigationStack {
+            ZStack {
+                MeshGradient(
+                    width: 3, height: 3,
+                    points: [
+                        [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
+                        [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
+                        [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
+                    ],
+                    colors: [
+                        Color(red: 0.75, green: 0.0, blue: 0),
+                        Color(red: 1.0, green: 0.4, blue: 0),
+                        Color(red: 0.95, green: 0.6, blue: 0),
+                        Color(red: 0.8, green: 0.2, blue: 0),
+                        Color(red: 1.0, green: 0.5, blue: 0),
+                        Color(red: 0.9, green: 0.3, blue: 0),
+                        Color(red: 0.8, green: 0.1, blue: 0),
+                        Color(red: 1.0, green: 0.45, blue: 0),
+                        Color(red: 0.85, green: 0.25, blue: 0)
+                    ]
+                )
+                .ignoresSafeArea()
+                .hueRotation(.degrees(animationPhase))
+                
+                ScrollView {
+                    VStack(spacing: 20) {
+                        CurrentWorkoutAnalysis()
+                        MovementQualityMetrics()
+                        FormFeedbackCard()
+                        PastWorkoutReview()
+                    }
+                    .padding()
                 }
-                .padding()
             }
+            .navigationTitle("Movement Analysis")
         }
-        .navigationTitle("Movement Analysis")
     }
 }
 

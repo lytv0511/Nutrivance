@@ -47,7 +47,7 @@ struct ContentView_iPad: View {
                        "Calories", "Carbs", "Protein", "Fats", "Water",
                        "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes",
                        "Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                       "Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator",
+                       "Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator",
                        "Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery",
                        "Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records",
                        "Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance",
@@ -198,7 +198,7 @@ struct ContentView_iPad: View {
                         AnyView(WorkoutHistoryView())
                     case "Training Calendar":
                         AnyView(TrainingCalendarView())
-                    case "Form Coach":
+                    case "Coach":
                         AnyView(CoachView())
                     case "Movement Analysis":
                         AnyView(MovementAnalysisView())
@@ -331,7 +331,7 @@ struct ContentView_iPad: View {
             }
             
             Section(header: Text("Smart Training")) {
-                ForEach(["Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -483,7 +483,7 @@ private func getIconName(for item: String) -> String {
     case "Today's Plan": return "calendar.badge.clock"
     case "Workout History": return "clock.arrow.circlepath"
     case "Training Calendar": return "calendar.badge.plus"
-    case "Form Coach": return "figure.mind.and.body"
+    case "Coach": return "figure.mind.and.body"
     case "Movement Analysis": return "figure.walk.motion"
     case "Fuel Check": return "fuelpump.fill"
     case "Exercise Library": return "books.vertical.fill"

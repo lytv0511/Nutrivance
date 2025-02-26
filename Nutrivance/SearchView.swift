@@ -23,14 +23,14 @@ struct SearchView: View {
                                   "Antioxidants", "Electrolytes"]
     
     private let fitnessItems = ["Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                                "Form Coach", "Movement Analysis", "Exercise Library", "Program Builder",
+                                "Coach", "Movement Analysis", "Exercise Library", "Program Builder",
                                 "Workout Generator", "Recovery Score", "Sleep Analysis", "Mobility Test",
                                 "Readiness Check", "Strain vs Recovery", "Activity Rings", "Heart Zones",
                                 "Step Count", "Distance", "Calories Burned", "Personal Records",
                                 "Pre-Workout Timing", "Post-Workout Window", "Performance Foods",
                                 "Hydration Status", "Macro Balance"]
     
-    private let mentalHealthItems = ["Dashboard", "Mood Tracker", "Journal", "Resources", "Meditation", "Breathing", "Sleep", "Stress"]
+    let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Resources", "Meditation", "Breathing", "Sleep", "Stress"]
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -65,11 +65,11 @@ struct SearchView: View {
                        "Calories", "Carbs", "Protein", "Fats", "Water",
                        "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes",
                        "Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                       "Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator",
+                       "Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator",
                        "Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery",
                        "Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records",
                        "Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance",
-                       "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards", "Fuel Check"]
+                        "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards", "Fuel Check", "Mindfulness Realm", "Mood Tracker", "Journal", "Resources", "Meditation", "Breathing", "Sleep", "Stress"]
         
         if searchState.searchText.isEmpty {
             return allItems
@@ -181,7 +181,7 @@ struct SearchView: View {
                                         WorkoutHistoryView()
                                     case "Training Calendar":
                                         TrainingCalendarView()
-                                    case "Form Coach":
+                                    case "Coach":
                                         CoachView()
                                     case "Movement Analysis":
                                         MovementAnalysisView()
@@ -235,6 +235,22 @@ struct SearchView: View {
                                         LeaderboardsView()
                                     case "Fuel Check":
                                         FuelCheckView()
+                                    case "Mindfulness Realm":
+                                        MindfulnessRealmView()
+                                    case "Mood Tracker":
+                                        MoodTrackerView()
+                                    case "Journal":
+                                        JournalView()
+                                    case "Resources":
+                                        ResourcesView()
+                                    case "Meditation":
+                                        MeditationView()
+                                    case "Breathing":
+                                        BreathingView()
+                                    case "Sleep":
+                                        SleepView()
+                                    case "Stress":
+                                        StressView()
                                     default:
                                         HomeView()
                                     }
@@ -292,7 +308,7 @@ struct SearchView: View {
             return AnyView(WorkoutHistoryView())
         case "Training Calendar":
             return AnyView(TrainingCalendarView())
-        case "Form Coach":
+        case "Coach":
             return AnyView(CoachView())
         case "Movement Analysis":
             return AnyView(MovementAnalysisView())
@@ -346,6 +362,22 @@ struct SearchView: View {
             return AnyView(LeaderboardsView())
         case "Fuel Check":
             return AnyView(FuelCheckView())
+        case "Mindfulness Realm":
+            return AnyView(MindfulnessRealmView())
+        case "Mood Tracker":
+            return AnyView(MoodTrackerView())
+        case "Journal":
+            return AnyView(JournalView())
+        case "Resources":
+            return AnyView(ResourcesView())
+        case "Meditation":
+            return AnyView(MeditationView())
+        case "Breathing":
+            return AnyView(BreathingView())
+        case "Sleep":
+            return AnyView(SleepView())
+        case "Stress":
+            return AnyView(StressView())
         default:
             return AnyView(HomeView())
         }
@@ -394,7 +426,7 @@ struct SearchView: View {
             }
             
             Section(header: Text("Smart Training")) {
-                ForEach(["Form Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -512,7 +544,7 @@ struct SearchView: View {
 private func getIconName(for item: String) -> String {
     switch item {
     // Main section
-    case "Home": return "house.fill"
+    case "Home": return "house"
     case "Insights": return "chart.bar.fill"
     case "Labels": return "barcode.viewfinder"
     case "Log": return "square.and.pencil"
@@ -535,7 +567,7 @@ private func getIconName(for item: String) -> String {
     case "Today's Plan": return "calendar.badge.clock"
     case "Workout History": return "clock.arrow.circlepath"
     case "Training Calendar": return "calendar.badge.plus"
-    case "Form Coach": return "figure.mind.and.body"
+    case "Coach": return "figure.mind.and.body"
     case "Movement Analysis": return "figure.walk.motion"
     case "Fuel Check": return "fuelpump.fill"
     case "Exercise Library": return "books.vertical.fill"
@@ -570,6 +602,15 @@ private func getIconName(for item: String) -> String {
     case "Achievements": return "medal.fill"
     case "Share Workouts": return "square.and.arrow.up.fill"
     case "Leaderboards": return "list.number"
+        
+    case "Mindfulness Realm": return "eye.fill"
+    case "Mood Tracker": return "sun.max"
+    case "Journal": return "book.fill"
+    case "Resources": return "folder.fill"
+    case "Meditation": return "sparkles"
+    case "Breathing": return "wind"
+    case "Sleep": return "moon.zzz.fill"
+    case "Stress": return "waveform.path.ecg"
     
     default: return "circle.fill"
     }

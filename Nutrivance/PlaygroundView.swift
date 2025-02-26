@@ -8,52 +8,55 @@ struct PlaygroundView: View {
     @State private var selectedTool: WidgetType?
     
     var body: some View {
-        ZStack {
-            Color.clear
-                .contentShape(Rectangle())
-                .onLongPressGesture {
-                    withAnimation(.spring()) {
-                        isEditing = true
-                        showToolPicker = true
+        NavigationStack {
+            ZStack {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onLongPressGesture {
+                        withAnimation(.spring()) {
+                            isEditing = true
+                            showToolPicker = true
+                        }
                     }
-                }
-            
-            ForEach($presetManager.elements) { $widget in
-                ResizableWidgetView(
-                    widget: $widget,
-                    isSelected: selectedWidget?.id == widget.id,
-                    onSelect: { selectedWidget = widget }
-                )
-                .wiggle(isEnabled: isEditing)
-            }
-            
-            VStack {
-                Spacer()
                 
-                if isEditing {
-                    ToolPicker(
-                        isPresented: $showToolPicker,
-                        selectedTool: $selectedTool,
-                        isEditing: $isEditing
+                ForEach($presetManager.elements) { $widget in
+                    ResizableWidgetView(
+                        widget: $widget,
+                        isSelected: selectedWidget?.id == widget.id,
+                        onSelect: { selectedWidget = widget }
                     )
-                    .transition(.move(edge: .bottom))
-                    .padding()
+                    .wiggle(isEnabled: isEditing)
                 }
                 
-                HStack {
-                    if !isEditing {
-                        Spacer()
+                VStack {
+                    Spacer()
+                    
+                    if isEditing {
+                        ToolPicker(
+                            isPresented: $showToolPicker,
+                            selectedTool: $selectedTool,
+                            isEditing: $isEditing
+                        )
+                        .transition(.move(edge: .bottom))
+                        .padding()
                     }
                     
-                    PlaygroundPresetPicker(
-                        presets: $presetManager.presets,
-                        selectedPreset: $presetManager.selectedPreset,
-                        isExpanded: isEditing
-                    )
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
+                    HStack {
+                        if !isEditing {
+                            Spacer()
+                        }
+                        
+                        PlaygroundPresetPicker(
+                            presets: $presetManager.presets,
+                            selectedPreset: $presetManager.selectedPreset,
+                            isExpanded: isEditing
+                        )
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 20)
+                    }
                 }
             }
+            .navigationTitle("Playground")
         }
     }
 

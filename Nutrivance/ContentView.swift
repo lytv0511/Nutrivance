@@ -12,8 +12,8 @@ struct ContentView: View {
                 ContentView_iPad_alt()
             } else {
 //                ContentView_iPhone()
-                ContentView_iPhone_alt()
-//                ContentView_iPad_alt()
+//                ContentView_iPhone_alt()
+                ContentView_iPad_alt()
             }
         }
         .onAppear {

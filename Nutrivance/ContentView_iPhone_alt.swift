@@ -76,7 +76,7 @@ struct ContentView_iPhone_alt: View {
                 Tab("Training Calendar", systemImage: "calendar.badge.clock") {
                     TrainingCalendarView()
                 }
-                Tab("Form Coach", systemImage: "figure.strengthtraining.traditional") {
+                Tab("Coach", systemImage: "figure.strengthtraining.traditional") {
                     CoachView()
                 }
                 Tab("Movement Analysis", systemImage: "figure.run") {

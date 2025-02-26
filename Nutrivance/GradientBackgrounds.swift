@@ -29,6 +29,88 @@ struct GradientBackgrounds {
         MeshGradientView(colors: lightForestColors, darkColors: darkForestColors, animationPhase: animationPhase)
     }
     
+    func realmGradient(animationPhase: Binding<Double>) -> some View {
+        let phase = animationPhase.wrappedValue * 0.3
+        
+        let spiral = { (i: Int) -> SIMD2<Float> in
+            let row = Float(i / 6) / 5.0
+            let col = Float(i % 6) / 5.0
+            let centerDist = sqrt(pow(row - 0.5, 2) + pow(col - 0.5, 2))
+            let angle = phase + Double(i) * 0.2
+            let radius = 0.2 * (1 - Float(centerDist))
+            return SIMD2<Float>(
+                col + radius * Float(cos(angle)),
+                row + radius * Float(sin(angle))
+            )
+        }
+        
+        let vortex = { (i: Int) -> SIMD2<Float> in
+            let row = Float(i / 6) / 5.0
+            let col = Float(i % 6) / 5.0
+            let angle = atan2(row - 0.5, col - 0.5)
+            let dist = sqrt(pow(row - 0.5, 2) + pow(col - 0.5, 2))
+            let spin = Float(phase + Double(dist) * 4)
+            return SIMD2<Float>(
+                col + 0.15 * Float(cos(Double(angle) + phase)) * dist,
+                row + 0.15 * Float(sin(Double(angle) + phase)) * dist
+            )
+        }
+        
+        let swirl = { (i: Int) -> SIMD2<Float> in
+            let row = Float(i / 6) / 5.0
+            let col = Float(i % 6) / 5.0
+            let angle = phase * 2 + Double(i) * 0.1
+            let radius = 0.15 * Float(sin(phase * 0.5))
+            return SIMD2<Float>(
+                col + radius * Float(cos(angle)) * (col - 0.5),
+                row + radius * Float(sin(angle)) * (row - 0.5)
+            )
+        }
+        
+        let ripple = { (i: Int) -> SIMD2<Float> in
+            let row = Float(i / 6) / 5.0
+            let col = Float(i % 6) / 5.0
+            let centerDist = sqrt(pow(row - 0.5, 2) + pow(col - 0.5, 2))
+            let angle = atan2(row - 0.5, col - 0.5) + Float(phase)
+            let wave = 0.15 * Float(sin(phase - Double(centerDist) * 8))
+            return SIMD2<Float>(
+                col + wave * Float(cos(Double(angle))),
+                row + wave * Float(sin(Double(angle)))
+            )
+        }
+        
+        return ZStack {
+            MeshGradient(
+                width: 6, height: 6,
+                points: Array((0...35).map(spiral)),
+                colors: Array(repeating: darkSpiritColors, count: 4).flatMap { $0 }
+            )
+            .opacity(0.5)
+            
+            MeshGradient(
+                width: 6, height: 6,
+                points: Array((0...35).map(vortex)),
+                colors: Array(repeating: darkSpiritColors.reversed(), count: 4).flatMap { $0 }
+            )
+            .opacity(0.5)
+            
+            MeshGradient(
+                width: 6, height: 6,
+                points: Array((0...35).map(swirl)),
+                colors: Array(repeating: darkSpiritColors, count: 4).flatMap { $0 }
+            )
+            .opacity(0.5)
+            
+            MeshGradient(
+                width: 6, height: 6,
+                points: Array((0...35).map(ripple)),
+                colors: Array(repeating: darkSpiritColors, count: 4).flatMap { $0 }
+            )
+            .opacity(0.9)
+        }
+        .ignoresSafeArea()
+    }
+    
     private var lightWarmColors: [Color] {
         [
 //            Color(.systemBackground),

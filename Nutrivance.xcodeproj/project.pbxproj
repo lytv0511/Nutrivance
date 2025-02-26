@@ -56,7 +56,7 @@
 		1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1570E2662D67B75300F42CB5 /* FuelCheckView.swift */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
 		157C20A62D6E1FF100D1FA9A /* WidgetType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A52D6E1FF100D1FA9A /* WidgetType.swift */; };
-		157C20AA2D6E6D6800D1FA9A /* MindfulnessRealm.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A92D6E6D6800D1FA9A /* MindfulnessRealm.swift */; };
+		157C20AA2D6E6D6800D1FA9A /* MindfulnessRealmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */; };
 		157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */; };
 		157C20AE2D6E6DDA00D1FA9A /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */; };
 		157C20B02D6E6E1A00D1FA9A /* ResourcesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AF2D6E6E1A00D1FA9A /* ResourcesView.swift */; };
@@ -200,7 +200,7 @@
 		1570E2662D67B75300F42CB5 /* FuelCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuelCheckView.swift; sourceTree = "<group>"; };
 		15741EA42CEFE2F400CDE4F9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		157C20A52D6E1FF100D1FA9A /* WidgetType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetType.swift; sourceTree = "<group>"; };
-		157C20A92D6E6D6800D1FA9A /* MindfulnessRealm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindfulnessRealm.swift; sourceTree = "<group>"; };
+		157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindfulnessRealmView.swift; sourceTree = "<group>"; };
 		157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodTrackerView.swift; sourceTree = "<group>"; };
 		157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalView.swift; sourceTree = "<group>"; };
 		157C20AF2D6E6E1A00D1FA9A /* ResourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcesView.swift; sourceTree = "<group>"; };
@@ -604,7 +604,7 @@
 				15561A602D6B755E006B8741 /* NutrivanceView.swift */,
 				15561A622D6B7580006B8741 /* MovanceView.swift */,
 				15561A642D6B758D006B8741 /* SpirivanceView.swift */,
-				157C20A92D6E6D6800D1FA9A /* MindfulnessRealm.swift */,
+				157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */,
 				157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */,
 				157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */,
 				157C20AF2D6E6E1A00D1FA9A /* ResourcesView.swift */,
@@ -887,7 +887,7 @@
 				15D7FFD12CD159010048E050 /* NutrientDetailView.swift in Sources */,
 				15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */,
 				15CB570C2CEEBF4000A6E970 /* ImagePicker.swift in Sources */,
-				157C20AA2D6E6D6800D1FA9A /* MindfulnessRealm.swift in Sources */,
+				157C20AA2D6E6D6800D1FA9A /* MindfulnessRealmView.swift in Sources */,
 				15D7FFA32CD142690048E050 /* ContentView.swift in Sources */,
 				15CB57102CEEC22300A6E970 /* NutrientRow.swift in Sources */,
 				15D8B5592CEEC73600E64AA3 /* Nutrivance-Bridging-Header.h in Sources */,
