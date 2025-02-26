@@ -331,8 +331,6 @@ struct WheelPicker: View {
         
         let currentAngle = dragLocation.map { calculateAngle(from: $0, in: geometry) } ?? 0
         
-        let isSelected = !isWithinCenterRange && getSelectedIndex(for: currentAngle) == index
-        
         return Image(systemName: radialMenuIcons[index])
             .font(.title)
             .foregroundColor(.white)
@@ -422,7 +420,7 @@ struct WheelPicker: View {
                         .scaleEffect(isWithinCenter ? 1.0 : (isHighlighted ? 1.6 : 1.2))
                         .offset(x: xOffset, y: yOffset)
                         .transition(.scale)
-                        .onChange(of: isHighlighted) { newValue in
+                        .onChange(of: isHighlighted) { oldValue, newValue in
                             if newValue {
                                 let generator = UIImpactFeedbackGenerator(style: .heavy)
                                 generator.impactOccurred()

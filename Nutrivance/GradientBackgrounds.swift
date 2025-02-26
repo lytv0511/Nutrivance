@@ -49,7 +49,6 @@ struct GradientBackgrounds {
             let col = Float(i % 6) / 5.0
             let angle = atan2(row - 0.5, col - 0.5)
             let dist = sqrt(pow(row - 0.5, 2) + pow(col - 0.5, 2))
-            let spin = Float(phase + Double(dist) * 4)
             return SIMD2<Float>(
                 col + 0.15 * Float(cos(Double(angle) + phase)) * dist,
                 row + 0.15 * Float(sin(Double(angle) + phase)) * dist

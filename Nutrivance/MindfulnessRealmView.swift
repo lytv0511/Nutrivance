@@ -28,70 +28,73 @@ struct MindfulnessRealmView: View {
     private let gradients = GradientBackgrounds()
     
     var body: some View {
-        ZStack {
-            GradientBackgrounds().realmGradient(animationPhase: $animationPhase)
-                .onAppear {
-                    withAnimation(.easeInOut(duration: 10).repeatForever(autoreverses: true)) {
-                        animationPhase = 180
+        NavigationStack {
+            ZStack {
+                GradientBackgrounds().realmGradient(animationPhase: $animationPhase)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 10).repeatForever(autoreverses: true)) {
+                            animationPhase = 180
+                        }
                     }
-                }
-            GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
-                .opacity(0.9)
-                .onAppear {
-                    withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                        animationPhase = 20
+                GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
+                    .opacity(0.9)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
+                        }
                     }
-                }
-            
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Enhanced Mindfulness Score with animation
-                    MindfulnessScoreCard()
-                    
-                    // Mood Tracker
-                    MoodTrackerCompact(selectedMood: $selectedMood)
-                    
-                    // Interactive Quick Actions
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-                        QuickActionCard(title: "Breathe", icon: "lungs.fill") {
-                            withAnimation {
-                                breathingActive.toggle()
+                
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // Enhanced Mindfulness Score with animation
+                        MindfulnessScoreCard()
+                        
+                        // Mood Tracker
+                        MoodTrackerCompact(selectedMood: $selectedMood)
+                        
+                        // Interactive Quick Actions
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+                            QuickActionCard(title: "Breathe", icon: "lungs.fill") {
+                                withAnimation {
+                                    breathingActive.toggle()
+                                }
+                            }
+                            
+                            QuickActionCard(title: "Meditate", icon: "sparkles") {
+                                // Meditation action
+                            }
+                            
+                            QuickActionCard(title: "Journal", icon: "book.fill") {
+                                showingJournal = true
+                            }
+                            
+                            QuickActionCard(title: "Track Mood", icon: "face.smiling.fill") {
+                                // Mood tracking action
                             }
                         }
                         
-                        QuickActionCard(title: "Meditate", icon: "sparkles") {
-                            // Meditation action
-                        }
+                        // Daily Stats Card
+                        DailyStatsCard()
                         
-                        QuickActionCard(title: "Journal", icon: "book.fill") {
-                            showingJournal = true
-                        }
-                        
-                        QuickActionCard(title: "Track Mood", icon: "face.smiling.fill") {
-                            // Mood tracking action
-                        }
+                        // Mindful Moments Timeline
+                        MindfulMomentsTimeline()
                     }
-                    
-                    // Daily Stats Card
-                    DailyStatsCard()
-                    
-                    // Mindful Moments Timeline
-                    MindfulMomentsTimeline()
+                    .padding()
                 }
-                .padding()
+                
+                // Breathing exercise overlay
+                if breathingActive {
+                    BreathingExerciseView(isActive: $breathingActive)
+                        .transition(.opacity)
+                }
             }
-            
-            // Breathing exercise overlay
-            if breathingActive {
-                BreathingExerciseView(isActive: $breathingActive)
-                    .transition(.opacity)
+            .sheet(isPresented: $showingJournal) {
+                JournalView()
             }
-        }
-        .sheet(isPresented: $showingJournal) {
-            JournalView()
-        }
-        .onAppear {
-            startAnimations()
+            .onAppear {
+                startAnimations()
+            }
+            .navigationTitle("Mindfulness Realm")
         }
     }
     
@@ -106,43 +109,40 @@ struct MindfulnessScoreCard: View {
     @State private var score: Double = 0
     
     var body: some View {
-        NavigationStack {
-            VStack {
-                Text("Daily Mindfulness Score")
-                    .font(.title2.weight(.bold))
+        VStack {
+            Text("Daily Mindfulness Score")
+                .font(.title2.weight(.bold))
+            
+            ZStack {
+                Circle()
+                    .stroke(.ultraThinMaterial, lineWidth: 12)
+                    .frame(width: 120, height: 120)
                 
-                ZStack {
-                    Circle()
-                        .stroke(.ultraThinMaterial, lineWidth: 12)
-                        .frame(width: 120, height: 120)
-                    
-                    Circle()
-                        .trim(from: 0, to: score)
-                        .stroke(
-                            AngularGradient(
-                                colors: [.blue, .purple, .pink],
-                                center: .center
-                            ),
-                            style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                        )
-                        .frame(width: 120, height: 120)
-                        .rotationEffect(.degrees(-90))
-                    
-                    Text("\(Int(score * 100))")
-                        .font(.system(.title, design: .rounded))
-                        .bold()
-                }
-                .onAppear {
-                    withAnimation(.easeInOut(duration: 2)) {
-                        score = 0.7
-                    }
+                Circle()
+                    .trim(from: 0, to: score)
+                    .stroke(
+                        AngularGradient(
+                            colors: [.blue, .purple, .pink],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 12, lineCap: .round)
+                    )
+                    .frame(width: 120, height: 120)
+                    .rotationEffect(.degrees(-90))
+                
+                Text("\(Int(score * 100))")
+                    .font(.system(.title, design: .rounded))
+                    .bold()
+            }
+            .onAppear {
+                withAnimation(.easeInOut(duration: 2)) {
+                    score = 0.7
                 }
             }
-            .padding()
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .navigationTitle("Mindfulness Realm")
         }
+        .padding()
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
     }
 }
 
