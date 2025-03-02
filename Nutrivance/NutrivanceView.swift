@@ -212,7 +212,6 @@ struct NutrivanceView: View {
                             }
                             .padding()
                         }
-                        //                .searchable(text: $searchState.searchText)
                         .navigationTitle("Nutrivance")
                     }
                     .padding()

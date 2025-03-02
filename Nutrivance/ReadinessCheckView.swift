@@ -33,14 +33,12 @@ struct ReadinessCheckView: View {
                 
                 ScrollView {
                     VStack(spacing: 20) {
-                        //                    HStack(spacing: 20) {
                         ReadinessScoreCard()
                             .frame(maxWidth: .infinity)
                             .padding(.horizontal)
                         RecoveryRecommendationsCard(hrvValue: hrvValue, rhrValue: rhrValue)
                             .frame(maxWidth: .infinity)
                             .padding(.horizontal)
-                        //                    }
                         SleepMetricsCard()
                             .padding(.horizontal)
                         HRVTrendsCard()
@@ -91,7 +89,6 @@ struct ReadinessScoreCard: View {
                         .padding(.trailing, 32)
                         .frame(width: 240, height: 240)
                 }
-//                .frame(width: 430, height: 257)
             }
         }
         .padding()
@@ -273,7 +270,6 @@ struct RecoveryRecommendationsCard: View {
             }
             Spacer()
         }
-//        .frame(width: 430, height: 300)
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -308,7 +304,6 @@ struct RecommendationRow: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.title2)
-//                .frame(width: 32)
             
             VStack(alignment: .leading) {
                 Text(title)
@@ -338,12 +333,10 @@ struct ReadinessGauge: View {
         ZStack {
             Circle()
                 .stroke(color.opacity(0.2), lineWidth: 8)
-//                .frame(width: 225, height: 225)
             
             Circle()
                 .trim(from: 0, to: animatedScore/100)
                 .stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-//                .frame(width: 225, height: 225)
                 .rotationEffect(.degrees(-90))
             
             Image(systemName: "bolt.heart.fill")

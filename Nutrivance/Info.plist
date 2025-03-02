@@ -27,13 +27,11 @@
         </dict>
     </dict>
 
-    <!-- Restrict to portrait mode on iPhone -->
     <key>UISupportedInterfaceOrientations~iphone</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
     
-    <!-- iPad can still support all orientations -->
     <key>UISupportedInterfaceOrientations~ipad</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
@@ -41,7 +39,24 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+
     <key>LSSupportsAutomaticTermination</key>
     <false/>
+
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.nutrivance.widget</string>
+            <key>UTTypeDescription</key>
+            <string>Nutrivance Widget</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict/>
+        </dict>
+    </array>
 </dict>
 </plist>

@@ -17,6 +17,18 @@ enum WidgetType: String, Codable, CaseIterable {
     case input
     case output
     
+    var iconName: String {
+        switch self {
+        case .view: return "square.grid.2x2"
+        case .tool: return "hammer"
+        case .container: return "square.dashed"
+        case .equation: return "function"
+        case .chart: return "chart.bar"
+        case .input: return "arrow.right.circle"
+        case .output: return "arrow.left.circle"
+        }
+    }
+    
     var displayName: String {
         switch self {
         case .view: return "View"
