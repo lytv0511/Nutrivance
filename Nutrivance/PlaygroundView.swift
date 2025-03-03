@@ -74,7 +74,8 @@ struct PlaygroundView: View {
                         ToolPicker(
                             isPresented: $showToolPicker,
                             selectedTool: $selectedTool,
-                            isEditing: $isEditing
+                            isEditing: $isEditing,
+                            presetManager: presetManager
                         )
                         .offset(y: toolPickerOffset)
                         .transition(.move(edge: .bottom))
@@ -85,6 +86,17 @@ struct PlaygroundView: View {
                         if !isEditing {
                             Spacer()
                         }
+                    }
+                    HStack {
+                        if !isEditing {
+                            Spacer()
+                        }
+                        PlaygroundPresetPicker(
+                            presets: $presetManager.presets,
+                            selectedPreset: $presetManager.selectedPreset,
+                            isExpanded: isEditing
+                        )
+                        .padding()
                     }
                 }
             }
@@ -259,29 +271,26 @@ struct ToolPalette: View {
     ]
     
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(tools, id: \.0) { tool, name, icon in
-                    Button {
-                        selectedTool = tool
-                    } label: {
-                        VStack {
-                            Image(systemName: icon)
-                                .font(.title2)
-                            Text(name)
-                                .font(.caption)
-                        }
-                        .frame(width: 60, height: 60)
-                        .background(selectedTool == tool ? .blue.opacity(0.2) : .clear)
-                        .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
+        List {
+            ForEach(tools, id: \.0) { tool, name, icon in
+                HStack {
+                    Image(systemName: icon)
+                        .imageScale(.large)
+                        .frame(width: 24, height: 24)
+                    Text(name)
+                        .font(.body)
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+                .listRowBackground(selectedTool == tool ? Color.blue.opacity(0.2) : Color.clear)
+                .onTapGesture {
+                    selectedTool = tool
                 }
             }
-            .padding()
         }
+        .listStyle(.sidebar)
         .background(.ultraThinMaterial)
-        .cornerRadius(12)
     }
 }
 
@@ -293,10 +302,11 @@ struct WiggleModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .rotationEffect(.degrees(isEnabled ? rotation : 0))
-            .onAppear {
-                guard isEnabled else { return }
-                withAnimation(.easeInOut(duration: 0.15).repeatForever(autoreverses: true)) {
-                    rotation = [-2, 2][Int.random(in: 0...1)]
+            .onChange(of: isEnabled) { _, newValue in
+                if newValue {
+                    withAnimation(.easeInOut(duration: 0.15).repeatForever(autoreverses: true)) {
+                        rotation = [-2, 2][Int.random(in: 0...1)]
+                    }
                 }
             }
     }
@@ -331,6 +341,7 @@ struct ToolPicker: View {
     @Binding var isPresented: Bool
     @Binding var selectedTool: WidgetType?
     @Binding var isEditing: Bool
+    let presetManager: PresetManager
     @Environment(\.horizontalSizeClass) var sizeClass
     @GestureState private var translation = CGFloat.zero
     @State private var offset = CGFloat.zero
@@ -370,7 +381,7 @@ struct ToolPicker: View {
                                 isEditing = false
                             }
                         }
-                        .padding()
+                        .padding(8)
                         .hoverEffect(.automatic)
                     }
                     .padding()
@@ -452,34 +463,41 @@ struct ToolPicker: View {
     
     private var iPadLayout: some View {
         HStack(spacing: 0) {
-            List(WidgetType.allCases, id: \.self) { tool in
-                HStack {
-                    Image(systemName: tool.iconName)
-                        .font(.title2)
-                    Text(tool.displayName)
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(WidgetType.allCases, id: \.self) { tool in
+                        Button(action: {
+                            selectedTool = tool
+                        }) {
+                            HStack {
+                                Image(systemName: tool.iconName)
+                                    .font(.title2)
+                                Text(tool.displayName)
+                                Spacer()
+                            }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(selectedTool == tool ? .blue.opacity(0.2) : .clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    selectedTool = tool
-                }
-                .listRowBackground(Color.clear)
+                .padding(16)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
             .background(.ultraThinMaterial)
-            .padding(.bottom)
-            .padding(.leading)
-            .padding(1)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .cornerRadius(10)
-            .frame(width: 250)
+            .frame(width: 250, height: 350)
+            .padding(.bottom)
+            .padding(.horizontal)
             
             if let selectedTool {
                 VStack {
                     Spacer()
                     createWidgetView(for: selectedTool)
-                        .frame(width: 300, height: 300)
+                        .frame(width: 250, height: 250)
                     Spacer()
                     
                     Button(action: addWidget) {
@@ -519,8 +537,19 @@ struct ToolPicker: View {
     }
     
     private func addWidget() {
+        if let type = selectedTool {
+            let widget = ResizableWidget(
+                type: type,
+                position: CGPoint(x: UIScreen.main.bounds.midX, y: UIScreen.main.bounds.midY),
+                size: CGSize(width: 200, height: 200),
+                view: createWidgetView(for: type)
+            )
+            presetManager.elements.append(widget)
+        }
+        
         withAnimation(.interpolatingSpring(stiffness: 300, damping: 30)) {
             offset = 400
+            isPresented = false
         }
     }
 }

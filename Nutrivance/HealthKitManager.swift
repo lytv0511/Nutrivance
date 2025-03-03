@@ -64,7 +64,11 @@ let additionalTypes: [(HKSampleType, String)] = [
     
     (HKObjectType.categoryType(forIdentifier: .moodChanges)!, "mood"),
     (HKObjectType.categoryType(forIdentifier: .sleepChanges)!, "sleep_changes"),
-    (HKObjectType.categoryType(forIdentifier: .appetiteChanges)!, "appetite_changes")
+    (HKObjectType.categoryType(forIdentifier: .appetiteChanges)!, "appetite_changes"),
+    (HKObjectType.quantityType(forIdentifier: .stepCount)!, "steps"),
+    (HKObjectType.quantityType(forIdentifier: .appleExerciseTime)!, "exercise"),
+    (HKObjectType.quantityType(forIdentifier: .appleStandTime)!, "stand"),
+    (HKObjectType.quantityType(forIdentifier: .flightsClimbed)!, "flights")
 ]
 
 class HealthKitManager: ObservableObject {
@@ -221,6 +225,22 @@ class HealthKitManager: ObservableObject {
         healthStore.execute(query)
     }
 
+    func fetchStandTime(completion: @escaping (Double) -> Void) {
+        guard let standTimeType = HKQuantityType.quantityType(forIdentifier: .appleStandTime) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: Calendar.current.startOfDay(for: Date()), end: Date(), options: .strictStartDate)
+        let query = HKStatisticsQuery(quantityType: standTimeType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+            let standTime = result?.sumQuantity()?.doubleValue(for: HKUnit.minute()) ?? 0
+            let standHours = standTime / 60.0
+            DispatchQueue.main.async {
+                completion(standHours)
+            }
+        }
+        healthStore.execute(query)
+    }
 
     func getNutrientInteractions(for nutrient: String) -> NutrientInteraction {
         switch nutrient.lowercased() {
@@ -332,8 +352,9 @@ class HealthKitManager: ObservableObject {
     
     func requestAuthorization(completion: @escaping (Bool, Error?) -> Void) {
         print("HealthKitManager: Requesting authorization")
-        let types = Set([
-            // Existing
+        
+        let typesToShare: Set<HKSampleType> = Set([
+            // Dietary
             HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
             HKObjectType.quantityType(forIdentifier: .dietaryProtein)!,
             HKObjectType.quantityType(forIdentifier: .dietaryFatTotal)!,
@@ -355,7 +376,7 @@ class HealthKitManager: ObservableObject {
             HKObjectType.quantityType(forIdentifier: .dietaryFolate)!,
             HKObjectType.quantityType(forIdentifier: .dietaryBiotin)!,
             HKObjectType.quantityType(forIdentifier: .dietaryPantothenicAcid)!,
-
+            
             // Minerals
             HKObjectType.quantityType(forIdentifier: .dietaryCalcium)!,
             HKObjectType.quantityType(forIdentifier: .dietaryIron)!,
@@ -371,7 +392,7 @@ class HealthKitManager: ObservableObject {
             HKObjectType.quantityType(forIdentifier: .dietaryChromium)!,
             HKObjectType.quantityType(forIdentifier: .dietaryMolybdenum)!,
             HKObjectType.quantityType(forIdentifier: .dietaryChloride)!,
-
+            
             // Others
             HKObjectType.quantityType(forIdentifier: .dietaryCholesterol)!,
             HKObjectType.quantityType(forIdentifier: .dietarySugar)!,
@@ -380,14 +401,22 @@ class HealthKitManager: ObservableObject {
             HKObjectType.quantityType(forIdentifier: .dietaryFatSaturated)!,
             HKObjectType.quantityType(forIdentifier: .dietaryCaffeine)!,
             
-            // Add workout and activity types
-            HKObjectType.workoutType(),
-            HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
-            HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!,
-            HKObjectType.quantityType(forIdentifier: .heartRate)!
+            // Workouts
+            HKObjectType.workoutType()
         ])
         
-        healthStore.requestAuthorization(toShare: types, read: types) { success, error in
+        let typesToRead: Set<HKSampleType> = Set([
+            // Activity and Fitness
+            HKQuantityType.quantityType(forIdentifier: .stepCount)!,
+            HKQuantityType.quantityType(forIdentifier: .appleExerciseTime)!,
+            HKQuantityType.quantityType(forIdentifier: .appleStandTime)!,
+            HKQuantityType.quantityType(forIdentifier: .flightsClimbed)!,
+            HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
+            HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)!,
+            HKQuantityType.quantityType(forIdentifier: .heartRate)!
+        ]).union(typesToShare)
+        
+        healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { success, error in
             DispatchQueue.main.async {
                 completion(success, error)
             }
@@ -852,6 +881,48 @@ class HealthKitManager: ObservableObject {
         }
     }
     
+    func fetchQuantity(for identifier: HKQuantityTypeIdentifier, start: Date, end: Date) async throws -> Double {
+        let type = HKQuantityType.quantityType(forIdentifier: identifier)!
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, result, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                let quantity = result?.sumQuantity()?.doubleValue(for: self.getUnit(for: identifier)) ?? 0
+                continuation.resume(returning: quantity)
+            }
+            healthStore.execute(query)
+        }
+    }
+    
+    func fetchActivityGoals() async throws -> (activeEnergy: Double, exerciseTime: Double, standHours: Double) {
+        let calendar = Calendar.current
+        let now = Date()
+        let components = DateComponents(calendar: calendar, year: calendar.component(.year, from: now), month: calendar.component(.month, from: now), day: calendar.component(.day, from: now))
+        let predicate = HKQuery.predicateForActivitySummary(with: components)
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKActivitySummaryQuery(predicate: predicate) { query, summaries, error in
+                if let summary = summaries?.first {
+                    let activeEnergyGoal = summary.activeEnergyBurnedGoal.doubleValue(for: .kilocalorie())
+                    let exerciseTimeGoal = summary.appleExerciseTimeGoal.doubleValue(for: .minute())
+                    let standHoursGoal = summary.appleStandHoursGoal.doubleValue(for: .count())
+                    continuation.resume(returning: (activeEnergyGoal, exerciseTimeGoal, standHoursGoal))
+                } else {
+                    continuation.resume(returning: (600, 30, 12))
+                }
+            }
+            healthStore.execute(query)
+        }
+    }
+    
     func fetchWorkouts(from startDate: Date, to endDate: Date, completion: @escaping ([HKWorkout]) -> Void) {
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
@@ -1100,5 +1171,117 @@ extension HealthKitManager {
             }
         }
         healthStore.execute(query)
+    }
+}
+
+extension HealthKitManager {
+    func fetchTodayQuantity(for identifier: HKQuantityTypeIdentifier) async throws -> Double {
+        let now = Date()
+        let startOfDay = Calendar.current.startOfDay(for: now)
+        let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: now, options: .strictStartDate)
+        
+        let quantityType = HKQuantityType(identifier)
+        let unit = getUnit(for: identifier)
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: quantityType,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, statistics, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                
+                let value = statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0
+                continuation.resume(returning: value)
+            }
+            
+            healthStore.execute(query)
+        }
+    }
+    
+    private func getUnit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
+        switch identifier {
+        case .activeEnergyBurned, .basalEnergyBurned:
+            return .kilocalorie()
+        case .stepCount:
+            return .count()
+        case .distanceWalkingRunning:
+            return .meter()
+        case .appleExerciseTime:
+            return .minute()
+        case .flightsClimbed:
+            return .count()
+        case .appleStandTime:
+            return .hour()
+        default:
+            return .count()
+        }
+    }
+    
+    func fetchDashboardMetrics() async throws -> DashboardMetrics {
+            var metrics = DashboardMetrics()
+            
+            let types: [HKQuantityTypeIdentifier] = [
+                .activeEnergyBurned,
+                .basalEnergyBurned,
+                .stepCount,
+                .distanceWalkingRunning,
+                .appleStandTime,
+                .appleExerciseTime,
+                .flightsClimbed
+            ]
+            
+            for type in types {
+                if let quantity = try? await fetchTodayQuantity(for: type) {
+                    switch type {
+                    case .activeEnergyBurned:
+                        metrics.activeEnergy = String(format: "%.0f", quantity)
+                    case .basalEnergyBurned:
+                        metrics.restingEnergy = String(format: "%.0f", quantity)
+                    case .stepCount:
+                        metrics.steps = String(format: "%.0f", quantity)
+                    case .distanceWalkingRunning:
+                        metrics.distance = String(format: "%.1f", quantity/1000)
+                    case .appleStandTime:
+                        metrics.standHours = String(format: "%.0f", quantity)
+                    case .appleExerciseTime:
+                        metrics.exercise = String(format: "%.0f", quantity)
+                    case .flightsClimbed:
+                        metrics.flights = String(format: "%.0f", quantity)
+                    default:
+                        break
+                    }
+                }
+            }
+            
+            return metrics
+        }
+}
+
+extension HealthKitManager {
+    func startObservingHealthData(updateHandler: @escaping () -> Void) {
+        let types: [HKQuantityType] = [
+            .quantityType(forIdentifier: .activeEnergyBurned)!,
+            .quantityType(forIdentifier: .stepCount)!,
+            .quantityType(forIdentifier: .distanceWalkingRunning)!,
+            .quantityType(forIdentifier: .appleExerciseTime)!,
+            .quantityType(forIdentifier: .flightsClimbed)!
+        ]
+        
+        for type in types {
+            let query = HKObserverQuery(sampleType: type, predicate: nil) { _, _, error in
+                if error == nil {
+                    DispatchQueue.main.async {
+                        updateHandler()
+                    }
+                }
+            }
+            
+            healthStore.execute(query)
+            healthStore.enableBackgroundDelivery(for: type, frequency: HKUpdateFrequency.immediate) { _, _ in }
+        }
     }
 }

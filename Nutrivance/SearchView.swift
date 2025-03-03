@@ -145,21 +145,45 @@ struct SearchView: View {
                     ))
                 VStack {
                     HStack {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
-                            .padding(.leading, 8)
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(.secondary)
+                                .padding(.leading, 8)
+                            
+                            TextField("Find in List", text: $searchState.searchText)
+                                .textFieldStyle(.plain)
+                                .focused($searchBarFocused)
+                                .autocorrectionDisabled(true)
+                            
+                            if !searchState.searchText.isEmpty {
+                                Button(action: {
+                                    searchState.searchText = ""
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 16, height: 16)
+                                }
+                                .hoverEffect(.automatic)
+                                .padding(.trailing, 8)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(8)
                         
-                        TextField("Find in List", text: $searchState.searchText)
-                            .textFieldStyle(.plain)
-                            .focused($searchBarFocused)
-                            .autocorrectionDisabled(true)
+                        if searchBarFocused {
+                            Button("Cancel") {
+                                searchBarFocused = false
+                            }
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            .padding(8)
+                            .hoverEffect(.automatic)
+                        }
                     }
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(8)
-                    .padding()
+                    .padding(.horizontal)
+                    .animation(.spring(), value: searchBarFocused)
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 20) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 20) {
                             ForEach(filteredItems, id: \.self) { item in
                                 NavigationLink {
                                     switch item {
@@ -266,7 +290,9 @@ struct SearchView: View {
                                         Text(item)
                                             .font(.caption)
                                             .multilineTextAlignment(.center)
+                                            .frame(width: 80, height: 40)
                                     }
+                                    .frame(width: 120, height: 120)
                                     .padding()
                                     .background(.ultraThinMaterial)
                                     .cornerRadius(12)

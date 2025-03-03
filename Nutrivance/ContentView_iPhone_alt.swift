@@ -124,11 +124,11 @@ struct ContentView_iPhone_alt: View {
                 .customizationID( "iPhone.tab.home")
                 .defaultVisibility(.visible, for: .tabBar)
             
-                Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
-                    PlaygroundView()
-                }
-                .customizationID("iPhone.tab.playground")
-                .defaultVisibility(.visible, for: .tabBar)
+//                Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
+//                    PlaygroundView()
+//                }
+//                .customizationID("iPhone.tab.playground")
+//                .defaultVisibility(.visible, for: .tabBar)
                 
                 Tab(role: .search) {
                     SearchView()
