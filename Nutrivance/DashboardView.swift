@@ -16,11 +16,119 @@ struct DashboardMetrics {
 }
 
 class DashboardViewModel: ObservableObject {
-    @Published var metrics = DashboardMetrics()
+    @Published var metrics: DashboardMetrics = DashboardMetrics()
+    @Published var showRingCard = false
+    @Published var activeRings: [RingMetric] = [] {
+        didSet {
+            saveRings()
+        }
+    }
+    @Published var isRingSectionExpanded: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isRingSectionExpanded, forKey: "ringSectionExpanded")
+        }
+    }
+    
+    private let goalsKey = "complicationGoals"
+    
+    func saveGoal(title: String, goal: Double) {
+        var goals = UserDefaults.standard.dictionary(forKey: goalsKey) as? [String: Double] ?? [:]
+        goals[title] = goal
+        UserDefaults.standard.set(goals, forKey: goalsKey)
+        NSUbiquitousKeyValueStore.default.set(goals, forKey: goalsKey)
+        NSUbiquitousKeyValueStore.default.synchronize()
+    }
+    
+    func loadGoal(for title: String) -> Double? {
+        let goals = UserDefaults.standard.dictionary(forKey: goalsKey) as? [String: Double]
+        return goals?[title]
+    }
+    
+    private let ringsKey = "activeRings"
+    
+    struct RingLayer: Identifiable, Codable {
+        let id: UUID
+        var title: String
+        var value: Double
+        var goal: Double
+        var colorRed: Double
+        var colorGreen: Double
+        var colorBlue: Double
+        var unit: String
+        
+        var color: Color {
+            Color(red: colorRed, green: colorGreen, blue: colorBlue)
+        }
+    }
+    
+    struct RingMetric: Identifiable, Codable {
+        let id: UUID
+        var name: String
+        var layers: [RingLayer]
+        
+        enum CodingKeys: CodingKey {
+            case id, name, layers
+        }
+        
+        init(id: UUID = UUID(), name: String, layers: [RingLayer]) {
+            self.id = id
+            self.name = name
+            self.layers = layers
+        }
+        
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            layers = try container.decode([RingLayer].self, forKey: .layers)
+        }
+        
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(name, forKey: .name)
+            try container.encode(layers, forKey: .layers)
+        }
+    }
+    
     let healthStore: HealthKitManager
     
     init(healthStore: HealthKitManager) {
         self.healthStore = healthStore
+        self.isRingSectionExpanded = UserDefaults.standard.bool(forKey: "ringSectionExpanded") || activeRings.count >= 1
+        loadSavedRings()
+        setupCloudSync()
+    }
+    
+    private func saveRings() {
+        if let encoded = try? JSONEncoder().encode(activeRings) {
+            UserDefaults.standard.set(encoded, forKey: ringsKey)
+            NSUbiquitousKeyValueStore.default.set(encoded, forKey: ringsKey)
+            NSUbiquitousKeyValueStore.default.synchronize()
+        }
+    }
+    
+    private func loadSavedRings() {
+        if let cloudData = NSUbiquitousKeyValueStore.default.data(forKey: ringsKey),
+           let decoded = try? JSONDecoder().decode([RingMetric].self, from: cloudData) {
+            activeRings = decoded
+        } else if let localData = UserDefaults.standard.data(forKey: ringsKey),
+                let decoded = try? JSONDecoder().decode([RingMetric].self, from: localData) {
+            activeRings = decoded
+        }
+    }
+    
+    private func setupCloudSync() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(ubiquitousKeyValueStoreDidChange),
+            name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: NSUbiquitousKeyValueStore.default
+        )
+    }
+    
+    @objc private func ubiquitousKeyValueStoreDidChange(_ notification: Notification) {
+        loadSavedRings()
     }
     
     func loadHealthData() async {
@@ -55,24 +163,14 @@ class DashboardViewModel: ObservableObject {
                 }
             }
         }
-        
-        let standHours = await withCheckedContinuation { continuation in
-            healthStore.fetchStandTime { hours in
-                continuation.resume(returning: hours)
-            }
-        }
-        
-        await MainActor.run {
-            metrics.standHours = String(format: "%.0f", standHours)
-        }
     }
-
 }
 
 struct DashboardView: View {
     @State private var animationPhase: Double = 0
     @StateObject private var healthStore = HealthKitManager()
     @StateObject private var viewModel: DashboardViewModel
+    @State private var isRing = false
     
     init() {
         let healthStore = HealthKitManager()
@@ -83,7 +181,6 @@ struct DashboardView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Rest of your view code remains the same, but use viewModel.metrics instead of metrics
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Today's Overview")
@@ -101,20 +198,56 @@ struct DashboardView: View {
                     .cornerRadius(15)
                     
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160))], spacing: 15) {
-                            MetricCard(title: "Active Energy", value: viewModel.metrics.activeEnergy, unit: "kcal", icon: "flame.fill")
-                            MetricCard(title: "Steps", value: viewModel.metrics.steps, unit: "steps", icon: "figure.walk")
-                            MetricCard(title: "Distance", value: viewModel.metrics.distance, unit: "km", icon: "figure.run")
-                            MetricCard(title: "Exercise", value: viewModel.metrics.exercise, unit: "min", icon: "timer")
-                            MetricCard(title: "Stand", value: viewModel.metrics.standHours, unit: "hr", icon: "figure.stand")
-                            MetricCard(title: "Flights", value: viewModel.metrics.flights, unit: "floors", icon: "stairs")
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200))], spacing: 15) {
+                            let complications = [
+                                (title: "Active Energy", value: viewModel.metrics.activeEnergy, unit: "kcal", icon: "flame.fill", isActivityRing: true),
+                                (title: "Steps", value: viewModel.metrics.steps, unit: "steps", icon: "figure.walk", isActivityRing: false),
+                                (title: "Distance", value: viewModel.metrics.distance, unit: "km", icon: "figure.run", isActivityRing: false),
+                                (title: "Exercise", value: viewModel.metrics.exercise, unit: "min", icon: "timer", isActivityRing: true),
+                                (title: "Stand", value: viewModel.metrics.standHours, unit: "hr", icon: "figure.stand", isActivityRing: true),
+                                (title: "Flights", value: viewModel.metrics.flights, unit: "floors", icon: "stairs", isActivityRing: false)
+                            ]
+                            
+                            ForEach(complications, id: \.title) { complication in
+                                ActivityComplication(
+                                    viewModel: viewModel,
+                                    title: complication.title,
+                                    value: complication.value,
+                                    unit: complication.unit,
+                                    icon: complication.icon,
+                                    isActivityRing: complication.isActivityRing
+                                )
+                                .frame(width: 200, height: 100)
+                            }
                         }
+                        
+                        HStack {
+                            Text("Rings")
+                                .font(.title2)
+                                .bold()
+                            Spacer()
+                            Button(action: {
+                                withAnimation(.spring()) {
+                                    viewModel.isRingSectionExpanded.toggle()
+                                }
+                            }) {
+                                Image(systemName: viewModel.isRingSectionExpanded ? "chevron.up" : "chevron.down")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.horizontal)
+
+                        if viewModel.isRingSectionExpanded {
+                            RingCard(rings: $viewModel.activeRings)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+
                     }
+
                     .task {
                         await viewModel.loadHealthData()
                     }
-                    
-                    // Rest of your existing view components
+
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Today's Training")
                             .font(.title3)
@@ -134,7 +267,7 @@ struct DashboardView: View {
                 .padding()
             }
             .background(
-                GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+//                GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
             )
             .navigationTitle("Dashboard")
         }
@@ -253,6 +386,9 @@ struct WeeklyProgressChart: View {
             Text("Weekly Progress")
                 .font(.title3)
                 .bold()
+            Text("Your familiar rings, powering your week")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
             
             Chart(weeklyData) { item in
                 Plot {
@@ -309,5 +445,516 @@ struct CircularProgressView: View {
                 style: StrokeStyle(lineWidth: 8, lineCap: .round)
             )
             .rotationEffect(.degrees(-90))
+    }
+}
+
+extension UTType {
+    static var activityComplication: UTType {
+        UTType(exportedAs: "com.nutrivance.activitycomplication")
+    }
+}
+
+struct ActivityComplicationTransferData: Transferable, Codable {
+    let title: String
+    let value: String
+    let unit: String
+    let customGoal: Double?
+    
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .activityComplication)
+    }
+}
+
+struct ActivityComplication: View, Transferable, Codable {
+    @StateObject private var viewModel: DashboardViewModel
+    @State private var isRing = false
+    @State private var showGoalSheet = false
+    @State private var customGoal: Double?
+    let title: String
+    let value: String
+    let unit: String
+    let icon: String
+    let isActivityRing: Bool
+
+    enum CodingKeys: CodingKey {
+        case title, value, unit, icon, isActivityRing, customGoal
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decode(String.self, forKey: .title)
+        value = try container.decode(String.self, forKey: .value)
+        unit = try container.decode(String.self, forKey: .unit)
+        icon = try container.decode(String.self, forKey: .icon)
+        isActivityRing = try container.decode(Bool.self, forKey: .isActivityRing)
+        _customGoal = State(initialValue: try container.decodeIfPresent(Double.self, forKey: .customGoal))
+        let healthStore = HealthKitManager()
+        _viewModel = StateObject(wrappedValue: DashboardViewModel(healthStore: healthStore))
+    }
+    
+    static var transferRepresentation: some TransferRepresentation {
+        ProxyRepresentation<Self, ActivityComplicationTransferData>(exporting: { (complication: ActivityComplication) in
+            ActivityComplicationTransferData(
+                title: complication.title,
+                value: complication.value,
+                unit: complication.unit,
+                customGoal: complication.customGoal
+            )
+        })
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(title, forKey: .title)
+        try container.encode(value, forKey: .value)
+        try container.encode(unit, forKey: .unit)
+        try container.encode(customGoal, forKey: .customGoal)
+    }
+    
+    init(viewModel: DashboardViewModel, title: String, value: String, unit: String, icon: String, isActivityRing: Bool) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+        self.title = title
+        self.value = value
+        self.unit = unit
+        self.icon = icon
+        self.isActivityRing = isActivityRing
+    }
+    
+    var targetValue: String? {
+        if isActivityRing {
+            switch title {
+                case "Active Energy": return "600"
+                case "Exercise": return "30"
+                case "Stand": return "12"
+                default: return nil
+            }
+        }
+        return customGoal?.description
+    }
+    
+    var body: some View {
+        VStack {
+            HStack {
+                if !isRing {
+                    HStack {
+                        Image(systemName: icon)
+                        VStack(alignment: .leading) {
+                            Text(title)
+                                .font(.caption)
+                            Text("\(value)/\(targetValue ?? "--") \(unit)")
+                                .font(.title2)
+                                .bold()
+                        }
+                        Spacer()
+                    }
+                    .padding()
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(15)
+                    .draggable(ActivityComplicationTransferData(
+                        title: title,
+                        value: value,
+                        unit: unit,
+                        customGoal: customGoal
+                    ))
+                    .contextMenu {
+                        if !isActivityRing {
+                            Button(action: { showGoalSheet = true }) {
+                                Label("Set Goal", systemImage: "target")
+                            }
+                        }
+                        Button(action: {
+                            withAnimation(.spring()) {
+                                viewModel.showRingCard = true
+                                isRing = true
+                            }
+                        }) {
+                            Label("Make Ring", systemImage: "circle")
+                        }
+                    }
+                    .wiggle(isEnabled: isRing)
+                    .draggable(title)
+                }
+            }
+        }
+        .sheet(isPresented: $showGoalSheet) {
+            GoalSettingView(goal: $customGoal)
+        }
+        .contextMenu {
+            Button(action: {
+                withAnimation(.spring()) {
+                    viewModel.showRingCard = true
+                    isRing = true
+                }
+            }) {
+                Label("Make Ring", systemImage: "circle")
+            }
+        }
+    }
+}
+
+struct RingCard: View {
+    @Binding var rings: [DashboardViewModel.RingMetric]
+    
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 20) {
+                ForEach(rings) { ring in
+                    RingItemView(rings: $rings, ring: ring)
+                        .dropDestination(for: ActivityComplicationTransferData.self) { complications, location in
+                            if ring.layers.count < 4 {
+                                for complication in complications {
+                                    if !ring.layers.contains(where: { $0.title == complication.title }) {
+                                        let newLayer = DashboardViewModel.RingLayer(
+                                            id: UUID(),
+                                            title: complication.title,
+                                            value: Double(complication.value) ?? 0,
+                                            goal: complication.customGoal ?? 100,
+                                            colorRed: getLayerColor(for: ring.layers.count).red,
+                                            colorGreen: getLayerColor(for: ring.layers.count).green,
+                                            colorBlue: getLayerColor(for: ring.layers.count).blue,
+                                            unit: complication.unit
+                                        )
+                                        if let index = rings.firstIndex(where: { $0.id == ring.id }) {
+                                            rings[index].layers.append(newLayer)
+                                        }
+                                    }
+                                }
+                            }
+                            return true
+                        }
+                }
+                
+                if rings.count < 5 {
+                    VStack {
+                        Circle()
+                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5]))
+                            .frame(width: 350, height: 350)
+                            .foregroundColor(.secondary)
+                            .overlay(
+                                Text("Drop Complication Here")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            )
+                            .padding()
+                    }
+                    .dropDestination(for: ActivityComplicationTransferData.self) { complications, location in
+                        handleDroppedComplications(complications)
+                        return true
+                    }
+                }
+            }
+            .padding()
+        }
+        .frame(height: 500)
+        .background(.ultraThinMaterial)
+        .cornerRadius(15)
+        .padding()
+    }
+    
+    private func handleDroppedComplications(_ items: [ActivityComplicationTransferData]) {
+        for item in items {
+            let firstLayer = DashboardViewModel.RingLayer(
+                id: UUID(),
+                title: item.title,
+                value: Double(item.value) ?? 0,
+                goal: item.customGoal ?? 100,
+                colorRed: 0.9,    // Deep red for outermost ring
+                colorGreen: 0.2,
+                colorBlue: 0.3,
+                unit: item.unit
+            )
+            
+            let newRing = DashboardViewModel.RingMetric(
+                name: "Ring \(rings.count + 1)",
+                layers: [firstLayer]
+            )
+            rings.append(newRing)
+        }
+    }
+    
+    private func getLayerColor(for index: Int) -> (red: Double, green: Double, blue: Double) {
+        switch index {
+        case 0: return (0.9, 0.2, 0.3)  // Deep red
+        case 1: return (0.3, 0.85, 0.3) // Rich green
+        case 2: return (0.1, 0.5, 0.9)  // Deep blue
+        case 3: return (0.6, 0.2, 0.8)  // Rich purple
+        default: return (0.5, 0.5, 0.5) // Gray
+        }
+    }
+}
+
+struct RingItemView: View {
+    @Binding var rings: [DashboardViewModel.RingMetric]
+    let ring: DashboardViewModel.RingMetric
+    @State private var showEditSheet = false
+    @State private var showRingDetail = false
+
+    var body: some View {
+        NavigationLink(destination: RingDetailView(ring: ring), isActive: $showRingDetail) {
+            VStack {
+                ringStack
+                    .padding(.bottom, 10)
+                HStack {
+                    Text(ring.name)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Divider()
+                    metricsStack
+                }
+            }
+            .frame(width: 350, height: 350)
+            .padding(30)
+            .background(.ultraThinMaterial)
+            .cornerRadius(15)
+            .onTapGesture {
+                showRingDetail = true
+            }
+            .contextMenu {
+                Button(role: .destructive) {
+                    withAnimation {
+                        rings.removeAll { $0.id == ring.id }
+                    }
+                } label: {
+                    Label("Delete Ring", systemImage: "trash")
+                }
+                
+                Button {
+                    showEditSheet = true
+                } label: {
+                    Label("Edit Ring", systemImage: "pencil")
+                }
+            }
+            .sheet(isPresented: $showEditSheet) {
+                NavigationStack {
+                    RingEditView(rings: $rings, ring: ring, editedRingName: ring.name)
+                }
+            }
+        }
+    }
+    
+    private var ringStack: some View {
+        ZStack {
+            if let outerRing = ring.layers.first {
+                ActivityRing(
+                    progress: outerRing.value / outerRing.goal,
+                    gradient: Gradient(colors: [outerRing.color, outerRing.color]),
+                    backgroundGradient: Gradient(colors: [outerRing.color.opacity(0.2)])
+                )
+                .frame(width: 280, height: 280)
+            }
+            
+            ForEach(Array(ring.layers.dropFirst().enumerated()), id: \.element.id) { index, layer in
+                ActivityRing(
+                    progress: layer.value / layer.goal,
+                    gradient: Gradient(colors: [layer.color, layer.color]),
+                    backgroundGradient: Gradient(colors: [layer.color.opacity(0.2)])
+                )
+                .frame(width: ringSize(for: index), height: ringSize(for: index))
+            }
+        }
+    }
+    
+    private var metricsStack: some View {
+        VStack {
+            ForEach(ring.layers) { layer in
+                HStack {
+                    Text(layer.title)
+                        .foregroundColor(.primary)  // Set to primary color
+                    Text("\(Int(layer.value))/\(Int(layer.goal)) \(layer.unit)")
+                        .foregroundColor(.primary)  // Set to primary color
+                }
+                .font(.caption)
+            }
+        }
+    }
+    
+    private func ringSize(for index: Int) -> CGFloat {
+        280 - CGFloat(index + 1) * 35
+    }
+}
+
+struct RingEditView: View {
+    @Binding var rings: [DashboardViewModel.RingMetric]
+    let ring: DashboardViewModel.RingMetric
+    @Environment(\.dismiss) private var dismiss
+    @State var editedRingName: String
+    @State private var editMode: EditMode = .inactive
+
+    private var nameSection: some View {
+        Section("Ring Name") {
+            TextField("Ring Name", text: $editedRingName)
+                .onChange(of: editedRingName) { _, newValue in
+                    if let index = rings.firstIndex(where: { $0.id == ring.id }) {
+                        rings[index].name = newValue
+                    }
+                }
+        }
+    }
+
+    private var layersSection: some View {
+        Section("Ring Layers") {
+            ForEach(ring.layers) { layer in
+                DisclosureGroup {
+                    VStack(spacing: 12) {
+                        ColorPicker(selection: Binding(
+                            get: {
+                                Color(red: layer.colorRed, green: layer.colorGreen, blue: layer.colorBlue)
+                            },
+                            set: { newColor in
+                                if let ringIndex = rings.firstIndex(where: { $0.id == ring.id }),
+                                   let layerIndex = rings[ringIndex].layers.firstIndex(where: { $0.id == layer.id }) {
+                                    var components = newColor.components
+                                    rings[ringIndex].layers[layerIndex].colorRed = components.red
+                                    rings[ringIndex].layers[layerIndex].colorGreen = components.green
+                                    rings[ringIndex].layers[layerIndex].colorBlue = components.blue
+                                }
+                            }
+                        )) {
+                            HStack {
+                                Circle()
+                                    .fill(layer.color)
+                                    .frame(width: 20, height: 20)
+                                Text("Ring Color")
+                            }
+                        }
+                        
+                        HStack {
+                            Text("Goal")
+                            Spacer()
+                            TextField("Goal", value: Binding(
+                                get: { layer.goal },
+                                set: { newValue in
+                                    if let ringIndex = rings.firstIndex(where: { $0.id == ring.id }),
+                                       let layerIndex = rings[ringIndex].layers.firstIndex(where: { $0.id == layer.id }) {
+                                        rings[ringIndex].layers[layerIndex].goal = newValue
+                                    }
+                                }
+                            ), format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            Text(layer.unit)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                } label: {
+                    HStack {
+                        Text(layer.title)
+                        Spacer()
+                        Text("\(Int(layer.value))/\(Int(layer.goal)) \(layer.unit)")
+                    }
+                }
+            }
+            .onMove(perform: editMode == .active ? moveLayer : nil)
+            .onDelete(perform: editMode == .active ? deleteLayer : nil)
+        }
+    }
+
+    
+    private func moveLayer(from source: IndexSet, to destination: Int) {
+        if let ringIndex = rings.firstIndex(where: { $0.id == ring.id }) {
+            rings[ringIndex].layers.move(fromOffsets: source, toOffset: destination)
+        }
+    }
+    
+    private func deleteLayer(at offsets: IndexSet) {
+        if let ringIndex = rings.firstIndex(where: { $0.id == ring.id }) {
+            rings[ringIndex].layers.remove(atOffsets: offsets)
+        }
+    }
+    
+    var body: some View {
+        List {
+            nameSection
+            layersSection
+        }
+        .navigationTitle("Edit Ring")
+        .navigationBarTitleDisplayMode(.inline)
+        .environment(\.editMode, $editMode)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    withAnimation {
+                        editMode = editMode == .active ? .inactive : .active
+                    }
+                } label: {
+                    Text(editMode == .active ? "Done" : "Edit")
+                }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") { dismiss() }
+            }
+        }
+    }
+}
+
+
+struct GoalSettingView: View {
+    @Binding var goal: Double?
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Goal Value", value: $goal, format: .number)
+                        .keyboardType(.decimalPad)
+                }
+                
+                if goal != nil {
+                    Button("Delete Goal", role: .destructive) {
+                        goal = nil
+                        dismiss()
+                    }
+                }
+            }
+            .navigationTitle("Set Goal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+struct ActivityRing: View {
+    let progress: Double
+    let gradient: Gradient
+    let backgroundGradient: Gradient
+    
+    init(progress: Double, gradient: Gradient, backgroundGradient: Gradient? = nil) {
+        self.progress = progress
+        self.gradient = gradient
+        self.backgroundGradient = backgroundGradient ?? Gradient(colors: [Color.gray.opacity(0.2)])
+    }
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(
+                    AngularGradient(gradient: backgroundGradient, center: .center),
+                    style: StrokeStyle(lineWidth: 20, lineCap: .round)
+                )
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(
+                    AngularGradient(gradient: gradient, center: .center),
+                    style: StrokeStyle(lineWidth: 20, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+    }
+}
+
+extension Color {
+    var components: (red: Double, green: Double, blue: Double, alpha: Double) {
+        let uiColor = UIColor(self)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return (red, green, blue, alpha)
     }
 }
