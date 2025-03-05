@@ -16,6 +16,7 @@ struct HealthInsightsView: View {
     @State private var nutrientValues: [String: Double] = [:]
     @EnvironmentObject var navigationState: NavigationState
     @Environment(\.dismiss) private var dismiss
+    @State private var animationPhase: Double = 0
     
     enum TimeFrame: String, CaseIterable {
         case daily = "Today"
@@ -25,65 +26,48 @@ struct HealthInsightsView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                // Mesh Gradient
-                RadialGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.05, green: 0.1, blue: 0.2),
-                        Color(red: 0.02, green: 0.15, blue: 0.05),
-                        Color.black
-                    ]),
-                    center: .topLeading,
-                    startRadius: 200,
-                    endRadius: 1500
-                )
-                .opacity(0.9)
-                .ignoresSafeArea()
-                
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.0, green: 0.08, blue: 0.12).opacity(0.7),
-                        Color.clear
-                    ]),
-                    startPoint: .topTrailing,
-                    endPoint: .bottomLeading
-                )
-                .ignoresSafeArea()
-                ScrollView {
-                    VStack {
-                        Text(timeBasedGreeting() + ", learn more about your health")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 20)
-                        Picker("Time Frame", selection: $selectedTimeFrame) {
-                            ForEach(TimeFrame.allCases, id: \.self) { timeFrame in
-                                Text(timeFrame.rawValue).tag(timeFrame)
-                            }
+            ScrollView {
+                VStack {
+                    Text(timeBasedGreeting() + ", learn more about your health")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 20)
+                    Picker("Time Frame", selection: $selectedTimeFrame) {
+                        ForEach(TimeFrame.allCases, id: \.self) { timeFrame in
+                            Text(timeFrame.rawValue).tag(timeFrame)
                         }
-                        .pickerStyle(.segmented)
-                        .padding()
-                        .onChange(of: selectedTimeFrame) { oldValue, newValue in
-                            fetchDataForTimeFrame()
-                        }
-                        
-                        if analysisService.isAnalyzing {
-                            ProgressView("Analyzing your nutrition data...")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                        }
-                        
-                        if !analysisService.insights.isEmpty {
-                            InsightCard(insight: analysisService.insights)
-                        }
-                        
-                        QuickActionButtons(nutrientData: nutrientData)
-                        
-                        NutrientCharts(data: nutrientData)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding()
+                    .onChange(of: selectedTimeFrame) { oldValue, newValue in
+                        fetchDataForTimeFrame()
+                    }
+                    
+                    if analysisService.isAnalyzing {
+                        ProgressView("Analyzing your nutrition data...")
+                            .frame(maxWidth: .infinity)
                             .padding()
                     }
+                    
+                    if !analysisService.insights.isEmpty {
+                        InsightCard(insight: analysisService.insights)
+                    }
+                    
+                    QuickActionButtons(nutrientData: nutrientData)
+                    
+                    NutrientCharts(data: nutrientData)
+                        .padding()
                 }
             }
+            .background(
+               GradientBackgrounds().natureGradient(animationPhase: $animationPhase)
+                   .onAppear {
+                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                           animationPhase = 20
+                       }
+                   }
+           )
             .onAppear {
                 fetchDataForTimeFrame()
             }

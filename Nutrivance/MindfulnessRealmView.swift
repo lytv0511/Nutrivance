@@ -29,21 +29,6 @@ struct MindfulnessRealmView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                GradientBackgrounds().realmGradient(animationPhase: $animationPhase)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 10).repeatForever(autoreverses: true)) {
-                            animationPhase = 180
-                        }
-                    }
-                GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
-                    .opacity(0.9)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                            animationPhase = 20
-                        }
-                    }
-                
                 ScrollView {
                     VStack(spacing: 24) {
                         // Enhanced Mindfulness Score with animation
@@ -80,7 +65,6 @@ struct MindfulnessRealmView: View {
                         MindfulMomentsTimeline()
                     }
                     .padding()
-                }
                 
                 // Breathing exercise overlay
                 if breathingActive {
@@ -88,6 +72,14 @@ struct MindfulnessRealmView: View {
                         .transition(.opacity)
                 }
             }
+            .background(
+               GradientBackgrounds().realmGradientFull(animationPhase: $animationPhase)
+                   .onAppear {
+                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                           animationPhase = 20
+                       }
+                   }
+           )
             .sheet(isPresented: $showingJournal) {
                 JournalView()
             }
@@ -109,36 +101,40 @@ struct MindfulnessScoreCard: View {
     @State private var score: Double = 0
     
     var body: some View {
-        VStack {
-            Text("Daily Mindfulness Score")
-                .font(.title2.weight(.bold))
-            
-            ZStack {
-                Circle()
-                    .stroke(.ultraThinMaterial, lineWidth: 12)
-                    .frame(width: 120, height: 120)
+        HStack {
+            Spacer()
+            VStack {
+                Text("Daily Mindfulness Score")
+                    .font(.title2.weight(.bold))
                 
-                Circle()
-                    .trim(from: 0, to: score)
-                    .stroke(
-                        AngularGradient(
-                            colors: [.blue, .purple, .pink],
-                            center: .center
-                        ),
-                        style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                    )
-                    .frame(width: 120, height: 120)
-                    .rotationEffect(.degrees(-90))
-                
-                Text("\(Int(score * 100))")
-                    .font(.system(.title, design: .rounded))
-                    .bold()
-            }
-            .onAppear {
-                withAnimation(.easeInOut(duration: 2)) {
-                    score = 0.7
+                ZStack {
+                    Circle()
+                        .stroke(.ultraThinMaterial, lineWidth: 12)
+                        .frame(width: 120, height: 120)
+                    
+                    Circle()
+                        .trim(from: 0, to: score)
+                        .stroke(
+                            AngularGradient(
+                                colors: [.blue, .purple, .pink],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 12, lineCap: .round)
+                        )
+                        .frame(width: 120, height: 120)
+                        .rotationEffect(.degrees(-90))
+                    
+                    Text("\(Int(score * 100))")
+                        .font(.system(.title, design: .rounded))
+                        .bold()
+                }
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 2)) {
+                        score = 0.7
+                    }
                 }
             }
+            Spacer()
         }
         .padding()
         .background(.ultraThinMaterial)
@@ -253,13 +249,17 @@ struct DailyStatsCard: View {
 
 struct MindfulMomentsTimeline: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Today's Journey")
-                .font(.title2.bold())
-            
-            ForEach(["Morning Meditation", "Mindful Break", "Evening Reflection"], id: \.self) { moment in
-                TimelineItem(time: "10:30 AM", title: moment)
+        HStack {
+            Spacer()
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Today's Journey")
+                    .font(.title2.bold())
+                
+                ForEach(["Morning Meditation", "Mindful Break", "Evening Reflection"], id: \.self) { moment in
+                    TimelineItem(time: "10:30 AM", title: moment)
+                }
             }
+            Spacer()
         }
         .padding()
         .background(.ultraThinMaterial)
@@ -366,6 +366,7 @@ struct MoodButtonsRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
+            Spacer()
             ForEach(Array(quickMoods.keys), id: \.self) { mood in
                 MoodButton(
                     mood: mood,
@@ -375,6 +376,7 @@ struct MoodButtonsRow: View {
                     selectedMood = mood
                 }
             }
+            Spacer()
         }
     }
 }

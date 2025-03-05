@@ -16,6 +16,7 @@ struct DashboardMetrics {
 }
 
 class DashboardViewModel: ObservableObject {
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Published var metrics: DashboardMetrics = DashboardMetrics()
     @Published var showRingCard = false
     @Published var activeRings: [RingMetric] = [] {
@@ -176,6 +177,7 @@ struct DashboardView: View {
         let healthStore = HealthKitManager()
         _viewModel = StateObject(wrappedValue: DashboardViewModel(healthStore: healthStore))
     }
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     var body: some View {
         NavigationStack {
@@ -198,7 +200,7 @@ struct DashboardView: View {
                     .cornerRadius(15)
                     
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200))], spacing: 15) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: horizontalSizeClass == .regular ? 225 : 160))], spacing: 30) {
                             let complications = [
                                 (title: "Active Energy", value: viewModel.metrics.activeEnergy, unit: "kcal", icon: "flame.fill", isActivityRing: true),
                                 (title: "Steps", value: viewModel.metrics.steps, unit: "steps", icon: "figure.walk", isActivityRing: false),
@@ -217,9 +219,10 @@ struct DashboardView: View {
                                     icon: complication.icon,
                                     isActivityRing: complication.isActivityRing
                                 )
-                                .frame(width: 200, height: 100)
+                                .frame(width: horizontalSizeClass == .regular ? 200 : 160, height: horizontalSizeClass == .regular ? 80 : 100)
                             }
                         }
+                        .padding()
                         
                         HStack {
                             Text("Rings")
@@ -267,8 +270,13 @@ struct DashboardView: View {
                 .padding()
             }
             .background(
-// GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
-            )
+               GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+                   .onAppear {
+                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                           animationPhase = 20
+                       }
+                   }
+           )
             .navigationTitle("Dashboard")
         }
         .onAppear {
@@ -562,6 +570,7 @@ struct ActivityComplication: View {
     @State private var isRing = false
     @State private var showGoalSheet = false
     @State private var customGoal: Double?
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     let title: String
     let value: String
     let unit: String
@@ -593,14 +602,18 @@ struct ActivityComplication: View {
         VStack {
             HStack {
                 if !isRing {
-                    HStack {
-                        Image(systemName: icon)
-                        VStack(alignment: .leading) {
-                            Text(title)
-                                .font(.caption)
-                            Text("\(value)/\(targetValue ?? "--") \(unit)")
-                                .font(.title2)
-                                .bold()
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Image(systemName: icon)
+                            VStack(alignment: .leading) {
+                                Text(title)
+                                    .font(horizontalSizeClass == .regular ? .caption : .caption2)
+                                Text("\(value)/\(targetValue ?? "--") \(unit)")
+                                    .font(horizontalSizeClass == .regular ? .title2 : .title3)
+                                    .bold()
+                            }
+                            Spacer()
                         }
                         Spacer()
                     }

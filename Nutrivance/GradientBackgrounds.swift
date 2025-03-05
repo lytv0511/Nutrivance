@@ -1,35 +1,35 @@
 import SwiftUI
 
 struct GradientBackgrounds {
-    func warmGradient(animationPhase: Binding<Double>) -> some View {
+    func warmGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightWarmColors, darkColors: darkWarmColors, animationPhase: animationPhase)
     }
     
-    func naturalGradient(animationPhase: Binding<Double>) -> some View {
+    func naturalGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightNaturalColors, darkColors: darkNaturalColors, animationPhase: animationPhase)
     }
     
-    func boldGradient(animationPhase: Binding<Double>) -> some View {
+    func boldGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightBoldColors, darkColors: darkBoldColors, animationPhase: animationPhase)
     }
     
-    func spiritGradient(animationPhase: Binding<Double>) -> some View {
+    func spiritGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightSpiritColors, darkColors: darkSpiritColors, animationPhase: animationPhase)
     }
     
-    func burningGradient(animationPhase: Binding<Double>) -> some View {
+    func burningGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightBurningColors, darkColors: darkBurningColors, animationPhase: animationPhase)
     }
     
-    func natureGradient(animationPhase: Binding<Double>) -> some View {
+    func natureGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightNatureColors, darkColors: darkNatureColors, animationPhase: animationPhase)
     }
 
-    func forestGradient(animationPhase: Binding<Double>) -> some View {
+    func forestGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightForestColors, darkColors: darkForestColors, animationPhase: animationPhase)
     }
     
-    func realmGradient(animationPhase: Binding<Double>) -> some View {
+    func realmGradientFull(animationPhase: Binding<Double>) -> some View {
         let phase = animationPhase.wrappedValue * 0.3
         
         let spiral = { (i: Int) -> SIMD2<Float> in
@@ -110,6 +110,62 @@ struct GradientBackgrounds {
         .ignoresSafeArea()
     }
     
+    func warmGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            warmGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
+    func naturalGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            naturalGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
+    func boldGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            boldGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
+    func spiritGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            spiritGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
+    func burningGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            burningGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
+    func natureGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            natureGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
+    func forestGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            forestGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
+    func realmGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            realmGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+    
     private var lightWarmColors: [Color] {
         [
 //            Color(.systemBackground),
@@ -168,29 +224,29 @@ struct GradientBackgrounds {
     
     private var lightBoldColors: [Color] {
         [
-            Color(red: 0.4, green: 0.0, blue: 0.9),
-            Color(red: 0.8, green: 0.0, blue: 0.0),
-            .white,
-            Color(red: 0.5, green: 0.0, blue: 1.0),
-            .white,
-            Color(red: 1.0, green: 0.0, blue: 0.0),
-            .white,
-            Color(red: 0.6, green: 0.0, blue: 0.8),
-            Color(red: 0.9, green: 0.0, blue: 0.0)
-        ]
-    }
-    
-    private var darkBoldColors: [Color] {
-        [
             Color(red: 0.2, green: 0.0, blue: 0.45),
             Color(red: 0.4, green: 0.0, blue: 0.0),
-            .black,
+            .white,
             Color(red: 0.25, green: 0.0, blue: 0.5),
-            .black,
+            .white,
             Color(red: 0.5, green: 0.0, blue: 0.0),
-            .black,
+            .white,
             Color(red: 0.3, green: 0.0, blue: 0.4),
             Color(red: 0.45, green: 0.0, blue: 0.0)
+        ]
+    }
+
+    private var darkBoldColors: [Color] {
+        [
+            Color(red: 0.1, green: 0.0, blue: 0.225),
+            Color(red: 0.2, green: 0.0, blue: 0.0),
+            .black,
+            Color(red: 0.125, green: 0.0, blue: 0.25),
+            .black,
+            Color(red: 0.25, green: 0.0, blue: 0.0),
+            .black,
+            Color(red: 0.15, green: 0.0, blue: 0.2),
+            Color(red: 0.225, green: 0.0, blue: 0.0)
         ]
     }
     
@@ -315,8 +371,14 @@ struct MeshGradientView: View {
     @Environment(\.colorScheme) var colorScheme
     
     init(colors: [Color], darkColors: [Color], animationPhase: Binding<Double>) {
-        self.lightColors = colors
-        self.darkColors = darkColors
+        // Darken light mode colors by 20%
+        self.lightColors = colors.map { color in
+            color.opacity(1)
+        }
+        // Darken dark mode colors by 30%
+        self.darkColors = darkColors.map { color in
+            color.opacity(0.7)
+        }
         self._animationPhase = animationPhase
     }
     
@@ -332,5 +394,38 @@ struct MeshGradientView: View {
         )
         .ignoresSafeArea()
         .hueRotation(.degrees(animationPhase))
+    }
+}
+
+struct GradientFadeOverlay: View {
+    @Environment(\.colorScheme) var colorScheme
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Top 10% - completely transparent
+            Color(.systemBackground)
+                .opacity(0)
+                .frame(height: UIScreen.main.bounds.height * 0.05)
+            
+            // Middle 30% - gradual fade
+            LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(.systemBackground).opacity(0), location: 0),
+                    .init(color: Color(.systemBackground).opacity(0.2), location: 0.2),
+                    .init(color: Color(.systemBackground).opacity(0.4), location: 0.4),
+                    .init(color: Color(.systemBackground).opacity(0.6), location: 0.6),
+                    .init(color: Color(.systemBackground).opacity(0.8), location: 0.8),
+                    .init(color: Color(.systemBackground), location: 1.0)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: UIScreen.main.bounds.height * 0.35)
+            
+            // Bottom 60% - full opacity
+            Color(.systemBackground)
+                .frame(height: UIScreen.main.bounds.height * 0.60)
+        }
+        .ignoresSafeArea()
     }
 }

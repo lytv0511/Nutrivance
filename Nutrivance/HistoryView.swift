@@ -22,8 +22,7 @@ struct HistoryView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                gradientBackground
+            VStack {
                 mainContent
             }
             .navigationTitle("Nutrition History")
@@ -34,6 +33,14 @@ struct HistoryView: View {
                     loadData: loadData
                 )
             }
+            .background(
+               GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
+                   .onAppear {
+                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                           animationPhase = 20
+                       }
+                   }
+           )
             .onAppear { loadData() }
             .onChange(of: selectedTimeFrame) { loadData() }
             .onChange(of: selectedDate) { loadData() }

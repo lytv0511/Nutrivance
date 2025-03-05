@@ -10,42 +10,42 @@ struct HomeView: View {
         let columns: Int = (horizontalSizeClass == .compact) ? 1 : 3 // 4 columns on compact, 3 on regular
         let gridItems = Array(repeating: GridItem(.flexible()), count: columns)
         NavigationStack {
-            ZStack {
-                GradientBackgrounds().natureGradient(animationPhase: $animationPhase)
-                        .onAppear {
-                            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                                animationPhase = 20
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(timeBasedGreeting() + ", learn more about your health")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    Text("Featured Articles")
+                        .font(.title)
+                        .foregroundColor(.primary)
+                        .bold()
+                    
+                    LazyVGrid(columns: gridItems, spacing: 20) {
+                        ForEach(0..<titles.count, id: \.self) { index in
+                            VStack {
+                                Text(titles[index])
+                                    .font(.headline)
+                                    .foregroundColor(.primary)
+                                Text(contents[index])
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
                             }
-                        }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        Text(timeBasedGreeting() + ", learn more about your health")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                        Text("Featured Articles")
-                            .font(.title)
-                            .foregroundColor(.primary)
-                            .bold()
-                        
-                        LazyVGrid(columns: gridItems, spacing: 20) {
-                            ForEach(0..<titles.count, id: \.self) { index in
-                                VStack {
-                                    Text(titles[index])
-                                        .font(.headline)
-                                        .foregroundColor(.primary)
-                                    Text(contents[index])
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding()
-                                .frame(maxWidth: .infinity)
-                                .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
-                            }
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
                         }
                     }
-                    .padding()
                 }
+                .padding(.horizontal, 24)
             }
+            .background(
+                GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
+                        }
+                    }
+            )
             .navigationTitle(Text("Home"))
         }
     }

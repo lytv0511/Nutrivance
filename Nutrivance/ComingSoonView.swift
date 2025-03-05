@@ -35,9 +35,10 @@ struct ComingSoonView: View {
     }
     
     var body: some View {
-        ZStack {
-            gradientBackground
+        HStack {
+            Spacer()
             VStack(spacing: 20) {
+                Spacer()
                 Image(systemName: "hammer.fill")
                     .font(.system(size: 60))
                     .foregroundStyle(.orange)
@@ -47,7 +48,17 @@ struct ComingSoonView: View {
                 Text(description)
                     .multilineTextAlignment(.center)
                     .padding()
+                Spacer()
             }
+            Spacer()
         }
+        .background(
+           GradientBackgrounds().burningGradientFull(animationPhase: $animationPhase)
+               .onAppear {
+                   withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                       animationPhase = 20
+                   }
+               }
+       )
     }
 }

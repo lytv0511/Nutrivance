@@ -14,6 +14,7 @@ struct SearchView: View {
     @FocusState private var contentFocused: Bool
     @State private var animationPhase: Double = 0
     private let gradients = GradientBackgrounds()
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     // Update items when needed
     private let nutritionItems = ["Insights", "Labels", "Log",
@@ -107,42 +108,36 @@ struct SearchView: View {
         }
     }
     
+    struct EquatableAnyView: Equatable {
+        let view: AnyView
+        
+        static func == (lhs: EquatableAnyView, rhs: EquatableAnyView) -> Bool {
+            withUnsafePointer(to: lhs) { lp in
+                withUnsafePointer(to: rhs) { rp in
+                    lp == rp
+                }
+            }
+        }
+    }
+
+    @State private var currentGradientView: EquatableAnyView
+
+    init() {
+        _currentGradientView = State(initialValue: EquatableAnyView(view: AnyView(GradientBackgrounds().boldGradient(animationPhase: .constant(0)))))
+    }
+    
     private var currentGradient: AnyView {
-        guard !searchState.searchText.isEmpty,
-              let firstResult = filteredItems.first else {
-            return AnyView(gradients.boldGradient(animationPhase: $animationPhase))
-        }
-        
-        if nutritionItems.contains(firstResult) {
-            return AnyView(gradients.forestGradient(animationPhase: $animationPhase))
-        } else if fitnessItems.contains(firstResult) {
-            return AnyView(gradients.burningGradient(animationPhase: $animationPhase))
-        } else if mentalHealthItems.contains(firstResult) {
-            return AnyView(gradients.spiritGradient(animationPhase: $animationPhase))
-        }
-        
-        return AnyView(gradients.boldGradient(animationPhase: $animationPhase))
+        currentGradientView.view
     }
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                currentGradient
-                    .animation(
-                        .spring(
-                            response: 0.8,
-                            dampingFraction: 0.8,
-                            blendDuration: 0.6
-                        )
-                        .speed(0.8)
-                        .repeatCount(1),
-                        value: searchState.searchText
-                    )
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 1.1)),
-                        removal: .opacity.combined(with: .scale(scale: 0.9))
-                    ))
-                VStack {
+            VStack {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Explore health, unlock the impossible")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 24)
                     HStack {
                         HStack {
                             Image(systemName: "magnifyingglass")
@@ -182,7 +177,7 @@ struct SearchView: View {
                     .padding(.horizontal)
                     .animation(.spring(), value: searchBarFocused)
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 20) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
                             ForEach(filteredItems, id: \.self) { item in
                                 NavigationLink {
                                     switch item {
@@ -301,13 +296,40 @@ struct SearchView: View {
                         }
                         .padding()
                     }
-                    //                .searchable(text: $searchState.searchText)
-                    .navigationTitle("Search")
                 }
-            }
-            .onChange(of: searchState.searchText) { _, _ in
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    animationPhase += 0.2
+                .navigationTitle("Search")
+                .background(
+                    currentGradient
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                                animationPhase = 20
+                            }
+                        }
+                )
+                .onChange(of: searchState.searchText) { _, newValue in
+                    let newGradient: EquatableAnyView
+                    
+                    if !newValue.isEmpty, let firstResult = filteredItems.first {
+                        if nutritionItems.contains(firstResult) {
+                            newGradient = EquatableAnyView(view: AnyView(gradients.forestGradient(animationPhase: $animationPhase)))
+                        } else if fitnessItems.contains(firstResult) {
+                            newGradient = EquatableAnyView(view: AnyView(gradients.burningGradient(animationPhase: $animationPhase)))
+                        } else if mentalHealthItems.contains(firstResult) {
+                            newGradient = EquatableAnyView(view: AnyView(gradients.spiritGradient(animationPhase: $animationPhase)))
+                        } else {
+                            newGradient = EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
+                        }
+                    } else {
+                        newGradient = EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
+                    }
+                    
+                    withAnimation(.easeInOut(duration: 1)) {
+                        currentGradientView = newGradient
+                    }
+                    
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        animationPhase += 0.2
+                    }
                 }
             }
         }

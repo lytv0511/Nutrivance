@@ -13,6 +13,7 @@ struct SpirivanceView: View {
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -85,181 +86,180 @@ struct SpirivanceView: View {
         
     var body: some View {
         NavigationStack {
-            ZStack {
+            VStack {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Restore, flow, thrive")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 24)
+                    HStack {
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(.secondary)
+                                .padding(.leading, 8)
+                            
+                            TextField("Awaken the spirit...", text: $searchState.searchText)
+                                .textFieldStyle(.plain)
+                                .focused($searchBarFocused)
+                                .autocorrectionDisabled(true)
+                            
+                            if !searchState.searchText.isEmpty {
+                                Button(action: {
+                                    searchState.searchText = ""
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 16, height: 16)
+                                }
+                                .hoverEffect(.automatic)
+                                .padding(.trailing, 8)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(8)
+                        
+                        if searchBarFocused {
+                            Button("Cancel") {
+                                searchBarFocused = false
+                            }
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            .padding(8)
+                            .hoverEffect(.automatic)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .animation(.spring(), value: searchBarFocused)
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
+                            ForEach(filteredItems, id: \.self) { item in
+                                NavigationLink {
+                                    switch item {
+                                    case "Home":
+                                        HomeView()
+                                    case "Insights":
+                                        HealthInsightsView()
+                                    case "Labels":
+                                        NutritionScannerView()
+                                    case "Log":
+                                        LogView()
+                                    case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+                                        NutrientDetailView(nutrientName: item)
+                                    case "Dashboard":
+                                        DashboardView()
+                                    case "Today's Plan":
+                                        TodaysPlanView()
+                                    case "Workout History":
+                                        WorkoutHistoryView()
+                                    case "Training Calendar":
+                                        TrainingCalendarView()
+                                    case "Coach":
+                                        CoachView()
+                                    case "Movement Analysis":
+                                        MovementAnalysisView()
+                                    case "Exercise Library":
+                                        ExerciseLibraryView()
+                                    case "Program Builder":
+                                        ProgramBuilderView()
+                                    case "Workout Generator":
+                                        WorkoutGeneratorView()
+                                    case "Recovery Score":
+                                        RecoveryScoreView()
+                                    case "Sleep Analysis":
+                                        SleepAnalysisView()
+                                    case "Mobility Test":
+                                        MobilityTestView()
+                                    case "Readiness Check":
+                                        ReadinessCheckView()
+                                    case "Strain vs Recovery":
+                                        StrainRecoveryView()
+                                    case "Activity Rings":
+                                        ActivityRingsView()
+                                    case "Heart Zones":
+                                        HeartZonesView()
+                                    case "Step Count":
+                                        StepCountView()
+                                    case "Distance":
+                                        DistanceView()
+                                    case "Calories Burned":
+                                        CaloriesBurnedView()
+                                    case "Personal Records":
+                                        PersonalRecordsView()
+                                    case "Pre-Workout Timing":
+                                        PreWorkoutTimingView()
+                                    case "Post-Workout Window":
+                                        PostWorkoutWindowView()
+                                    case "Performance Foods":
+                                        PerformanceFoodsView()
+                                    case "Hydration Status":
+                                        HydrationStatusView()
+                                    case "Macro Balance":
+                                        MacroBalanceView()
+                                    case "Live Challenges":
+                                        LiveChallengesView()
+                                    case "Friend Activity":
+                                        FriendActivityView()
+                                    case "Achievements":
+                                        AchievementsView()
+                                    case "Share Workouts":
+                                        ShareWorkoutsView()
+                                    case "Leaderboards":
+                                        LeaderboardsView()
+                                    case "Fuel Check":
+                                        FuelCheckView()
+                                    case "Mindfulness Realm":
+                                        MindfulnessRealmView()
+                                    case "Mood Tracker":
+                                        MoodTrackerView()
+                                    case "Journal":
+                                        JournalView()
+                                    case "Resources":
+                                        ResourcesView()
+                                    case "Meditation":
+                                        MeditationView()
+                                    case "Breathing":
+                                        BreathingView()
+                                    case "Sleep":
+                                        SleepView()
+                                    case "Stress":
+                                        StressView()
+                                    default:
+                                        HomeView()
+                                    }
+                                } label: {
+                                    VStack {
+                                        Image(systemName: getIconName(for: item))
+                                            .font(.system(size: 40))
+                                            .foregroundColor(.primary)
+                                            .frame(width: 80, height: 80)
+                                            .background(.ultraThinMaterial)
+                                            .clipShape(Circle())
+                                        
+                                        Text(item)
+                                            .font(.caption)
+                                            .multilineTextAlignment(.center)
+                                            .frame(width: 80, height: 40)
+                                    }
+                                    .frame(width: 120, height: 120) // Makes container square
+                                    .padding()
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(12)
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                    .navigationTitle("Spirivance")
+                }
+            }
+            .background(
                 GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
                     .onAppear {
                         withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                             animationPhase = 20
                         }
                     }
-                VStack {
-                    VStack(alignment: .leading, spacing: 20) {
-                        Text("Restore, flow, thrive")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                        HStack {
-                            HStack {
-                                Image(systemName: "magnifyingglass")
-                                    .foregroundColor(.secondary)
-                                    .padding(.leading, 8)
-                                
-                                TextField("Find in List", text: $searchState.searchText)
-                                    .textFieldStyle(.plain)
-                                    .focused($searchBarFocused)
-                                    .autocorrectionDisabled(true)
-                                
-                                if !searchState.searchText.isEmpty {
-                                    Button(action: {
-                                        searchState.searchText = ""
-                                    }) {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundColor(.secondary)
-                                            .frame(width: 16, height: 16)
-                                    }
-                                    .hoverEffect(.automatic)
-                                    .padding(.trailing, 8)
-                                }
-                            }
-                            .padding(8)
-                            .background(Color(.systemGray5))
-                            .cornerRadius(8)
-                            
-                            if searchBarFocused {
-                                Button("Cancel") {
-                                    searchBarFocused = false
-                                }
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                                .padding(8)
-                                .hoverEffect(.automatic)
-                            }
-                        }
-                        .padding(.horizontal)
-                        .animation(.spring(), value: searchBarFocused)
-                        ScrollView {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 20) {
-                                ForEach(filteredItems, id: \.self) { item in
-                                    NavigationLink {
-                                        switch item {
-                                        case "Home":
-                                            HomeView()
-                                        case "Insights":
-                                            HealthInsightsView()
-                                        case "Labels":
-                                            NutritionScannerView()
-                                        case "Log":
-                                            LogView()
-                                        case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                            NutrientDetailView(nutrientName: item)
-                                        case "Dashboard":
-                                            DashboardView()
-                                        case "Today's Plan":
-                                            TodaysPlanView()
-                                        case "Workout History":
-                                            WorkoutHistoryView()
-                                        case "Training Calendar":
-                                            TrainingCalendarView()
-                                        case "Coach":
-                                            CoachView()
-                                        case "Movement Analysis":
-                                            MovementAnalysisView()
-                                        case "Exercise Library":
-                                            ExerciseLibraryView()
-                                        case "Program Builder":
-                                            ProgramBuilderView()
-                                        case "Workout Generator":
-                                            WorkoutGeneratorView()
-                                        case "Recovery Score":
-                                            RecoveryScoreView()
-                                        case "Sleep Analysis":
-                                            SleepAnalysisView()
-                                        case "Mobility Test":
-                                            MobilityTestView()
-                                        case "Readiness Check":
-                                            ReadinessCheckView()
-                                        case "Strain vs Recovery":
-                                            StrainRecoveryView()
-                                        case "Activity Rings":
-                                            ActivityRingsView()
-                                        case "Heart Zones":
-                                            HeartZonesView()
-                                        case "Step Count":
-                                            StepCountView()
-                                        case "Distance":
-                                            DistanceView()
-                                        case "Calories Burned":
-                                            CaloriesBurnedView()
-                                        case "Personal Records":
-                                            PersonalRecordsView()
-                                        case "Pre-Workout Timing":
-                                            PreWorkoutTimingView()
-                                        case "Post-Workout Window":
-                                            PostWorkoutWindowView()
-                                        case "Performance Foods":
-                                            PerformanceFoodsView()
-                                        case "Hydration Status":
-                                            HydrationStatusView()
-                                        case "Macro Balance":
-                                            MacroBalanceView()
-                                        case "Live Challenges":
-                                            LiveChallengesView()
-                                        case "Friend Activity":
-                                            FriendActivityView()
-                                        case "Achievements":
-                                            AchievementsView()
-                                        case "Share Workouts":
-                                            ShareWorkoutsView()
-                                        case "Leaderboards":
-                                            LeaderboardsView()
-                                        case "Fuel Check":
-                                            FuelCheckView()
-                                        case "Mindfulness Realm":
-                                            MindfulnessRealmView()
-                                        case "Mood Tracker":
-                                            MoodTrackerView()
-                                        case "Journal":
-                                            JournalView()
-                                        case "Resources":
-                                            ResourcesView()
-                                        case "Meditation":
-                                            MeditationView()
-                                        case "Breathing":
-                                            BreathingView()
-                                        case "Sleep":
-                                            SleepView()
-                                        case "Stress":
-                                            StressView()
-                                        default:
-                                            HomeView()
-                                        }
-                                    } label: {
-                                        VStack {
-                                            Image(systemName: getIconName(for: item))
-                                                .font(.system(size: 40))
-                                                .foregroundColor(.primary)
-                                                .frame(width: 80, height: 80)
-                                                .background(.ultraThinMaterial)
-                                                .clipShape(Circle())
-                                            
-                                            Text(item)
-                                                .font(.caption)
-                                                .multilineTextAlignment(.center)
-                                                .frame(width: 80, height: 40)
-                                        }
-                                        .frame(width: 120, height: 120) // Makes container square
-                                        .padding()
-                                        .background(.ultraThinMaterial)
-                                        .cornerRadius(12)
-                                    }
-                                }
-                                
-                            }
-                            .padding()
-                        }
-                        .navigationTitle("Spirivance")
-                    }
-                    .padding()
-                }
-            }
+            )
         }
     }
     

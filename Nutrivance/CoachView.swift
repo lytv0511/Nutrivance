@@ -6,29 +6,6 @@ struct CoachView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                MeshGradient(
-                    width: 3, height: 3,
-                    points: [
-                        [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                        [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
-                        [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
-                    ],
-                    colors: [
-                        Color(red: 0.75, green: 0.0, blue: 0),
-                        Color(red: 1.0, green: 0.4, blue: 0),
-                        Color(red: 0.95, green: 0.6, blue: 0),
-                        Color(red: 0.8, green: 0.2, blue: 0),
-                        Color(red: 1.0, green: 0.5, blue: 0),
-                        Color(red: 0.9, green: 0.3, blue: 0),
-                        Color(red: 0.8, green: 0.1, blue: 0),
-                        Color(red: 1.0, green: 0.45, blue: 0),
-                        Color(red: 0.85, green: 0.25, blue: 0)
-                    ]
-                )
-                .ignoresSafeArea()
-                .hueRotation(.degrees(animationPhase))
-                
                 ScrollView {
                     VStack(spacing: 20) {
                         MotivationalMessageCard()
@@ -38,9 +15,16 @@ struct CoachView: View {
                     }
                     .padding()
                 }
+                .background(
+                   GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+                       .onAppear {
+                           withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                               animationPhase = 20
+                           }
+                       }
+               )
+                .navigationTitle(Text("Coach"))
             }
-            .navigationTitle("Coach")
-        }
     }
 }
 

@@ -12,6 +12,7 @@ struct NutrivanceView: View {
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -85,25 +86,19 @@ struct NutrivanceView: View {
         
     var body: some View {
         NavigationStack {
-            ZStack {
-                GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                            animationPhase = 20
-                        }
-                    }
                 VStack {
                     VStack(alignment: .leading, spacing: 20) {
                         Text("Fuel vitality with nature's essence")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
+                            .padding(.horizontal, 24)
                         HStack {
                             HStack {
                                 Image(systemName: "magnifyingglass")
                                     .foregroundColor(.secondary)
                                     .padding(.leading, 8)
                                 
-                                TextField("Find in List", text: $searchState.searchText)
+                                TextField("Nature's bounty...", text: $searchState.searchText)
                                     .textFieldStyle(.plain)
                                     .focused($searchBarFocused)
                                     .autocorrectionDisabled(true)
@@ -136,7 +131,7 @@ struct NutrivanceView: View {
                         .padding(.horizontal)
                         .animation(.spring(), value: searchBarFocused)
                         ScrollView {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 20) {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
                                 ForEach(filteredItems, id: \.self) { item in
                                     NavigationLink {
                                         switch item {
@@ -239,9 +234,15 @@ struct NutrivanceView: View {
                         }
                         .navigationTitle("Nutrivance")
                     }
-                    .padding()
                 }
-            }
+                .background(
+                   GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
+                       .onAppear {
+                           withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                               animationPhase = 20
+                           }
+                       }
+               )
         }
     }
     

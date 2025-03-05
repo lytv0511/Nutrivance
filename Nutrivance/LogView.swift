@@ -22,43 +22,12 @@ struct LogView: View {
     
     private let nlProcessor = NLNaturalLanguageProcessor()
     private let healthStore = HKHealthStore()
+    @State private var animationPhase: Double = 0
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                // Mesh Gradient
-                RadialGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.04, green: 0.15, blue: 0.18),  // Deep teal-blue
-                        Color(red: 0.02, green: 0.13, blue: 0.06),  // Rich dark green
-                        Color.black
-                    ]),
-                    center: .bottomLeading,  // Different position for unique feel
-                    startRadius: 500,
-                    endRadius: 1500
-                )
-                .opacity(0.9)
-                .ignoresSafeArea()
-                
-                // Overlay gradient for depth
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color(red: 0.01, green: 0.11, blue: 0.14).opacity(0.7),
-                        Color.clear
-                    ]),
-                    startPoint: .center,      // Centered fade
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
                 ScrollView {
                     VStack {
-                        //                Text("Add Nutrients")
-                        //                    .font(.largeTitle)
-                        //                    .bold()
-                        //                    .frame(maxWidth: .infinity, alignment: .leading)
-                        //                    .padding(.horizontal)
-                        
-                        // Enhanced search bar
                         HStack {
                             Image(systemName: "text.bubble")
                                 .foregroundColor(.blue)
@@ -202,8 +171,15 @@ struct LogView: View {
                         }
                     }
                 }
-            }
-            .navigationTitle(Text("Log Nutrients"))
+                .background(
+                   GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
+                       .onAppear {
+                           withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                               animationPhase = 20
+                           }
+                       }
+               )
+                .navigationTitle(Text("Log Nutrients"))
         }
     }
     

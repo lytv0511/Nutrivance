@@ -8,34 +8,11 @@ struct ReadinessCheckView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                MeshGradient(
-                    width: 3, height: 3,
-                    points: [
-                        [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                        [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
-                        [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
-                    ],
-                    colors: [
-                        Color(red: 0.75, green: 0.0, blue: 0),
-                        Color(red: 1.0, green: 0.4, blue: 0),
-                        Color(red: 0.95, green: 0.6, blue: 0),
-                        Color(red: 0.8, green: 0.2, blue: 0),
-                        Color(red: 1.0, green: 0.5, blue: 0),
-                        Color(red: 0.9, green: 0.3, blue: 0),
-                        Color(red: 0.8, green: 0.1, blue: 0),
-                        Color(red: 1.0, green: 0.45, blue: 0),
-                        Color(red: 0.85, green: 0.25, blue: 0)
-                    ]
-                )
-                .ignoresSafeArea()
-                .hueRotation(.degrees(animationPhase))
-                
                 ScrollView {
                     VStack(spacing: 20) {
                         ReadinessScoreCard()
                             .frame(maxWidth: .infinity)
-                            .padding(.horizontal)
+                            .padding()
                         RecoveryRecommendationsCard(hrvValue: hrvValue, rhrValue: rhrValue)
                             .frame(maxWidth: .infinity)
                             .padding(.horizontal)
@@ -44,15 +21,20 @@ struct ReadinessCheckView: View {
                         HRVTrendsCard()
                             .padding(.horizontal)
                     }
-                    .padding()
-                    
                 }
                 .navigationTitle("Readiness Check")
+                .background(
+                   GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+                       .onAppear {
+                           withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                               animationPhase = 20
+                           }
+                       }
+               )
                 .task {
                     await fetchHealthData()
                 }
             }
-        }
     }
     
     private func fetchHealthData() async {
@@ -68,6 +50,7 @@ struct ReadinessScoreCard: View {
     @State private var rhrValue: Double = 0
     @State private var sleepHours: Double = 0
     @State private var isLoading = true
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -78,16 +61,32 @@ struct ReadinessScoreCard: View {
                 ProgressView()
             } else {
                 HStack {
-                    Text("\(Int(readinessScore))")
-                        .font(.system(size: 72, weight: .bold))
-                        .padding(.leading, 16)
-                    Text("/100")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    ReadinessGauge(score: readinessScore)
-                        .padding(.trailing, 32)
-                        .frame(width: 240, height: 240)
+                    if horizontalSizeClass == .regular {
+                        Text("\(Int(readinessScore))")
+                            .font(.system(size: 72, weight: .bold))
+                            .padding(.leading, 16)
+                        Text("/100")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        ReadinessGauge(score: readinessScore)
+                            .padding(.trailing, 32)
+                            .frame(width: 240, height: 240)
+                    } else {
+                        VStack(spacing: 16) {
+                            HStack {
+                                Spacer()
+                                Text("\(Int(readinessScore))")
+                                    .font(.system(size: 72, weight: .bold))
+                                Text("/100")
+                                    .font(.title2)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                            ReadinessGauge(score: readinessScore)
+                                .frame(width: 200, height: 200)
+                        }
+                    }
                 }
             }
         }

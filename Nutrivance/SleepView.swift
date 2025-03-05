@@ -14,10 +14,22 @@ struct SleepView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                gradients.spiritGradient(animationPhase: $animationPhase)
+            HStack {
+                Spacer()
+                VStack {
+                    Text("Sleep")
+                }
+                Spacer()
             }
-            .navigationTitle("Sleep")
+            .background(
+               GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
+                   .onAppear {
+                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                           animationPhase = 20
+                       }
+                   }
+           )
+            .navigationTitle(Text("Sleep"))
         }
     }
 }

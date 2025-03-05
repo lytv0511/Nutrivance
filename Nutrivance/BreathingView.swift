@@ -14,10 +14,22 @@ struct BreathingView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                gradients.spiritGradient(animationPhase: $animationPhase)
+            HStack {
+                Spacer()
+                VStack {
+                    Text("Breathing")
+                }
+                Spacer()
             }
-            .navigationTitle("Breathing")
+            .background(
+                GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
+                        }
+                    }
+            )
+            .navigationTitle(Text("Breathing"))
         }
     }
 }
