@@ -71,41 +71,108 @@ let additionalTypes: [(HKSampleType, String)] = [
     (HKObjectType.quantityType(forIdentifier: .flightsClimbed)!, "flights")
 ]
 
-class HealthKitManager: ObservableObject {
-    private let healthStore = HKHealthStore()
+@MainActor
+final class HealthKitManager: ObservableObject, @unchecked Sendable {
+    let healthStore: HKHealthStore
     
-    struct NutritionEntry: Identifiable {
-        let id: UUID
-        let timestamp: Date
-        let nutrients: [String: Double]
-        let source: EntrySource
-        let mealType: String?
-        let category: NutrientCategory
-        
-        enum EntrySource {
-            case scanner
-            case search
-            case savedMeal
+    init() {
+        self.healthStore = HKHealthStore()
+    }
+    
+    nonisolated func unit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
+        switch identifier {
+        case .activeEnergyBurned, .basalEnergyBurned:
+            return .kilocalorie()
+        case .distanceWalkingRunning, .distanceCycling:
+            return .meter()
+        case .stepCount, .flightsClimbed:
+            return .count()
+        case .appleExerciseTime, .appleStandTime:
+            return .minute()
+        default:
+            return .count()
+        }
+    }
+    
+    struct NutritionEntry {
+        enum NutrientCategory: String {
+            case protein = "Protein"
+            case fats = "Fats"
+            case carbs = "Carbs"
+            case other = "Other"
         }
         
-        enum NutrientCategory {
-            case macronutrient
-            case vitamin
-            case mineral
-            case other
+        enum EntrySource: String {
+           case manual = "Manual"
+           case automatic = "Automatic"
+           case scanner = "Scanner"
+           case search = "Search"
+       }
+        
+        let id: UUID
+        let timestamp: Date
+        var nutrients: [String: Double]
+        let source: EntrySource
+        let mealType: String
+        let category: NutrientCategory
+    }
+
+    nonisolated func getUnit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
+        switch identifier {
+        case .activeEnergyBurned, .basalEnergyBurned:
+            return .kilocalorie()
+        case .stepCount, .flightsClimbed:
+            return .count()
+        case .distanceWalkingRunning:
+            return .meter()
+        case .appleExerciseTime:
+            return .minute()
+        case .appleStandTime:
+            return .hour()
+        default:
+            return .count()
+        }
+    }
+
+    nonisolated func determineCategory(for nutrientKey: HKQuantityTypeIdentifier) -> NutritionEntry.NutrientCategory {
+        switch nutrientKey {
+        case .dietaryProtein: return .protein
+        case .dietaryFatTotal: return .fats
+        case .dietaryCarbohydrates: return .carbs
+        default: return .other
+        }
+    }
+
+    private func processNutritionEntries(entriesByID: inout [String: NutritionEntry],
+                                       sample: HKQuantitySample,
+                                       entryId: String,
+                                       nutrientKey: HKQuantityTypeIdentifier,
+                                       entrySource: NutritionEntry.EntrySource,
+                                       mealType: String) {
+        let unit = getUnit(for: nutrientKey)
+        let category = determineCategory(for: nutrientKey)
+        
+        if let entry = entriesByID[entryId] {
+            var updatedNutrients = entry.nutrients
+            updatedNutrients[nutrientKey.rawValue] = sample.quantity.doubleValue(for: unit)
             
-            var subcategories: [String] {
-                switch self {
-                case .vitamin:
-                    return ["A", "B Complex", "C", "D", "E", "K"]
-                case .mineral:
-                    return ["Electrolytes", "Non-Electrolytes"]
-                case .macronutrient:
-                    return ["Protein", "Carbs", "Fats"]
-                case .other:
-                    return ["Cholesterol", "Sugar", "Caffeine"]
-                }
-            }
+            entriesByID[entryId] = NutritionEntry(
+                id: entry.id,
+                timestamp: entry.timestamp,
+                nutrients: updatedNutrients,
+                source: entry.source,
+                mealType: entry.mealType,
+                category: category
+            )
+        } else {
+            entriesByID[entryId] = NutritionEntry(
+                id: UUID(uuidString: entryId) ?? UUID(),
+                timestamp: sample.startDate,
+                nutrients: [nutrientKey.rawValue: sample.quantity.doubleValue(for: unit)],
+                source: entrySource,
+                mealType: mealType,
+                category: category
+            )
         }
     }
 
@@ -514,77 +581,79 @@ class HealthKitManager: ObservableObject {
         fetchTodayNutrientData(for: nutrientType, completion: completion)
     }
     
-    private func determineCategory(for nutrient: String) -> NutritionEntry.NutrientCategory {
-        let categories = getNutrientsByCategory()
-        if categories["Vitamins"]?.contains(nutrient) ?? false {
-            return .vitamin
-        } else if categories["Minerals"]?.contains(nutrient) ?? false {
-            return .mineral
-        } else if ["protein", "carbs", "fats"].contains(nutrient) {
-            return .macronutrient
-        } else {
-            return .other
-        }
-    }
-    
-    func fetchNutrientHistory(from startDate: Date, to endDate: Date, completion: @escaping ([NutritionEntry]) -> Void) {
-        
+    func fetchNutrientHistory(from startDate: Date, to endDate: Date) async throws -> [NutritionEntry] {
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         var entriesByID: [String: NutritionEntry] = [:]
-        let group = DispatchGroup()
         
         for (type, nutrientKey) in types {
-            group.enter()
-            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
-                defer { group.leave() }
-                
-                guard let samples = samples as? [HKQuantitySample] else { return }
-                
-                for sample in samples {
-                    let entryId = sample.metadata?["entryId"] as? String ?? UUID().uuidString
-                    let source = sample.metadata?["source"] as? String ?? "unknown"
-                    let mealType = sample.metadata?["mealType"] as? String
+            let samples = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKQuantitySample], Error>) in
+                let query = HKSampleQuery(
+                    sampleType: type,
+                    predicate: predicate,
+                    limit: HKObjectQueryNoLimit,
+                    sortDescriptors: nil
+                ) { _, samples, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
                     
-                    let entrySource: NutritionEntry.EntrySource = {
-                        switch source {
-                        case "scanner": return .scanner
-                        case "search": return .search
-                        default: return .savedMeal
-                        }
-                    }()
-                    
-                    if let entry = entriesByID[entryId] {
-                        var updatedNutrients = entry.nutrients
-                        updatedNutrients[nutrientKey] = sample.quantity.doubleValue(for: self.unit(for: nutrientKey))
-                        entriesByID[entryId] = NutritionEntry(
-                            id: entry.id,
-                            timestamp: entry.timestamp,
-                            nutrients: updatedNutrients,
-                            source: entry.source,
-                            mealType: entry.mealType,
-                            category: self.determineCategory(for: nutrientKey)
-                        )
+                    if let samples = samples as? [HKQuantitySample] {
+                        continuation.resume(returning: samples)
                     } else {
-                        entriesByID[entryId] = NutritionEntry(
-                            id: UUID(uuidString: entryId) ?? UUID(),
-                            timestamp: sample.startDate,
-                            nutrients: [nutrientKey: sample.quantity.doubleValue(for: self.unit(for: nutrientKey))],
-                            source: entrySource,
-                            mealType: mealType,
-                            category: self.determineCategory(for: nutrientKey)
-                        )
+                        continuation.resume(returning: [])
                     }
                 }
+                healthStore.execute(query)
             }
             
-            healthStore.execute(query)
+            for sample in samples {
+                let entryId = sample.metadata?["entryId"] as? String ?? UUID().uuidString
+                let source = sample.metadata?["source"] as? String ?? "unknown"
+                let mealType = sample.metadata?["mealType"] as? String ?? "Unknown"
+                
+                let entrySource: NutritionEntry.EntrySource = {
+                    switch source {
+                    case "scanner": return .scanner
+                    case "search": return .search
+                    case "manual": return .manual
+                    case "automatic": return .automatic
+                    default: return .manual
+                    }
+                }()
+                
+                let typeIdentifier = HKQuantityTypeIdentifier(rawValue: type.identifier)
+                
+                if let entry = entriesByID[entryId] {
+                    var updatedNutrients = entry.nutrients
+                    updatedNutrients[String(describing: nutrientKey)] = sample.quantity.doubleValue(for: getUnit(for: typeIdentifier))
+                    
+                    entriesByID[entryId] = NutritionEntry(
+                        id: entry.id,
+                        timestamp: entry.timestamp,
+                        nutrients: updatedNutrients,
+                        source: entry.source,
+                        mealType: mealType,
+                        category: determineCategory(for: typeIdentifier)
+                    )
+                } else {
+                    entriesByID[entryId] = NutritionEntry(
+                        id: UUID(uuidString: entryId) ?? UUID(),
+                        timestamp: sample.startDate,
+                        nutrients: [String(describing: nutrientKey): sample.quantity.doubleValue(for: getUnit(for: typeIdentifier))],
+                        source: entrySource,
+                        mealType: mealType,
+                        category: determineCategory(for: typeIdentifier)
+                    )
+                }
+            }
         }
         
-        group.notify(queue: .main) {
-            let entries = Array(entriesByID.values).sorted { $0.timestamp > $1.timestamp }
-            completion(entries)
-        }
+        return Array(entriesByID.values).sorted { $0.timestamp > $1.timestamp }
     }
+
+
+
     
     func deleteNutrientData(for id: UUID, completion: @escaping (Bool) -> Void) {
         
@@ -882,25 +951,29 @@ class HealthKitManager: ObservableObject {
     }
     
     func fetchQuantity(for identifier: HKQuantityTypeIdentifier, start: Date, end: Date) async throws -> Double {
-        let type = HKQuantityType.quantityType(forIdentifier: identifier)!
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            let query = HKStatisticsQuery(
-                quantityType: type,
-                quantitySamplePredicate: predicate,
-                options: .cumulativeSum
-            ) { _, result, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                    return
+            let type = HKQuantityType(.init(rawValue: identifier.rawValue))
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+            let unit = getUnit(for: identifier)
+            
+            return try await withCheckedThrowingContinuation { continuation in
+                let query = HKStatisticsQuery(
+                    quantityType: type,
+                    quantitySamplePredicate: predicate,
+                    options: .cumulativeSum
+                ) { _, statistics, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    
+                    let value = statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0
+                    continuation.resume(returning: value)
                 }
-                let quantity = result?.sumQuantity()?.doubleValue(for: self.getUnit(for: identifier)) ?? 0
-                continuation.resume(returning: quantity)
+                
+                healthStore.execute(query)
             }
-            healthStore.execute(query)
         }
-    }
+
     
     func fetchActivityGoals() async throws -> (activeEnergy: Double, exerciseTime: Double, standHours: Double) {
         let calendar = Calendar.current
@@ -1199,25 +1272,6 @@ extension HealthKitManager {
             }
             
             healthStore.execute(query)
-        }
-    }
-    
-    private func getUnit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
-        switch identifier {
-        case .activeEnergyBurned, .basalEnergyBurned:
-            return .kilocalorie()
-        case .stepCount:
-            return .count()
-        case .distanceWalkingRunning:
-            return .meter()
-        case .appleExerciseTime:
-            return .minute()
-        case .flightsClimbed:
-            return .count()
-        case .appleStandTime:
-            return .hour()
-        default:
-            return .count()
         }
     }
     

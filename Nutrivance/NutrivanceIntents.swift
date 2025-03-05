@@ -1,14 +1,6 @@
-//
-//  NutrivanceIntents.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 1/21/25.
-//
-
 import AppIntents
 import HealthKit
 
-@available(iOS 16.0, *)
 @available(iOS 16.0, *)
 struct LogNutrientIntent: AppIntent {
     static var title: LocalizedStringResource = "Log Nutrient Intake"
@@ -24,7 +16,8 @@ struct LogNutrientIntent: AppIntent {
     }
     
     func perform() async throws -> some IntentResult {
-        _ = HealthKitManager()
+        let healthStore = await HealthKitManager()
+        let _ = try await healthStore.fetchTodayQuantity(for: .activeEnergyBurned)
         return .result()
     }
 }
@@ -40,7 +33,8 @@ struct QueryNutrientIntent: AppIntent {
     }
     
     func perform() async throws -> some IntentResult {
-        _ = HealthKitManager()
+        let healthStore = await HealthKitManager()
+        let _ = try await healthStore.fetchTodayQuantity(for: .stepCount)
         return .result()
     }
 }

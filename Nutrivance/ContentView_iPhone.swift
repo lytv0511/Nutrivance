@@ -325,12 +325,6 @@ struct WheelPicker: View {
         let xOffset = cos(angle) * menuRadius
         let yOffset = sin(angle) * menuRadius
         
-        let isWithinCenterRange = dragLocation.map { location in
-            calculateDistance(location, in: geometry) < 25
-        } ?? false
-        
-        let currentAngle = dragLocation.map { calculateAngle(from: $0, in: geometry) } ?? 0
-        
         return Image(systemName: radialMenuIcons[index])
             .font(.title)
             .foregroundColor(.white)

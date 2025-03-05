@@ -22,6 +22,7 @@ struct ModelInput {
     let recommended_foods: [(category: String, items: [String], timing_window: String)]
 }
 
+@MainActor
 class PerformanceFoodPredictor: ObservableObject {
     @Published var lastWorkout: HKWorkout?
     @Published var isPostWorkout: Bool = false
@@ -75,7 +76,7 @@ class PerformanceFoodPredictor: ObservableObject {
             )
             
             let query = HKSampleQuery(
-                sampleType: .workoutType(),
+                sampleType: HKObjectType.workoutType(),
                 predicate: predicate,
                 limit: 10,
                 sortDescriptors: [sortDescriptor]
@@ -288,6 +289,8 @@ class PerformanceFoodPredictor: ObservableObject {
         return recommendations
     }
 }
+
+
 
 struct PerformanceFoodsView: View {
     @StateObject private var predictor: PerformanceFoodPredictor

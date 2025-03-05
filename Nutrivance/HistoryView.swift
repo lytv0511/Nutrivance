@@ -1,5 +1,7 @@
 import SwiftUI
 
+extension HealthKitManager.NutritionEntry: Identifiable { }
+
 struct HistoryView: View {
     @StateObject private var healthStore = HealthKitManager()
     @State private var selectedTimeFrame: TimeFrame = .daily
@@ -13,11 +15,9 @@ struct HistoryView: View {
     }
     
     private var groupedEntries: [Date: [HealthKitManager.NutritionEntry]] {
-        let calendar = Calendar.current
-        let groups = Dictionary(grouping: entries) { entry in
-            calendar.startOfDay(for: entry.timestamp)
+        Dictionary(grouping: entries) { entry in
+            Calendar.current.startOfDay(for: entry.timestamp)
         }
-        return groups
     }
     
     var body: some View {
@@ -35,8 +35,8 @@ struct HistoryView: View {
                 )
             }
             .onAppear { loadData() }
-            .onChange(of: selectedTimeFrame) { _, _ in loadData() }
-            .onChange(of: selectedDate) { _, _ in loadData() }
+            .onChange(of: selectedTimeFrame) { loadData() }
+            .onChange(of: selectedDate) { loadData() }
         }
     }
     
@@ -50,13 +50,13 @@ struct HistoryView: View {
             ],
             colors: [
                 .black,
-                Color(red: 0, green: 0.25, blue: 0.3),  // Deeper blue
+                Color(red: 0, green: 0.25, blue: 0.3),
                 .black,
-                Color(red: 0, green: 0.3, blue: 0.2),   // Deeper green
-                Color(red: 0, green: 0.2, blue: 0.3),   // Rich blue
-                Color(red: 0, green: 0.25, blue: 0.25), // Deep teal
+                Color(red: 0, green: 0.3, blue: 0.2),
+                Color(red: 0, green: 0.2, blue: 0.3),
+                Color(red: 0, green: 0.25, blue: 0.25),
                 .black,
-                Color(red: 0, green: 0.22, blue: 0.28), // Dark blue-green
+                Color(red: 0, green: 0.22, blue: 0.28),
                 .black
             ]
         )
@@ -164,8 +164,10 @@ struct HistoryView: View {
         let endDate = calendar.endOfDay(for: selectedDate)
         let startDate = getStartDate(for: selectedTimeFrame, endDate: endDate)
         
-        healthStore.fetchNutrientHistory(from: startDate, to: endDate) { fetchedEntries in
-            entries = fetchedEntries
+        Task {
+            if let fetchedEntries = try? await healthStore.fetchNutrientHistory(from: startDate, to: endDate) {
+                entries = fetchedEntries
+            }
         }
     }
     
@@ -187,15 +189,14 @@ struct HistoryView: View {
 struct NutritionEntryRow: View {
     let entry: HealthKitManager.NutritionEntry
     let onDelete: () -> Void
+    let loadData: () -> Void
     @StateObject private var healthStore = HealthKitManager()
     @State private var isEditing = false
-    let loadData: () -> Void
-
     
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
-                Text(entry.mealType ?? "Meal")
+                Text(entry.mealType)
                     .font(.headline)
                 Spacer()
                 Text(entry.timestamp, style: .time)
@@ -233,15 +234,16 @@ struct NutritionEntryRow: View {
             }
         }
         .sheet(isPresented: $isEditing) {
-           EditEntryView(entry: entry, onSave: onDelete, loadData: loadData)
-       }
+            EditEntryView(entry: entry, onSave: onDelete, loadData: loadData)
+        }
     }
     
     private var sourceIcon: String {
         switch entry.source {
         case .scanner: return "doc.text.viewfinder"
         case .search: return "text.bubble"
-        case .savedMeal: return "star"
+        case .manual: return "pencil"
+        case .automatic: return "gear"
         }
     }
     
@@ -249,7 +251,8 @@ struct NutritionEntryRow: View {
         switch entry.source {
         case .scanner: return "Scanned"
         case .search: return "Search"
-        case .savedMeal: return "Saved Meal"
+        case .manual: return "Manual"
+        case .automatic: return "Automatic"
         }
     }
 }
@@ -261,117 +264,118 @@ struct EditEntryView: View {
     @State private var mealType: String
     @State private var nutrients: [String: Double]
     let onSave: () -> Void
+    let loadData: () -> Void
     
-    let loadData: () -> Void  // Add this
-
     init(entry: HealthKitManager.NutritionEntry, onSave: @escaping () -> Void, loadData: @escaping () -> Void) {
         self.entry = entry
         self.onSave = onSave
         self.loadData = loadData
-        _mealType = State(initialValue: entry.mealType ?? "")
+        _mealType = State(initialValue: entry.mealType)
         _nutrients = State(initialValue: entry.nutrients)
     }
     
     var body: some View {
-            NavigationStack {
-                Form {
-                    Section("Meal Type") {
-                        TextField("Meal Type", text: $mealType)
-                    }
-                    
-                    Section("Nutrients") {
-                        // Break down the nutrient list into a separate view
-                        NutrientEditList(nutrients: $nutrients)
-                    }
+        NavigationStack {
+            Form {
+                Section("Meal Type") {
+                    TextField("Meal Type", text: $mealType)
                 }
-                .navigationTitle("Edit Entry")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") { saveChanges() }
-                    }
+                
+                Section("Nutrients") {
+                    NutrientEditList(nutrients: $nutrients)
                 }
             }
-        }
-
-        private func saveChanges() {
-            let nutrientDataArray = nutrients.map { name, value in
-                HealthKitManager.NutrientData(
-                    name: name,
-                    value: value,
-                    unit: NutritionUnit.getUnit(for: name)
-                )
-            }
-            
-            onSave()
-            healthStore.saveNutrients(nutrientDataArray) { success in
-                if success {
-                    dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        loadData()
-                    }
+            .navigationTitle("Edit Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { saveChanges() }
                 }
             }
         }
     }
-
-    struct NutrientEditList: View {
-        @Binding var nutrients: [String: Double]
+    
+    private func saveChanges() {
+        let nutrientDataArray = nutrients.map { name, value in
+            HealthKitManager.NutrientData(name: name, value: value, unit: "g")
+        }
         
-        var body: some View {
-            ForEach(Array(nutrients.keys.sorted()), id: \.self) { nutrient in
-                HStack {
-                    Text(nutrient.capitalized)
-                    Spacer()
-                    TextField("Amount", value: Binding(
-                        get: { nutrients[nutrient] ?? 0 },
-                        set: { nutrients[nutrient] = $0 }
-                    ), format: .number)
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
+        onSave()
+        healthStore.saveNutrients(nutrientDataArray) { success in
+            if success {
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    loadData()
                 }
             }
         }
     }
+}
 
+struct NutrientEditList: View {
+    @Binding var nutrients: [String: Double]
+    
+    var body: some View {
+        ForEach(Array(nutrients.keys.sorted()), id: \.self) { nutrient in
+            HStack {
+                Text(nutrient.capitalized)
+                Spacer()
+                TextField("Amount", value: Binding(
+                    get: { nutrients[nutrient] ?? 0 },
+                    set: { nutrients[nutrient] = $0 }
+                ), format: .number)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+            }
+        }
+    }
+}
 
 struct FullListView: View {
     let entries: [Date: [HealthKitManager.NutritionEntry]]
-        let deleteEntry: (HealthKitManager.NutritionEntry) -> Void
-        let loadData: () -> Void
+    let deleteEntry: (HealthKitManager.NutritionEntry) -> Void
+    let loadData: () -> Void
     
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 16) {
-                    let sortedDates = entries.keys.sorted(by: >)
-                    ForEach(sortedDates, id: \.self) { date in
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(formatDate(date))
-                                .font(.headline)
-                                .foregroundStyle(.mint)
-                            
-                            let entries = entries[date] ?? []
-                            ForEach(entries) { entry in
-                                NutritionEntryRow(
-                                    entry: entry,
-                                    onDelete: { deleteEntry(entry) },
-                                    loadData: { loadData() }
-                                )
-                            }
-                        }
-                        .padding()
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(12)
-                    }
-                }
-                .padding()
+                entriesContent
             }
             .navigationTitle("All Entries")
         }
+    }
+    
+    private var entriesContent: some View {
+        LazyVStack(spacing: 16) {
+            let sortedDates = entries.keys.sorted(by: >)
+            ForEach(sortedDates, id: \.self) { date in
+                dateGroup(for: date)
+            }
+        }
+        .padding()
+    }
+    
+    private func dateGroup(for date: Date) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(formatDate(date))
+                .font(.headline)
+                .foregroundStyle(.mint)
+            
+            let dateEntries = entries[date] ?? []
+            ForEach(dateEntries) { entry in
+                NutritionEntryRow(
+                    entry: entry,
+                    onDelete: { deleteEntry(entry) },
+                    loadData: loadData
+                )
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(12)
     }
     
     private func formatDate(_ date: Date) -> String {

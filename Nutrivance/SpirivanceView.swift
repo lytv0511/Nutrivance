@@ -9,7 +9,6 @@ struct SpirivanceView: View {
     @State private var showHome: Bool = true
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
-    private let detector = NutritionTableDetector()
     @State private var capturedImage: UIImage?
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool

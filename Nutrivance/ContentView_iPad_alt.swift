@@ -13,7 +13,6 @@ struct ContentView_iPad_alt: View {
     @State private var showHome: Bool = true
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
-    private let detector = NutritionTableDetector()
     @State private var capturedImage: UIImage?
 
     let nutrientDetails: [String: NutrientInfo] = [

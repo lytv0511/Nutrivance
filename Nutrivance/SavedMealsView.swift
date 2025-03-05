@@ -25,8 +25,10 @@ struct SavedMeal: Identifiable, Codable {
     }
 }
 
-class SavedMealsManager: ObservableObject {
+@MainActor
+class SavedMealsManager: ObservableObject, @unchecked Sendable {
     @Published var savedMeals: [SavedMeal] = []
+    @Published var showSaveConfirmation = false
     private let saveKey = "savedMeals"
     
     init() {
@@ -52,18 +54,22 @@ class SavedMealsManager: ObservableObject {
     }
     
     func logMeal(_ meal: SavedMeal) {
-        let healthStore = HealthKitManager()
-        healthStore.saveNutrients(meal.nutrients.map { nutrient in
-            HealthKitManager.NutrientData(
-                name: nutrient.key,
-                value: nutrient.value,
-                unit: NutritionUnit.getUnit(for: nutrient.key)
-            )
-        }) { success in
-            if success {
-                if let index = self.savedMeals.firstIndex(where: { $0.id == meal.id }) {
-                    self.savedMeals[index].lastUsed = Date()
-                    self.saveToDisk()
+        Task { @MainActor in
+            let healthStore = HealthKitManager()
+            let nutrientData = meal.nutrients.map { key, value in
+                HealthKitManager.NutrientData(name: key, value: value, unit: "g")
+            }
+            
+            healthStore.saveNutrients(nutrientData) { success in
+                if success {
+                    withAnimation {
+                        self.showSaveConfirmation = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation {
+                            self.showSaveConfirmation = false
+                        }
+                    }
                 }
             }
         }

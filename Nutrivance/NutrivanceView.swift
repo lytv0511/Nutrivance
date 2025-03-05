@@ -8,7 +8,6 @@ struct NutrivanceView: View {
     @State private var showCamera = false
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
-    private let detector = NutritionTableDetector()
     @State private var capturedImage: UIImage?
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
