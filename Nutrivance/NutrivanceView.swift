@@ -39,11 +39,12 @@ struct NutrivanceView: View {
         "minerals": ["minerals", "calcium", "iron", "magnesium", "zinc", "selenium"],
         "phytochemicals": ["phytochemicals", "plant compounds", "bioactive compounds"],
         "antioxidants": ["antioxidants", "antioxidant", "free radicals"],
-        "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
+        "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"],
+        "barcode": ["barcode", "code 128", "upc", "ean"]
     ]
     var filteredItems: [String] {
            let nutritionItems = ["Insights", "Labels", "Log",
-                              "Calories", "Carbs", "Protein", "Fats", "Water",
+                                 "Calories", "Carbs", "Protein", "Fats", "Water", "Barcode",
                               "Fiber", "Vitamins", "Minerals", "Phytochemicals",
                               "Antioxidants", "Electrolytes"]
         
@@ -141,6 +142,8 @@ struct NutrivanceView: View {
                                             NutritionScannerView()
                                         case "Log":
                                             LogView()
+                                        case "Barcode":
+                                            BarcodeScannerView()
                                         case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
                                             NutrientDetailView(nutrientName: item)
                                         case "Dashboard":
@@ -256,6 +259,8 @@ struct NutrivanceView: View {
             return AnyView(LogView())
         case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
             return AnyView(NutrientDetailView(nutrientName: item))
+        case "Barcode":
+            return AnyView(BarcodeScannerView())
         case "Dashboard":
             return AnyView(DashboardView())
         case "Today's Plan":
@@ -327,7 +332,7 @@ struct NutrivanceView: View {
     private var nutritionSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Insights", "Labels", "Log"], id: \.self) { item in
+                ForEach(["Insights", "Labels", "Log", "Barcode"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -487,6 +492,7 @@ private func getIconName(for item: String) -> String {
     case "Insights": return "chart.bar.fill"
     case "Labels": return "barcode.viewfinder"
     case "Log": return "square.and.pencil"
+    case "Barcode": return "barcode.viewfinder"
     
     // Nutrition
     case "Calories": return "flame.fill"

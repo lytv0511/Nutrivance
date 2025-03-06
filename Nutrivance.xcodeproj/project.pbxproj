@@ -21,6 +21,7 @@
 		15561A712D6B8945006B8741 /* PlaygroundTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A702D6B8945006B8741 /* PlaygroundTypes.swift */; };
 		1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */; };
 		1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0592CD26FA6004E1D13 /* HomeView.swift */; };
+		1567DE082D79150500881AD5 /* BarcodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1567DE072D79150500881AD5 /* BarcodeScannerView.swift */; };
 		1568141B2D5C0E80003C861E /* ComingSoonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568141A2D5C0E80003C861E /* ComingSoonView.swift */; };
 		1568143A2D5C0F2D003C861E /* ProgramBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568142F2D5C0F2D003C861E /* ProgramBuilderView.swift */; };
 		1568143B2D5C0F2D003C861E /* LiveChallengesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814272D5C0F2D003C861E /* LiveChallengesView.swift */; };
@@ -163,6 +164,7 @@
 		15561A702D6B8945006B8741 /* PlaygroundTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundTypes.swift; sourceTree = "<group>"; };
 		1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone.swift; sourceTree = "<group>"; };
 		1557A0592CD26FA6004E1D13 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		1567DE072D79150500881AD5 /* BarcodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarcodeScannerView.swift; sourceTree = "<group>"; };
 		1568141A2D5C0E80003C861E /* ComingSoonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComingSoonView.swift; sourceTree = "<group>"; };
 		1568141C2D5C0F2D003C861E /* AchievementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AchievementsView.swift; sourceTree = "<group>"; };
 		1568141D2D5C0F2D003C861E /* ActivityRingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityRingsView.swift; sourceTree = "<group>"; };
@@ -609,6 +611,7 @@
 				15F5865C2CF783F3006D3A9C /* HealthInsightsView.swift */,
 				15CB57112CEEC22F00A6E970 /* HealthKitImportView.swift */,
 				159F516E2CD5591E001F5FFC /* HealthKitManager.swift */,
+				1567DE072D79150500881AD5 /* BarcodeScannerView.swift */,
 				156814242D5C0F2D003C861E /* HeartZonesView.swift */,
 				15F5865E2CF7840F006D3A9C /* HistoryView.swift */,
 				1557A0592CD26FA6004E1D13 /* HomeView.swift */,
@@ -951,6 +954,7 @@
 				156814472D5C0F2D003C861E /* HeartZonesView.swift in Sources */,
 				156814482D5C0F2D003C861E /* PreWorkoutTimingView.swift in Sources */,
 				156814492D5C0F2D003C861E /* StrainRecoveryView.swift in Sources */,
+				1567DE082D79150500881AD5 /* BarcodeScannerView.swift in Sources */,
 				1568144A2D5C0F2D003C861E /* DashboardView.swift in Sources */,
 				1568144B2D5C0F2D003C861E /* MobilityTestView.swift in Sources */,
 				15561A432D6AE865006B8741 /* SearchView.swift in Sources */,

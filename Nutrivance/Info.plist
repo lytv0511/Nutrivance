@@ -27,6 +27,11 @@
         </dict>
     </dict>
 
+    <key>NSCameraUsageDescription</key>
+    <string>Nutrivance needs camera access to scan barcodes</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Nutrivance needs photo library access to scan barcodes from images</string>
+    
     <key>UISupportedInterfaceOrientations~iphone</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>

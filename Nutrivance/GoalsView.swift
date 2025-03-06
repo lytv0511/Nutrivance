@@ -43,7 +43,7 @@ struct GoalsView: View {
                 updateGoalProgress()
             }
             .background(
-               GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+               GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
                    .onAppear {
                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                            animationPhase = 20

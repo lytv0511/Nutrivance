@@ -89,27 +89,8 @@ struct SavedMealsView: View {
     @State private var animationPhase: Double = 0
     
     var body: some View {
-        ZStack {
-            gradientBackground
+        NavigationStack {
             VStack(spacing: 20) {
-                HStack {
-                    Text("Saved Meals")
-                        .font(.largeTitle)
-                        .bold()
-                    
-                    Spacer()
-                    
-                    Button(action: { showingAddMeal = true }) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                    }
-                    .buttonStyle(.plain)
-                    .contentShape(Circle())
-                    .hoverEffect(.lift)
-                }
-                .padding()
-                
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 15) {
                         CategoryButton(title: "All", isSelected: selectedCategory == nil) {
@@ -143,6 +124,27 @@ struct SavedMealsView: View {
                     .padding()
                 }
             }
+            .toolbar {
+               ToolbarItem(placement: .navigationBarTrailing) {
+                   Button(action: { showingAddMeal = true }) {
+                       Image(systemName: "plus.circle.fill")
+                           .font(.title2)
+                           .foregroundColor(.blue)
+                   }
+                   .buttonStyle(.plain)
+                   .contentShape(Circle())
+                   .hoverEffect(.lift)
+               }
+           }
+            .background(
+                GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
+                        }
+                    }
+            )
+            .navigationTitle(Text("Saved Meals"))
             .sheet(isPresented: $showingAddMeal) {
                 AddMealView(mealsManager: mealsManager)
             }

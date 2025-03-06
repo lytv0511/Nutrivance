@@ -169,6 +169,12 @@ struct ContentView_iPad_alt: View {
                 .customizationID("iPad.tab.insights")
                 .defaultVisibility(.visible, for: .tabBar)
                 
+                Tab("Barcode", systemImage: "barcode.viewfinder") {
+                    BarcodeScannerView()
+                }
+                .customizationID("iPad.tab.barcode")
+                .defaultVisibility(.hidden, for: .tabBar)
+                
             } header: {
                 Text("Nutrivance Tools")
                     .font(.headline)
