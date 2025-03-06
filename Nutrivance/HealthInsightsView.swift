@@ -1,281 +1,203 @@
-//
-//  HealthInsightsView.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 11/27/24.
-//
-
-import Foundation
 import SwiftUI
+import Charts
+import HealthKit
 
 struct HealthInsightsView: View {
-    @StateObject private var healthStore = HealthKitManager()
-    @StateObject private var analysisService = HealthAnalysisService()
-    @State private var nutrientData: [String: Double] = [:]
-    @State private var selectedTimeFrame: TimeFrame = .daily
-    @State private var nutrientValues: [String: Double] = [:]
-    @EnvironmentObject var navigationState: NavigationState
-    @Environment(\.dismiss) private var dismiss
-    @State private var animationPhase: Double = 0
+    @State private var selectedPoint: NutrientDataPoint?
+    struct NutrientDataPoint: Identifiable {
+        let id = UUID()
+        let date: Date
+        let value: Double
+        let nutrient: String
+    }
     
-    enum TimeFrame: String, CaseIterable {
-        case daily = "Today"
-        case weekly = "This Week"
-        case monthly = "This Month"
+    @StateObject private var healthStore = HealthKitManager()
+    @State private var nutrientData: [String: [NutrientDataPoint]] = [:]
+    
+    private var startOfToday: Date {
+        Calendar.current.startOfDay(for: Date())
+    }
+
+    private var endOfToday: Date {
+        Calendar.current.date(byAdding: .day, value: 1, to: startOfToday)!
     }
     
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack {
-                    Text(timeBasedGreeting() + ", learn more about your health")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.leading, 20)
-                    Picker("Time Frame", selection: $selectedTimeFrame) {
-                        ForEach(TimeFrame.allCases, id: \.self) { timeFrame in
-                            Text(timeFrame.rawValue).tag(timeFrame)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding()
-                    .onChange(of: selectedTimeFrame) { oldValue, newValue in
-                        fetchDataForTimeFrame()
-                    }
-                    
-                    if analysisService.isAnalyzing {
-                        ProgressView("Analyzing your nutrition data...")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                    }
-                    
-                    if !analysisService.insights.isEmpty {
-                        InsightCard(insight: analysisService.insights)
-                    }
-                    
-                    QuickActionButtons(nutrientData: nutrientData)
-                    
-                    NutrientCharts(data: nutrientData)
-                        .padding()
-                }
-            }
-            .background(
-               GradientBackgrounds().natureGradient(animationPhase: $animationPhase)
-                   .onAppear {
-                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                           animationPhase = 20
-                       }
-                   }
-           )
-            .onAppear {
-                fetchDataForTimeFrame()
-            }
-            .navigationTitle(Text("Health Insights"))
-        }
-        .onDisappear {
-            navigationState.setDismissAction {
-                dismiss()
-            }
-        }
-        .onAppear {
-            navigationState.clearDismissAction()
-        }
-    }
-    
-    struct QuickActionButtons: View {
-        let nutrientData: [String: Double]
-        @Environment(\.horizontalSizeClass) var horizontalSizeClass
-        
-        var body: some View {
-            Text("Action Buttons")
-                .font(.title2)
-                .bold()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 25)
-            Group {
-                if horizontalSizeClass == .regular {
-                    HStack(spacing: 20) {
-                        ForEach(actionButtons, id: \.title) { button in
-                            NavigationLink(destination: destinationView(for: button.title)) {
-                                HStack {
-                                    Image(systemName: button.icon)
-                                        .font(.title)
-                                    VStack(alignment: .leading) {
-                                        Text(button.title)
+            VStack(spacing: 0) {
+                // Info overlay area
+                ZStack {
+                    if let selected = selectedPoint {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Today")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.secondary)
+                            
+                            let selectedTime = selected.date
+                            ForEach(["Protein", "Carbs", "Fats"], id: \.self) { nutrient in
+                                if let point = nutrientData[nutrient]?.first(where: {
+                                    Calendar.current.compare($0.date, to: selectedTime, toGranularity: .hour) == .orderedSame
+                                }) {
+                                    HStack {
+                                        Text(nutrient)
                                             .font(.headline)
-                                            .foregroundColor(.primary)
-                                        Text(button.description)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
+                                            .foregroundStyle(nutrient == "Protein" ? .red :
+                                                            nutrient == "Carbs" ? .green : .blue)
+                                        Spacer()
+                                        Text("\(Int(point.value))")
+                                            .font(.title3.bold())
+                                        Text("grams")
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 100)
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(15)
                             }
-                            .hoverEffect(.lift)
+                            
+                            Text(selected.date, format: .dateTime.month(.abbreviated).day().hour())
+                                .font(.footnote.bold())
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .padding()
+                    }
+                }
+                .frame(height: 180)
+                
+                ZStack(alignment: .top) {
+                    Chart {
+                        ForEach(Array(0..<24), id: \.self) { hour in
+                            if let date = Calendar.current.date(byAdding: .hour, value: hour, to: startOfToday) {
+                                RuleMark(
+                                    x: .value("Hour", date, unit: .hour)
+                                )
+                                .lineStyle(StrokeStyle(dash: [2, 4]))
+                                .foregroundStyle(.gray.opacity(0.3))
+                            }
+                        }
+                        
+                        ForEach(nutrientData["Protein"] ?? []) { point in
+                            PointMark(
+                                x: .value("Time", point.date, unit: .hour),
+                                y: .value("Grams", point.value)
+                            )
+                            .foregroundStyle(.red)
+                            .symbol(.circle)
+                        }
+                        
+                        ForEach(nutrientData["Carbs"] ?? []) { point in
+                            PointMark(
+                                x: .value("Time", point.date, unit: .hour),
+                                y: .value("Grams", point.value)
+                            )
+                            .foregroundStyle(.green)
+                            .symbol(.circle)
+                        }
+                        
+                        ForEach(nutrientData["Fats"] ?? []) { point in
+                            PointMark(
+                                x: .value("Time", point.date, unit: .hour),
+                                y: .value("Grams", point.value)
+                            )
+                            .foregroundStyle(.blue)
+                            .symbol(.circle)
+                        }
+                        
+                        if let selected = selectedPoint {
+                            RuleMark(
+                                x: .value("Selected", selected.date, unit: .hour)
+                            )
+                            .foregroundStyle(.ultraThinMaterial)
                         }
                     }
-                    .padding(.horizontal)
-                } else {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
-                        ForEach(actionButtons, id: \.title) { button in
-                            NavigationLink(destination: destinationView(for: button.title)) {
-                                VStack {
-                                    Image(systemName: button.icon)
-                                        .font(.title2)
-                                    Text(button.title)
-                                        .font(.caption)
+                    .chartXAxis {
+                        AxisMarks(values: [startOfToday,
+                                         Calendar.current.date(byAdding: .hour, value: 6, to: startOfToday)!,
+                                         Calendar.current.date(byAdding: .hour, value: 12, to: startOfToday)!,
+                                         Calendar.current.date(byAdding: .hour, value: 18, to: startOfToday)!,
+                                         endOfToday]) { value in
+                            AxisGridLine()
+                            AxisTick()
+                            if let date = value.as(Date.self) {
+                                AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                            }
+                        }
+                    }
+                    .chartXScale(domain: startOfToday...endOfToday)
+                    .frame(height: 300)
+                    .padding()
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            Rectangle().fill(.clear).contentShape(Rectangle())
+                                .onTapGesture { location in
+                                    let xPosition = location.x - geometry.frame(in: .local).origin.x
+                                    guard let date = proxy.value(atX: xPosition) as Date? else { return }
+                                    
+                                    let allPoints = (nutrientData["Protein"] ?? []) + (nutrientData["Carbs"] ?? []) + (nutrientData["Fats"] ?? [])
+                                    selectedPoint = allPoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })
                                 }
-                                .frame(height: 80)
-                                .frame(maxWidth: .infinity)
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(15)
-                            }
-                            .hoverEffect(.lift)
                         }
                     }
-                    .padding(.horizontal)
                 }
+                
+                HStack(spacing: 20) {
+                    Label("Protein", systemImage: "circle.fill")
+                        .foregroundColor(.red)
+                    Label("Carbs", systemImage: "circle.fill")
+                        .foregroundColor(.green)
+                    Label("Fats", systemImage: "circle.fill")
+                        .foregroundColor(.blue)
+                }
+                .padding()
+            }
+            .navigationTitle("Today's Macronutrients")
+            .task {
+                await fetchHourlyNutrientData()
             }
         }
-        
-        private var actionButtons: [(title: String, icon: String, description: String)] {
-            [
-                ("Log Meal", "plus.circle.fill", "Quick access to saved meals"),
-                ("View History", "clock.fill", "Easily track your nutrition trends"),
-                ("Set Goals", "target", "Effectively manage nutrition targets"),
-                ("Get Tips", "lightbulb.fill", "Personalized recommendations")
-            ]
-        }
-        
-        private func destinationView(for buttonTitle: String) -> some View {
-            switch buttonTitle {
-            case "Log Meal":
-                return AnyView(SavedMealsView())
-            case "View History":
-                return AnyView(HistoryView())
-            case "Set Goals":
-                return AnyView(GoalsView())
-            case "Get Tips":
-                return AnyView(TipsView())
-            default:
-                return AnyView(EmptyView())
-            }
-        }
+
     }
+
+
     
-    private func fetchDataForTimeFrame() {
-        switch selectedTimeFrame {
-        case .daily:
-            fetchTodayData()
-        case .weekly:
-            fetchWeekData()
-        case .monthly:
-            fetchMonthData()
+    private func fetchHourlyNutrientData() async {
+        let calendar = Calendar.current
+        let now = Date()
+        let startOfToday = calendar.startOfDay(for: now)
+        
+        let intervals = (0...23).map { hour -> (start: Date, end: Date) in
+            let start = calendar.date(byAdding: .hour, value: hour, to: startOfToday)!
+            let end = calendar.date(byAdding: .hour, value: hour + 1, to: startOfToday)!
+            return (start: start, end: end)
         }
-    }
-    
-    private func fetchTodayData() {
-        let nutrients = ["calories", "protein", "carbs", "fats", "water"]
-        let data = [String: Double]()
-        let _: [String: Double] = [:]
         
-        let group = DispatchGroup()
-        
-        for nutrient in nutrients {
-            group.enter()
-            healthStore.fetchNutrientData(for: nutrient) { value, error in
+        for nutrient in ["Protein", "Carbs", "Fats"] {
+            var hourlyData: [NutrientDataPoint] = []
+            
+            for interval in intervals {
+                let value = await withCheckedContinuation { continuation in
+                    healthStore.fetchNutrientDataForInterval(
+                        nutrientType: nutrient.lowercased(),
+                        start: interval.start,
+                        end: interval.end
+                    ) { value, _ in
+                        continuation.resume(returning: value)
+                    }
+                }
+                
                 if let value = value {
-                    DispatchQueue.main.async {
-                        nutrientValues[nutrient] = value
-                    }
+                    hourlyData.append(NutrientDataPoint(
+                        date: interval.start,
+                        value: value,
+                        nutrient: nutrient
+                    ))
                 }
             }
-        }
-        
-        group.notify(queue: .main) {
-            nutrientData = data
-            analysisService.analyzeNutrientData(data)
-        }
-    }
-    
-    private func fetchWeekData() {
-        let calendar = Calendar.current
-        let today = Date()
-        let weekAgo = calendar.date(byAdding: .day, value: -7, to: today)!
-        
-        fetchHistoricalData(from: weekAgo, to: today)
-    }
-    
-    private func fetchMonthData() {
-        let calendar = Calendar.current
-        let today = Date()
-        let monthAgo = calendar.date(byAdding: .month, value: -1, to: today)!
-        
-        fetchHistoricalData(from: monthAgo, to: today)
-    }
-    
-    private func fetchHistoricalData(from startDate: Date, to endDate: Date) {
-        let nutrients = ["calories", "protein", "carbs", "fats", "water"]
-        let group = DispatchGroup()
-        
-        for nutrient in nutrients {
-            group.enter()
-            healthStore.fetchNutrientData(for: nutrient) { value, error in
-                if value != nil {
-                    DispatchQueue.main.async {
-                        updateNutrientData(nutrient: nutrient, value: value!)
-                    }
-                }
-                group.leave()
+            
+            await MainActor.run {
+                nutrientData[nutrient] = hourlyData.sorted(by: { $0.date < $1.date })
             }
         }
-    }
-
-    private func updateNutrientData(nutrient: String, value: Double) {
-        nutrientData[nutrient] = value
-    }
-}
-
-struct InsightCard: View {
-    let insight: String
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Analysis Results")
-                .font(.headline)
-            Text(insight)
-                .font(.body)
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 5)
-        .padding(.horizontal)
-    }
-}
-
-struct TipsView: View {
-    var body: some View {
-        Text("Tips Coming Soon")
-    }
-}
-
-private func timeBasedGreeting() -> String {
-    let hour = Calendar.current.component(.hour, from: Date())
-    switch hour {
-    case 5..<12:
-        return "Good Morning"
-    case 12..<17:
-        return "Good Afternoon"
-    case 17..<21:
-        return "Good Evening"
-    default:
-        return "Good Night"
     }
 }

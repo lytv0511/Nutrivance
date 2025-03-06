@@ -581,6 +581,36 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         fetchTodayNutrientData(for: nutrientType, completion: completion)
     }
     
+    func fetchNutrientDataForInterval(
+        nutrientType: String,
+        start: Date,
+        end: Date,
+        completion: @escaping (Double?, Error?) -> Void
+    ) {
+        guard let type = quantityType(for: nutrientType) else {
+            print("Debug: No quantity type for \(nutrientType)")
+            completion(nil, nil)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(
+            withStart: start,
+            end: end,
+            options: .strictStartDate
+        )
+        
+        let query = HKStatisticsQuery(
+            quantityType: type,
+            quantitySamplePredicate: predicate,
+            options: .cumulativeSum
+        ) { _, result, error in
+            let value = result?.sumQuantity()?.doubleValue(for: .gram())
+            completion(value, error)
+        }
+        
+        healthStore.execute(query)
+    }
+    
     func fetchNutrientHistory(from startDate: Date, to endDate: Date) async throws -> [NutritionEntry] {
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         var entriesByID: [String: NutritionEntry] = [:]

@@ -125,17 +125,12 @@ struct SavedMealsView: View {
                 }
             }
             .toolbar {
-               ToolbarItem(placement: .navigationBarTrailing) {
-                   Button(action: { showingAddMeal = true }) {
-                       Image(systemName: "plus.circle.fill")
-                           .font(.title2)
-                           .foregroundColor(.blue)
-                   }
-                   .buttonStyle(.plain)
-                   .contentShape(Circle())
-                   .hoverEffect(.lift)
-               }
-           }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showingAddMeal = true }) {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
             .background(
                 GradientBackgrounds().forestGradient(animationPhase: $animationPhase)
                     .onAppear {
@@ -145,6 +140,7 @@ struct SavedMealsView: View {
                     }
             )
             .navigationTitle(Text("Saved Meals"))
+            .navigationBarTitleDisplayMode(.large)
             .sheet(isPresented: $showingAddMeal) {
                 AddMealView(mealsManager: mealsManager)
             }
@@ -240,7 +236,8 @@ struct MealCard: View {
             }
             
             HStack {
-                ForEach(Array(meal.nutrients.filter { $0.value > 0 }), id: \.key) { nutrient in
+                ForEach(Array(meal.nutrients.filter { $0.value > 0 })
+                    .sorted(by: { $0.key < $1.key }), id: \.key) { nutrient in
                     Text("\(nutrient.key): \(nutrient.value, specifier: "%.1f")")
                         .font(.caption)
                         .padding(5)
@@ -258,7 +255,7 @@ struct MealCard: View {
             .hoverEffect(.lift)
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(.ultraThinMaterial)
         .cornerRadius(15)
         .shadow(radius: 5)
         .alert("Log This Meal?", isPresented: $showingLogConfirmation) {

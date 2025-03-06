@@ -236,6 +236,7 @@ struct NutrivanceView: View {
                             .padding()
                         }
                         .navigationTitle("Nutrivance")
+                        .navigationBarTitleDisplayMode(.large)
                     }
                 }
                 .background(
