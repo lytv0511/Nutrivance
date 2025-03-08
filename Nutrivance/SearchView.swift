@@ -14,7 +14,7 @@ struct SearchView: View {
     @FocusState private var contentFocused: Bool
     @State private var animationPhase: Double = 0
     private let gradients = GradientBackgrounds()
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+//    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     // Update items when needed
     private let nutritionItems = ["Insights", "Labels", "Log", "Barcode",
@@ -189,11 +189,11 @@ struct SearchView: View {
                                     case "Labels":
                                         NutritionScannerView()
                                     case "Log":
-                                        LogView()
+                                        UnifiedLogView()
                                     case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
                                         NutrientDetailView(nutrientName: item)
-                                    case "Barcode":
-                                        BarcodeScannerView()
+//                                    case "Barcode":
+//                                        BarcodeScannerView()
                                     case "Dashboard":
                                         DashboardView()
                                     case "Today's Plan":
@@ -347,11 +347,11 @@ struct SearchView: View {
         case "Labels":
             return AnyView(NutritionScannerView())
         case "Log":
-            return AnyView(LogView())
+            return AnyView(UnifiedLogView())
         case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
             return AnyView(NutrientDetailView(nutrientName: item))
-        case "Barcode":
-            return AnyView(BarcodeScannerView())
+//        case "Barcode":
+//            return AnyView(BarcodeScannerView())
         case "Dashboard":
             return AnyView(DashboardView())
         case "Today's Plan":

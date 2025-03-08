@@ -42,15 +42,38 @@ struct ContentView_iPad: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     var filteredItems: [String] {
-        let allItems = ["Home", "Insights", "Labels", "Log",
-                       "Calories", "Carbs", "Protein", "Fats", "Water",
-                       "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes",
-                       "Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                       "Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator",
-                       "Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery",
-                       "Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records",
-                       "Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance",
-                       "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards", "Fuel Check"]
+        let allItems = [
+            // Nutrition
+            "Home", "Insights", "Labels", "Log", "Saved Meals",
+            
+            // Macronutrients
+            "Calories", "Carbs", "Protein", "Fats", "Water",
+            
+            // Micronutrients
+            "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes",
+            
+            // Fitness Training
+            "Dashboard", "Today's Plan", "Workout History", "Training Calendar",
+            "Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator",
+            
+            // Recovery
+            "Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness", "Strain vs Recovery", "Fuel Check",
+            
+            // Metrics
+            "Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records",
+            
+            // Performance Nutrition
+            "Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance",
+            
+            // Social
+            "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards",
+            
+            // Mental Health
+            "Mindfulness Realm", "Mood Tracker", "Journal", "Resources",
+            
+            // Wellness
+            "Meditation", "Breathing", "Sleep", "Stress"
+        ]
         
         if searchState.searchText.isEmpty {
             return allItems
@@ -93,18 +116,45 @@ struct ContentView_iPad: View {
             NavigationSplitView {
                 List(selection: navigationBinding) {
                     HStack {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
-                            .padding(.leading, 8)
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(.secondary)
+                                .padding(.leading, 8)
+                            
+                            TextField("Find in List", text: $searchState.searchText)
+                                .textFieldStyle(.plain)
+                                .focused($searchBarFocused)
+                                .autocorrectionDisabled(true)
+                            
+                            if !searchState.searchText.isEmpty {
+                                Button(action: {
+                                    searchState.searchText = ""
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 16, height: 16)
+                                }
+                                .hoverEffect(.automatic)
+                                .padding(.trailing, 8)
+                                .keyboardShortcut(".", modifiers: [.command])
+                            }
+                        }
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(8)
                         
-                        TextField("Find in List", text: $searchState.searchText)
-                            .textFieldStyle(.plain)
-                            .focused($searchBarFocused)
-                            .autocorrectionDisabled(true)
+                        if searchBarFocused {
+                            Button("Cancel") {
+                                searchBarFocused = false
+                                searchState.searchText = ""
+                            }
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            .padding(8)
+                            .hoverEffect(.automatic)
+                        }
                     }
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(8)
+                    .animation(.spring(), value: searchBarFocused)
+
                     .listRowBackground(Color.clear)
                     .onChange(of: searchBarFocused) { _, isFocused in
                         searchState.isSearching = isFocused
@@ -159,6 +209,7 @@ struct ContentView_iPad: View {
             } detail: {
                 Group {
                     switch navigationState.selectedView {
+                    // Nutrition Focus
                     case "Home":
                         AnyView(HomeView())
                     case "Insights":
@@ -166,7 +217,11 @@ struct ContentView_iPad: View {
                     case "Labels":
                         AnyView(NutritionScannerView())
                     case "Log":
-                        AnyView(LogView())
+                        AnyView(UnifiedLogView())
+                    case "Saved Meals":
+                        AnyView(SavedMealsView())
+                    
+                    // Detailed Nutrients
                     case "Calories":
                         AnyView(NutrientDetailView(nutrientName: "Calories"))
                     case "Carbs":
@@ -189,6 +244,8 @@ struct ContentView_iPad: View {
                         AnyView(NutrientDetailView(nutrientName: "Antioxidants"))
                     case "Electrolytes":
                         AnyView(NutrientDetailView(nutrientName: "Electrolytes"))
+                    
+                    // Fitness Focus - Training
                     case "Dashboard":
                         AnyView(DashboardView())
                     case "Today's Plan":
@@ -201,24 +258,28 @@ struct ContentView_iPad: View {
                         AnyView(CoachView())
                     case "Movement Analysis":
                         AnyView(MovementAnalysisView())
-                    case "Fuel Check":
-                        AnyView(FuelCheckView())
                     case "Exercise Library":
                         AnyView(ExerciseLibraryView())
                     case "Program Builder":
                         AnyView(ProgramBuilderView())
                     case "Workout Generator":
                         AnyView(WorkoutGeneratorView())
+                    
+                    // Fitness Focus - Recovery
                     case "Recovery Score":
                         AnyView(RecoveryScoreView())
                     case "Sleep Analysis":
                         AnyView(SleepAnalysisView())
                     case "Mobility Test":
-                         AnyView(MobilityTestView())
-                    case "Readiness Check":
+                        AnyView(MobilityTestView())
+                    case "Readiness":
                         AnyView(ReadinessCheckView())
                     case "Strain vs Recovery":
                         AnyView(StrainRecoveryView())
+                    case "Fuel Check":
+                        AnyView(FuelCheckView())
+                    
+                    // Fitness Focus - Metrics
                     case "Activity Rings":
                         AnyView(ActivityRingsView())
                     case "Heart Zones":
@@ -231,6 +292,8 @@ struct ContentView_iPad: View {
                         AnyView(CaloriesBurnedView())
                     case "Personal Records":
                         AnyView(PersonalRecordsView())
+                    
+                    // Fitness Focus - Nutrition
                     case "Pre-Workout Timing":
                         AnyView(PreWorkoutTimingView())
                     case "Post-Workout Window":
@@ -241,6 +304,8 @@ struct ContentView_iPad: View {
                         AnyView(HydrationStatusView())
                     case "Macro Balance":
                         AnyView(MacroBalanceView())
+                    
+                    // Fitness Focus - Social
                     case "Live Challenges":
                         AnyView(LiveChallengesView())
                     case "Friend Activity":
@@ -251,7 +316,25 @@ struct ContentView_iPad: View {
                         AnyView(ShareWorkoutsView())
                     case "Leaderboards":
                         AnyView(LeaderboardsView())
-
+                    
+                    // Mental Health Focus
+                    case "Mindfulness Realm":
+                        AnyView(MindfulnessRealmView())
+                    case "Mood Tracker":
+                        AnyView(MoodTrackerView())
+                    case "Journal":
+                        AnyView(JournalView())
+                    case "Resources":
+                        AnyView(ResourcesView())
+                    case "Meditation":
+                        AnyView(MeditationView())
+                    case "Breathing":
+                        AnyView(BreathingView())
+                    case "Sleep":
+                        AnyView(SleepView())
+                    case "Stress":
+                        AnyView(StressView())
+                    
                     default:
                         AnyView(HomeView())
                     }
@@ -291,7 +374,7 @@ struct ContentView_iPad: View {
     private var nutritionSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Home", "Insights", "Labels", "Log"], id: \.self) { item in
+                ForEach(["Home", "Insights", "Labels", "Log", "Saved Meals"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -318,19 +401,11 @@ struct ContentView_iPad: View {
             }
         }
     }
+
     private var fitnessSections: some View {
         Group {
-            Section(header: Text("Main")) {
-                ForEach(["Dashboard", "Today's Plan", "Workout History", "Training Calendar"], id: \.self) { item in
-                    if filteredItems.contains(item) {
-                        Label(item, systemImage: getIconName(for: item))
-                            .tag(item)
-                    }
-                }
-            }
-            
-            Section(header: Text("Smart Training")) {
-                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+            Section(header: Text("Training")) {
+                ForEach(["Dashboard", "Today's Plan", "Workout History", "Training Calendar", "Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -339,7 +414,7 @@ struct ContentView_iPad: View {
             }
             
             Section(header: Text("Recovery")) {
-                ForEach(["Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery"], id: \.self) { item in
+                ForEach(["Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness", "Strain vs Recovery", "Fuel Check"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -356,8 +431,8 @@ struct ContentView_iPad: View {
                 }
             }
             
-            Section(header: Text("Nutrition Impact")) {
-                ForEach(["Pre-Workout Timing", "Post-Workout Window", "Fuel Check", "Hydration Status", "Macro Balance"], id: \.self) { item in
+            Section(header: Text("Performance Nutrition")) {
+                ForEach(["Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -365,7 +440,7 @@ struct ContentView_iPad: View {
                 }
             }
             
-            Section(header: Text("Community")) {
+            Section(header: Text("Social")) {
                 ForEach(["Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
@@ -375,10 +450,11 @@ struct ContentView_iPad: View {
             }
         }
     }
+
     private var mentalHealthSections: some View {
         Group {
-            Section(header: Text("Main")) {
-                ForEach(["Dashboard", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
+            Section(header: Text("Mental Health")) {
+                ForEach(["Mindfulness Realm", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -388,15 +464,6 @@ struct ContentView_iPad: View {
             
             Section(header: Text("Wellness")) {
                 ForEach(["Meditation", "Breathing", "Sleep", "Stress"], id: \.self) { item in
-                    if filteredItems.contains(item) {
-                        Label(item, systemImage: getIconName(for: item))
-                            .tag(item)
-                    }
-                }
-            }
-            
-            Section(header: Text("Support")) {
-                ForEach(["Community", "Professional Help", "Crisis Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -517,7 +584,18 @@ private func getIconName(for item: String) -> String {
     case "Achievements": return "medal.fill"
     case "Share Workouts": return "square.and.arrow.up.fill"
     case "Leaderboards": return "list.number"
-    
+        
+    // Update
+    case "Mindfulness Realm": return "eye.fill"
+    case "Mood Tracker": return "sun.max"
+    case "Journal": return "book.fill"
+    case "Resources": return "folder.fill"
+    case "Meditation": return "sparkles"
+    case "Breathing": return "wind"
+    case "Sleep": return "moon.zzz.fill"
+    case "Stress": return "waveform.path.ecg"
+    case "Saved Meals": return "bookmark.fill"
+
     default: return "circle.fill"
     }
 }

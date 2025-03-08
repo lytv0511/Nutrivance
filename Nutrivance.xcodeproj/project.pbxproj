@@ -22,6 +22,7 @@
 		1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */; };
 		1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0592CD26FA6004E1D13 /* HomeView.swift */; };
 		1567DE082D79150500881AD5 /* BarcodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1567DE072D79150500881AD5 /* BarcodeScannerView.swift */; };
+		1567DE0A2D7BB5E000881AD5 /* UnifiedLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1567DE092D7BB5E000881AD5 /* UnifiedLogView.swift */; };
 		1568141B2D5C0E80003C861E /* ComingSoonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568141A2D5C0E80003C861E /* ComingSoonView.swift */; };
 		1568143A2D5C0F2D003C861E /* ProgramBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568142F2D5C0F2D003C861E /* ProgramBuilderView.swift */; };
 		1568143B2D5C0F2D003C861E /* LiveChallengesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814272D5C0F2D003C861E /* LiveChallengesView.swift */; };
@@ -165,6 +166,7 @@
 		1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone.swift; sourceTree = "<group>"; };
 		1557A0592CD26FA6004E1D13 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		1567DE072D79150500881AD5 /* BarcodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarcodeScannerView.swift; sourceTree = "<group>"; };
+		1567DE092D7BB5E000881AD5 /* UnifiedLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedLogView.swift; sourceTree = "<group>"; };
 		1568141A2D5C0E80003C861E /* ComingSoonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComingSoonView.swift; sourceTree = "<group>"; };
 		1568141C2D5C0F2D003C861E /* AchievementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AchievementsView.swift; sourceTree = "<group>"; };
 		1568141D2D5C0F2D003C861E /* ActivityRingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityRingsView.swift; sourceTree = "<group>"; };
@@ -597,6 +599,7 @@
 				15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */,
 				15D7FFA22CD142690048E050 /* ContentView.swift */,
 				159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */,
+				1567DE092D7BB5E000881AD5 /* UnifiedLogView.swift */,
 				159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */,
 				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
 				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
@@ -945,6 +948,7 @@
 				1568143F2D5C0F2D003C861E /* ExerciseLibraryView.swift in Sources */,
 				156814402D5C0F2D003C861E /* ReadinessCheckView.swift in Sources */,
 				156814412D5C0F2D003C861E /* RecoveryScoreView.swift in Sources */,
+				1567DE0A2D7BB5E000881AD5 /* UnifiedLogView.swift in Sources */,
 				156814422D5C0F2D003C861E /* HydrationStatusView.swift in Sources */,
 				156814432D5C0F2D003C861E /* WorkoutGeneratorView.swift in Sources */,
 				156814442D5C0F2D003C861E /* PersonalRecordsView.swift in Sources */,

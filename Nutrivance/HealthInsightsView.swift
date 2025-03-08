@@ -722,6 +722,7 @@ struct HealthInsightsView: View {
                     Text("Today")
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
+                        .frame(minWidth: 20)
                         .background(.ultraThinMaterial)
                         .clipShape(Capsule())
                 }

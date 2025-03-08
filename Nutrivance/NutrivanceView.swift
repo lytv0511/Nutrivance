@@ -12,7 +12,7 @@ struct NutrivanceView: View {
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+//    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -142,8 +142,8 @@ struct NutrivanceView: View {
                                             NutritionScannerView()
                                         case "Log":
                                             LogView()
-                                        case "Barcode":
-                                            BarcodeScannerView()
+//                                        case "Barcode":
+//                                            BarcodeScannerView()
                                         case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
                                             NutrientDetailView(nutrientName: item)
                                         case "Dashboard":
@@ -260,8 +260,8 @@ struct NutrivanceView: View {
             return AnyView(LogView())
         case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
             return AnyView(NutrientDetailView(nutrientName: item))
-        case "Barcode":
-            return AnyView(BarcodeScannerView())
+//        case "Barcode":
+//            return AnyView(BarcodeScannerView())
         case "Dashboard":
             return AnyView(DashboardView())
         case "Today's Plan":

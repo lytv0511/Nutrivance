@@ -56,16 +56,16 @@ struct LogView: View {
                         }
                         .padding()
                         
-                        if extractedNutrients.isEmpty && !isSearchBarFocused {
-                            BubblesView(activeNutrients: Set(), rotationSpeed: 0.001, nutrientValues: [:])
+                        if extractedNutrients.isEmpty {
+                            BubblesView(activeNutrients: Set(), rotationSpeed: 0.0005, nutrientValues: [:])
                                 .frame(minHeight: 500)
-                        } else if !extractedNutrients.isEmpty && !isSearchBarFocused {
-                            BubblesView(activeNutrients: Set(extractedNutrients.keys), rotationSpeed: 0.005, nutrientValues: extractedNutrients)
-                                .frame(minHeight: 500)
+                        } else if !extractedNutrients.isEmpty {
+                            BubblesView(activeNutrients: Set(extractedNutrients.keys), rotationSpeed: 0.001, nutrientValues: extractedNutrients)
+                                .frame(minHeight: 300)
                         }
                         
                         if !extractedNutrients.isEmpty {
-                            VStack(spacing: 15) {
+                            VStack() {
                                 HStack {
                                     Text("Extracted Nutrients")
                                         .font(.headline)
@@ -86,7 +86,6 @@ struct LogView: View {
                                         ForEach(Array(extractedNutrients.keys.sorted()), id: \.self) { nutrient in
                                             Spacer()
                                             Spacer()
-                                            Spacer()
                                             HStack {
                                                 Image(systemName: getNutrientIcon(for: nutrient))
                                                     .resizable()
@@ -105,14 +104,13 @@ struct LogView: View {
                                             .padding(.horizontal)
                                             Spacer()
                                             Spacer()
-                                            Spacer()
                                             Divider()
                                         }
                                     }
-                                    .background(Color(.systemBackground))
+                                    .background(.ultraThinMaterial)
                                     .cornerRadius(15)
                                     .shadow(radius: 5)
-                                    .padding()
+                                    .padding(.horizontal)
 //                                }
                             }
                             
@@ -352,11 +350,14 @@ struct BubblesView: View {
     ]
     
     var activeSymbols: [String] {
-        activeNutrients.isEmpty ? Array(symbolMapping.values) : activeNutrients.compactMap { symbolMapping[$0] }
+        let symbols = activeNutrients.isEmpty ?
+            Array(symbolMapping.values) :
+            activeNutrients.compactMap { symbolMapping[$0] }
+        return symbols.sorted()
     }
     
     @State private var angle: Double = 0
-    let timer = Timer.publish(every: 1/120, on: .main, in: .common).autoconnect()
+    let timer = Timer.publish(every: 1/480, on: .main, in: .common).autoconnect()
     
     var body: some View {
         GeometryReader { geometry in

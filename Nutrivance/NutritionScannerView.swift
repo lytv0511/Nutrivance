@@ -30,6 +30,7 @@ public struct NutritionScannerView: View {
     @State private var selectedNutrient: NutritionScannerViewModel.NutritionDetection?
     @State private var sourceType: UIImagePickerController.SourceType = .camera  // Default to camera
     @State private var animationPhase: Double = 0
+    @State private var showingImagePreview = false
     
     public var body: some View {
         NavigationStack {
@@ -40,7 +41,36 @@ public struct NutritionScannerView: View {
                             .resizable()
                             .scaledToFit()
                             .cornerRadius(12)
-                            .frame(height: 400)
+                            .frame(maxHeight: 300)
+                            .onTapGesture {
+                                showingImagePreview = true
+                            }
+                            .fullScreenCover(isPresented: $showingImagePreview) {
+                                ZStack {
+                                    Color.black.ignoresSafeArea()
+                                    
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .ignoresSafeArea()
+                                    
+                                    VStack {
+                                        HStack {
+                                            Spacer()
+                                            Button {
+                                                showingImagePreview = false
+                                            } label: {
+                                                Text("Done")
+                                            }
+                                            .padding(8)
+                                            .hoverEffect()
+                                            .padding()
+                                        }
+                                        Spacer()
+                                    }
+                                }
+                            }
+
                     } else {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(Color.gray.opacity(0.2))
@@ -128,6 +158,18 @@ public struct NutritionScannerView: View {
                                 .tint(.yellow)
                             }
                         }
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text("...")
+                                    .font(.headline)
+                                Text("...")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "camera.metering.unknown")
+                                .foregroundColor(.blue)
+                        }
                     }
                     
                     // Sheet for editing the nutrient value
@@ -187,7 +229,7 @@ public struct NutritionScannerView: View {
                 
                 Spacer()
             }
-            .sheet(isPresented: $showingImagePicker) {
+            .fullScreenCover(isPresented: $showingImagePicker) {
                 ImagePicker(selectedImage: $selectedImage, sourceType: sourceType)
             }
             .onChange(of: selectedImage) { _, newValue in

@@ -2,24 +2,19 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var healthKitManager = HealthKitManager()
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     var body: some View {
         Group {
-            if horizontalSizeClass == .regular {
-//                ContentView_iPad()
-                ContentView_iPad_alt()
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                ContentView_iPad()
             } else {
-//                ContentView_iPhone()
                 ContentView_iPhone_alt()
-//                ContentView_iPad_alt()
-//                ContentView_iPad()
             }
         }
         .onAppear {
             requestHealthDataPermissions()
         }
-    } 
+    }
     
     private func requestHealthDataPermissions() {
         healthKitManager.requestAuthorization { success, error in

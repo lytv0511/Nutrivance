@@ -9,12 +9,12 @@ enum AppFocus: String, CaseIterable {
 }
 
 class NavigationState: ObservableObject {
-    @Published var selectedView: String = "Readiness Check"
+    @Published var selectedView: String = "Log"
     @Published var dismissAction: (() -> Void)?
     @Published var canGoBack: Bool = false
     @Published var showFocusSwitcher = false
-    @Published var appFocus: AppFocus = .fitness
-    @Published var tempFocus: AppFocus = .fitness
+    @Published var appFocus: AppFocus = .nutrition
+    @Published var tempFocus: AppFocus = .nutrition
     @Published var isSearchBarFocused = false
     
     func setDismissAction(_ action: @escaping () -> Void) {
