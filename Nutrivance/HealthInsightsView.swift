@@ -840,7 +840,7 @@ struct HealthInsightsView: View {
             
             Spacer()
             
-            HStack(spacing: 20) {
+            HStack(spacing: 10) {
                 Button(action: {
                     let generator = UIImpactFeedbackGenerator(style: .medium)
                     generator.impactOccurred()
