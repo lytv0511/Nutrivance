@@ -141,7 +141,7 @@ struct NutrivanceView: View {
                                         case "Labels":
                                             NutritionScannerView()
                                         case "Log":
-                                            LogView()
+                                            UnifiedLogView()
 //                                        case "Barcode":
 //                                            BarcodeScannerView()
                                         case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
@@ -257,7 +257,7 @@ struct NutrivanceView: View {
         case "Labels":
             return AnyView(NutritionScannerView())
         case "Log":
-            return AnyView(LogView())
+            return AnyView(UnifiedLogView())
         case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
             return AnyView(NutrientDetailView(nutrientName: item))
 //        case "Barcode":

@@ -268,20 +268,19 @@ struct DayChartView: View {
                     }
                 }
             }
-            .contentShape(Rectangle())
-            .onTapGesture { location in
-                let hour = Int(location.x / 300 * 24)
-                for nutrient in ["Protein", "Carbs", "Fats"] {
-                    if let point = hourlyData[nutrient]?.first(where: {
-                        Calendar.current.component(.hour, from: $0.hourStart) == hour
-                    }), point.value > 0 {
-                        selectedPoint = NutrientDataPoint(
-                            date: point.hourStart,
-                            value: point.value,
-                            nutrient: point.nutrient
-                        )
-                        break
-                    }
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { location in
+                            if let hour = proxy.value(atX: location.x) as Double? {
+                                selectedPoint = hourlyData.values
+                                    .flatMap { $0 }
+                                    .first { Calendar.current.component(.hour, from: $0.hourStart) == Int(hour) }
+                                    .map { NutrientDataPoint(date: $0.hourStart, value: $0.value, nutrient: $0.nutrient) }
+                                let generator = UIImpactFeedbackGenerator(style: .medium)
+                                generator.impactOccurred()
+                            }
+                        }
                 }
             }
         }
@@ -394,6 +393,8 @@ struct WeekChartView: View, NutrientChartView {
                                 }
                             }
                             selectedPoint = allPoints.first { Calendar.current.component(.weekday, from: $0.date) == weekday }
+                            let generator = UIImpactFeedbackGenerator(style: .medium)
+                            generator.impactOccurred()
                         }
                 }
             }
@@ -502,6 +503,8 @@ struct MonthChartView: View, NutrientChartView {
                                 }
                             }
                             selectedPoint = allPoints.first { Calendar.current.component(.weekOfMonth, from: $0.date) == weekOfMonth }
+                            let generator = UIImpactFeedbackGenerator(style: .medium)
+                            generator.impactOccurred()
                         }
                 }
             }
@@ -569,6 +572,8 @@ struct SixMonthChartView: View {
                        selectedPoint = allPoints.first { point in
                            Calendar.current.component(.month, from: point.date) - 1 == monthIndex
                        }
+                       let generator = UIImpactFeedbackGenerator(style: .medium)
+                       generator.impactOccurred()
                    }
            }
        }
@@ -682,6 +687,8 @@ struct YearChartView: View {
                         selectedPoint = allPoints.first { point in
                             Calendar.current.component(.month, from: point.date) - 1 == monthIndex
                         }
+                        let generator = UIImpactFeedbackGenerator(style: .medium)
+                        generator.impactOccurred()
                     }
             }
         }
