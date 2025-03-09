@@ -1,10 +1,3 @@
-//
-//  UnifiedLogView.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 3/7/25.
-//
-
 import Foundation
 import SwiftUI
 import AVFoundation
@@ -15,6 +8,7 @@ struct UnifiedLogView: View {
     @State private var showingCamera = false
     @State private var capturedImage: UIImage?
     @State private var orientation = UIDevice.current.orientation
+    @State private var animationPhase: Double = 0
     
     var body: some View {
         NavigationStack {
@@ -23,8 +17,6 @@ struct UnifiedLogView: View {
                     .frame(maxWidth: .infinity)
                     .aspectRatio(4/3, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .rotationEffect(getRotationAngle(for: orientation))
-                    .animation(.default, value: orientation)
                     .overlay(alignment: .trailing) {
                         VStack(spacing: 12) {
                             if viewModel.hasVisibleText {
@@ -43,9 +35,15 @@ struct UnifiedLogView: View {
                         .font(.title2)
                         .padding()
                     }
-                    .onRotate { newOrientation in
-                        if let connection = viewModel.session.connections.first {
-                            updateVideoRotation(connection: connection, orientation: newOrientation)
+                    .padding()
+                    .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+                        if let connection = viewModel.session.connections.first,
+                           let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+                           let previewLayer = (connection.videoPreviewLayer) {
+                            if #available(iOS 17.0, *) {
+                                let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+                                connection.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+                            }
                         }
                     }
                 
@@ -76,42 +74,20 @@ struct UnifiedLogView: View {
             .sheet(isPresented: $viewModel.showingResults) {
                 NutrientResultsView(results: viewModel.analysisResults)
             }
-        }
-    }
-    
-    private func getRotationAngle(for orientation: UIDeviceOrientation) -> Angle {
-        switch orientation {
-        case .landscapeLeft: return .degrees(0)
-        case .landscapeRight: return .degrees(0)
-        case .portraitUpsideDown: return .degrees(0)
-        default: return .degrees(0)
-        }
-    }
-    
-    private func updateVideoRotation(connection: AVCaptureConnection, orientation: UIDeviceOrientation) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.viewModel.session.stopRunning()
-            self.viewModel.session.beginConfiguration()
-            
-            if #available(iOS 17.0, *) {
-                if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-                   let previewLayer = connection.videoPreviewLayer {
-                    let rotationCoordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
-                    let angle = rotationCoordinator.videoRotationAngleForHorizonLevelCapture
-                    connection.videoRotationAngle = angle
-                }
+            .onAppear {
+                UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             }
-            
-            self.viewModel.session.commitConfiguration()
-            self.viewModel.session.startRunning()
-        }
-    }
-}
-
-extension View {
-    func onRotate(perform action: @escaping (UIDeviceOrientation) -> Void) -> some View {
-        self.onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            action(UIDevice.current.orientation)
+            .onDisappear {
+                UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            }
+            .background(
+               GradientBackgrounds().natureGradient(animationPhase: $animationPhase)
+                   .onAppear {
+                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                           animationPhase = 20
+                       }
+                   }
+           )
         }
     }
 }
@@ -138,6 +114,13 @@ struct CameraPreview: UIViewRepresentable {
     
     func updateUIView(_ uiView: PreviewView, context: Context) {
         uiView.videoPreviewLayer.frame = uiView.bounds
+        if let connection = uiView.videoPreviewLayer.connection,
+           let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+            if #available(iOS 17.0, *) {
+                let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: uiView.videoPreviewLayer)
+                connection.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+            }
+        }
     }
 }
 
@@ -181,7 +164,6 @@ class UnifiedLoggingViewModel: NSObject, ObservableObject, AVCapturePhotoCapture
     
     let session = AVCaptureSession()
     let photoOutput = AVCapturePhotoOutput()
-    var previewLayer: AVCaptureVideoPreviewLayer?
     
     var canTakePhoto: Bool {
         session.isRunning
@@ -230,8 +212,10 @@ class UnifiedLoggingViewModel: NSObject, ObservableObject, AVCapturePhotoCapture
             
             if let connection = self.photoOutput.connection(with: .video) {
                 if #available(iOS 17.0, *) {
-                    let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: self.previewLayer)
-                    connection.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+                    if let previewLayer = connection.videoPreviewLayer {
+                        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+                        connection.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+                    }
                 }
             }
             

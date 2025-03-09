@@ -399,33 +399,39 @@ struct MeshGradientView: View {
 
 struct GradientFadeOverlay: View {
     @Environment(\.colorScheme) var colorScheme
+    @State private var orientation = UIDevice.current.orientation
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Top 10% - completely transparent
-            Color(.systemBackground)
-                .opacity(0)
-                .frame(height: UIScreen.main.bounds.height * 0.05)
-            
-            // Middle 30% - gradual fade
-            LinearGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(.systemBackground).opacity(0), location: 0),
-                    .init(color: Color(.systemBackground).opacity(0.2), location: 0.2),
-                    .init(color: Color(.systemBackground).opacity(0.4), location: 0.4),
-                    .init(color: Color(.systemBackground).opacity(0.6), location: 0.6),
-                    .init(color: Color(.systemBackground).opacity(0.8), location: 0.8),
-                    .init(color: Color(.systemBackground), location: 1.0)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: UIScreen.main.bounds.height * 0.35)
-            
-            // Bottom 60% - full opacity
-            Color(.systemBackground)
-                .frame(height: UIScreen.main.bounds.height * 0.60)
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // Top 10% - completely transparent
+                Color(.systemBackground)
+                    .opacity(0)
+                    .frame(height: geometry.size.height * 0.05)
+                
+                // Middle 30% - gradual fade
+                LinearGradient(
+                    gradient: Gradient(stops: [
+                        .init(color: Color(.systemBackground).opacity(0), location: 0),
+                        .init(color: Color(.systemBackground).opacity(0.2), location: 0.2),
+                        .init(color: Color(.systemBackground).opacity(0.4), location: 0.4),
+                        .init(color: Color(.systemBackground).opacity(0.6), location: 0.6),
+                        .init(color: Color(.systemBackground).opacity(0.8), location: 0.8),
+                        .init(color: Color(.systemBackground), location: 1.0)
+                    ]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: geometry.size.height * 0.35)
+                
+                // Bottom 60% - full opacity
+                Color(.systemBackground)
+                    .frame(height: geometry.size.height * 0.60)
+            }
         }
         .ignoresSafeArea()
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            orientation = UIDevice.current.orientation
+        }
     }
 }

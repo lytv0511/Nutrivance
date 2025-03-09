@@ -11,6 +11,43 @@ struct NutrientDataPoint: Identifiable {
     let nutrient: String
 }
 
+struct DayNutrientData: Identifiable {
+    let id = UUID()
+    let hourStart: Date
+    let value: Double
+    let nutrient: String
+    
+    @MainActor
+    static func fetchDayData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [DayNutrientData] {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        var hourlyData: [DayNutrientData] = []
+        
+        for hour in 0..<24 {
+            let hourStart = calendar.date(byAdding: .hour, value: hour, to: startOfDay)!
+            let hourEnd = calendar.date(byAdding: .hour, value: 1, to: hourStart)!
+            
+            let value = await withCheckedContinuation { continuation in
+                healthStore.fetchNutrientDataForInterval(
+                    nutrientType: nutrientType.lowercased(),
+                    start: hourStart,
+                    end: hourEnd
+                ) { value, _ in
+                    continuation.resume(returning: value ?? 0)
+                }
+            }
+            
+            hourlyData.append(DayNutrientData(
+                hourStart: hourStart,
+                value: value,
+                nutrient: nutrientType
+            ))
+        }
+        
+        return hourlyData
+    }
+}
+
 struct WeekNutrientData: Identifiable {
     let id = UUID()
     let date: Date
@@ -102,45 +139,6 @@ struct MonthNutrientData: Identifiable {
     }
 }
 
-struct SixMonthNutrientData: Identifiable {
-    let id = UUID()
-    let monthStart: Date
-    let averageValue: Double
-    let nutrient: String
-    let monthIndex: Int
-    
-    @MainActor
-    static func fetchSixMonthData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [SixMonthNutrientData] {
-        let calendar = Calendar.current
-        let sixMonthsAgo = calendar.date(byAdding: .month, value: -5, to: date)!
-        var sixMonthData: [SixMonthNutrientData] = []
-        
-        for monthOffset in 0...5 {
-            let monthStart = calendar.date(byAdding: .month, value: monthOffset, to: sixMonthsAgo)!
-            let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
-            
-            let value = await withCheckedContinuation { continuation in
-                healthStore.fetchNutrientDataForInterval(
-                    nutrientType: nutrientType.lowercased(),
-                    start: monthStart,
-                    end: monthEnd
-                ) { value, _ in
-                    continuation.resume(returning: value ?? 0)
-                }
-            }
-            
-            sixMonthData.append(SixMonthNutrientData(
-                monthStart: monthStart,
-                averageValue: value,
-                nutrient: nutrientType,
-                monthIndex: monthOffset
-            ))
-        }
-        
-        return sixMonthData
-    }
-}
-
 struct YearNutrientData: Identifiable {
     let id = UUID()
     let monthStart: Date
@@ -189,92 +187,101 @@ struct YearNutrientData: Identifiable {
     }
 }
 
-struct DayChartView: View, NutrientChartView {
-    let nutrientData: [String: [NutrientDataPoint]]
-    let startOfDay: Date
-    let endOfDay: Date
+struct DayChartView: View {
+    let hourlyData: [String: [DayNutrientData]]
     @Binding var selectedPoint: NutrientDataPoint?
+    let selectedDiet: DietPlan?
+    let strictLevel: StrictLevel
+    let tdee: Double
+    
+    private var maxValue: Double {
+        hourlyData.values.flatMap { $0 }.map(\.value).max() ?? 100
+    }
     
     var body: some View {
-        if (nutrientData["Protein"]?.isEmpty ?? true) &&
-              (nutrientData["Carbs"]?.isEmpty ?? true) &&
-              (nutrientData["Fats"]?.isEmpty ?? true) {
-               Text("No data")
-                   .font(.title2)
-                   .foregroundStyle(.secondary)
-                   .frame(height: 300)
+        if hourlyData.values.flatMap({ $0 }).allSatisfy({ $0.value == 0 }) {
+            Text("No Data")
+                .font(.title)
+                .foregroundColor(.secondary)
+                .frame(height: 300)
         } else {
             Chart {
-                ForEach(Array(0..<24), id: \.self) { hour in
-                    if let date = Calendar.current.date(byAdding: .hour, value: hour, to: startOfDay) {
-                        RuleMark(
-                            x: .value("Hour", date, unit: .hour)
-                        )
-                        .lineStyle(StrokeStyle(dash: [2, 4]))
-                        .foregroundStyle(.gray.opacity(0.3))
+                if let selectedDiet = selectedDiet {
+                    let ranges = getRangesForStrictLevel(diet: selectedDiet, level: strictLevel)
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 0),
+                        xEnd: .value("End", 23),
+                        yStart: .value("Lower", ranges.carbs.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.carbs.upperBound * tdee)
+                    )
+                    .foregroundStyle(.green.opacity(0.1))
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 0),
+                        xEnd: .value("End", 23),
+                        yStart: .value("Lower", ranges.protein.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.protein.upperBound * tdee)
+                    )
+                    .foregroundStyle(.red.opacity(0.1))
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 0),
+                        xEnd: .value("End", 23),
+                        yStart: .value("Lower", ranges.fat.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.fat.upperBound * tdee)
+                    )
+                    .foregroundStyle(.blue.opacity(0.1))
+                }
+                
+                ForEach(["Protein", "Carbs", "Fats"], id: \.self) { nutrient in
+                    ForEach(hourlyData[nutrient] ?? [], id: \.id) { point in
+                        if point.value > 0 {
+                            PointMark(
+                                x: .value("Hour", Double(Calendar.current.component(.hour, from: point.hourStart))),
+                                y: .value("Value", point.value)
+                            )
+                            .foregroundStyle(nutrient == "Protein" ? .red :
+                                            nutrient == "Carbs" ? .green : .blue)
+                        }
                     }
-                }
-                
-                ForEach(nutrientData["Protein"] ?? []) { point in
-                    PointMark(
-                        x: .value("Time", point.date, unit: .hour),
-                        y: .value("Grams", point.value)
-                    )
-                    .foregroundStyle(.red)
-                    .symbol(.circle)
-                }
-                
-                ForEach(nutrientData["Carbs"] ?? []) { point in
-                    PointMark(
-                        x: .value("Time", point.date, unit: .hour),
-                        y: .value("Grams", point.value)
-                    )
-                    .foregroundStyle(.green)
-                    .symbol(.circle)
-                }
-                
-                ForEach(nutrientData["Fats"] ?? []) { point in
-                    PointMark(
-                        x: .value("Time", point.date, unit: .hour),
-                        y: .value("Grams", point.value)
-                    )
-                    .foregroundStyle(.blue)
-                    .symbol(.circle)
                 }
                 
                 if let selected = selectedPoint {
                     RuleMark(
-                        x: .value("Selected", selected.date, unit: .hour)
+                        x: .value("Selected", Double(Calendar.current.component(.hour, from: selected.date)))
                     )
                     .foregroundStyle(.gray.opacity(0.3))
                 }
             }
+            .chartXScale(domain: 0...23)
+            .chartYScale(domain: 0...maxValue)
+            .chartPlotStyle { plotArea in
+                plotArea.frame(height: 300)
+            }
             .chartXAxis {
-                AxisMarks(values: [startOfDay,
-                                   Calendar.current.date(byAdding: .hour, value: 6, to: startOfDay)!,
-                                   Calendar.current.date(byAdding: .hour, value: 12, to: startOfDay)!,
-                                   Calendar.current.date(byAdding: .hour, value: 18, to: startOfDay)!,
-                                   endOfDay]) { value in
+                AxisMarks(values: .stride(by: 6)) { value in
                     AxisGridLine()
                     AxisTick()
-                    if let date = value.as(Date.self) {
-                        AxisValueLabel {
-                            Text(date.formatted(.dateTime.hour(.defaultDigits(amPM: .omitted))))
-                        }
+                    AxisValueLabel {
+                        Text(String(format: "%02d", value.as(Int.self) ?? 0))
                     }
                 }
             }
-            .chartXScale(domain: startOfDay...endOfDay)
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                        .onTapGesture { location in
-                            let xPosition = location.x - geometry.frame(in: .local).origin.x
-                            guard let date = proxy.value(atX: xPosition) as Date? else { return }
-                            
-                            let allPoints = (nutrientData["Protein"] ?? []) + (nutrientData["Carbs"] ?? []) + (nutrientData["Fats"] ?? [])
-                            selectedPoint = allPoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })
-                        }
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                let hour = Int(location.x / 300 * 24)
+                for nutrient in ["Protein", "Carbs", "Fats"] {
+                    if let point = hourlyData[nutrient]?.first(where: {
+                        Calendar.current.component(.hour, from: $0.hourStart) == hour
+                    }), point.value > 0 {
+                        selectedPoint = NutrientDataPoint(
+                            date: point.hourStart,
+                            value: point.value,
+                            nutrient: point.nutrient
+                        )
+                        break
+                    }
                 }
             }
         }
@@ -284,6 +291,9 @@ struct DayChartView: View, NutrientChartView {
 struct WeekChartView: View, NutrientChartView {
     let weekData: [String: [WeekNutrientData]]
     @Binding var selectedPoint: NutrientDataPoint?
+    let selectedDiet: DietPlan?
+    let strictLevel: StrictLevel
+    let tdee: Double
     
     var body: some View {
         if (weekData["Protein"]?.isEmpty ?? true) &&
@@ -296,6 +306,34 @@ struct WeekChartView: View, NutrientChartView {
                 .frame(maxWidth: .infinity, alignment: .center)
         } else {
             Chart {
+                if let selectedDiet = selectedDiet {
+                    let ranges = getRangesForStrictLevel(diet: selectedDiet, level: strictLevel)
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 1),
+                        xEnd: .value("End", 7),
+                        yStart: .value("Lower", ranges.carbs.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.carbs.upperBound * tdee)
+                    )
+                    .foregroundStyle(.green.opacity(0.1))
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 1),
+                        xEnd: .value("End", 7),
+                        yStart: .value("Lower", ranges.protein.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.protein.upperBound * tdee)
+                    )
+                    .foregroundStyle(.red.opacity(0.1))
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 1),
+                        xEnd: .value("End", 7),
+                        yStart: .value("Lower", ranges.fat.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.fat.upperBound * tdee)
+                    )
+                    .foregroundStyle(.blue.opacity(0.1))
+                }
+                
                 ForEach(weekData["Protein"] ?? []) { point in
                     PointMark(
                         x: .value("Day", point.dayOfWeek),
@@ -366,6 +404,9 @@ struct WeekChartView: View, NutrientChartView {
 struct MonthChartView: View, NutrientChartView {
     let monthData: [String: [MonthNutrientData]]
     @Binding var selectedPoint: NutrientDataPoint?
+    let selectedDiet: DietPlan?
+    let strictLevel: StrictLevel
+    let tdee: Double
     
     var body: some View {
         if (monthData["Protein"]?.isEmpty ?? true) &&
@@ -377,6 +418,33 @@ struct MonthChartView: View, NutrientChartView {
                 .frame(height: 300)
         } else {
             Chart {
+                if let selectedDiet = selectedDiet {
+                    let ranges = getRangesForStrictLevel(diet: selectedDiet, level: strictLevel)
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 1),
+                        xEnd: .value("End", 5),
+                        yStart: .value("Lower", ranges.carbs.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.carbs.upperBound * tdee)
+                    )
+                    .foregroundStyle(.green.opacity(0.1))
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 1),
+                        xEnd: .value("End", 5),
+                        yStart: .value("Lower", ranges.protein.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.protein.upperBound * tdee)
+                    )
+                    .foregroundStyle(.red.opacity(0.1))
+                    
+                    RectangleMark(
+                        xStart: .value("Start", 1),
+                        xEnd: .value("End", 5),
+                        yStart: .value("Lower", ranges.fat.lowerBound * tdee),
+                        yEnd: .value("Upper", ranges.fat.upperBound * tdee)
+                    )
+                    .foregroundStyle(.blue.opacity(0.1))
+                }
                 ForEach(monthData["Protein"] ?? []) { point in
                     PointMark(
                         x: .value("Week", point.weekOfMonth),
@@ -411,7 +479,7 @@ struct MonthChartView: View, NutrientChartView {
                     .foregroundStyle(.gray.opacity(0.3))
                 }
             }
-            .chartXScale(domain: 1...5)  // Show all 5 weeks
+            .chartXScale(domain: 1...5)
             .chartXAxis {
                 AxisMarks { value in
                     AxisGridLine()
@@ -441,60 +509,161 @@ struct MonthChartView: View, NutrientChartView {
     }
 }
 
-struct SixMonthChartView: View, NutrientChartView {
+struct SixMonthChartView: View {
     let sixMonthData: [String: [SixMonthNutrientData]]
     @Binding var selectedPoint: NutrientDataPoint?
-    
-    private var currentHalfYear: String {
-        let currentMonth = Calendar.current.component(.month, from: Date())
-        let year = Calendar.current.component(.year, from: Date())
-        return "\(year) \(currentMonth <= 6 ? "First" : "Second") Half"
-    }
+    let selectedDiet: DietPlan?
+    let strictLevel: StrictLevel
+    let tdee: Double
     
     var body: some View {
         Chart {
-            ForEach(sixMonthData["Protein"] ?? []) { point in
-                PointMark(
-                    x: .value("Month", point.monthIndex),
-                    y: .value("Grams", point.averageValue)
-                )
-                .foregroundStyle(.red)
-                .symbol(.circle)
+            ForEach(["Protein", "Carbs", "Fats"], id: \.self) { nutrient in
+                ForEach(sixMonthData[nutrient] ?? []) { point in
+                    PointMark(
+                        x: .value("Month", point.monthIndex),
+                        y: .value("Value", point.averageValue)
+                    )
+                    .foregroundStyle(nutrient == "Protein" ? .red :
+                                    nutrient == "Carbs" ? .green : .blue)
+                }
             }
-            
-            ForEach(sixMonthData["Carbs"] ?? []) { point in
-                PointMark(
-                    x: .value("Month", point.monthIndex),
-                    y: .value("Grams", point.averageValue)
-                )
-                .foregroundStyle(.green)
-                .symbol(.circle)
-            }
-            
-            ForEach(sixMonthData["Fats"] ?? []) { point in
-                PointMark(
-                    x: .value("Month", point.monthIndex),
-                    y: .value("Grams", point.averageValue)
-                )
-                .foregroundStyle(.blue)
-                .symbol(.circle)
-            }
-            
             if let selected = selectedPoint {
                 RuleMark(
-                    x: .value("Selected", Calendar.current.component(.month, from: selected.date))
+                    x: .value("Selected", Calendar.current.component(.month, from: selected.date) - 1)
                 )
                 .foregroundStyle(.gray.opacity(0.3))
             }
         }
+        .chartXScale(domain: 0...5)
         .chartXAxis {
-            let currentMonth = Calendar.current.component(.month, from: Date())
-            let startMonth = currentMonth <= 6 ? 1 : 7
-            AxisMarks(values: Array(startMonth...startMonth+5)) { value in
+            let calendar = Calendar.current
+            let firstPoint = sixMonthData.values.first?.first
+            let startMonth = calendar.component(.month, from: firstPoint?.monthStart ?? Date())
+            
+            let monthLabels = startMonth <= 6 ?
+                ["Jan", "Feb", "Mar", "Apr", "May", "Jun"] :
+                ["Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            
+            AxisMarks(values: Array(0...5)) { value in
                 AxisGridLine()
                 AxisTick()
                 AxisValueLabel {
-                    Text(Calendar.current.monthSymbols[value.as(Int.self)! - 1].prefix(3))
+                    Text(monthLabels[value.as(Int.self)!])
+                        .font(.caption2)
+                }
+            }
+        }
+        .chartOverlay { proxy in
+           GeometryReader { geometry in
+               Rectangle().fill(.clear).contentShape(Rectangle())
+                   .onTapGesture { location in
+                       let xPosition = location.x - geometry.frame(in: .local).origin.x
+                       guard let monthIndex = proxy.value(atX: xPosition) as Int? else { return }
+                       
+                       let allPoints = sixMonthData.values.flatMap { monthPoints in
+                           monthPoints.map { point in
+                               NutrientDataPoint(date: point.monthStart, value: point.averageValue, nutrient: point.nutrient)
+                           }
+                       }
+                       selectedPoint = allPoints.first { point in
+                           Calendar.current.component(.month, from: point.date) - 1 == monthIndex
+                       }
+                   }
+           }
+       }
+        .frame(height: 300)
+    }
+}
+
+struct SixMonthNutrientData: Identifiable {
+    let id = UUID()
+    let monthStart: Date
+    let averageValue: Double
+    let nutrient: String
+    let monthIndex: Int
+    
+    @MainActor
+    static func fetchSixMonthData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [SixMonthNutrientData] {
+        let calendar = Calendar.current
+        let month = calendar.component(.month, from: date)
+        let year = calendar.component(.year, from: date)
+        
+        let isFirstHalf = month <= 6
+        let startMonth = isFirstHalf ? 7 : 1
+        let startYear = isFirstHalf ? year - 1 : year
+        
+        var components = DateComponents()
+        components.year = startYear
+        components.month = startMonth
+        components.day = 1
+        let startDate = calendar.date(from: components)!
+
+        var monthlyData: [SixMonthNutrientData] = []
+        
+        for monthOffset in 0..<6 {
+            let monthStart = calendar.date(byAdding: .month, value: monthOffset, to: startDate)!
+            let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+            
+            let value = await withCheckedContinuation { continuation in
+                healthStore.fetchNutrientDataForInterval(
+                    nutrientType: nutrientType.lowercased(),
+                    start: monthStart,
+                    end: monthEnd
+                ) { value, _ in
+                    continuation.resume(returning: value ?? 0)
+                }
+            }
+            
+            monthlyData.append(SixMonthNutrientData(
+                monthStart: monthStart,
+                averageValue: value,
+                nutrient: nutrientType,
+                monthIndex: monthOffset
+            ))
+        }
+        
+        return monthlyData.sorted(by: { $0.monthStart < $1.monthStart })
+    }
+}
+
+struct YearChartView: View {
+    let yearData: [String: [YearNutrientData]]
+    @Binding var selectedPoint: NutrientDataPoint?
+    let selectedDiet: DietPlan?
+    let strictLevel: StrictLevel
+    let tdee: Double
+    
+    var body: some View {
+        Chart {
+            ForEach(["Protein", "Carbs", "Fats"], id: \.self) { nutrient in
+                ForEach(yearData[nutrient] ?? []) { point in
+                    PointMark(
+                        x: .value("Month", point.monthOfYear - 1),
+                        y: .value("Value", point.averageValue)
+                    )
+                    .foregroundStyle(nutrient == "Protein" ? .red :
+                                    nutrient == "Carbs" ? .green : .blue)
+                }
+            }
+            
+            if let selected = selectedPoint {
+                RuleMark(
+                    x: .value("Selected", Calendar.current.component(.month, from: selected.date) - 1)
+                )
+                .foregroundStyle(.gray.opacity(0.3))
+            }
+        }
+        .chartXScale(domain: 0...11)
+        .chartXAxis {
+            let monthLabels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
+            
+            AxisMarks(values: Array(0...11)) { value in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel {
+                    Text(monthLabels[value.as(Int.self)!])
+                        .font(.caption2)
                 }
             }
         }
@@ -503,122 +672,87 @@ struct SixMonthChartView: View, NutrientChartView {
                 Rectangle().fill(.clear).contentShape(Rectangle())
                     .onTapGesture { location in
                         let xPosition = location.x - geometry.frame(in: .local).origin.x
-                        guard let date = proxy.value(atX: xPosition) as Date? else { return }
+                        guard let monthIndex = proxy.value(atX: xPosition) as Int? else { return }
                         
-                        let currentMonth = Calendar.current.component(.month, from: Date())
-                        let startMonth = currentMonth <= 6 ? 1 : 7
-                        let allPoints = sixMonthData.values.flatMap { points in
-                            points.filter { point in
-                                let pointMonth = Calendar.current.component(.month, from: point.monthStart)
-                                return pointMonth >= startMonth && pointMonth < startMonth + 6
-                            }.map { point in
+                        let allPoints = yearData.values.flatMap { monthPoints in
+                            monthPoints.map { point in
                                 NutrientDataPoint(date: point.monthStart, value: point.averageValue, nutrient: point.nutrient)
                             }
                         }
-                        selectedPoint = allPoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })
+                        selectedPoint = allPoints.first { point in
+                            Calendar.current.component(.month, from: point.date) - 1 == monthIndex
+                        }
                     }
             }
         }
+        .frame(height: 300)
     }
 }
 
-struct YearChartView: View, NutrientChartView {
-    let yearData: [String: [YearNutrientData]]
-    @Binding var selectedPoint: NutrientDataPoint?
-    
-    var xAxisValues: [Date] {
-        let year = Calendar.current.component(.year, from: Date())
-        let startOfYear = Calendar.current.date(from: DateComponents(year: year, month: 1, day: 1))!
-        let endOfYear = Calendar.current.date(from: DateComponents(year: year, month: 12, day: 31))!
-        return [startOfYear, endOfYear]
-    }
-    
-    var body: some View {
-        if (yearData["Protein"]?.isEmpty ?? true) &&
-              (yearData["Carbs"]?.isEmpty ?? true) &&
-              (yearData["Fats"]?.isEmpty ?? true) {
-               Text("No data")
-                   .font(.title2)
-                   .foregroundStyle(.secondary)
-                   .frame(height: 300)
-        } else {
-            Chart {
-                ForEach(yearData["Protein"] ?? []) { point in
-                    PointMark(
-                        x: .value("Month", point.monthOfYear),
-                        y: .value("Grams", point.averageValue)
-                    )
-                    .foregroundStyle(.red)
-                    .symbol(.circle)
-                }
-                
-                ForEach(yearData["Carbs"] ?? []) { point in
-                    PointMark(
-                        x: .value("Month", point.monthOfYear),
-                        y: .value("Grams", point.averageValue)
-                    )
-                    .foregroundStyle(.green)
-                    .symbol(.circle)
-                }
-                
-                ForEach(yearData["Fats"] ?? []) { point in
-                    PointMark(
-                        x: .value("Month", point.monthOfYear),
-                        y: .value("Grams", point.averageValue)
-                    )
-                    .foregroundStyle(.blue)
-                    .symbol(.circle)
-                }
-                
-                if let selected = selectedPoint {
-                    RuleMark(
-                        x: .value("Selected", Calendar.current.component(.month, from: selected.date))
-                    )
-                    .foregroundStyle(.gray.opacity(0.3))
-                }
-            }
-            .chartXAxis {
-                AxisMarks(values: xAxisValues) { value in
-                    AxisGridLine()
-                    AxisTick()
-                    AxisValueLabel {
-                        Text(value.as(Date.self)?.formatted(.dateTime.month(.abbreviated)) ?? "")
-                    }
-                }
-            }
-            .chartXScale(domain: xAxisValues.first!...xAxisValues.last!)
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                        .onTapGesture { location in
-                            let xPosition = location.x - geometry.frame(in: .local).origin.x
-                            guard let date = proxy.value(atX: xPosition) as Date? else { return }
-                            
-                            let year = Calendar.current.component(.year, from: Date())
-                            let allPoints = yearData.values.flatMap { points in
-                                points.filter { point in
-                                    Calendar.current.component(.year, from: point.monthStart) == year
-                                }.map { point in
-                                    NutrientDataPoint(date: point.monthStart, value: point.averageValue, nutrient: point.nutrient)
-                                }
-                            }
-                            selectedPoint = allPoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })
-                        }
-                }
-            }
-        }
-    }
-}
 
 
 struct HealthInsightsView: View {
+    @StateObject private var viewModel = HealthInsightsViewModel()
     @State private var selectedPoint: NutrientDataPoint?
     @State private var selectedDate: Date = Date()
+    @State private var hourlyData: [String: [DayNutrientData]] = [:]
     @State private var weekData: [String: [WeekNutrientData]] = [:]
     @State private var monthData: [String: [MonthNutrientData]] = [:]
     @State private var sixMonthData: [String: [SixMonthNutrientData]] = [:]
     @State private var yearData: [String: [YearNutrientData]] = [:]
     @State private var animationPhase: Double = 0
+    @State private var selectedDiet: DietPlan?
+    @State private var strictLevel: StrictLevel = .medium
+    
+    let dietPlans = [
+        DietPlan(name: "Balanced Diet",
+                 strictRanges: (carbs: 0.4...0.4, protein: 0.3...0.3, fat: 0.3...0.3),
+                 lenientRanges: (carbs: 0.45...0.5, protein: 0.2...0.3, fat: 0.25...0.35)),
+        
+        DietPlan(name: "High-Protein Diet",
+                 strictRanges: (carbs: 0.3...0.3, protein: 0.4...0.4, fat: 0.3...0.3),
+                 lenientRanges: (carbs: 0.25...0.35, protein: 0.35...0.45, fat: 0.2...0.3)),
+        
+        DietPlan(name: "Low-Carb Diet",
+                 strictRanges: (carbs: 0.15...0.2, protein: 0.35...0.4, fat: 0.4...0.5),
+                 lenientRanges: (carbs: 0.2...0.3, protein: 0.25...0.35, fat: 0.35...0.45)),
+        
+        DietPlan(name: "Ketogenic Diet",
+                 strictRanges: (carbs: 0.05...0.1, protein: 0.2...0.25, fat: 0.65...0.75),
+                 lenientRanges: (carbs: 0.05...0.15, protein: 0.15...0.3, fat: 0.6...0.8)),
+        
+        DietPlan(name: "Paleo Diet",
+                 strictRanges: (carbs: 0.2...0.3, protein: 0.3...0.4, fat: 0.3...0.4),
+                 lenientRanges: (carbs: 0.25...0.4, protein: 0.25...0.35, fat: 0.3...0.45)),
+        
+        DietPlan(name: "Mediterranean Diet",
+                 strictRanges: (carbs: 0.4...0.5, protein: 0.2...0.3, fat: 0.3...0.4),
+                 lenientRanges: (carbs: 0.45...0.55, protein: 0.15...0.25, fat: 0.25...0.35)),
+        
+        DietPlan(name: "Vegetarian Diet",
+                 strictRanges: (carbs: 0.5...0.55, protein: 0.2...0.25, fat: 0.2...0.3),
+                 lenientRanges: (carbs: 0.45...0.6, protein: 0.15...0.25, fat: 0.2...0.35)),
+        
+        DietPlan(name: "Vegan Diet",
+                 strictRanges: (carbs: 0.5...0.6, protein: 0.2...0.25, fat: 0.15...0.25),
+                 lenientRanges: (carbs: 0.45...0.65, protein: 0.15...0.25, fat: 0.15...0.3)),
+        
+        DietPlan(name: "Carnivore Diet",
+                 strictRanges: (carbs: 0.0...0.05, protein: 0.35...0.5, fat: 0.5...0.65),
+                 lenientRanges: (carbs: 0.0...0.1, protein: 0.3...0.45, fat: 0.5...0.7)),
+        
+        DietPlan(name: "DASH Diet",
+                 strictRanges: (carbs: 0.5...0.55, protein: 0.2...0.25, fat: 0.2...0.3),
+                 lenientRanges: (carbs: 0.45...0.6, protein: 0.15...0.3, fat: 0.2...0.35)),
+        
+        DietPlan(name: "Zone Diet",
+                 strictRanges: (carbs: 0.4...0.4, protein: 0.3...0.3, fat: 0.3...0.3),
+                 lenientRanges: (carbs: 0.35...0.45, protein: 0.25...0.35, fat: 0.25...0.35)),
+        
+        DietPlan(name: "Intermittent Fasting",
+                 strictRanges: (carbs: 0.0...1.0, protein: 0.0...1.0, fat: 0.0...1.0),
+                 lenientRanges: (carbs: 0.0...1.0, protein: 0.0...1.0, fat: 0.0...1.0))
+    ]
     
     enum TimePeriod: String, CaseIterable {
         case day = "Day"
@@ -657,7 +791,8 @@ struct HealthInsightsView: View {
             case .sixMonth:
                 let month = Calendar.current.component(.month, from: selectedDate)
                 let year = Calendar.current.component(.year, from: selectedDate)
-                return "\(year) \(month <= 6 ? "First" : "Second") Half"
+                let isFirstHalf = month <= 6
+                return "\(year) \(isFirstHalf ? "First" : "Second") Half"
             case .year:
                 return selectedDate.formatted(.dateTime.year())
         }
@@ -672,19 +807,22 @@ struct HealthInsightsView: View {
     
     var chartView: some View {
         switch selectedTimePeriod {
-            case .day:
-                AnyView(DayChartView(nutrientData: nutrientData,
-                            startOfDay: startOfSelectedDay,
-                            endOfDay: endOfSelectedDay,
-                            selectedPoint: $selectedPoint))
-            case .week:
-                AnyView(WeekChartView(weekData: weekData, selectedPoint: $selectedPoint))
-            case .month:
-                AnyView(MonthChartView(monthData: monthData, selectedPoint: $selectedPoint))
-            case .sixMonth:
-            AnyView(SixMonthChartView(sixMonthData: sixMonthData, selectedPoint: $selectedPoint))
-            case .year:
-            AnyView(YearChartView(yearData: yearData, selectedPoint: $selectedPoint))
+        case .day:
+            AnyView(DayChartView(hourlyData: hourlyData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee)
+                .task {
+                    await fetchData()
+                })
+        case .week:
+            AnyView(WeekChartView(weekData: weekData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee))
+        case .month:
+            AnyView(MonthChartView(monthData: monthData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee))
+        case .sixMonth:
+            AnyView(SixMonthChartView(sixMonthData: sixMonthData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee)
+                .task {
+                    await fetchData()
+                })
+        case .year:
+            AnyView(YearChartView(yearData: yearData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee))
         }
     }
     
@@ -711,7 +849,11 @@ struct HealthInsightsView: View {
                     case .sixMonth:
                         let month = Calendar.current.component(.month, from: today)
                         let halfYearStart = month <= 6 ? 1 : 7
-                        selectedDate = Calendar.current.date(from: DateComponents(year: Calendar.current.component(.year, from: today), month: halfYearStart, day: 1))!
+                        selectedDate = Calendar.current.date(from: DateComponents(
+                            year: Calendar.current.component(.year, from: today),
+                            month: halfYearStart,
+                            day: 1
+                        ))!
                     case .year:
                         selectedDate = Calendar.current.date(from: Calendar.current.dateComponents([.year], from: today))!
                     }
@@ -781,7 +923,7 @@ struct HealthInsightsView: View {
         Group {
             let hasData: Bool = {
                 switch selectedTimePeriod {
-                    case .day: return !(nutrientData.values.allSatisfy { $0.isEmpty })
+                    case .day: return !(hourlyData.values.flatMap { $0 }.allSatisfy { $0.value == 0 })
                     case .week: return !(weekData.values.allSatisfy { $0.isEmpty })
                     case .month: return !(monthData.values.allSatisfy { $0.isEmpty })
                     case .sixMonth: return !(sixMonthData.values.allSatisfy { $0.isEmpty })
@@ -824,32 +966,32 @@ struct HealthInsightsView: View {
 
     private func selectedPointDetail(_ selected: NutrientDataPoint) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Date header based on time period
             switch selectedTimePeriod {
             case .day:
-                Text(selected.date, format: .dateTime.month(.abbreviated).day())
+                let hourStart = Calendar.current.component(.hour, from: selected.date)
+                let hourEnd = hourStart + 1
+                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) \(String(format: "%02d:00-%02d:00", hourStart, hourEnd)) (total):")
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
             case .week:
-                Text(selected.date.formatted(.dateTime.month(.abbreviated).day()))
+                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) (total):")
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
             case .month:
                 let weekEnd = Calendar.current.date(byAdding: .day, value: 6, to: selected.date)!
-                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) - \(weekEnd.formatted(.dateTime.month(.abbreviated).day())), \(selected.date.formatted(.dateTime.year()))")
+                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) - \(weekEnd.formatted(.dateTime.month(.abbreviated).day())), \(selected.date.formatted(.dateTime.year())) (average):")
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
             case .sixMonth:
-                Text(selected.date.formatted(.dateTime.month(.abbreviated).year()))
+                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).year())) (average):")
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
             case .year:
-                Text(selected.date.formatted(.dateTime.year()))
+                Text("\(selected.date.formatted(.dateTime.month(.defaultDigits)))/\(selected.date.formatted(.dateTime.year())) (average):")
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
             }
             
-            // Nutrient values
             ForEach(["Protein", "Carbs", "Fats"], id: \.self) { nutrient in
                 let value: Double = {
                     switch selectedTimePeriod {
@@ -921,6 +1063,31 @@ struct HealthInsightsView: View {
                     selectedPointDetail(selected)
                 }
                 nutrientLegend
+                Picker("Diet Plan", selection: $selectedDiet) {
+                    ForEach(dietPlans) { plan in
+                        Text(plan.name).tag(Optional(plan))
+                    }
+                }
+                .pickerStyle(.menu)
+                
+                Picker("Strictness Level", selection: $strictLevel) {
+                    Text("Strict").tag(StrictLevel.strict)
+                    Text("Medium").tag(StrictLevel.medium)
+                    Text("Lenient").tag(StrictLevel.lenient)
+                }
+                .pickerStyle(.segmented)
+                .padding()
+                
+                CalorieNeedsCard(
+                    tdee: viewModel.calculateTDEE(),
+                    exerciseCalories: viewModel.todayExerciseCalories,
+                    foodCalories: viewModel.todayFoodCalories
+                )
+                
+                ExploreDietsCard()
+            }
+            .task {
+                await fetchData()
             }
             .navigationTitle("Macronutrients")
             .task {
@@ -975,8 +1142,14 @@ struct HealthInsightsView: View {
     private func fetchData() async {
         switch selectedTimePeriod {
             case .day:
-                await fetchHourlyNutrientData()
-                
+                for nutrient in ["Protein", "Carbs", "Fats"] {
+                    let data = await DayNutrientData.fetchDayData(
+                        for: selectedDate,
+                        nutrientType: nutrient,
+                        healthStore: healthStore
+                    )
+                    hourlyData[nutrient] = data
+                }
             case .week:
                 let calendar = Calendar.current
                 let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selectedDate))!
@@ -1062,121 +1235,123 @@ struct HealthInsightsView: View {
                     monthData[nutrient] = monthlyData
                 }
                 
-            case .sixMonth:
-                let calendar = Calendar.current
-                let sixMonthsAgo = calendar.date(byAdding: .month, value: -5, to: selectedDate)!
+        case .sixMonth:
+            let calendar = Calendar.current
+            let month = calendar.component(.month, from: selectedDate)
+            let year = calendar.component(.year, from: selectedDate)
+            let isFirstHalf = month <= 6
+            let startMonth = isFirstHalf ? 1 : 7
+            
+            let halfYearStart = calendar.date(from: DateComponents(year: year, month: startMonth, day: 1))!
+            
+            for nutrient in ["Protein", "Carbs", "Fats"] {
+                var sixMonthPoints: [SixMonthNutrientData] = []
                 
-                for nutrient in ["Protein", "Carbs", "Fats"] {
-                    var sixMonthPoints: [SixMonthNutrientData] = []
+                for monthOffset in 0...5 {
+                    let monthStart = calendar.date(byAdding: .month, value: monthOffset, to: halfYearStart)!
+                    let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+                    var monthTotal: Double = 0
+                    var validDays = 0
                     
-                    for monthOffset in 0...5 {
-                        let monthStart = calendar.date(byAdding: .month, value: monthOffset, to: sixMonthsAgo)!
-                        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
-                        var monthTotal: Double = 0
-                        var validDays = 0
-                        
-                        var currentDay = monthStart
-                        while currentDay < monthEnd {
-                            let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
-                            let value = await withCheckedContinuation { continuation in
-                                healthStore.fetchNutrientDataForInterval(
-                                    nutrientType: nutrient.lowercased(),
-                                    start: currentDay,
-                                    end: nextDay
-                                ) { value, _ in
-                                    continuation.resume(returning: value)
-                                }
+                    var currentDay = monthStart
+                    while currentDay < monthEnd {
+                        let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
+                        let value = await withCheckedContinuation { continuation in
+                            healthStore.fetchNutrientDataForInterval(
+                                nutrientType: nutrient.lowercased(),
+                                start: currentDay,
+                                end: nextDay
+                            ) { value, _ in
+                                continuation.resume(returning: value)
                             }
-                            
-                            if let value = value, value > 0 {
-                                monthTotal += value
-                                validDays += 1
-                            }
-                            currentDay = nextDay
                         }
                         
-                        if validDays > 0 {
-                            sixMonthPoints.append(SixMonthNutrientData(
-                                monthStart: monthStart,
-                                averageValue: monthTotal / Double(validDays),
-                                nutrient: nutrient,
-                                monthIndex: monthOffset
-                            ))
+                        if let value = value, value > 0 {
+                            monthTotal += value
+                            validDays += 1
                         }
+                        currentDay = nextDay
                     }
                     
-                    sixMonthData[nutrient] = sixMonthPoints
+                    if validDays > 0 {
+                        sixMonthPoints.append(SixMonthNutrientData(
+                            monthStart: monthStart,
+                            averageValue: monthTotal / Double(validDays),
+                            nutrient: nutrient,
+                            monthIndex: monthOffset
+                        ))
+                    }
                 }
                 
-            case .year:
-                let calendar = Calendar.current
-                let yearStart = calendar.date(from: calendar.dateComponents([.year], from: selectedDate))!
+                sixMonthData[nutrient] = sixMonthPoints
+            }
                 
-                for nutrient in ["Protein", "Carbs", "Fats"] {
-                    var yearlyPoints: [YearNutrientData] = []
+        case .year:
+            let calendar = Calendar.current
+            let year = calendar.component(.year, from: selectedDate)
+            let yearStart = calendar.date(from: DateComponents(year: year, month: 1, day: 1))!
+            
+            for nutrient in ["Protein", "Carbs", "Fats"] {
+                var yearPoints: [YearNutrientData] = []
+                
+                for monthOffset in 0...11 {
+                    let monthStart = calendar.date(byAdding: .month, value: monthOffset, to: yearStart)!
+                    let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+                    var monthTotal: Double = 0
+                    var validDays = 0
                     
-                    for monthOffset in 0...11 {
-                        let monthStart = calendar.date(byAdding: .month, value: monthOffset, to: yearStart)!
-                        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
-                        var monthTotal: Double = 0
-                        var validDays = 0
-                        
-                        var currentDay = monthStart
-                        while currentDay < monthEnd {
-                            let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
-                            let value = await withCheckedContinuation { continuation in
-                                healthStore.fetchNutrientDataForInterval(
-                                    nutrientType: nutrient.lowercased(),
-                                    start: currentDay,
-                                    end: nextDay
-                                ) { value, _ in
-                                    continuation.resume(returning: value)
-                                }
+                    var currentDay = monthStart
+                    while currentDay < monthEnd {
+                        let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
+                        let value = await withCheckedContinuation { continuation in
+                            healthStore.fetchNutrientDataForInterval(
+                                nutrientType: nutrient.lowercased(),
+                                start: currentDay,
+                                end: nextDay
+                            ) { value, _ in
+                                continuation.resume(returning: value)
                             }
-                            
-                            if let value = value, value > 0 {
-                                monthTotal += value
-                                validDays += 1
-                            }
-                            currentDay = nextDay
                         }
                         
-                        if validDays > 0 {
-                            yearlyPoints.append(YearNutrientData(
-                                monthStart: monthStart,
-                                averageValue: monthTotal / Double(validDays),
-                                nutrient: nutrient,
-                                monthOfYear: calendar.component(.month, from: monthStart)
-                            ))
+                        if let value = value, value > 0 {
+                            monthTotal += value
+                            validDays += 1
                         }
+                        currentDay = nextDay
                     }
                     
-                    yearData[nutrient] = yearlyPoints
+                    if validDays > 0 {
+                        yearPoints.append(YearNutrientData(
+                            monthStart: monthStart,
+                            averageValue: monthTotal / Double(validDays),
+                            nutrient: nutrient,
+                            monthOfYear: monthOffset + 1
+                        ))
+                    }
                 }
+                
+                yearData[nutrient] = yearPoints
+            }
         }
     }
-
-
     
     private func fetchHourlyNutrientData() async {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: selectedDate)
-        
-        let intervals = (0...23).map { hour -> (start: Date, end: Date) in
-            let start = calendar.date(byAdding: .hour, value: hour, to: startOfDay)!
-            let end = calendar.date(byAdding: .hour, value: hour + 1, to: startOfDay)!
-            return (start: start, end: end)
-        }
+        _ = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
         for nutrient in ["Protein", "Carbs", "Fats"] {
             var hourlyData: [NutrientDataPoint] = []
             
-            for interval in intervals {
+            for hour in 0...23 {
+                let intervalStart = calendar.date(byAdding: .hour, value: hour, to: startOfDay)!
+                let intervalEnd = calendar.date(byAdding: .hour, value: hour + 1, to: startOfDay)!
+                
                 let value = await withCheckedContinuation { continuation in
                     healthStore.fetchNutrientDataForInterval(
                         nutrientType: nutrient.lowercased(),
-                        start: interval.start,
-                        end: interval.end
+                        start: intervalStart,
+                        end: intervalEnd
                     ) { value, _ in
                         continuation.resume(returning: value)
                     }
@@ -1184,7 +1359,7 @@ struct HealthInsightsView: View {
                 
                 if let value = value {
                     hourlyData.append(NutrientDataPoint(
-                        date: interval.start,
+                        date: intervalStart,
                         value: value,
                         nutrient: nutrient
                     ))
@@ -1198,3 +1373,122 @@ struct HealthInsightsView: View {
     }
 }
 
+struct DietPlan: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let strictRanges: (carbs: ClosedRange<Double>, protein: ClosedRange<Double>, fat: ClosedRange<Double>)
+    let lenientRanges: (carbs: ClosedRange<Double>, protein: ClosedRange<Double>, fat: ClosedRange<Double>)
+    
+    static func == (lhs: DietPlan, rhs: DietPlan) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+enum StrictLevel: Int, CaseIterable {
+    case strict = 0
+    case medium = 1
+    case lenient = 2
+}
+
+struct CalorieNeedsCard: View {
+    let tdee: Double
+    let exerciseCalories: Double
+    let foodCalories: Double
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Daily Energy Balance")
+                .font(.headline)
+            
+            HStack {
+                Spacer()
+                VStack(alignment: .center) {
+                    Text("Base Needs")
+                        .font(.subheadline)
+                    Text("\(Int(tdee))")
+                        .font(.title2.bold())
+                }
+                Spacer()
+                Text("+")
+                Spacer()
+                VStack(alignment: .center) {
+                    Text("Exercise")
+                        .font(.subheadline)
+                    Text("\(Int(exerciseCalories))")
+                        .font(.title2.bold())
+                }
+                Spacer()
+                Text("-")
+                Spacer()
+                VStack(alignment: .center) {
+                    Text("Food")
+                        .font(.subheadline)
+                    Text("\(Int(foodCalories))")
+                        .font(.title2.bold())
+                }
+                Spacer()
+            }
+            .padding()
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .padding()
+    }
+}
+
+struct ExploreDietsCard: View {
+    var body: some View {
+        NavigationLink(destination: DietsExplorerView()) {
+            VStack {
+                Text("Explore Diets")
+                    .font(.title)
+                    .bold()
+                Text("Discover different dietary approaches and find what works best for you")
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(radius: 5)
+            .padding()
+        }
+    }
+}
+
+class HealthInsightsViewModel: ObservableObject {
+    @Published var tdee: Double = 2000
+    @Published var todayExerciseCalories: Double = 0
+    @Published var todayFoodCalories: Double = 0
+    
+    func calculateTDEE() -> Double {
+        // Implement TDEE calculation logic
+        return tdee
+    }
+}
+
+func getRangesForStrictLevel(diet: DietPlan, level: StrictLevel) -> (carbs: ClosedRange<Double>, protein: ClosedRange<Double>, fat: ClosedRange<Double>) {
+    switch level {
+    case .strict:
+        return diet.strictRanges
+    case .lenient:
+        return diet.lenientRanges
+    case .medium:
+        return (
+            carbs: (diet.strictRanges.carbs.lowerBound + diet.lenientRanges.carbs.lowerBound)/2...(diet.strictRanges.carbs.upperBound + diet.lenientRanges.carbs.upperBound)/2,
+            protein: (diet.strictRanges.protein.lowerBound + diet.lenientRanges.protein.lowerBound)/2...(diet.strictRanges.protein.upperBound + diet.lenientRanges.protein.upperBound)/2,
+            fat: (diet.strictRanges.fat.lowerBound + diet.lenientRanges.fat.lowerBound)/2...(diet.strictRanges.fat.upperBound + diet.lenientRanges.fat.upperBound)/2
+        )
+    }
+}
+
+struct DietsExplorerView: View {
+    var body: some View {
+        Text("Coming Soon")
+    }
+}
