@@ -193,9 +193,12 @@ struct DayChartView: View {
     let selectedDiet: DietPlan?
     let strictLevel: StrictLevel
     let tdee: Double
+    @State private var isDragging = false
     
     private var maxValue: Double {
-        hourlyData.values.flatMap { $0 }.map(\.value).max() ?? 100
+       let baseMax = hourlyData.values.flatMap { $0 }.map(\.value).max() ?? 100
+       let increment = 100.0
+       return ceil(baseMax / increment) * increment
     }
     
     var body: some View {
@@ -254,8 +257,8 @@ struct DayChartView: View {
                     .foregroundStyle(.gray.opacity(0.3))
                 }
             }
-            .chartXScale(domain: 0...23)
-            .chartYScale(domain: 0...maxValue)
+            .chartXScale(domain: 0...24)
+            .frame(height: 300)
             .chartPlotStyle { plotArea in
                 plotArea.frame(height: 300)
             }
@@ -268,41 +271,58 @@ struct DayChartView: View {
                     }
                 }
             }
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let hour = proxy.value(atX: location.x) as Double? {
-                                selectedPoint = hourlyData.values
-                                    .flatMap { $0 }
-                                    .first { Calendar.current.component(.hour, from: $0.hourStart) == Int(hour) }
-                                    .map { NutrientDataPoint(date: $0.hourStart, value: $0.value, nutrient: $0.nutrient) }
-                                let generator = UIImpactFeedbackGenerator(style: .medium)
-                                generator.impactOccurred()
-                            }
-                        }
+            .chartOverlay { chartProxy in
+                GeometryReader { geometryProxy in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    if !isDragging {
+                                        isDragging = true
+                                        let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                        generator.impactOccurred()
+                                    }
+                                    
+                                    let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
+                                    if let hour = chartProxy.value(atX: xPosition) as Double? {
+                                        let newPoint = hourlyData.values
+                                            .flatMap { $0 }
+                                            .first { Calendar.current.component(.hour, from: $0.hourStart) == Int(hour) && $0.value > 0 }
+                                            .map { NutrientDataPoint(date: $0.hourStart, value: $0.value, nutrient: $0.nutrient) }
+                                        
+                                        if newPoint?.date != selectedPoint?.date {
+                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                            generator.impactOccurred()
+                                            selectedPoint = newPoint
+                                        }
+                                    }
+                                }
+                                .onEnded { _ in
+                                    isDragging = false
+                                }
+                        )
                 }
             }
         }
     }
 }
 
-struct WeekChartView: View, NutrientChartView {
+struct WeekChartView: View {
     let weekData: [String: [WeekNutrientData]]
     @Binding var selectedPoint: NutrientDataPoint?
     let selectedDiet: DietPlan?
     let strictLevel: StrictLevel
     let tdee: Double
+    @State private var isDragging = false
     
     var body: some View {
         if (weekData["Protein"]?.isEmpty ?? true) &&
-              (weekData["Carbs"]?.isEmpty ?? true) &&
-              (weekData["Fats"]?.isEmpty ?? true) {
+           (weekData["Carbs"]?.isEmpty ?? true) &&
+           (weekData["Fats"]?.isEmpty ?? true) {
             Text("No data")
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .frame(height: 300)
-                .frame(maxWidth: .infinity, alignment: .center)
         } else {
             Chart {
                 if let selectedDiet = selectedDiet {
@@ -339,7 +359,6 @@ struct WeekChartView: View, NutrientChartView {
                         y: .value("Grams", point.totalValue)
                     )
                     .foregroundStyle(.red)
-                    .symbol(.circle)
                 }
                 
                 ForEach(weekData["Carbs"] ?? []) { point in
@@ -348,7 +367,6 @@ struct WeekChartView: View, NutrientChartView {
                         y: .value("Grams", point.totalValue)
                     )
                     .foregroundStyle(.green)
-                    .symbol(.circle)
                 }
                 
                 ForEach(weekData["Fats"] ?? []) { point in
@@ -357,7 +375,6 @@ struct WeekChartView: View, NutrientChartView {
                         y: .value("Grams", point.totalValue)
                     )
                     .foregroundStyle(.blue)
-                    .symbol(.circle)
                 }
                 
                 if let selected = selectedPoint {
@@ -380,39 +397,54 @@ struct WeekChartView: View, NutrientChartView {
                 }
             }
             .chartXScale(domain: 1...7)
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
+            .chartOverlay { chartProxy in
+                GeometryReader { geometryProxy in
                     Rectangle().fill(.clear).contentShape(Rectangle())
-                        .onTapGesture { location in
-                            let xPosition = location.x - geometry.frame(in: .local).origin.x
-                            guard let weekday = proxy.value(atX: xPosition) as Int? else { return }
-                            
-                            let allPoints = weekData.values.flatMap { weekPoints in
-                                weekPoints.map { point in
-                                    NutrientDataPoint(date: point.date, value: point.totalValue, nutrient: point.nutrient)
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    if !isDragging {
+                                        isDragging = true
+                                        let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                        generator.impactOccurred()
+                                    }
+                                    
+                                    let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
+                                    if let weekday = chartProxy.value(atX: xPosition) as Double? {
+                                        let newPoint = weekData.values
+                                            .flatMap { $0 }
+                                            .first { $0.dayOfWeek == Int(weekday) }
+                                            .map { NutrientDataPoint(date: $0.date, value: $0.totalValue, nutrient: $0.nutrient) }
+                                        
+                                        if newPoint?.date != selectedPoint?.date {
+                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                            generator.impactOccurred()
+                                            selectedPoint = newPoint
+                                        }
+                                    }
                                 }
-                            }
-                            selectedPoint = allPoints.first { Calendar.current.component(.weekday, from: $0.date) == weekday }
-                            let generator = UIImpactFeedbackGenerator(style: .medium)
-                            generator.impactOccurred()
-                        }
+                                .onEnded { _ in
+                                    isDragging = false
+                                }
+                        )
                 }
             }
         }
     }
 }
 
-struct MonthChartView: View, NutrientChartView {
+struct MonthChartView: View {
     let monthData: [String: [MonthNutrientData]]
     @Binding var selectedPoint: NutrientDataPoint?
     let selectedDiet: DietPlan?
     let strictLevel: StrictLevel
     let tdee: Double
+    @State private var isDragging = false
     
     var body: some View {
         if (monthData["Protein"]?.isEmpty ?? true) &&
-            (monthData["Carbs"]?.isEmpty ?? true) &&
-            (monthData["Fats"]?.isEmpty ?? true) {
+           (monthData["Carbs"]?.isEmpty ?? true) &&
+           (monthData["Fats"]?.isEmpty ?? true) {
             Text("No data")
                 .font(.title2)
                 .foregroundStyle(.secondary)
@@ -446,13 +478,13 @@ struct MonthChartView: View, NutrientChartView {
                     )
                     .foregroundStyle(.blue.opacity(0.1))
                 }
+                
                 ForEach(monthData["Protein"] ?? []) { point in
                     PointMark(
                         x: .value("Week", point.weekOfMonth),
                         y: .value("Grams", point.averageValue)
                     )
                     .foregroundStyle(.red)
-                    .symbol(.circle)
                 }
                 
                 ForEach(monthData["Carbs"] ?? []) { point in
@@ -461,7 +493,6 @@ struct MonthChartView: View, NutrientChartView {
                         y: .value("Grams", point.averageValue)
                     )
                     .foregroundStyle(.green)
-                    .symbol(.circle)
                 }
                 
                 ForEach(monthData["Fats"] ?? []) { point in
@@ -470,7 +501,6 @@ struct MonthChartView: View, NutrientChartView {
                         y: .value("Grams", point.averageValue)
                     )
                     .foregroundStyle(.blue)
-                    .symbol(.circle)
                 }
                 
                 if let selected = selectedPoint {
@@ -490,22 +520,36 @@ struct MonthChartView: View, NutrientChartView {
                     }
                 }
             }
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
+            .chartOverlay { chartProxy in
+                GeometryReader { geometryProxy in
                     Rectangle().fill(.clear).contentShape(Rectangle())
-                        .onTapGesture { location in
-                            let xPosition = location.x - geometry.frame(in: .local).origin.x
-                            guard let weekOfMonth = proxy.value(atX: xPosition) as Int? else { return }
-                            
-                            let allPoints = monthData.values.flatMap { monthPoints in
-                                monthPoints.map { point in
-                                    NutrientDataPoint(date: point.weekStart, value: point.averageValue, nutrient: point.nutrient)
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    if !isDragging {
+                                        isDragging = true
+                                        let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                        generator.impactOccurred()
+                                    }
+                                    
+                                    let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
+                                    if let week = chartProxy.value(atX: xPosition) as Double? {
+                                        let newPoint = monthData.values
+                                            .flatMap { $0 }
+                                            .first { $0.weekOfMonth == Int(week) }
+                                            .map { NutrientDataPoint(date: $0.weekStart, value: $0.averageValue, nutrient: $0.nutrient) }
+                                        
+                                        if newPoint?.date != selectedPoint?.date {
+                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                            generator.impactOccurred()
+                                            selectedPoint = newPoint
+                                        }
+                                    }
                                 }
-                            }
-                            selectedPoint = allPoints.first { Calendar.current.component(.weekOfMonth, from: $0.date) == weekOfMonth }
-                            let generator = UIImpactFeedbackGenerator(style: .medium)
-                            generator.impactOccurred()
-                        }
+                                .onEnded { _ in
+                                    isDragging = false
+                                }
+                        )
                 }
             }
         }
@@ -518,6 +562,7 @@ struct SixMonthChartView: View {
     let selectedDiet: DietPlan?
     let strictLevel: StrictLevel
     let tdee: Double
+    @State private var isDragging = false
     
     var body: some View {
         Chart {
@@ -531,9 +576,10 @@ struct SixMonthChartView: View {
                                     nutrient == "Carbs" ? .green : .blue)
                 }
             }
+            
             if let selected = selectedPoint {
                 RuleMark(
-                    x: .value("Selected", Calendar.current.component(.month, from: selected.date) - 1)
+                    x: .value("Selected", Double(sixMonthData.values.first?.first { $0.monthStart == selected.date }?.monthIndex ?? 0))
                 )
                 .foregroundStyle(.gray.opacity(0.3))
             }
@@ -557,26 +603,115 @@ struct SixMonthChartView: View {
                 }
             }
         }
-        .chartOverlay { proxy in
-           GeometryReader { geometry in
-               Rectangle().fill(.clear).contentShape(Rectangle())
-                   .onTapGesture { location in
-                       let xPosition = location.x - geometry.frame(in: .local).origin.x
-                       guard let monthIndex = proxy.value(atX: xPosition) as Int? else { return }
-                       
-                       let allPoints = sixMonthData.values.flatMap { monthPoints in
-                           monthPoints.map { point in
-                               NutrientDataPoint(date: point.monthStart, value: point.averageValue, nutrient: point.nutrient)
-                           }
-                       }
-                       selectedPoint = allPoints.first { point in
-                           Calendar.current.component(.month, from: point.date) - 1 == monthIndex
-                       }
-                       let generator = UIImpactFeedbackGenerator(style: .medium)
-                       generator.impactOccurred()
-                   }
-           }
-       }
+        .chartOverlay { chartProxy in
+            GeometryReader { geometryProxy in
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                if !isDragging {
+                                    isDragging = true
+                                    let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                    generator.impactOccurred()
+                                }
+                                
+                                let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
+                                if let monthIndex = chartProxy.value(atX: xPosition) as Double? {
+                                    let newPoint = sixMonthData.values
+                                        .flatMap { $0 }
+                                        .first { $0.monthIndex == Int(monthIndex) }
+                                        .map { NutrientDataPoint(date: $0.monthStart, value: $0.averageValue, nutrient: $0.nutrient) }
+                                    
+                                    if newPoint?.date != selectedPoint?.date {
+                                        let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                        generator.impactOccurred()
+                                        selectedPoint = newPoint
+                                    }
+                                }
+                            }
+                            .onEnded { _ in
+                                isDragging = false
+                            }
+                    )
+            }
+        }
+        .frame(height: 300)
+    }
+}
+
+struct YearChartView: View {
+    let yearData: [String: [YearNutrientData]]
+    @Binding var selectedPoint: NutrientDataPoint?
+    let selectedDiet: DietPlan?
+    let strictLevel: StrictLevel
+    let tdee: Double
+    @State private var isDragging = false
+    
+    var body: some View {
+        Chart {
+            ForEach(["Protein", "Carbs", "Fats"], id: \.self) { nutrient in
+                ForEach(yearData[nutrient] ?? []) { point in
+                    PointMark(
+                        x: .value("Month", point.monthOfYear - 1),
+                        y: .value("Value", point.averageValue)
+                    )
+                    .foregroundStyle(nutrient == "Protein" ? .red :
+                                    nutrient == "Carbs" ? .green : .blue)
+                }
+            }
+            
+            if let selected = selectedPoint {
+                RuleMark(
+                    x: .value("Selected", Calendar.current.component(.month, from: selected.date) - 1)
+                )
+                .foregroundStyle(.gray.opacity(0.3))
+            }
+        }
+        .chartXScale(domain: 0...11)
+        .chartXAxis {
+            let monthLabels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
+            
+            AxisMarks(values: Array(0...11)) { value in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel {
+                    Text(monthLabels[value.as(Int.self)!])
+                        .font(.caption2)
+                }
+            }
+        }
+        .chartOverlay { chartProxy in
+            GeometryReader { geometryProxy in
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                if !isDragging {
+                                    isDragging = true
+                                    let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                    generator.impactOccurred()
+                                }
+                                
+                                let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
+                                if let monthIndex = chartProxy.value(atX: xPosition) as Double? {
+                                    let newPoint = yearData.values
+                                        .flatMap { $0 }
+                                        .first { $0.monthOfYear - 1 == Int(monthIndex) }
+                                        .map { NutrientDataPoint(date: $0.monthStart, value: $0.averageValue, nutrient: $0.nutrient) }
+                                    
+                                    if newPoint?.date != selectedPoint?.date {
+                                        let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                        generator.impactOccurred()
+                                        selectedPoint = newPoint
+                                    }
+                                }
+                            }
+                            .onEnded { _ in
+                                isDragging = false
+                            }
+                    )
+            }
+        }
         .frame(height: 300)
     }
 }
@@ -632,73 +767,8 @@ struct SixMonthNutrientData: Identifiable {
     }
 }
 
-struct YearChartView: View {
-    let yearData: [String: [YearNutrientData]]
-    @Binding var selectedPoint: NutrientDataPoint?
-    let selectedDiet: DietPlan?
-    let strictLevel: StrictLevel
-    let tdee: Double
-    
-    var body: some View {
-        Chart {
-            ForEach(["Protein", "Carbs", "Fats"], id: \.self) { nutrient in
-                ForEach(yearData[nutrient] ?? []) { point in
-                    PointMark(
-                        x: .value("Month", point.monthOfYear - 1),
-                        y: .value("Value", point.averageValue)
-                    )
-                    .foregroundStyle(nutrient == "Protein" ? .red :
-                                    nutrient == "Carbs" ? .green : .blue)
-                }
-            }
-            
-            if let selected = selectedPoint {
-                RuleMark(
-                    x: .value("Selected", Calendar.current.component(.month, from: selected.date) - 1)
-                )
-                .foregroundStyle(.gray.opacity(0.3))
-            }
-        }
-        .chartXScale(domain: 0...11)
-        .chartXAxis {
-            let monthLabels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
-            
-            AxisMarks(values: Array(0...11)) { value in
-                AxisGridLine()
-                AxisTick()
-                AxisValueLabel {
-                    Text(monthLabels[value.as(Int.self)!])
-                        .font(.caption2)
-                }
-            }
-        }
-        .chartOverlay { proxy in
-            GeometryReader { geometry in
-                Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onTapGesture { location in
-                        let xPosition = location.x - geometry.frame(in: .local).origin.x
-                        guard let monthIndex = proxy.value(atX: xPosition) as Int? else { return }
-                        
-                        let allPoints = yearData.values.flatMap { monthPoints in
-                            monthPoints.map { point in
-                                NutrientDataPoint(date: point.monthStart, value: point.averageValue, nutrient: point.nutrient)
-                            }
-                        }
-                        selectedPoint = allPoints.first { point in
-                            Calendar.current.component(.month, from: point.date) - 1 == monthIndex
-                        }
-                        let generator = UIImpactFeedbackGenerator(style: .medium)
-                        generator.impactOccurred()
-                    }
-            }
-        }
-        .frame(height: 300)
-    }
-}
-
-
-
 struct HealthInsightsView: View {
+    @State private var showDatePicker = false
     @StateObject private var viewModel = HealthInsightsViewModel()
     @State private var selectedPoint: NutrientDataPoint?
     @State private var selectedDate: Date = Date()
@@ -837,6 +907,20 @@ struct HealthInsightsView: View {
         HStack {
             Text(dateTitle)
                 .font(.title2.bold())
+                .onLongPressGesture {
+                    showDatePicker.toggle()
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                }
+                .sheet(isPresented: $showDatePicker) {
+                    DatePickerSheet(selectedDate: $selectedDate, timePeriod: selectedTimePeriod)
+                        .presentationDetents([.height(300)])
+                        .onChange(of: selectedDate) { oldValue, newValue in
+                            Task {
+                                await fetchData()
+                            }
+                        }
+                }
             
             Spacer()
             
@@ -894,6 +978,8 @@ struct HealthInsightsView: View {
                     Task {
                         await fetchData()
                     }
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
                 } label: {
                     Image(systemName: "chevron.left")
                 }
@@ -916,14 +1002,50 @@ struct HealthInsightsView: View {
                     Task {
                         await fetchData()
                     }
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
                 } label: {
                     Image(systemName: "chevron.right")
                 }
                 .padding(8)
                 .hoverEffect(.automatic)
+                .disabled(canNavigateForward)
+                .opacity(canNavigateForward ? 0.3 : 1)
             }
         }
         .padding()
+    }
+    
+    private var canNavigateForward: Bool {
+        let calendar = Calendar.current
+        let now = Date()
+        
+        switch selectedTimePeriod {
+        case .day:
+            return calendar.startOfDay(for: selectedDate) >= calendar.startOfDay(for: now)
+        case .week:
+            let currentWeekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now))!
+            let selectedWeekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selectedDate))!
+            return selectedWeekStart >= currentWeekStart
+        case .month:
+            let currentMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now))!
+            let selectedMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedDate))!
+            return selectedMonthStart >= currentMonthStart
+        case .sixMonth:
+            let currentMonth = calendar.component(.month, from: now)
+            let currentYear = calendar.component(.year, from: now)
+            let selectedMonth = calendar.component(.month, from: selectedDate)
+            let selectedYear = calendar.component(.year, from: selectedDate)
+            
+            let currentHalf = currentMonth <= 6 ? 1 : 2
+            let selectedHalf = selectedMonth <= 6 ? 1 : 2
+            
+            return selectedYear > currentYear || (selectedYear == currentYear && selectedHalf >= currentHalf)
+        case .year:
+            let currentYear = calendar.component(.year, from: now)
+            let selectedYear = calendar.component(.year, from: selectedDate)
+            return selectedYear >= currentYear
+        }
     }
     
     private var chartContent: some View {
@@ -939,12 +1061,14 @@ struct HealthInsightsView: View {
             }()
             
             if hasData {
-                ScrollView(.horizontal, showsIndicators: false) {
+                VStack {
                     HStack(spacing: 0) {
-                        chartView
-                            .frame(width: UIScreen.main.bounds.width - 32)
-                            .frame(height: 300)
-                            .padding()
+                        GeometryReader { geometry in
+                            chartView
+                                .frame(width: geometry.size.width - 32) // Adjust width dynamically
+                                .frame(height: 300)
+                                .padding()
+                        }
                     }
                 }
             } else {
@@ -1003,8 +1127,9 @@ struct HealthInsightsView: View {
                 let value: Double = {
                     switch selectedTimePeriod {
                     case .day:
-                        return nutrientData[nutrient]?.first(where: {
-                            Calendar.current.compare($0.date, to: selected.date, toGranularity: .hour) == .orderedSame
+                        return hourlyData[nutrient]?.first(where: {
+                            Calendar.current.component(.hour, from: $0.hourStart) ==
+                            Calendar.current.component(.hour, from: selected.date)
                         })?.value ?? 0
                     case .week:
                         return weekData[nutrient]?.first(where: {
@@ -1053,12 +1178,16 @@ struct HealthInsightsView: View {
             ScrollView {
                 Picker("Time Period", selection: $selectedTimePeriod) {
                     ForEach(TimePeriod.allCases, id: \.self) { period in
-                        Text(period.rawValue).tag(period)
+                        Text(UIDevice.current.userInterfaceIdiom == .pad ? period.rawValue :
+                            period == .sixMonth ? "6M" : String(period.rawValue.prefix(1)))
+                            .tag(period)
                     }
                 }
                 .pickerStyle(.segmented)
                 .padding()
                 .onChange(of: selectedTimePeriod) { oldValue, newValue in
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
                     Task {
                         await fetchData()
                     }
@@ -1066,6 +1195,9 @@ struct HealthInsightsView: View {
                 
                 timeNavigationHeader
                 chartContent
+                    .frame(height: 300)
+                    .padding()
+
                 if let selected = selectedPoint {
                     selectedPointDetail(selected)
                 }
@@ -1076,6 +1208,10 @@ struct HealthInsightsView: View {
                     }
                 }
                 .pickerStyle(.menu)
+                .onChange(of: selectedDiet) { oldValue, newValue in
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                }
                 
                 Picker("Strictness Level", selection: $strictLevel) {
                     Text("Strict").tag(StrictLevel.strict)
@@ -1084,6 +1220,10 @@ struct HealthInsightsView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding()
+                .onChange(of: strictLevel) { oldValue, newValue in
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                }
                 
                 CalorieNeedsCard(
                     tdee: viewModel.calculateTDEE(),
@@ -1143,6 +1283,137 @@ struct HealthInsightsView: View {
                         }
                     }
             )
+        }
+    }
+    
+    struct DatePickerSheet: View {
+        @Environment(\.dismiss) private var dismiss
+        @Binding var selectedDate: Date
+        let timePeriod: TimePeriod
+        @State private var animationPhase: Double = 0
+        
+        private let calendar = Calendar.current
+        private let now = Date()
+        @State private var halfSelection = 1
+        
+        var body: some View {
+            NavigationStack {
+                Group {
+                    switch timePeriod {
+                    case .day:
+                        DatePicker(
+                            "",
+                            selection: $selectedDate,
+                            in: ...now,
+                            displayedComponents: [.date]
+                        )
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                    case .week:
+                        Picker("Week", selection: $selectedDate) {
+                            ForEach(getPastWeeks(), id: \.self) { weekStart in
+                                let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart)!
+                                Text("\(weekStart.formatted(.dateTime.month().day())) - \(weekEnd.formatted(.dateTime.month().day())) \(String(calendar.component(.year, from: weekStart)))")
+                                    .tag(weekStart)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                    case .month:
+                        HStack {
+                            Picker("Month", selection: $selectedDate) {
+                                ForEach(getPastMonths(), id: \.self) { date in
+                                    Text("\(date.formatted(.dateTime.month(.wide))) \(String(calendar.component(.year, from: date)))")
+                                        .tag(date)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                        }
+                    case .sixMonth:
+                        HStack {
+                            let currentYear = calendar.component(.year, from: now)
+                            let currentHalf = calendar.component(.month, from: now) <= 6 ? 1 : 2
+                            let selectedYear = calendar.component(.year, from: selectedDate)
+                            
+                            Picker("Year", selection: Binding(
+                                get: { selectedYear },
+                                set: { newYear in
+                                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                                    generator.impactOccurred()
+                                    
+                                    let isCurrentlySecondHalf = calendar.component(.month, from: selectedDate) > 6
+                                    
+                                    if newYear == currentYear && isCurrentlySecondHalf {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            halfSelection = 1
+                                            selectedDate = calendar.date(from: DateComponents(year: newYear, month: 1, day: 1))!
+                                        }
+                                    } else {
+                                        let month = isCurrentlySecondHalf ? 7 : 1
+                                        selectedDate = calendar.date(from: DateComponents(year: newYear, month: month, day: 1))!
+                                    }
+                                }
+                            )) {
+                                ForEach((1970...currentYear).reversed(), id: \.self) { year in
+                                    Text(String(year)).tag(year)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+
+                            Picker("Half", selection: $halfSelection) {
+                                Text("First Half").tag(1)
+                                Text("Second Half").tag(2)
+                            }
+                            .pickerStyle(.wheel)
+                            .onChange(of: halfSelection) { oldValue, newValue in
+                                let generator = UIImpactFeedbackGenerator(style: .medium)
+                                generator.impactOccurred()
+                                
+                                if selectedYear == currentYear && currentHalf == 1 {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                        halfSelection = 1
+                                    }
+                                } else {
+                                    let month = newValue == 1 ? 1 : 7
+                                    selectedDate = calendar.date(from: DateComponents(year: selectedYear, month: month, day: 1))!
+                                }
+                            }
+                        }
+                    case .year:
+                        Picker("Year", selection: Binding(
+                            get: { calendar.component(.year, from: selectedDate) },
+                            set: { newYear in
+                                selectedDate = calendar.date(from: DateComponents(year: newYear, month: 1, day: 1))!
+                            }
+                        )) {
+                            ForEach((1970...calendar.component(.year, from: now)).reversed(), id: \.self) { year in
+                                Text(String(year)).tag(year)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                    }
+                }
+                .navigationTitle("Select Date")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
+        }
+        
+        private func getPastWeeks() -> [Date] {
+            let currentWeekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now))!
+            return stride(from: 0, through: 520, by: 1).compactMap { weekOffset in
+                calendar.date(byAdding: .weekOfYear, value: -weekOffset, to: currentWeekStart)
+            }
+        }
+        
+        private func getPastMonths() -> [Date] {
+            let currentMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: now))!
+            return stride(from: 0, through: 120, by: 1).compactMap { monthOffset in
+                calendar.date(byAdding: .month, value: -monthOffset, to: currentMonth)
+            }
         }
     }
     

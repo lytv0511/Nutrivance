@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		151F147A2D77BE1900B51F88 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 151F14792D77BE1900B51F88 /* UIKit.framework */; };
 		152C743A2CF79BE300DB118D /* HealthAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152C74392CF79BE300DB118D /* HealthAnalysisService.swift */; };
+		153DD1902D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */; };
 		15561A432D6AE865006B8741 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A422D6AE865006B8741 /* SearchView.swift */; };
 		15561A612D6B755E006B8741 /* NutrivanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A602D6B755E006B8741 /* NutrivanceView.swift */; };
 		15561A632D6B7580006B8741 /* MovanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A622D6B7580006B8741 /* MovanceView.swift */; };
@@ -153,6 +154,7 @@
 /* Begin PBXFileReference section */
 		151F14792D77BE1900B51F88 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		152C74392CF79BE300DB118D /* HealthAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthAnalysisService.swift; sourceTree = "<group>"; };
+		153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad_compact.swift; sourceTree = "<group>"; };
 		15561A422D6AE865006B8741 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		15561A602D6B755E006B8741 /* NutrivanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceView.swift; sourceTree = "<group>"; };
 		15561A622D6B7580006B8741 /* MovanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovanceView.swift; sourceTree = "<group>"; };
@@ -603,6 +605,7 @@
 				159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */,
 				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
 				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
+				153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */,
 				1568141F2D5C0F2D003C861E /* DashboardView.swift */,
 				156814202D5C0F2D003C861E /* DistanceView.swift */,
 				156814212D5C0F2D003C861E /* ExerciseLibraryView.swift */,
@@ -937,6 +940,7 @@
 				15561A6B2D6B88B0006B8741 /* PresetButton.swift in Sources */,
 				156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */,
 				15CB570A2CEEBED000A6E970 /* NutritionScannerView.swift in Sources */,
+				153DD1902D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift in Sources */,
 				1568143A2D5C0F2D003C861E /* ProgramBuilderView.swift in Sources */,
 				157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */,
 				1568143B2D5C0F2D003C861E /* LiveChallengesView.swift in Sources */,

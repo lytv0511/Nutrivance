@@ -117,20 +117,22 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         let category: NutrientCategory
     }
 
-    nonisolated func getUnit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
+    func getUnit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
         switch identifier {
-        case .activeEnergyBurned, .basalEnergyBurned:
+        case .dietaryWater:
+            return .literUnit(with: .milli)
+        case .dietaryEnergyConsumed:
             return .kilocalorie()
-        case .stepCount, .flightsClimbed:
-            return .count()
-        case .distanceWalkingRunning:
-            return .meter()
-        case .appleExerciseTime:
+        case .dietaryProtein, .dietaryCarbohydrates, .dietaryFatTotal, .dietaryFiber:
+            return .gram()
+        case .appleExerciseTime, .appleStandTime:
             return .minute()
-        case .appleStandTime:
-            return .hour()
-        default:
+        case .activeEnergyBurned:
+            return .kilocalorie()
+        case .stepCount:
             return .count()
+        default:
+            return .gram()
         }
     }
 
@@ -581,14 +583,32 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         fetchTodayNutrientData(for: nutrientType, completion: completion)
     }
     
+    private func getQuantityTypeIdentifier(for nutrientType: String) -> HKQuantityTypeIdentifier {
+        switch nutrientType.lowercased() {
+        case "calories":
+            return .dietaryEnergyConsumed
+        case "protein":
+            return .dietaryProtein
+        case "carbs":
+            return .dietaryCarbohydrates
+        case "fats":
+            return .dietaryFatTotal
+        case "water":
+            return .dietaryWater
+        case "fiber":
+            return .dietaryFiber
+        default:
+            return .dietaryProtein
+        }
+    }
+    
     func fetchNutrientDataForInterval(
         nutrientType: String,
         start: Date,
         end: Date,
         completion: @escaping (Double?, Error?) -> Void
     ) {
-        guard let type = quantityType(for: nutrientType) else {
-            print("Debug: No quantity type for \(nutrientType)")
+        guard let type = HKQuantityType.quantityType(forIdentifier: getQuantityTypeIdentifier(for: nutrientType)) else {
             completion(nil, nil)
             return
         }
@@ -599,18 +619,21 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             options: .strictStartDate
         )
         
+        let typeIdentifier = getQuantityTypeIdentifier(for: nutrientType)
+        let unit = getUnit(for: typeIdentifier)
+        
         let query = HKStatisticsQuery(
             quantityType: type,
             quantitySamplePredicate: predicate,
             options: .cumulativeSum
         ) { _, result, error in
-            let value = result?.sumQuantity()?.doubleValue(for: .gram())
+            let value = result?.sumQuantity()?.doubleValue(for: unit)
             completion(value, error)
         }
         
         healthStore.execute(query)
     }
-    
+
     func fetchNutrientHistory(from startDate: Date, to endDate: Date) async throws -> [NutritionEntry] {
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         var entriesByID: [String: NutritionEntry] = [:]
@@ -829,17 +852,17 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             case "vitamin b6", "vitamin b12", "vitamin c", "vitamin e",
                  "thiamin", "riboflavin", "niacin", "pantothenic acid":
                 return .gramUnit(with: .milli)
-                
+                    
             case "sodium", "potassium", "calcium", "phosphorus", "magnesium":
                 return .gramUnit(with: .milli)
             case "iron", "zinc", "copper", "manganese":
                 return .gramUnit(with: .milli)
             case "selenium", "chromium", "molybdenum", "iodine":
                 return .gramUnit(with: .micro)
-                
+                    
             case "cholesterol": return .gramUnit(with: .milli)
             case "caffeine": return .gramUnit(with: .milli)
-            
+                
             default: return .gram()
         }
     }

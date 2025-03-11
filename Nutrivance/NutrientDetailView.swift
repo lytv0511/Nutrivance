@@ -1,421 +1,1249 @@
 import SwiftUI
+import Charts
 import HealthKit
-import Combine
-import CoreML
 
-struct NutrientDetailView: View {
-    @StateObject private var healthKitManager = HealthKitManager()
-    @State private var todayCurrentNutrient: Double?
-    @State private var recommendedIntake: String?
-    let nutrientName: String
-    let mlModel: nutrition_prediction_model? = {
-        do {
-            let config = MLModelConfiguration()
-            return try nutrition_prediction_model(configuration: config)
-        } catch {
-            print("ML Model initialization failed: \(error)")
-            return nil
-        }
-    }()
-    @Environment(\.presentationMode) var presentationMode
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+enum CardType: String {
+    case today = "Today's Consumption"
+    case weekly = "Weekly Consumption"
+    case monthly = "Monthly Consumption"
+    case recommended = "Recommended Intake"
+    case foods = "Foods Rich In"
+    case benefits = "Benefits"
+}
+
+struct SingleNutrientDayData: Identifiable {
+    let id = UUID()
+    let hourStart: Date
+    let value: Double
+    let nutrient: String
     
-    @State private var nutrientDetails: [String: NutrientInfo] = [
-        "Carbs": NutrientInfo(
-            todayConsumption: "0 g",
-            weeklyConsumption: "1.4kg",
-            monthlyConsumption: "6kg",
-            recommendedIntake: "45-65% of total calories",
-            foodsRichInNutrient: "Bread, Pasta, Rice",
-            benefits: "Provides energy, aids in digestion."
-        ),
-        "Protein": NutrientInfo(
-            todayConsumption: "50g",
-            weeklyConsumption: "350g",
-            monthlyConsumption: "1.5kg",
-            recommendedIntake: "10-35% of total calories",
-            foodsRichInNutrient: "Meat, Beans, Nuts",
-            benefits: "Essential for muscle repair and growth."
-        ),
-        "Fats": NutrientInfo(
-            todayConsumption: "70g",
-            weeklyConsumption: "490g",
-            monthlyConsumption: "2.1kg",
-            recommendedIntake: "20-35% of total calories",
-            foodsRichInNutrient: "Oils, Nuts, Avocados",
-            benefits: "Supports cell growth, provides energy."
-        ),
-        "Calories": NutrientInfo(
-            todayConsumption: "2000 kcal",
-            weeklyConsumption: "14000 kcal",
-            monthlyConsumption: "60000 kcal",
-            recommendedIntake: "Varies based on activity level",
-            foodsRichInNutrient: "All foods contribute calories",
-            benefits: "Essential for energy."
-        ),
-        // New categories
-        "Fiber": NutrientInfo(
-            todayConsumption: "25g",
-            weeklyConsumption: "175g",
-            monthlyConsumption: "750g",
-            recommendedIntake: "Women: 25g; Men: 38g",
-            foodsRichInNutrient: "Fruits, Vegetables, Whole Grains",
-            benefits: "Aids digestion, helps maintain a healthy weight."
-        ),
-        "Vitamins": NutrientInfo(
-            todayConsumption: "A, C, D, E",
-            weeklyConsumption: "Varies",
-            monthlyConsumption: "Varies",
-            recommendedIntake: "Varies by vitamin",
-            foodsRichInNutrient: "Fruits, Vegetables, Dairy",
-            benefits: "Supports immune function, promotes vision."
-        ),
-        "Minerals": NutrientInfo(
-            todayConsumption: "Iron, Calcium",
-            weeklyConsumption: "Varies",
-            monthlyConsumption: "Varies",
-            recommendedIntake: "Varies by mineral",
-            foodsRichInNutrient: "Meat, Dairy, Leafy Greens",
-            benefits: "Supports bone health, aids in oxygen transport."
-        ),
-        "Water": NutrientInfo(
-            todayConsumption: "2L",
-            weeklyConsumption: "14L",
-            monthlyConsumption: "60L",
-            recommendedIntake: "8 cups per day",
-            foodsRichInNutrient: "Water, Fruits, Vegetables",
-            benefits: "Essential for hydration, regulates body temperature."
-        ),
-        "Phytochemicals": NutrientInfo(
-            todayConsumption: "Varies",
-            weeklyConsumption: "Varies",
-            monthlyConsumption: "Varies",
-            recommendedIntake: "Include colorful fruits and vegetables",
-            foodsRichInNutrient: "Berries, Green Tea, Nuts",
-            benefits: "Antioxidant properties, may reduce disease risk."
-        ),
-        "Antioxidants": NutrientInfo(
-            todayConsumption: "Varies",
-            weeklyConsumption: "Varies",
-            monthlyConsumption: "Varies",
-            recommendedIntake: "Include a variety of foods",
-            foodsRichInNutrient: "Berries, Dark Chocolate, Spinach",
-            benefits: "Protects cells from damage, supports overall health."
-        ),
-        "Electrolytes": NutrientInfo(
-            todayConsumption: "Sodium, Potassium",
-            weeklyConsumption: "Varies",
-            monthlyConsumption: "Varies",
-            recommendedIntake: "Varies by electrolyte",
-            foodsRichInNutrient: "Bananas, Salt, Coconut Water",
-            benefits: "Regulates fluid balance, supports muscle function."
-        )
+    @MainActor
+    static func fetchDayData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [DayNutrientData] {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        var hourlyData: [DayNutrientData] = []
         
-    ]
-    
-    let themeColors: [String: Color] = [
-        "Carbs": Color.green.opacity(0.4),        // Darker green
-        "Protein": Color.orange.opacity(0.4),     // Darker orange
-        "Fats": Color.blue.opacity(0.4),          // Darker blue
-        "Calories": Color.red.opacity(0.4),       // Darker red
-        "Fiber": Color.purple.opacity(0.4),       // Darker purple
-        "Vitamins": Color.yellow.opacity(0.4),    // Darker yellow
-        "Minerals": Color.teal.opacity(0.4),      // Darker teal
-        "Water": Color.cyan.opacity(0.4),         // Darker cyan
-        "Phytochemicals": Color.pink.opacity(0.4), // Darker pink
-        "Antioxidants": Color.indigo.opacity(0.4), // Darker indigo
-        "Electrolytes": Color.mint.opacity(0.4)    // Darker mint
-    ]
-
-    private func standardize(_ value: Float, mean: Float, std: Float) -> Float {
-        return (value - mean) / std
-    }
-
-    private func getPredictedIntake() {
-        guard let model = mlModel else { return }
-        
-        healthKitManager.fetchSteps { steps in
-            healthKitManager.fetchWalkingRunningMinutes { walkingMinutes in
-                healthKitManager.fetchFlightsClimbed { flights in
-                    do {
-                        let inputArray = MLShapedArray<Float>(
-                            scalars: [
-                                28.0,    // age
-                                2400.0,  // tdee
-                                12000.0, // steps
-                                45.0,    // walking_running_minutes
-                                15.0,    // flights_climbed
-                                45.0,    // cardio_vo2max
-                                65.0     // cardio_recovery_bpm
-                            ],
-                            shape: [1, 7]
-                        )
-                        
-                        let modelInput = nutrition_prediction_modelInput(inputs: inputArray)
-                        let prediction = try model.prediction(input: modelInput)
-                        
-                        let value = switch nutrientName.lowercased() {
-                            case "protein": prediction.Identity[0].doubleValue
-                            case "fats": prediction.Identity[1].doubleValue
-                            case "carbs": prediction.Identity[2].doubleValue
-                            case "water": prediction.Identity[3].doubleValue * 1000
-                            default: 0.0
-                        }
-                        
-                        DispatchQueue.main.async {
-                            recommendedIntake = "\(value) \(NutritionUnit.getUnit(for: nutrientName))"
-                        }
-                    } catch {
-                        print("Prediction error: \(error)")
-                    }
-                }
-            }
-        }
-    }
-
-    // Computed property to determine the display value and unit
-    private var displayValue: String {
-        print("NutrientDetailView: Computing displayValue with todayCurrentNutrient: \(String(describing: todayCurrentNutrient))")
-        let unit = NutritionUnit.getUnit(for: nutrientName)
-
-        #if targetEnvironment(macCatalyst)
-        return "Please see Health data on iPhone or iPad."
-        #else
-        return "\(String(format: "%.2f", todayCurrentNutrient ?? 0)) \(unit)"
-        #endif
-    }
-    
-    var body: some View {
-        NavigationStack {
-        ZStack {
-            LinearGradient(
-                gradient: Gradient(stops: [
-                    Gradient.Stop(color: themeColors[nutrientName] ?? Color(.systemBackground), location: 0.0),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.95), location: 0.02),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.90), location: 0.04),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.85), location: 0.06),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.80), location: 0.08),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.75), location: 0.10),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.70), location: 0.12),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.65), location: 0.14),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.60), location: 0.16),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.55), location: 0.20),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.50), location: 0.24),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.45), location: 0.28),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.40), location: 0.32),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.35), location: 0.36),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.30), location: 0.40),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.25), location: 0.44),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.20), location: 0.48),
-                    Gradient.Stop(color: themeColors[nutrientName]!.opacity(0.15), location: 0.52),
-                    Gradient.Stop(color: Color(.systemBackground).opacity(0.10), location: 0.56),
-                    Gradient.Stop(color: Color(.systemBackground), location: 1.0)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            GeometryReader { geometry in
-                ScrollView {
-                    VStack {
-                        let columns = horizontalSizeClass == .regular ?
-                        Array(repeating: GridItem(.flexible(), spacing: 10), count: 3) :
-                        Array(repeating: GridItem(.flexible(), spacing: 10), count: 1)
-                        
-                        LazyVGrid(columns: columns, spacing: 10) {
-                            if isGroupCategory(nutrientName) {
-                                if let details = nutrientDetails[nutrientName] {
-                                    NutrientCard(title: "Category Overview",
-                                                 content: details.todayConsumption,
-                                                 cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9,
-                                                 titleColor: .red,
-                                                 symbolName: "doc.text.magnifyingglass")
-                                    
-                                    Group {
-                                        NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
-                                        NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
-                                        NutrientCard(title: "Recommended Intake", content: details.recommendedIntake, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .orange, symbolName: "star")
-                                        NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
-                                        NutrientCard(title: "Benefits", content: details.benefits, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.3 : geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
-                                    }
-                                }
-                            } else {
-                                if let details = nutrientDetails[nutrientName] {
-                                    Group {
-                                        NutrientCard(title: "Today's Consumption",
-                                                     content: displayValue,
-                                                     cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9,
-                                                     titleColor: .red,
-                                                     symbolName: "doc.text.magnifyingglass")
-                                        
-                                        NutrientCard(title: "Weekly Consumption", content: details.weeklyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .green, symbolName: "calendar")
-                                        NutrientCard(title: "Monthly Consumption", content: details.monthlyConsumption, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .blue, symbolName: "calendar")
-                                        NutrientCard(
-                                            title: "Recommended Intake",
-                                            content: recommendedIntake != nil ? String(format: "%.2f %@", Double(recommendedIntake?.split(separator: " ")[0] ?? "0") ?? 0, NutritionUnit.getUnit(for: nutrientName)) : "Calculating...",
-                                            cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9,
-                                            titleColor: .orange,
-                                            symbolName: "star"
-                                        )
-                                        NutrientCard(title: "Foods Rich In \(nutrientName)", content: details.foodsRichInNutrient, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .purple, symbolName: "leaf.arrow.triangle.circlepath")
-                                        NutrientCard(title: "Benefits", content: details.benefits, cardWidth: horizontalSizeClass == .regular ? geometry.size.width * 0.30 : geometry.size.width * 0.9, titleColor: .yellow, symbolName: "heart.fill")
-                                    }
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding()
-                        if isGroupCategory(nutrientName) {
-                            CategoryDetailView(category: nutrientName)
-                                .padding()
-                        }
-                    }
-                }
-                .navigationTitle(nutrientName)
-                }
-            }
-        }
-        .onAppear {
-            print("NutrientDetailView onAppear for: \(nutrientName)")
-            if isGroupCategory(nutrientName) {
-                fetchCategoryData(for: nutrientName)
-            } else {
-                fetchNutrientData(for: nutrientName)
-                getPredictedIntake()
-            }
-        }
-
-        // Also add to onChange
-        .onChange(of: nutrientName) { oldValue, newNutrient in
-            todayCurrentNutrient = nil
-            if isGroupCategory(newNutrient) {
-                fetchCategoryData(for: newNutrient)
-            } else {
-                fetchNutrientData(for: newNutrient)
-                getPredictedIntake()
-            }
-        }
-    }
-    
-    private func fetchCategoryData(for category: String) {
-        healthKitManager.fetchCategoryAggregate(for: category) { totalValue, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    print("Debug: Error fetching category data: \(error.localizedDescription)")
-                    return
-                }
-                if let total = totalValue {
-                    self.nutrientDetails[category]?.todayConsumption = "\(total) \(NutritionUnit.getUnit(for: category))"
-                    print("Debug: Updated category \(category) with total: \(total)")
-                }
-            }
-        }
-    }
-    
-    private func isGroupCategory(_ category: String) -> Bool {
-        ["Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(category)
-    }
-    
-    private func fetchNutrientData(for nutrient: String) {
-        print("NutrientDetailView: Starting fetch for \(nutrient)")
-        healthKitManager.fetchTodayNutrientData(for: nutrient) { totalNutrient, error in
-            print("NutrientDetailView: Received value: \(String(describing: totalNutrient)) for \(nutrient)")
-            DispatchQueue.main.async {
-                if let error = error {
-                    print("NutrientDetailView: Error fetching \(nutrient): \(error.localizedDescription)")
-                    return
-                }
-                self.todayCurrentNutrient = totalNutrient
-                print("NutrientDetailView: Updated todayCurrentNutrient to \(String(describing: totalNutrient))")
-            }
-        }
-    }
-
-    }
-
-    struct NutrientInfo {
-        var todayConsumption: String
-        let weeklyConsumption: String
-        let monthlyConsumption: String
-        let recommendedIntake: String
-        let foodsRichInNutrient: String
-        let benefits: String
-    }
-
-struct NutrientCard: View {
-    let title: String
-    let content: String
-    let cardWidth: CGFloat
-    let titleColor: Color
-    let symbolName: String
-
-    private func parseContent() -> [(String, Bool)] {
-        let pattern = "([0-9]+[.-]?[0-9]*)"
-        let regex = try! NSRegularExpression(pattern: pattern)
-        let nsString = content as NSString
-        let matches = regex.matches(in: content, range: NSRange(location: 0, length: nsString.length))
-        
-        var segments: [(String, Bool)] = []
-        var currentIndex = 0
-        
-        for match in matches {
-            let numberRange = match.range(at: 1)
+        for hour in 0..<24 {
+            let hourStart = calendar.date(byAdding: .hour, value: hour, to: startOfDay)!
+            let hourEnd = calendar.date(byAdding: .hour, value: 1, to: hourStart)!
             
-            if currentIndex < numberRange.location {
-                segments.append((nsString.substring(with: NSRange(location: currentIndex, length: numberRange.location - currentIndex)), false))
+            let value = await withCheckedContinuation { continuation in
+                healthStore.fetchNutrientDataForInterval(
+                    nutrientType: nutrientType.lowercased(),
+                    start: hourStart,
+                    end: hourEnd
+                ) { value, _ in
+                    continuation.resume(returning: value ?? 0)
+                }
             }
             
-            segments.append((nsString.substring(with: numberRange), true))
-            currentIndex = numberRange.location + numberRange.length
+            hourlyData.append(DayNutrientData(
+                hourStart: hourStart,
+                value: value,
+                nutrient: nutrientType
+            ))
         }
         
-        if currentIndex < nsString.length {
-            segments.append((nsString.substring(from: currentIndex), false))
+        return hourlyData
+    }
+}
+
+struct SingleNutrientWeekData: Identifiable {
+    let id = UUID()
+    let date: Date
+    let totalValue: Double
+    let nutrient: String
+    let dayOfWeek: Int
+    
+    @MainActor
+    static func fetchWeekData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [WeekNutrientData] {
+        let calendar = Calendar.current
+        let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date))!
+        var weekData: [WeekNutrientData] = []
+        
+        for dayOffset in 0...6 {
+            let dayStart = calendar.date(byAdding: .day, value: dayOffset, to: weekStart)!
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+            
+            let value = await withCheckedContinuation { continuation in
+                healthStore.fetchNutrientDataForInterval(
+                    nutrientType: nutrientType.lowercased(),
+                    start: dayStart,
+                    end: dayEnd
+                ) { value, _ in
+                    continuation.resume(returning: value ?? 0)
+                }
+            }
+            
+            weekData.append(WeekNutrientData(
+                date: dayStart,
+                totalValue: value,
+                nutrient: nutrientType,
+                dayOfWeek: calendar.component(.weekday, from: dayStart)
+            ))
         }
         
-        return segments
+        return weekData
     }
+}
 
-    @ViewBuilder
-    private func formatContent() -> some View {
-        let segments = parseContent()
-        HStack(spacing: 0) {
-            ForEach(segments.indices, id: \.self) { index in
-                Text(segments[index].0)
-                    .font(segments[index].1 ? .title2 : .body)
-                    .fontWeight(segments[index].1 ? .bold : .bold)
-                    .foregroundColor(segments[index].1 ? .primary : .secondary)
+struct SingleNutrientMonthData: Identifiable {
+    let id = UUID()
+    let weekStart: Date
+    let averageValue: Double
+    let nutrient: String
+    let weekOfMonth: Int
+    
+    @MainActor
+    static func fetchMonthData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [MonthNutrientData] {
+        let calendar = Calendar.current
+        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: date))!
+        var monthData: [MonthNutrientData] = []
+        
+        let weeksInMonth = calendar.range(of: .weekOfMonth, in: .month, for: monthStart)!
+        
+        for week in weeksInMonth {
+            let weekStart = calendar.date(bySetting: .weekday, value: calendar.firstWeekday, of: monthStart)!
+            let weekStartDate = calendar.date(byAdding: .weekOfMonth, value: week - 1, to: weekStart)!
+            let weekEndDate = calendar.date(byAdding: .weekOfMonth, value: 1, to: weekStartDate)!
+            
+            var weekTotal: Double = 0
+            var daysCount = 0
+            
+            for dayOffset in 0...6 {
+                let dayDate = calendar.date(byAdding: .day, value: dayOffset, to: weekStartDate)!
+                if dayDate < weekEndDate {
+                    let value = await withCheckedContinuation { continuation in
+                        healthStore.fetchNutrientDataForInterval(
+                            nutrientType: nutrientType.lowercased(),
+                            start: dayDate,
+                            end: calendar.date(byAdding: .day, value: 1, to: dayDate)!
+                        ) { value, _ in
+                            continuation.resume(returning: value ?? 0)
+                        }
+                    }
+                    weekTotal += value
+                    daysCount += 1
+                }
             }
+            
+            monthData.append(MonthNutrientData(
+                weekStart: weekStartDate,
+                averageValue: daysCount > 0 ? weekTotal / Double(daysCount) : 0,
+                nutrient: nutrientType,
+                weekOfMonth: week
+            ))
         }
-    }
-    var body: some View {
-        HStack {
-            Image(systemName: symbolName)
-                .foregroundColor(titleColor)
-                .font(.title)
-                .padding(.trailing)
-
-            VStack(alignment: .leading) {
-                Text(title)
-                    .font(.headline)
-                    .padding(.bottom, 5)
-                    .foregroundColor(titleColor)
-                formatContent()
-            }
-        }
-        .padding()
-        .frame(width: cardWidth, height: 125)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
+        
+        return monthData
     }
 }
 
 
+struct NutrientDetailView: View {
+    let nutrientName: String
+    @StateObject private var healthStore = HealthKitManager()
+    @State private var selectedDate = Date()
+    @State private var showDatePicker = false
+    @State private var selectedCard: CardType = .today
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var dayData: [DayNutrientData] = []
+    @State private var weekData: [WeekNutrientData] = []
+    @State private var monthData: [MonthNutrientData] = []
+    @State private var nutrientData: [String: [NutrientDataPoint]] = [:]
+    @State private var selectedPoint: NutrientDataPoint?
+    var columnVisibility: NavigationSplitViewVisibility = .detailOnly
 
-    struct NutrientDetailView_Previews: PreviewProvider {
-        static var previews: some View {
-            NutrientDetailView(nutrientName: "Carbs")
+    private func computeLayout(for size: CGSize) -> (columns: Int, cardWidth: CGFloat) {
+        let availableWidth = size.width
+        let minPadding: CGFloat = 16
+        let sidePadding: CGFloat = 24
+        
+        let layout = switch (availableWidth, columnVisibility) {
+        // No Sidebar (.detailOnly)
+        case (1366..., .detailOnly):
+            (3, availableWidth / 3 - minPadding * 2)
+        case (1194...1365, .detailOnly):
+            (3, (availableWidth - minPadding * 4) / 3)
+        case (1024...1193, .detailOnly):
+            (3, (availableWidth - minPadding * 4) / 3)
+        case (981...1023, .detailOnly):
+            (2, (availableWidth - minPadding * 3) / 2)
+        case (820...980, .detailOnly):
+            (2, (availableWidth - minPadding * 3) / 2)
+        case (744...819, .detailOnly):
+            (1, availableWidth - sidePadding * 2 - 40)
+        case (694...743, .detailOnly):
+            (1, availableWidth - sidePadding * 2 + 100)  // Wider
+        case (639...693, .detailOnly):
+            (1, availableWidth - sidePadding * 2 + 120)  // Wider
+        // With Sidebar (all good, keeping as is)
+        case (1366..., _):
+            (2, (availableWidth - minPadding * 4) / 2)
+        case (1024...1365, _):
+            (2, (availableWidth - minPadding * 4) / 2)
+        case (820...1023, _):
+            (2, (availableWidth - minPadding * 4) / 2)
+        case (744...819, _):
+            (2, (availableWidth - minPadding * 4) / 2)
+        case (639...743, _):
+            (2, (availableWidth - minPadding * 4) / 2)
+        default:
+            (1, availableWidth - sidePadding * 2)
+        }
+        
+        return layout
+    }
+
+    private func getNutrientColor() -> Color {
+        switch nutrientName {
+        case "Protein": return .red
+        case "Carbs": return .green
+        case "Fats": return .blue
+        default: return .primary
         }
     }
+
+    private func getSymbolName(for cardType: CardType) -> String {
+        switch cardType {
+        case .today: return "chart.bar.fill"
+        case .weekly: return "calendar.badge.clock"
+        case .monthly: return "calendar"
+        case .recommended: return "target"
+        case .foods: return "leaf.fill"
+        case .benefits: return "heart.fill"
+        }
+    }
+
+    private func getCardColor(for cardType: CardType) -> Color {
+        switch cardType {
+        case .today: return .red
+        case .weekly: return .green
+        case .monthly: return .blue
+        case .recommended: return .orange
+        case .foods: return .purple
+        case .benefits: return .yellow
+        }
+    }
+
+    @ViewBuilder
+    private var selectedDetailView: some View {
+        switch selectedCard {
+        case .today:
+            DayChartView(
+                hourlyData: [nutrientName: dayData],
+                selectedPoint: $selectedPoint,
+                selectedDiet: nil,
+                strictLevel: .medium,
+                tdee: 2000
+            )
+        case .weekly:
+            WeekChartView(
+                weekData: [nutrientName: weekData],
+                selectedPoint: $selectedPoint,
+                selectedDiet: nil,
+                strictLevel: .medium,
+                tdee: 2000
+            )
+        case .monthly:
+            MonthChartView(
+                monthData: [nutrientName: monthData],
+                selectedPoint: $selectedPoint,
+                selectedDiet: nil,
+                strictLevel: .medium,
+                tdee: 2000
+            )
+        case .recommended:
+            RecommendedIntakeDetailView(nutrientName: nutrientName)
+        case .foods:
+            FoodSourcesDetailView(nutrientName: nutrientName)
+        case .benefits:
+            BenefitsDetailView(nutrientName: nutrientName)
+        }
+    }
+
+    private func fetchAllData() async {
+        let dayResult = await DayNutrientData.fetchDayData(
+            for: selectedDate,
+            nutrientType: nutrientName,
+            healthStore: healthStore
+        )
+        dayData = dayResult
+        
+        let weekResult = await WeekNutrientData.fetchWeekData(
+            for: selectedDate,
+            nutrientType: nutrientName,
+            healthStore: healthStore
+        )
+        weekData = weekResult
+        
+        let monthResult = await MonthNutrientData.fetchMonthData(
+            for: selectedDate,
+            nutrientType: nutrientName,
+            healthStore: healthStore
+        )
+        monthData = monthResult
+    }
+    
+    private func selectedPointDetail(_ selected: NutrientDataPoint) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            switch selectedCard {
+            case .today:
+                let hourStart = Calendar.current.component(.hour, from: selected.date)
+                let hourEnd = hourStart + 1
+                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) \(String(format: "%02d:00-%02d:00", hourStart, hourEnd)) (total):")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.secondary)
+            case .weekly:
+                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) (total):")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.secondary)
+            case .monthly:
+                let weekEnd = Calendar.current.date(byAdding: .day, value: 6, to: selected.date)!
+                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) - \(weekEnd.formatted(.dateTime.month(.abbreviated).day())), \(selected.date.formatted(.dateTime.year())) (average):")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.secondary)
+            default:
+                EmptyView()
+            }
+
+            HStack {
+                Text(nutrientName)
+                    .font(.headline)
+                    .foregroundStyle(getNutrientColor())
+                Spacer()
+                Text("\(Int(selected.value))")
+                    .font(.title3.bold())
+                Text("grams")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding()
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        themeColors[nutrientName] ?? Color(.systemBackground),
+                        Color(.systemBackground)
+                    ]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+                
+                GeometryReader { geometry in
+                    let layout = computeLayout(for: geometry.size)
+                    
+                    ScrollView {
+                        LazyVGrid(
+                            columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: layout.columns),
+                            spacing: 16
+                        ) {
+                            if ["Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(nutrientName),
+                               let _ = nutrientDetails[nutrientName] {
+                                NutrientCard(
+                                    type: .today,
+                                    nutrientName: nutrientName,
+                                    selectedDate: $selectedDate,
+                                    isSelected: selectedCard == .today,
+                                    healthStore: healthStore,
+                                    titleColor: getNutrientColor(),
+                                    symbolName: getSymbolName(for: .today),
+                                    cardWidth: layout.cardWidth
+                                )
+                                .onTapGesture {
+                                    withAnimation(.spring()) {
+                                        selectedCard = .today
+                                    }
+                                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                                    generator.impactOccurred()
+                                }
+                                
+                                ForEach([CardType.weekly, .monthly, .recommended, .foods, .benefits], id: \.self) { cardType in
+                                    NutrientCard(
+                                        type: cardType,
+                                        nutrientName: nutrientName,
+                                        selectedDate: $selectedDate,
+                                        isSelected: selectedCard == cardType,
+                                        healthStore: healthStore,
+                                        titleColor: getCardColor(for: cardType),
+                                        symbolName: getSymbolName(for: cardType),
+                                        cardWidth: layout.cardWidth
+                                    )
+                                    .onTapGesture {
+                                        withAnimation(.spring()) {
+                                            selectedCard = cardType
+                                        }
+                                        let generator = UIImpactFeedbackGenerator(style: .medium)
+                                        generator.impactOccurred()
+                                    }
+                                }
+                                
+                                CategoryDetailView(category: nutrientName)
+                                    .padding()
+                            } else {
+                                ForEach([CardType.today, .weekly, .monthly, .recommended, .foods, .benefits], id: \.self) { cardType in
+                                    NutrientCard(
+                                        type: cardType,
+                                        nutrientName: nutrientName,
+                                        selectedDate: $selectedDate,
+                                        isSelected: selectedCard == cardType,
+                                        healthStore: healthStore,
+                                        titleColor: getNutrientColor(),
+                                        symbolName: getSymbolName(for: cardType),
+                                        cardWidth: layout.cardWidth
+                                    )
+                                    .onTapGesture {
+                                        withAnimation(.spring()) {
+                                            selectedCard = cardType
+                                        }
+                                        let generator = UIImpactFeedbackGenerator(style: .medium)
+                                        generator.impactOccurred()
+                                    }
+                                }
+                            }
+                        }
+                        .padding()
+                        if !["Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(nutrientName) {
+                            if let selected = selectedPoint {
+                                selectedPointDetail(selected)
+                            }
+                            selectedDetailView
+                                .task {
+                                    await fetchAllData()
+                                }
+                                .onChange(of: selectedDate) { _, _ in
+                                    Task {
+                                        await fetchAllData()
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 300)
+                                .padding()
+                        }
+                    }
+                }
+            }
+            .navigationTitle(nutrientName)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    DateButton(selectedDate: $selectedDate, showPicker: $showDatePicker)
+                }
+            }
+        }
+    }
+
+}
+
+struct NutrientCard: View {
+    let type: CardType
+    let nutrientName: String
+    @Binding var selectedDate: Date
+    let isSelected: Bool
+    let healthStore: HealthKitManager
+    let titleColor: Color
+    let symbolName: String
+    let cardWidth: CGFloat
+    @State private var nutrientValue: Double = 0
+    @State private var weekData: [NutrientDataPoint] = []
+    @State private var monthData: [NutrientDataPoint] = []
+    @State private var nutrientData: [String: [NutrientDataPoint]] = [:]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: symbolName)
+                    .foregroundColor(titleColor)
+                    .font(.title2)
+                
+                Text(type.rawValue + (type == .foods ? " \(nutrientName)" : ""))
+                    .font(.headline)
+                    .foregroundColor(titleColor)
+                
+                Spacer()
+                
+                if isSelected {
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+            
+            switch type {
+            case .today:
+                todayContent
+            case .weekly:
+                weeklyContent
+            case .monthly:
+                monthlyContent
+            case .recommended:
+                recommendedContent
+            case .foods:
+                foodsContent
+            case .benefits:
+                benefitsContent
+            }
+        }
+        .padding()
+        .frame(width: max(cardWidth, 0), height: 150)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .task {
+            await updateNutrientValue()
+            await fetchWeekData()
+            await fetchMonthData()
+        }
+        .onChange(of: selectedDate) { _, _ in
+            Task {
+                await updateNutrientValue()
+                await fetchWeekData()
+                await fetchMonthData()
+            }
+        }
+    }
+    
+    private var todayContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("\(Int(nutrientValue))")
+                    .font(.title.bold())
+                Text("grams")
+                    .foregroundStyle(.secondary)
+            }
+            Text(selectedDate.formatted(.dateTime.month().day()))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+    
+    private var weeklyContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("\(Int(nutrientValue))")
+                    .fontWeight(.bold)
+                Text("grams weekly")
+                    .foregroundStyle(.secondary)
+            }
+            Text(getWeekRange())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+    
+    private var monthlyContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("\(Int(nutrientValue))")
+                    .fontWeight(.bold)
+                Text("grams monthly")
+                    .foregroundStyle(.secondary)
+            }
+            Text(selectedDate.formatted(.dateTime.month().year()))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+    
+    private var recommendedContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(getRecommendedRange())
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Recommended daily intake")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+    
+    private var foodsContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(getFoodSources().prefix(2), id: \.self) { food in
+                Text("• \(food)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+    private var benefitsContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(getBenefits().prefix(2), id: \.self) { benefit in
+                Text("• \(benefit)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+    
+    private func updateNutrientValue() async {
+        let calendar = Calendar.current
+        
+        switch type {
+        case .today:
+            let startOfDay = calendar.startOfDay(for: selectedDate)
+            let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+            let value = await fetchNutrientData(start: startOfDay, end: endOfDay)
+            await MainActor.run { nutrientValue = value }
+            
+        case .weekly:
+            let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selectedDate))!
+            let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart)!
+            let value = await fetchNutrientData(start: weekStart, end: weekEnd)
+            await MainActor.run { nutrientValue = value }
+            
+        case .monthly:
+            let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedDate))!
+            let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+            let value = await fetchNutrientData(start: monthStart, end: monthEnd)
+            await MainActor.run { nutrientValue = value }
+            
+        default:
+            break
+        }
+    }
+    
+    private func fetchNutrientData(start: Date, end: Date) async -> Double {
+        await withCheckedContinuation { continuation in
+            healthStore.fetchNutrientDataForInterval(
+                nutrientType: nutrientName.lowercased(),
+                start: start,
+                end: end
+            ) { value, _ in
+                continuation.resume(returning: value ?? 0)
+            }
+        }
+    }
+    
+    private func fetchWeekData() async {
+        let weekResult = await WeekNutrientData.fetchWeekData(
+            for: selectedDate,
+            nutrientType: nutrientName,
+            healthStore: healthStore
+        )
+        
+        let weekPoints = weekResult.map { weekData in
+            NutrientDataPoint(
+                date: weekData.date,
+                value: weekData.totalValue,
+                nutrient: weekData.nutrient
+            )
+        }
+        
+        nutrientData[nutrientName] = weekPoints
+    }
+
+    private func fetchMonthData() async {
+        let monthResult = await MonthNutrientData.fetchMonthData(
+            for: selectedDate,
+            nutrientType: nutrientName,
+            healthStore: healthStore
+        )
+        
+        let monthPoints = monthResult.map { monthData in
+            NutrientDataPoint(
+                date: monthData.weekStart,
+                value: monthData.averageValue,
+                nutrient: monthData.nutrient
+            )
+        }
+        
+        nutrientData[nutrientName] = monthPoints
+    }
+
+    private func getWeekRange() -> String {
+        let calendar = Calendar.current
+        let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selectedDate))!
+        let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart)!
+        return "\(weekStart.formatted(.dateTime.month().day())) - \(weekEnd.formatted(.dateTime.month().day()))"
+    }
+    
+    private func getRecommendedRange() -> String {
+        switch nutrientName {
+        case "Protein": return "0.8-1.2g per kg body weight"
+        case "Carbs": return "45-65% of daily calories"
+        case "Fats": return "20-35% of daily calories"
+        default: return ""
+        }
+    }
+    
+    private func getFoodSources() -> [String] {
+        switch nutrientName {
+        case "Protein":
+            return ["Chicken breast", "Eggs", "Fish", "Greek yogurt", "Lean beef"]
+        case "Carbs":
+            return ["Brown rice", "Sweet potatoes", "Quinoa", "Oatmeal", "Whole grain bread"]
+        case "Fats":
+            return ["Avocados", "Nuts", "Olive oil", "Salmon", "Chia seeds"]
+        default:
+            return []
+        }
+    }
+    
+    private func getBenefits() -> [String] {
+        switch nutrientName {
+        case "Protein":
+            return ["Muscle growth and repair",
+                    "Immune system support",
+                    "Enzyme production",
+                    "Hormone regulation"]
+        case "Carbs":
+            return ["Primary energy source",
+                    "Brain function",
+                    "Muscle glycogen storage",
+                    "Fiber for digestive health"]
+        case "Fats":
+            return ["Hormone production",
+                    "Nutrient absorption",
+                    "Brain development",
+                    "Cell membrane structure"]
+        default:
+            return []
+        }
+    }
+}
+
+struct DateButton: View {
+    @Binding var selectedDate: Date
+    @Binding var showPicker: Bool
+    
+    var body: some View {
+        Button {
+            showPicker.toggle()
+        } label: {
+            Image(systemName: "calendar")
+                .symbolVariant(.fill)
+        }
+        .sheet(isPresented: $showPicker) {
+            NavigationStack {
+                DatePicker(
+                    "Select Date",
+                    selection: $selectedDate,
+                    in: ...Date(),
+                    displayedComponents: [.date]
+                )
+                .datePickerStyle(.graphical)
+                .navigationTitle("Select Date")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showPicker = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.height(400)])
+        }
+    }
+}
+
+struct RecommendedIntakeDetailView: View {
+    let nutrientName: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Daily Recommended Intake")
+                .font(.title2.bold())
+            
+            VStack(alignment: .leading, spacing: 12) {
+                switch nutrientName {
+                case "Protein":
+                    Text("General recommendation:")
+                        .font(.headline)
+                    Text("• 0.8-1.2g per kg of body weight")
+                    Text("• 10-35% of total daily calories")
+                    
+                    Text("\nAthletes and active individuals:")
+                        .font(.headline)
+                    Text("• 1.2-2.0g per kg of body weight")
+                    Text("• Higher needs during intense training")
+                    
+                    Text("\nFactors affecting needs:")
+                        .font(.headline)
+                    Text("• Activity level")
+                    Text("• Training goals")
+                    Text("• Age and gender")
+                    Text("• Overall health status")
+                    
+                case "Carbs":
+                    Text("General recommendation:")
+                        .font(.headline)
+                    Text("• 45-65% of total daily calories")
+                    Text("• 3-10g per kg of body weight")
+                    
+                    Text("\nAthletes and active individuals:")
+                        .font(.headline)
+                    Text("• 5-12g per kg of body weight")
+                    Text("• Higher during intense training periods")
+                    
+                    Text("\nTypes of carbohydrates:")
+                        .font(.headline)
+                    Text("• Complex carbs: whole grains, vegetables")
+                    Text("• Simple carbs: fruits, sports drinks")
+                    Text("• Fiber: 25-38g daily")
+                    
+                case "Fats":
+                    Text("General recommendation:")
+                        .font(.headline)
+                    Text("• 20-35% of total daily calories")
+                    Text("• 0.5-1.0g per kg of body weight")
+                    
+                    Text("\nEssential fatty acids:")
+                        .font(.headline)
+                    Text("• Omega-3: 1.1-1.6g daily")
+                    Text("• Omega-6: 11-17g daily")
+                    
+                    Text("\nTypes of fats:")
+                        .font(.headline)
+                    Text("• Unsaturated: olive oil, nuts, avocados")
+                    Text("• Saturated: limit to <10% of calories")
+                    Text("• Trans fats: avoid when possible")
+                    
+                default:
+                    Text("No specific recommendations available")
+                }
+            }
+            .font(.subheadline)
+        }
+        .padding()
+    }
+}
+
+struct FoodSourcesDetailView: View {
+    let nutrientName: String
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rich Food Sources")
+                .font(.title2.bold())
+            
+            if horizontalSizeClass == .regular {
+                // iPad Layout
+                HStack(alignment: .top, spacing: 20) {
+                    switch nutrientName {
+                    case "Protein":
+                        Group {
+                            makeSection("Animal Sources:", items: [
+                                "Chicken breast (31g per 100g)",
+                                "Lean beef (26g per 100g)",
+                                "Fish (20-25g per 100g)",
+                                "Eggs (6g per large egg)",
+                                "Greek yogurt (10g per 100g)"
+                            ])
+                            
+                            makeSection("Plant Sources:", items: [
+                                "Lentils (9g per 100g cooked)",
+                                "Chickpeas (15g per 100g)",
+                                "Quinoa (4.4g per 100g cooked)",
+                                "Tofu (8g per 100g)",
+                                "Almonds (21g per 100g)"
+                            ])
+                            
+                            makeSection("Protein Supplements:", items: [
+                                "Whey protein powder (24g per 30g)",
+                                "Casein protein powder (24g per 30g)",
+                                "Pea protein powder (21g per 30g)",
+                                "Soy protein powder (22g per 30g)"
+                            ])
+                        }
+                        
+                    case "Carbs":
+                        Group {
+                            makeSection("Whole Grains:", items: [
+                                "Brown rice (23g per 100g cooked)",
+                                "Quinoa (21g per 100g cooked)",
+                                "Oatmeal (27g per 100g)",
+                                "Whole wheat bread (43g per 100g)",
+                                "Barley (28g per 100g cooked)"
+                            ])
+                            
+                            makeSection("Starchy Vegetables:", items: [
+                                "Sweet potatoes (20g per 100g)",
+                                "Potatoes (17g per 100g)",
+                                "Corn (19g per 100g)",
+                                "Peas (14g per 100g)",
+                                "Winter squash (10g per 100g)"
+                            ])
+                            
+                            makeSection("Fruits:", items: [
+                                "Bananas (23g per 100g)",
+                                "Apples (14g per 100g)",
+                                "Oranges (12g per 100g)",
+                                "Grapes (17g per 100g)",
+                                "Mangoes (15g per 100g)"
+                            ])
+                        }
+                        
+                    case "Fats":
+                        Group {
+                            makeSection("Healthy Oils:", items: [
+                                "Olive oil (100g fat per 100ml)",
+                                "Avocado oil (100g fat per 100ml)",
+                                "Coconut oil (99g fat per 100g)",
+                                "MCT oil (100g fat per 100ml)"
+                            ])
+                            
+                            makeSection("Nuts and Seeds:", items: [
+                                "Almonds (49g fat per 100g)",
+                                "Walnuts (65g fat per 100g)",
+                                "Chia seeds (31g fat per 100g)",
+                                "Flaxseeds (42g fat per 100g)",
+                                "Pumpkin seeds (46g fat per 100g)"
+                            ])
+                            
+                            makeSection("Other Sources:", items: [
+                                "Avocados (15g fat per 100g)",
+                                "Salmon (13g fat per 100g)",
+                                "Eggs (11g fat per 100g)",
+                                "Dark chocolate (31g fat per 100g)",
+                                "Cheese (33g fat per 100g)"
+                            ])
+                        }
+                        
+                    default:
+                        Text("No specific food sources available")
+                    }
+                }
+            } else {
+                // iPhone Layout
+                VStack(alignment: .leading, spacing: 12) {
+                    switch nutrientName {
+                    case "Protein":
+                        Group {
+                            makeSection("Animal Sources:", items: [
+                                "Chicken breast (31g per 100g)",
+                                "Lean beef (26g per 100g)",
+                                "Fish (20-25g per 100g)",
+                                "Eggs (6g per large egg)",
+                                "Greek yogurt (10g per 100g)"
+                            ])
+                            
+                            makeSection("Plant Sources:", items: [
+                                "Lentils (9g per 100g cooked)",
+                                "Chickpeas (15g per 100g)",
+                                "Quinoa (4.4g per 100g cooked)",
+                                "Tofu (8g per 100g)",
+                                "Almonds (21g per 100g)"
+                            ])
+                            
+                            makeSection("Protein Supplements:", items: [
+                                "Whey protein powder (24g per 30g)",
+                                "Casein protein powder (24g per 30g)",
+                                "Pea protein powder (21g per 30g)",
+                                "Soy protein powder (22g per 30g)"
+                            ])
+                        }
+                        
+                    case "Carbs":
+                        Group {
+                            makeSection("Whole Grains:", items: [
+                                "Brown rice (23g per 100g cooked)",
+                                "Quinoa (21g per 100g cooked)",
+                                "Oatmeal (27g per 100g)",
+                                "Whole wheat bread (43g per 100g)",
+                                "Barley (28g per 100g cooked)"
+                            ])
+                            
+                            makeSection("Starchy Vegetables:", items: [
+                                "Sweet potatoes (20g per 100g)",
+                                "Potatoes (17g per 100g)",
+                                "Corn (19g per 100g)",
+                                "Peas (14g per 100g)",
+                                "Winter squash (10g per 100g)"
+                            ])
+                            
+                            makeSection("Fruits:", items: [
+                                "Bananas (23g per 100g)",
+                                "Apples (14g per 100g)",
+                                "Oranges (12g per 100g)",
+                                "Grapes (17g per 100g)",
+                                "Mangoes (15g per 100g)"
+                            ])
+                        }
+                        
+                    case "Fats":
+                        Group {
+                            makeSection("Healthy Oils:", items: [
+                                "Olive oil (100g fat per 100ml)",
+                                "Avocado oil (100g fat per 100ml)",
+                                "Coconut oil (99g fat per 100g)",
+                                "MCT oil (100g fat per 100ml)"
+                            ])
+                            
+                            makeSection("Nuts and Seeds:", items: [
+                                "Almonds (49g fat per 100g)",
+                                "Walnuts (65g fat per 100g)",
+                                "Chia seeds (31g fat per 100g)",
+                                "Flaxseeds (42g fat per 100g)",
+                                "Pumpkin seeds (46g fat per 100g)"
+                            ])
+                            
+                            makeSection("Other Sources:", items: [
+                                "Avocados (15g fat per 100g)",
+                                "Salmon (13g fat per 100g)",
+                                "Eggs (11g fat per 100g)",
+                                "Dark chocolate (31g fat per 100g)",
+                                "Cheese (33g fat per 100g)"
+                            ])
+                        }
+                        
+                    default:
+                        Text("No specific food sources available")
+                    }
+                }
+            }
+        }
+        .padding()
+        .font(.subheadline)
+    }
+    
+    private func makeSection(_ title: String, items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            ForEach(items, id: \.self) { item in
+                Text("• \(item)")
+            }
+            Spacer(minLength: 16)
+        }
+    }
+}
+
+struct BenefitsDetailView: View {
+    let nutrientName: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Health Benefits")
+                .font(.title2.bold())
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    switch nutrientName {
+                    case "Protein":
+                        Group {
+                            makeBenefitSection("Muscle Health:", benefits: [
+                                "Essential for muscle growth and repair",
+                                "Prevents muscle loss during weight loss",
+                                "Supports recovery after exercise",
+                                "Maintains muscle mass during aging"
+                            ])
+                            
+                            makeBenefitSection("Body Function:", benefits: [
+                                "Creates enzymes and hormones",
+                                "Supports immune system function",
+                                "Maintains fluid balance",
+                                "Forms antibodies for immune defense"
+                            ])
+                            
+                            makeBenefitSection("Other Benefits:", benefits: [
+                                "Promotes feeling of fullness",
+                                "Supports healthy skin and hair",
+                                "Helps maintain strong bones",
+                                "Essential for blood clotting"
+                            ])
+                        }
+                        
+                    case "Carbs":
+                        Group {
+                            makeBenefitSection("Energy:", benefits: [
+                                "Primary energy source for body",
+                                "Fuels brain function",
+                                "Provides quick energy for exercise",
+                                "Spares protein from being used for energy"
+                            ])
+                            
+                            makeBenefitSection("Digestive Health:", benefits: [
+                                "Fiber supports digestive health",
+                                "Feeds beneficial gut bacteria",
+                                "Helps maintain regular bowel movements",
+                                "Supports healthy cholesterol levels"
+                            ])
+                            
+                            makeBenefitSection("Performance:", benefits: [
+                                "Essential for high-intensity exercise",
+                                "Maintains blood glucose levels",
+                                "Replenishes muscle glycogen",
+                                "Supports athletic performance"
+                            ])
+                        }
+                        
+                    case "Fats":
+                        Group {
+                            makeBenefitSection("Essential Functions:", benefits: [
+                                "Supports cell membrane structure",
+                                "Essential for hormone production",
+                                "Aids in nutrient absorption",
+                                "Provides insulation and protection"
+                            ])
+                            
+                            makeBenefitSection("Brain Health:", benefits: [
+                                "Crucial for brain development",
+                                "Supports cognitive function",
+                                "Essential for nerve signaling",
+                                "Maintains brain tissue health"
+                            ])
+                            
+                            makeBenefitSection("Other Benefits:", benefits: [
+                                "Provides long-lasting energy",
+                                "Helps maintain healthy skin",
+                                "Supports vitamin absorption",
+                                "Important for inflammation response"
+                            ])
+                        }
+                        
+                    default:
+                        Text("No specific benefits information available")
+                    }
+                }
+            }
+            .font(.subheadline)
+        }
+        .padding()
+    }
+    
+    private func makeBenefitSection(_ title: String, benefits: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            ForEach(benefits, id: \.self) { benefit in
+                Text("• \(benefit)")
+            }
+            Spacer(minLength: 16)
+        }
+    }
+}
+
+struct NutrientChartData: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let value: Double
+    let type: String
+}
+
+extension View {
+    func nutrientCardStyle() -> some View {
+        self
+            .padding()
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct ChartHeaderView: View {
+    let title: String
+    let value: Double
+    let unit: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.headline)
+            HStack {
+                Text("\(Int(value))")
+                    .font(.title.bold())
+                Text(unit)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .nutrientCardStyle()
+    }
+}
+
+struct NutrientLegendView: View {
+    var body: some View {
+        HStack(spacing: 20) {
+            LegendItem(color: .red, label: "Protein")
+            LegendItem(color: .green, label: "Carbs")
+            LegendItem(color: .blue, label: "Fats")
+        }
+        .padding()
+    }
+}
+
+struct LegendItem: View {
+    let color: Color
+    let label: String
+    
+    var body: some View {
+        Label {
+            Text(label)
+                .font(.caption)
+        } icon: {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+        }
+    }
+}
+
+let themeColors: [String: Color] = [
+    "Carbs": Color.green.opacity(0.4),
+    "Protein": Color.red.opacity(0.4),
+    "Fats": Color.blue.opacity(0.4),
+    "Calories": Color.orange.opacity(0.4),
+    "Fiber": Color.purple.opacity(0.4),
+    "Vitamins": Color.yellow.opacity(0.4),
+    "Minerals": Color.teal.opacity(0.4),
+    "Water": Color.cyan.opacity(0.4),
+    "Phytochemicals": Color.pink.opacity(0.4),
+    "Antioxidants": Color.indigo.opacity(0.4),
+    "Electrolytes": Color.mint.opacity(0.4)
+]
+
+let nutrientDetails: [String: NutrientInfo] = [
+    "Vitamins": NutrientInfo(
+        todayConsumption: "A, C, D, E",
+        weeklyConsumption: "Varies",
+        monthlyConsumption: "Varies",
+        recommendedIntake: "Varies by vitamin",
+        foodsRichInNutrient: "Fruits, Vegetables, Dairy",
+        benefits: "Supports immune function, promotes vision."
+    ),
+    "Minerals": NutrientInfo(
+        todayConsumption: "Iron, Calcium",
+        weeklyConsumption: "Varies",
+        monthlyConsumption: "Varies",
+        recommendedIntake: "Varies by mineral",
+        foodsRichInNutrient: "Meat, Dairy, Leafy Greens",
+        benefits: "Supports bone health, aids in oxygen transport."
+    ),
+    "Phytochemicals": NutrientInfo(
+        todayConsumption: "Varies",
+        weeklyConsumption: "Varies",
+        monthlyConsumption: "Varies",
+        recommendedIntake: "Include colorful fruits and vegetables",
+        foodsRichInNutrient: "Berries, Green Tea, Nuts",
+        benefits: "Antioxidant properties, may reduce disease risk."
+    ),
+    "Antioxidants": NutrientInfo(
+        todayConsumption: "Varies",
+        weeklyConsumption: "Varies",
+        monthlyConsumption: "Varies",
+        recommendedIntake: "Include a variety of foods",
+        foodsRichInNutrient: "Berries, Dark Chocolate, Spinach",
+        benefits: "Protects cells from damage, supports overall health."
+    ),
+    "Electrolytes": NutrientInfo(
+        todayConsumption: "Sodium, Potassium",
+        weeklyConsumption: "Varies",
+        monthlyConsumption: "Varies",
+        recommendedIntake: "Varies by electrolyte",
+        foodsRichInNutrient: "Bananas, Salt, Coconut Water",
+        benefits: "Regulates fluid balance, supports muscle function."
+    )
+]
 
 struct CategoryDetailView: View {
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
@@ -423,7 +1251,7 @@ struct CategoryDetailView: View {
     let CategoryDetailWidthScaling: CGFloat = 0.975
     
     var body: some View {
-        LazyVGrid(columns: [GridItem(.flexible())], spacing: 10) {
+        LazyVGrid(columns: [GridItem(.flexible())], spacing: 40) {
             switch category {
             case "Vitamins":
                 NutrientSubcategoryCard(title: "B Complex", nutrients: [
@@ -482,79 +1310,75 @@ struct CategoryDetailView: View {
     }
 }
 
+enum TimePeriod: String, CaseIterable {
+    case day = "Day"
+    case week = "Week"
+    case month = "Month"
+    case sixMonth = "6 Months"
+    case year = "Year"
+}
+
+struct NutrientInfo {
+    var todayConsumption: String
+    let weeklyConsumption: String
+    let monthlyConsumption: String
+    let recommendedIntake: String
+    let foodsRichInNutrient: String
+    let benefits: String
+}
+
 struct NutrientSubcategoryCard: View {
     let title: String
-        let nutrients: [String]
-        @StateObject private var healthStore = HealthKitManager()
-        @State private var values: [String: Double] = [:]
-        @State private var isExpanded = true
-        @Namespace private var namespace
-        
+    let nutrients: [String]
+    @StateObject private var healthStore = HealthKitManager()
+    @State private var values: [String: Double] = [:]
+    @State private var isExpanded = true
+    @Namespace private var namespace
+    
     var body: some View {
-            VStack(alignment: .leading, spacing: 0) {
-                Button(action: {
-                    withAnimation { isExpanded.toggle() }
-                }) {
-                    HStack {
-                        Text(title)
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                        Spacer()
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .foregroundColor(.blue)
-                    }
-                    .padding()
-                    .background(Color(.systemGray6))
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: {
+                withAnimation { isExpanded.toggle() }
+            }) {
+                HStack {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .foregroundColor(.blue)
                 }
-                
-                if isExpanded {
-                    ForEach(nutrients, id: \.self) { nutrient in
-                        NavigationLink(
-                            destination: SubcategoryDetailView(nutrientName: nutrient)
-                        ) {
-                            HStack {
-                                Text(nutrient)
-                                    .foregroundColor(.primary)
-                                Spacer()
-                                Text("\(formatValue(values[nutrient.lowercased()] ?? 0)) \(NutritionUnit.getUnit(for: nutrient))")
-                                    .foregroundColor(.blue)
-                            }
-                            .padding(.horizontal)
-                            .frame(height: 44)
-                        }
-                        Divider()
-                    }
-                }
+                .padding()
+                .background(Color(.systemGray6))
             }
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .shadow(radius: 1)
-            .padding(.horizontal)
-            .task {
-                await fetchNutrientValues()
+            
+            if isExpanded {
+                ForEach(nutrients, id: \.self) { nutrient in
+                    NavigationLink(
+                        destination: SubcategoryDetailView(nutrientName: nutrient)
+                    ) {
+                        HStack {
+                            Text(nutrient)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text("\(formatValue(values[nutrient.lowercased()] ?? 0)) \(NutritionUnit.getUnit(for: nutrient))")
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.horizontal)
+                        .frame(height: 44)
+                    }
+                    Divider()
+                }
             }
         }
-    
-    struct NutrientSubcategoryDetailView: View {
-        var body: some View {
-            VStack(spacing: 20) {
-                Text("Detailed Nutrient Information")
-                    .font(.title)
-                    .padding()
-                
-                Text("Coming Soon!")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-                
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.blue)
-                    .padding()
-            }
-            .navigationTitle("Nutrient Details")
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .shadow(radius: 1)
+        .padding(.horizontal)
+        .task {
+            await fetchNutrientValues()
         }
     }
-
     
     private func formatValue(_ value: Double) -> String {
         if value >= 1 {
@@ -563,6 +1387,19 @@ struct NutrientSubcategoryCard: View {
             return String(format: "%.3f", value)
         } else {
             return "0"
+        }
+    }
+    
+    private func fetchNutrientValues() async {
+        for nutrient in nutrients {
+            let normalizedName = normalizeNutrientName(nutrient)
+            healthStore.fetchTodayNutrientData(for: normalizedName) { value, _ in
+                if let value = value {
+                    DispatchQueue.main.async {
+                        values[nutrient.lowercased()] = value
+                    }
+                }
+            }
         }
     }
     
@@ -584,62 +1421,6 @@ struct NutrientSubcategoryCard: View {
             return name
         default:
             return baseName
-        }
-    }
-
-    private func fetchNutrientValues() async {
-        for nutrient in nutrients {
-            let normalizedName = normalizeNutrientName(nutrient)
-            healthStore.fetchTodayNutrientData(for: normalizedName) { value, _ in
-                if let value = value {
-                    DispatchQueue.main.async {
-                        values[nutrient.lowercased()] = value
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct SubcategoryCard: View {
-    let nutrient: String
-    @StateObject private var healthStore = HealthKitManager()
-    @State private var value: Double?
-    
-    var body: some View {
-        HStack {
-            Image(systemName: "leaf.circle")
-                .foregroundColor(.green)
-                .font(.title)
-                .padding(.trailing)
-            
-            VStack(alignment: .leading) {
-                Text(nutrient)
-                    .font(.headline)
-                    .padding(.bottom, 5)
-                if let value = value {
-                    Text("\(String(format: "%.1f", value)) \(NutritionUnit.getUnit(for: nutrient))")
-                        .font(.subheadline)
-                        .foregroundStyle(.blue)
-                } else {
-                    Text("Loading...")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                }
-            }
-        }
-        .padding()
-        .frame(height: 125)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
-        .onAppear {
-            fetchValue()
-        }
-    }
-    private func fetchValue() {
-        healthStore.fetchTodayNutrientData(for: nutrient.lowercased()) { fetchedValue, _ in
-            DispatchQueue.main.async {
-                value = fetchedValue
-            }
         }
     }
 }

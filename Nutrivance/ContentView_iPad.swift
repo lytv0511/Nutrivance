@@ -12,6 +12,7 @@ struct ContentView_iPad: View {
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -113,7 +114,7 @@ struct ContentView_iPad: View {
     }
     var body: some View {
         ZStack {
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
                 List(selection: navigationBinding) {
                     HStack {
                         HStack {
@@ -217,33 +218,34 @@ struct ContentView_iPad: View {
                     case "Labels":
                         AnyView(NutritionScannerView())
                     case "Log":
-                        AnyView(UnifiedLogView())
+                        AnyView(LogView())
                     case "Saved Meals":
                         AnyView(SavedMealsView())
                     
-                    // Detailed Nutrients
-                    case "Calories":
-                        AnyView(NutrientDetailView(nutrientName: "Calories"))
-                    case "Carbs":
-                        AnyView(NutrientDetailView(nutrientName: "Carbs"))
-                    case "Protein":
-                        AnyView(NutrientDetailView(nutrientName: "Protein"))
-                    case "Fats":
-                        AnyView(NutrientDetailView(nutrientName: "Fats"))
-                    case "Water":
-                        AnyView(NutrientDetailView(nutrientName: "Water"))
-                    case "Fiber":
-                        AnyView(NutrientDetailView(nutrientName: "Fiber"))
-                    case "Vitamins":
-                        AnyView(NutrientDetailView(nutrientName: "Vitamins"))
-                    case "Minerals":
-                        AnyView(NutrientDetailView(nutrientName: "Minerals"))
-                    case "Phytochemicals":
-                        AnyView(NutrientDetailView(nutrientName: "Phytochemicals"))
-                    case "Antioxidants":
-                        AnyView(NutrientDetailView(nutrientName: "Antioxidants"))
-                    case "Electrolytes":
-                        AnyView(NutrientDetailView(nutrientName: "Electrolytes"))
+                        // Detailed Nutrients
+                        case "Calories":
+                            AnyView(NutrientDetailView(nutrientName: "Calories", columnVisibility: columnVisibility))
+                        case "Carbs":
+                            AnyView(NutrientDetailView(nutrientName: "Carbs", columnVisibility: columnVisibility))
+                        case "Protein":
+                            AnyView(NutrientDetailView(nutrientName: "Protein", columnVisibility: columnVisibility))
+                        case "Fats":
+                            AnyView(NutrientDetailView(nutrientName: "Fats", columnVisibility: columnVisibility))
+                        case "Water":
+                            AnyView(NutrientDetailView(nutrientName: "Water", columnVisibility: columnVisibility))
+                        case "Fiber":
+                            AnyView(NutrientDetailView(nutrientName: "Fiber", columnVisibility: columnVisibility))
+                        case "Vitamins":
+                            AnyView(NutrientDetailView(nutrientName: "Vitamins", columnVisibility: columnVisibility))
+                        case "Minerals":
+                            AnyView(NutrientDetailView(nutrientName: "Minerals", columnVisibility: columnVisibility))
+                        case "Phytochemicals":
+                            AnyView(NutrientDetailView(nutrientName: "Phytochemicals", columnVisibility: columnVisibility))
+                        case "Antioxidants":
+                            AnyView(NutrientDetailView(nutrientName: "Antioxidants", columnVisibility: columnVisibility))
+                        case "Electrolytes":
+                            AnyView(NutrientDetailView(nutrientName: "Electrolytes", columnVisibility: columnVisibility))
+
                     
                     // Fitness Focus - Training
                     case "Dashboard":

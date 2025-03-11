@@ -1,36 +1,43 @@
 import SwiftUI
 
+@MainActor
+class AppState: ObservableObject {
+    @Published var healthKitManager = HealthKitManager()
+    @Published var selectedNutrient: String?
+    @Published var navigationPath = NavigationPath()
+}
+
 struct ContentView: View {
-    @ObservedObject var healthKitManager = HealthKitManager()
+    @StateObject private var appState = AppState()
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     var body: some View {
         Group {
             if UIDevice.current.userInterfaceIdiom == .pad {
-                ContentView_iPad()
-            } else {
+                if horizontalSizeClass == .regular {
+                    ContentView_iPad()
+                        .environmentObject(appState)
+                } else {
+                    ContentView_iPad()
+                        .environmentObject(appState)
+                }
+            } else if UIDevice.current.userInterfaceIdiom == .phone {
                 ContentView_iPhone_alt()
             }
         }
-        .onAppear {
+        .task {
             requestHealthDataPermissions()
         }
     }
-    
     private func requestHealthDataPermissions() {
-        healthKitManager.requestAuthorization { success, error in
-            if let error = error {
-                print("Error requesting health data permissions: \(error.localizedDescription)")
-            } else if success {
-                print("Health data permissions granted.")
-            } else {
-                print("Health data permissions not granted.")
+            appState.healthKitManager.requestAuthorization { success, error in
+                if let error = error {
+                    print("Error requesting health data permissions: \(error.localizedDescription)")
+                } else if success {
+                    print("Health data permissions granted.")
+                } else {
+                    print("Health data permissions not granted.")
+                }
             }
         }
-    }
-}
-
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
-    }
 }
