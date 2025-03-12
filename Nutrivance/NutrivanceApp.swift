@@ -9,7 +9,7 @@ enum AppFocus: String, CaseIterable {
 }
 
 class NavigationState: ObservableObject {
-    @Published var selectedView: String = "Carbs"
+    @Published var selectedView: String = "Insights"
     @Published var dismissAction: (() -> Void)?
     @Published var canGoBack: Bool = false
     @Published var showFocusSwitcher = false

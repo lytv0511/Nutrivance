@@ -98,45 +98,62 @@ struct SingleNutrientMonthData: Identifiable {
     static func fetchMonthData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [MonthNutrientData] {
         let calendar = Calendar.current
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: date))!
+        let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+        
+        // Find the first Sunday on or before month start
+        var weekStart = monthStart
+        while calendar.component(.weekday, from: weekStart) != 1 { // 1 is Sunday
+            weekStart = calendar.date(byAdding: .day, value: -1, to: weekStart)!
+        }
+        
         var monthData: [MonthNutrientData] = []
+        var weekNumber = 1
+        var currentWeekStart = weekStart
         
-        let weeksInMonth = calendar.range(of: .weekOfMonth, in: .month, for: monthStart)!
-        
-        for week in weeksInMonth {
-            let weekStart = calendar.date(bySetting: .weekday, value: calendar.firstWeekday, of: monthStart)!
-            let weekStartDate = calendar.date(byAdding: .weekOfMonth, value: week - 1, to: weekStart)!
-            let weekEndDate = calendar.date(byAdding: .weekOfMonth, value: 1, to: weekStartDate)!
-            
+        while currentWeekStart < nextMonth {
+            let weekEnd = calendar.date(byAdding: .day, value: 7, to: currentWeekStart)!
             var weekTotal: Double = 0
-            var daysCount = 0
+            var validDays = 0
             
-            for dayOffset in 0...6 {
-                let dayDate = calendar.date(byAdding: .day, value: dayOffset, to: weekStartDate)!
-                if dayDate < weekEndDate {
+            var currentDay = currentWeekStart
+            while currentDay < weekEnd {
+                if currentDay >= monthStart && currentDay < nextMonth {
+                    let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
                     let value = await withCheckedContinuation { continuation in
                         healthStore.fetchNutrientDataForInterval(
                             nutrientType: nutrientType.lowercased(),
-                            start: dayDate,
-                            end: calendar.date(byAdding: .day, value: 1, to: dayDate)!
+                            start: currentDay,
+                            end: nextDay
                         ) { value, _ in
                             continuation.resume(returning: value ?? 0)
                         }
                     }
-                    weekTotal += value
-                    daysCount += 1
+                    
+                    if value > 0 {
+                        weekTotal += value
+                        validDays += 1
+                    }
                 }
+                currentDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
             }
             
-            monthData.append(MonthNutrientData(
-                weekStart: weekStartDate,
-                averageValue: daysCount > 0 ? weekTotal / Double(daysCount) : 0,
-                nutrient: nutrientType,
-                weekOfMonth: week
-            ))
+            if validDays > 0 {
+                monthData.append(MonthNutrientData(
+                    weekStart: currentWeekStart,
+                    weekEnd: weekEnd,
+                    averageValue: weekTotal / Double(validDays),
+                    nutrient: nutrientType,
+                    weekNumber: weekNumber
+                ))
+            }
+            
+            currentWeekStart = weekEnd
+            weekNumber += 1
         }
         
         return monthData
     }
+
 }
 
 
@@ -252,7 +269,8 @@ struct NutrientDetailView: View {
                 selectedPoint: $selectedPoint,
                 selectedDiet: nil,
                 strictLevel: .medium,
-                tdee: 2000
+                tdee: 2000,
+                viewingMonth: selectedDate
             )
         case .recommended:
             RecommendedIntakeDetailView(nutrientName: nutrientName)
@@ -381,6 +399,7 @@ struct NutrientDetailView: View {
                                     .onTapGesture {
                                         withAnimation(.spring()) {
                                             selectedCard = cardType
+                                            selectedPoint = nil
                                         }
                                         let generator = UIImpactFeedbackGenerator(style: .medium)
                                         generator.impactOccurred()
@@ -404,6 +423,7 @@ struct NutrientDetailView: View {
                                     .onTapGesture {
                                         withAnimation(.spring()) {
                                             selectedCard = cardType
+                                            selectedPoint = nil
                                         }
                                         let generator = UIImpactFeedbackGenerator(style: .medium)
                                         generator.impactOccurred()
@@ -435,7 +455,7 @@ struct NutrientDetailView: View {
             .navigationTitle(nutrientName)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    DateButton(selectedDate: $selectedDate, showPicker: $showDatePicker)
+                    DateButton(selectedDate: $selectedDate, selectedPoint: $selectedPoint, showPicker: $showDatePicker)
                 }
             }
         }
@@ -713,11 +733,13 @@ struct NutrientCard: View {
 
 struct DateButton: View {
     @Binding var selectedDate: Date
+    @Binding var selectedPoint: NutrientDataPoint?  // Add this binding
     @Binding var showPicker: Bool
     
     var body: some View {
         Button {
             showPicker.toggle()
+            selectedPoint = nil
         } label: {
             Image(systemName: "calendar")
                 .symbolVariant(.fill)
@@ -750,89 +772,186 @@ struct RecommendedIntakeDetailView: View {
     let nutrientName: String
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Daily Recommended Intake")
-                .font(.title2.bold())
+        GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
+            let isPad = UIDevice.current.userInterfaceIdiom == .pad
             
-            VStack(alignment: .leading, spacing: 12) {
-                switch nutrientName {
-                case "Protein":
-                    Text("General recommendation:")
-                        .font(.headline)
-                    Text("• 0.8-1.2g per kg of body weight")
-                    Text("• 10-35% of total daily calories")
-                    
-                    Text("\nAthletes and active individuals:")
-                        .font(.headline)
-                    Text("• 1.2-2.0g per kg of body weight")
-                    Text("• Higher needs during intense training")
-                    
-                    Text("\nFactors affecting needs:")
-                        .font(.headline)
-                    Text("• Activity level")
-                    Text("• Training goals")
-                    Text("• Age and gender")
-                    Text("• Overall health status")
-                    
-                case "Carbs":
-                    Text("General recommendation:")
-                        .font(.headline)
-                    Text("• 45-65% of total daily calories")
-                    Text("• 3-10g per kg of body weight")
-                    
-                    Text("\nAthletes and active individuals:")
-                        .font(.headline)
-                    Text("• 5-12g per kg of body weight")
-                    Text("• Higher during intense training periods")
-                    
-                    Text("\nTypes of carbohydrates:")
-                        .font(.headline)
-                    Text("• Complex carbs: whole grains, vegetables")
-                    Text("• Simple carbs: fruits, sports drinks")
-                    Text("• Fiber: 25-38g daily")
-                    
-                case "Fats":
-                    Text("General recommendation:")
-                        .font(.headline)
-                    Text("• 20-35% of total daily calories")
-                    Text("• 0.5-1.0g per kg of body weight")
-                    
-                    Text("\nEssential fatty acids:")
-                        .font(.headline)
-                    Text("• Omega-3: 1.1-1.6g daily")
-                    Text("• Omega-6: 11-17g daily")
-                    
-                    Text("\nTypes of fats:")
-                        .font(.headline)
-                    Text("• Unsaturated: olive oil, nuts, avocados")
-                    Text("• Saturated: limit to <10% of calories")
-                    Text("• Trans fats: avoid when possible")
-                    
-                default:
-                    Text("No specific recommendations available")
+            VStack(alignment: .leading) {
+                Text("Daily Recommended Intake")
+                    .font(.title2.bold())
+                    .padding()
+                
+                if isLandscape && isPad {
+                    HStack(alignment: .top, spacing: 24) {
+                        switch nutrientName {
+                        case "Protein":
+                            VStack(alignment: .leading) {
+                                Text("General recommendation:")
+                                    .font(.headline)
+                                Text("• 0.8-1.2g per kg of body weight")
+                                Text("• 10-35% of total daily calories")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            VStack(alignment: .leading) {
+                                Text("Athletes and active individuals:")
+                                    .font(.headline)
+                                Text("• 1.2-2.0g per kg of body weight")
+                                Text("• Higher needs during intense training")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            VStack(alignment: .leading) {
+                                Text("Factors affecting needs:")
+                                    .font(.headline)
+                                Text("• Activity level")
+                                Text("• Training goals")
+                                Text("• Age and gender")
+                                Text("• Overall health status")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                        case "Carbs":
+                            VStack(alignment: .leading) {
+                                Text("General recommendation:")
+                                    .font(.headline)
+                                Text("• 45-65% of total daily calories")
+                                Text("• 3-10g per kg of body weight")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            VStack(alignment: .leading) {
+                                Text("Athletes and active individuals:")
+                                    .font(.headline)
+                                Text("• 5-12g per kg of body weight")
+                                Text("• Higher during intense training periods")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            VStack(alignment: .leading) {
+                                Text("Types of carbohydrates:")
+                                    .font(.headline)
+                                Text("• Complex carbs: whole grains, vegetables")
+                                Text("• Simple carbs: fruits, sports drinks")
+                                Text("• Fiber: 25-38g daily")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                        case "Fats":
+                            VStack(alignment: .leading) {
+                                Text("General recommendation:")
+                                    .font(.headline)
+                                Text("• 20-35% of total daily calories")
+                                Text("• 0.5-1.0g per kg of body weight")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            VStack(alignment: .leading) {
+                                Text("Essential fatty acids:")
+                                    .font(.headline)
+                                Text("• Omega-3: 1.1-1.6g daily")
+                                Text("• Omega-6: 11-17g daily")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            VStack(alignment: .leading) {
+                                Text("Types of fats:")
+                                    .font(.headline)
+                                Text("• Unsaturated: olive oil, nuts, avocados")
+                                Text("• Saturated: limit to <10% of calories")
+                                Text("• Trans fats: avoid when possible")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                        default:
+                            Text("No specific recommendations available")
+                        }
+                    }
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            switch nutrientName {
+                            case "Protein":
+                                Text("General recommendation:")
+                                    .font(.headline)
+                                Text("• 0.8-1.2g per kg of body weight")
+                                Text("• 10-35% of total daily calories")
+                                
+                                Text("\nAthletes and active individuals:")
+                                    .font(.headline)
+                                Text("• 1.2-2.0g per kg of body weight")
+                                Text("• Higher needs during intense training")
+                                
+                                Text("\nFactors affecting needs:")
+                                    .font(.headline)
+                                Text("• Activity level")
+                                Text("• Training goals")
+                                Text("• Age and gender")
+                                Text("• Overall health status")
+                                
+                            case "Carbs":
+                                Text("General recommendation:")
+                                    .font(.headline)
+                                Text("• 45-65% of total daily calories")
+                                Text("• 3-10g per kg of body weight")
+                                
+                                Text("\nAthletes and active individuals:")
+                                    .font(.headline)
+                                Text("• 5-12g per kg of body weight")
+                                Text("• Higher during intense training periods")
+                                
+                                Text("\nTypes of carbohydrates:")
+                                    .font(.headline)
+                                Text("• Complex carbs: whole grains, vegetables")
+                                Text("• Simple carbs: fruits, sports drinks")
+                                Text("• Fiber: 25-38g daily")
+                                
+                            case "Fats":
+                                Text("General recommendation:")
+                                    .font(.headline)
+                                Text("• 20-35% of total daily calories")
+                                Text("• 0.5-1.0g per kg of body weight")
+                                
+                                Text("\nEssential fatty acids:")
+                                    .font(.headline)
+                                Text("• Omega-3: 1.1-1.6g daily")
+                                Text("• Omega-6: 11-17g daily")
+                                
+                                Text("\nTypes of fats:")
+                                    .font(.headline)
+                                Text("• Unsaturated: olive oil, nuts, avocados")
+                                Text("• Saturated: limit to <10% of calories")
+                                Text("• Trans fats: avoid when possible")
+                                
+                            default:
+                                Text("No specific recommendations available")
+                            }
+                        }
+                    }
                 }
             }
             .font(.subheadline)
+            .padding()
         }
-        .padding()
     }
 }
 
 struct FoodSourcesDetailView: View {
     let nutrientName: String
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Rich Food Sources")
-                .font(.title2.bold())
+        GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
+            let isPad = UIDevice.current.userInterfaceIdiom == .pad
             
-            if horizontalSizeClass == .regular {
-                // iPad Layout
-                HStack(alignment: .top, spacing: 20) {
-                    switch nutrientName {
-                    case "Protein":
-                        Group {
+            VStack(alignment: .leading) {
+                Text("Rich Food Sources")
+                    .font(.title2.bold())
+                
+                if isLandscape && isPad {
+                    HStack(alignment: .top, spacing: 24) {
+                        switch nutrientName {
+                        case "Protein":
                             makeSection("Animal Sources:", items: [
                                 "Chicken breast (31g per 100g)",
                                 "Lean beef (26g per 100g)",
@@ -840,6 +959,7 @@ struct FoodSourcesDetailView: View {
                                 "Eggs (6g per large egg)",
                                 "Greek yogurt (10g per 100g)"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeSection("Plant Sources:", items: [
                                 "Lentils (9g per 100g cooked)",
@@ -848,6 +968,7 @@ struct FoodSourcesDetailView: View {
                                 "Tofu (8g per 100g)",
                                 "Almonds (21g per 100g)"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeSection("Protein Supplements:", items: [
                                 "Whey protein powder (24g per 30g)",
@@ -855,10 +976,9 @@ struct FoodSourcesDetailView: View {
                                 "Pea protein powder (21g per 30g)",
                                 "Soy protein powder (22g per 30g)"
                             ])
-                        }
-                        
-                    case "Carbs":
-                        Group {
+                            .frame(maxWidth: .infinity)
+                            
+                        case "Carbs":
                             makeSection("Whole Grains:", items: [
                                 "Brown rice (23g per 100g cooked)",
                                 "Quinoa (21g per 100g cooked)",
@@ -866,6 +986,7 @@ struct FoodSourcesDetailView: View {
                                 "Whole wheat bread (43g per 100g)",
                                 "Barley (28g per 100g cooked)"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeSection("Starchy Vegetables:", items: [
                                 "Sweet potatoes (20g per 100g)",
@@ -874,6 +995,7 @@ struct FoodSourcesDetailView: View {
                                 "Peas (14g per 100g)",
                                 "Winter squash (10g per 100g)"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeSection("Fruits:", items: [
                                 "Bananas (23g per 100g)",
@@ -882,16 +1004,16 @@ struct FoodSourcesDetailView: View {
                                 "Grapes (17g per 100g)",
                                 "Mangoes (15g per 100g)"
                             ])
-                        }
-                        
-                    case "Fats":
-                        Group {
+                            .frame(maxWidth: .infinity)
+                            
+                        case "Fats":
                             makeSection("Healthy Oils:", items: [
                                 "Olive oil (100g fat per 100ml)",
                                 "Avocado oil (100g fat per 100ml)",
                                 "Coconut oil (99g fat per 100g)",
                                 "MCT oil (100g fat per 100ml)"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeSection("Nuts and Seeds:", items: [
                                 "Almonds (49g fat per 100g)",
@@ -900,6 +1022,7 @@ struct FoodSourcesDetailView: View {
                                 "Flaxseeds (42g fat per 100g)",
                                 "Pumpkin seeds (46g fat per 100g)"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeSection("Other Sources:", items: [
                                 "Avocados (15g fat per 100g)",
@@ -908,109 +1031,112 @@ struct FoodSourcesDetailView: View {
                                 "Dark chocolate (31g fat per 100g)",
                                 "Cheese (33g fat per 100g)"
                             ])
+                            .frame(maxWidth: .infinity)
+                            
+                        default:
+                            Text("No specific food sources available")
                         }
-                        
-                    default:
-                        Text("No specific food sources available")
                     }
-                }
-            } else {
-                // iPhone Layout
-                VStack(alignment: .leading, spacing: 12) {
-                    switch nutrientName {
-                    case "Protein":
-                        Group {
-                            makeSection("Animal Sources:", items: [
-                                "Chicken breast (31g per 100g)",
-                                "Lean beef (26g per 100g)",
-                                "Fish (20-25g per 100g)",
-                                "Eggs (6g per large egg)",
-                                "Greek yogurt (10g per 100g)"
-                            ])
-                            
-                            makeSection("Plant Sources:", items: [
-                                "Lentils (9g per 100g cooked)",
-                                "Chickpeas (15g per 100g)",
-                                "Quinoa (4.4g per 100g cooked)",
-                                "Tofu (8g per 100g)",
-                                "Almonds (21g per 100g)"
-                            ])
-                            
-                            makeSection("Protein Supplements:", items: [
-                                "Whey protein powder (24g per 30g)",
-                                "Casein protein powder (24g per 30g)",
-                                "Pea protein powder (21g per 30g)",
-                                "Soy protein powder (22g per 30g)"
-                            ])
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            switch nutrientName {
+                            case "Protein":
+                                Group {
+                                    makeSection("Animal Sources:", items: [
+                                        "Chicken breast (31g per 100g)",
+                                        "Lean beef (26g per 100g)",
+                                        "Fish (20-25g per 100g)",
+                                        "Eggs (6g per large egg)",
+                                        "Greek yogurt (10g per 100g)"
+                                    ])
+                                    
+                                    makeSection("Plant Sources:", items: [
+                                        "Lentils (9g per 100g cooked)",
+                                        "Chickpeas (15g per 100g)",
+                                        "Quinoa (4.4g per 100g cooked)",
+                                        "Tofu (8g per 100g)",
+                                        "Almonds (21g per 100g)"
+                                    ])
+                                    
+                                    makeSection("Protein Supplements:", items: [
+                                        "Whey protein powder (24g per 30g)",
+                                        "Casein protein powder (24g per 30g)",
+                                        "Pea protein powder (21g per 30g)",
+                                        "Soy protein powder (22g per 30g)"
+                                    ])
+                                }
+                                
+                            case "Carbs":
+                                Group {
+                                    makeSection("Whole Grains:", items: [
+                                        "Brown rice (23g per 100g cooked)",
+                                        "Quinoa (21g per 100g cooked)",
+                                        "Oatmeal (27g per 100g)",
+                                        "Whole wheat bread (43g per 100g)",
+                                        "Barley (28g per 100g cooked)"
+                                    ])
+                                    
+                                    makeSection("Starchy Vegetables:", items: [
+                                        "Sweet potatoes (20g per 100g)",
+                                        "Potatoes (17g per 100g)",
+                                        "Corn (19g per 100g)",
+                                        "Peas (14g per 100g)",
+                                        "Winter squash (10g per 100g)"
+                                    ])
+                                    
+                                    makeSection("Fruits:", items: [
+                                        "Bananas (23g per 100g)",
+                                        "Apples (14g per 100g)",
+                                        "Oranges (12g per 100g)",
+                                        "Grapes (17g per 100g)",
+                                        "Mangoes (15g per 100g)"
+                                    ])
+                                }
+                                
+                            case "Fats":
+                                Group {
+                                    makeSection("Healthy Oils:", items: [
+                                        "Olive oil (100g fat per 100ml)",
+                                        "Avocado oil (100g fat per 100ml)",
+                                        "Coconut oil (99g fat per 100g)",
+                                        "MCT oil (100g fat per 100ml)"
+                                    ])
+                                    
+                                    makeSection("Nuts and Seeds:", items: [
+                                        "Almonds (49g fat per 100g)",
+                                        "Walnuts (65g fat per 100g)",
+                                        "Chia seeds (31g fat per 100g)",
+                                        "Flaxseeds (42g fat per 100g)",
+                                        "Pumpkin seeds (46g fat per 100g)"
+                                    ])
+                                    
+                                    makeSection("Other Sources:", items: [
+                                        "Avocados (15g fat per 100g)",
+                                        "Salmon (13g fat per 100g)",
+                                        "Eggs (11g fat per 100g)",
+                                        "Dark chocolate (31g fat per 100g)",
+                                        "Cheese (33g fat per 100g)"
+                                    ])
+                                }
+                                
+                            default:
+                                Text("No specific food sources available")
+                            }
                         }
-                        
-                    case "Carbs":
-                        Group {
-                            makeSection("Whole Grains:", items: [
-                                "Brown rice (23g per 100g cooked)",
-                                "Quinoa (21g per 100g cooked)",
-                                "Oatmeal (27g per 100g)",
-                                "Whole wheat bread (43g per 100g)",
-                                "Barley (28g per 100g cooked)"
-                            ])
-                            
-                            makeSection("Starchy Vegetables:", items: [
-                                "Sweet potatoes (20g per 100g)",
-                                "Potatoes (17g per 100g)",
-                                "Corn (19g per 100g)",
-                                "Peas (14g per 100g)",
-                                "Winter squash (10g per 100g)"
-                            ])
-                            
-                            makeSection("Fruits:", items: [
-                                "Bananas (23g per 100g)",
-                                "Apples (14g per 100g)",
-                                "Oranges (12g per 100g)",
-                                "Grapes (17g per 100g)",
-                                "Mangoes (15g per 100g)"
-                            ])
-                        }
-                        
-                    case "Fats":
-                        Group {
-                            makeSection("Healthy Oils:", items: [
-                                "Olive oil (100g fat per 100ml)",
-                                "Avocado oil (100g fat per 100ml)",
-                                "Coconut oil (99g fat per 100g)",
-                                "MCT oil (100g fat per 100ml)"
-                            ])
-                            
-                            makeSection("Nuts and Seeds:", items: [
-                                "Almonds (49g fat per 100g)",
-                                "Walnuts (65g fat per 100g)",
-                                "Chia seeds (31g fat per 100g)",
-                                "Flaxseeds (42g fat per 100g)",
-                                "Pumpkin seeds (46g fat per 100g)"
-                            ])
-                            
-                            makeSection("Other Sources:", items: [
-                                "Avocados (15g fat per 100g)",
-                                "Salmon (13g fat per 100g)",
-                                "Eggs (11g fat per 100g)",
-                                "Dark chocolate (31g fat per 100g)",
-                                "Cheese (33g fat per 100g)"
-                            ])
-                        }
-                        
-                    default:
-                        Text("No specific food sources available")
                     }
                 }
             }
+            .font(.subheadline)
+            .padding()
         }
-        .padding()
-        .font(.subheadline)
     }
     
     private func makeSection(_ title: String, items: [String]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
+                .padding()
             ForEach(items, id: \.self) { item in
                 Text("• \(item)")
             }
@@ -1023,21 +1149,25 @@ struct BenefitsDetailView: View {
     let nutrientName: String
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Health Benefits")
-                .font(.title2.bold())
+        GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
+            let isPad = UIDevice.current.userInterfaceIdiom == .pad
             
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    switch nutrientName {
-                    case "Protein":
-                        Group {
+            VStack(alignment: .leading) {
+                Text("Health Benefits")
+                    .font(.title2.bold())
+                
+                if isLandscape && isPad {
+                    HStack(alignment: .top, spacing: 24) {
+                        switch nutrientName {
+                        case "Protein":
                             makeBenefitSection("Muscle Health:", benefits: [
                                 "Essential for muscle growth and repair",
                                 "Prevents muscle loss during weight loss",
                                 "Supports recovery after exercise",
                                 "Maintains muscle mass during aging"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeBenefitSection("Body Function:", benefits: [
                                 "Creates enzymes and hormones",
@@ -1045,6 +1175,7 @@ struct BenefitsDetailView: View {
                                 "Maintains fluid balance",
                                 "Forms antibodies for immune defense"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeBenefitSection("Other Benefits:", benefits: [
                                 "Promotes feeling of fullness",
@@ -1052,16 +1183,16 @@ struct BenefitsDetailView: View {
                                 "Helps maintain strong bones",
                                 "Essential for blood clotting"
                             ])
-                        }
-                        
-                    case "Carbs":
-                        Group {
+                            .frame(maxWidth: .infinity)
+                            
+                        case "Carbs":
                             makeBenefitSection("Energy:", benefits: [
                                 "Primary energy source for body",
                                 "Fuels brain function",
                                 "Provides quick energy for exercise",
                                 "Spares protein from being used for energy"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeBenefitSection("Digestive Health:", benefits: [
                                 "Fiber supports digestive health",
@@ -1069,6 +1200,7 @@ struct BenefitsDetailView: View {
                                 "Helps maintain regular bowel movements",
                                 "Supports healthy cholesterol levels"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeBenefitSection("Performance:", benefits: [
                                 "Essential for high-intensity exercise",
@@ -1076,16 +1208,16 @@ struct BenefitsDetailView: View {
                                 "Replenishes muscle glycogen",
                                 "Supports athletic performance"
                             ])
-                        }
-                        
-                    case "Fats":
-                        Group {
+                            .frame(maxWidth: .infinity)
+                            
+                        case "Fats":
                             makeBenefitSection("Essential Functions:", benefits: [
                                 "Supports cell membrane structure",
                                 "Essential for hormone production",
                                 "Aids in nutrient absorption",
                                 "Provides insulation and protection"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeBenefitSection("Brain Health:", benefits: [
                                 "Crucial for brain development",
@@ -1093,6 +1225,7 @@ struct BenefitsDetailView: View {
                                 "Essential for nerve signaling",
                                 "Maintains brain tissue health"
                             ])
+                            .frame(maxWidth: .infinity)
                             
                             makeBenefitSection("Other Benefits:", benefits: [
                                 "Provides long-lasting energy",
@@ -1100,22 +1233,105 @@ struct BenefitsDetailView: View {
                                 "Supports vitamin absorption",
                                 "Important for inflammation response"
                             ])
+                            .frame(maxWidth: .infinity)
+                            
+                        default:
+                            Text("No specific benefits information available")
                         }
-                        
-                    default:
-                        Text("No specific benefits information available")
+                    }
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            switch nutrientName {
+                            case "Protein":
+                                Group {
+                                    makeBenefitSection("Muscle Health:", benefits: [
+                                        "Essential for muscle growth and repair",
+                                        "Prevents muscle loss during weight loss",
+                                        "Supports recovery after exercise",
+                                        "Maintains muscle mass during aging"
+                                    ])
+                                    
+                                    makeBenefitSection("Body Function:", benefits: [
+                                        "Creates enzymes and hormones",
+                                        "Supports immune system function",
+                                        "Maintains fluid balance",
+                                        "Forms antibodies for immune defense"
+                                    ])
+                                    
+                                    makeBenefitSection("Other Benefits:", benefits: [
+                                        "Promotes feeling of fullness",
+                                        "Supports healthy skin and hair",
+                                        "Helps maintain strong bones",
+                                        "Essential for blood clotting"
+                                    ])
+                                }
+                                
+                            case "Carbs":
+                                Group {
+                                    makeBenefitSection("Energy:", benefits: [
+                                        "Primary energy source for body",
+                                        "Fuels brain function",
+                                        "Provides quick energy for exercise",
+                                        "Spares protein from being used for energy"
+                                    ])
+                                    
+                                    makeBenefitSection("Digestive Health:", benefits: [
+                                        "Fiber supports digestive health",
+                                        "Feeds beneficial gut bacteria",
+                                        "Helps maintain regular bowel movements",
+                                        "Supports healthy cholesterol levels"
+                                    ])
+                                    
+                                    makeBenefitSection("Performance:", benefits: [
+                                        "Essential for high-intensity exercise",
+                                        "Maintains blood glucose levels",
+                                        "Replenishes muscle glycogen",
+                                        "Supports athletic performance"
+                                    ])
+                                }
+                                
+                            case "Fats":
+                                Group {
+                                    makeBenefitSection("Essential Functions:", benefits: [
+                                        "Supports cell membrane structure",
+                                        "Essential for hormone production",
+                                        "Aids in nutrient absorption",
+                                        "Provides insulation and protection"
+                                    ])
+                                    
+                                    makeBenefitSection("Brain Health:", benefits: [
+                                        "Crucial for brain development",
+                                        "Supports cognitive function",
+                                        "Essential for nerve signaling",
+                                        "Maintains brain tissue health"
+                                    ])
+                                    
+                                    makeBenefitSection("Other Benefits:", benefits: [
+                                        "Provides long-lasting energy",
+                                        "Helps maintain healthy skin",
+                                        "Supports vitamin absorption",
+                                        "Important for inflammation response"
+                                    ])
+                                }
+                                
+                            default:
+                                Text("No specific benefits information available")
+                            }
+                        }
                     }
                 }
             }
             .font(.subheadline)
+            .padding()
         }
-        .padding()
     }
     
     private func makeBenefitSection(_ title: String, benefits: [String]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
+                .padding()
             ForEach(benefits, id: \.self) { benefit in
                 Text("• \(benefit)")
             }

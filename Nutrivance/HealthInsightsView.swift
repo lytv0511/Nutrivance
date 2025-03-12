@@ -90,49 +90,67 @@ struct WeekNutrientData: Identifiable {
 struct MonthNutrientData: Identifiable {
     let id = UUID()
     let weekStart: Date
+    let weekEnd: Date
     let averageValue: Double
     let nutrient: String
-    let weekOfMonth: Int
+    let weekNumber: Int
     
     @MainActor
     static func fetchMonthData(for date: Date, nutrientType: String, healthStore: HealthKitManager) async -> [MonthNutrientData] {
         let calendar = Calendar.current
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: date))!
+        let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+        
+        // Find the closest Sunday before or on the start of the month
+        var firstWeekStart = calendar.date(byAdding: .day, value: -calendar.component(.weekday, from: monthStart) + 1, to: monthStart)!
+        if calendar.component(.weekday, from: monthStart) == 1 {
+            firstWeekStart = monthStart
+        }
+        
+        // Find the closest Saturday after the end of the month
+        var lastWeekEnd = calendar.date(byAdding: .day, value: 6 - calendar.component(.weekday, from: nextMonth), to: nextMonth)!
+        if calendar.component(.weekday, from: nextMonth) != 7 {
+            lastWeekEnd = calendar.date(byAdding: .day, value: 7 - calendar.component(.weekday, from: nextMonth), to: nextMonth)!
+        }
+        
         var monthData: [MonthNutrientData] = []
+        let weekRange = stride(from: firstWeekStart, to: lastWeekEnd, by: 7 * 24 * 60 * 60)
         
-        let weeksInMonth = calendar.range(of: .weekOfMonth, in: .month, for: monthStart)!
-        
-        for week in weeksInMonth {
-            let weekStart = calendar.date(bySetting: .weekday, value: calendar.firstWeekday, of: monthStart)!
-            let weekStartDate = calendar.date(byAdding: .weekOfMonth, value: week - 1, to: weekStart)!
-            let weekEndDate = calendar.date(byAdding: .weekOfMonth, value: 1, to: weekStartDate)!
-            
+        for (weekNumber, weekStart) in weekRange.enumerated() {
+            let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart)!
             var weekTotal: Double = 0
-            var daysCount = 0
+            var validDays = 0
             
-            for dayOffset in 0...6 {
-                let dayDate = calendar.date(byAdding: .day, value: dayOffset, to: weekStartDate)!
-                if dayDate < weekEndDate {
-                    let value = await withCheckedContinuation { continuation in
-                        healthStore.fetchNutrientDataForInterval(
-                            nutrientType: nutrientType.lowercased(),
-                            start: dayDate,
-                            end: calendar.date(byAdding: .day, value: 1, to: dayDate)!
-                        ) { value, _ in
-                            continuation.resume(returning: value ?? 0)
-                        }
+            let dayRange = stride(from: weekStart, through: min(weekEnd, lastWeekEnd), by: 24 * 60 * 60)
+            
+            for currentDay in dayRange {
+                let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
+                let value = await withCheckedContinuation { continuation in
+                    healthStore.fetchNutrientDataForInterval(
+                        nutrientType: nutrientType.lowercased(),
+                        start: currentDay,
+                        end: nextDay
+                    ) { value, _ in
+                        continuation.resume(returning: value)
                     }
+                }
+                
+                if let value = value, value > 0 {
                     weekTotal += value
-                    daysCount += 1
+                    validDays += 1
                 }
             }
             
-            monthData.append(MonthNutrientData(
-                weekStart: weekStartDate,
-                averageValue: daysCount > 0 ? weekTotal / Double(daysCount) : 0,
-                nutrient: nutrientType,
-                weekOfMonth: week
-            ))
+            if validDays > 0 {
+                let averageValue = (weekTotal / Double(validDays)).rounded() // Round the average value
+                monthData.append(MonthNutrientData(
+                    weekStart: weekStart,
+                    weekEnd: weekEnd,
+                    averageValue: averageValue,
+                    nutrient: nutrientType,
+                    weekNumber: weekNumber + 1
+                ))
+            }
         }
         
         return monthData
@@ -186,6 +204,20 @@ struct YearNutrientData: Identifiable {
         return yearData
     }
 }
+
+private func findClosestPoint<T>(
+    to xPosition: Double,
+    in data: [T],
+    xKeyPath: KeyPath<T, Double>,
+    tolerance: Double = 0.5
+) -> T? {
+    let sortedPoints = data.sorted { abs($0[keyPath: xKeyPath] - xPosition) < abs($1[keyPath: xKeyPath] - xPosition) }
+    guard let closest = sortedPoints.first else { return nil }
+    
+    // Only return if within tolerance
+    return abs(closest[keyPath: xKeyPath] - xPosition) <= tolerance ? closest : nil
+}
+
 
 struct DayChartView: View {
     let hourlyData: [String: [DayNutrientData]]
@@ -285,15 +317,26 @@ struct DayChartView: View {
                                     
                                     let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
                                     if let hour = chartProxy.value(atX: xPosition) as Double? {
-                                        let newPoint = hourlyData.values
-                                            .flatMap { $0 }
-                                            .first { Calendar.current.component(.hour, from: $0.hourStart) == Int(hour) && $0.value > 0 }
-                                            .map { NutrientDataPoint(date: $0.hourStart, value: $0.value, nutrient: $0.nutrient) }
+                                        let points = hourlyData.values.flatMap { $0 }.filter { $0.value > 0 }
+                                        let closest = points.min(by: { point1, point2 in
+                                            let hour1 = Calendar.current.component(.hour, from: point1.hourStart)
+                                            let hour2 = Calendar.current.component(.hour, from: point2.hourStart)
+                                            return abs(Double(hour1) - hour) < abs(Double(hour2) - hour)
+                                        })
                                         
-                                        if newPoint?.date != selectedPoint?.date {
-                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
-                                            generator.impactOccurred()
-                                            selectedPoint = newPoint
+                                        if let closest = closest,
+                                           abs(Double(Calendar.current.component(.hour, from: closest.hourStart)) - hour) <= 0.5 {
+                                            let newPoint = NutrientDataPoint(
+                                                date: closest.hourStart,
+                                                value: closest.value,
+                                                nutrient: closest.nutrient
+                                            )
+                                            
+                                            if newPoint.date != selectedPoint?.date {
+                                                let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                                generator.impactOccurred()
+                                                selectedPoint = newPoint
+                                            }
                                         }
                                     }
                                 }
@@ -353,7 +396,7 @@ struct WeekChartView: View {
                     .foregroundStyle(.blue.opacity(0.1))
                 }
                 
-                ForEach(weekData["Protein"] ?? []) { point in
+                ForEach(weekData["Protein"]?.filter { $0.totalValue > 0 } ?? []) { point in
                     PointMark(
                         x: .value("Day", point.dayOfWeek),
                         y: .value("Grams", point.totalValue)
@@ -361,7 +404,7 @@ struct WeekChartView: View {
                     .foregroundStyle(.red)
                 }
                 
-                ForEach(weekData["Carbs"] ?? []) { point in
+                ForEach(weekData["Carbs"]?.filter { $0.totalValue > 0 } ?? []) { point in
                     PointMark(
                         x: .value("Day", point.dayOfWeek),
                         y: .value("Grams", point.totalValue)
@@ -369,7 +412,7 @@ struct WeekChartView: View {
                     .foregroundStyle(.green)
                 }
                 
-                ForEach(weekData["Fats"] ?? []) { point in
+                ForEach(weekData["Fats"]?.filter { $0.totalValue > 0 } ?? []) { point in
                     PointMark(
                         x: .value("Day", point.dayOfWeek),
                         y: .value("Grams", point.totalValue)
@@ -411,15 +454,26 @@ struct WeekChartView: View {
                                     
                                     let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
                                     if let weekday = chartProxy.value(atX: xPosition) as Double? {
-                                        let newPoint = weekData.values
-                                            .flatMap { $0 }
-                                            .first { $0.dayOfWeek == Int(weekday) }
-                                            .map { NutrientDataPoint(date: $0.date, value: $0.totalValue, nutrient: $0.nutrient) }
+                                        let points = weekData.values.flatMap { $0 }.filter { $0.totalValue > 0 }
+                                        let closest = points.min(by: { point1, point2 in
+                                            abs(Double(point1.dayOfWeek) - weekday) < abs(Double(point2.dayOfWeek) - weekday)
+                                        })
                                         
-                                        if newPoint?.date != selectedPoint?.date {
-                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
-                                            generator.impactOccurred()
-                                            selectedPoint = newPoint
+                                        if let closest = closest,
+                                           abs(Double(closest.dayOfWeek) - weekday) <= 0.5 {
+                                            let newPoint = NutrientDataPoint(
+                                                date: closest.date,
+                                                value: closest.totalValue,
+                                                nutrient: closest.nutrient
+                                            )
+                                            
+                                            if newPoint.date != selectedPoint?.date {
+                                                let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                                generator.impactOccurred()
+                                                selectedPoint = newPoint
+                                            }
+                                        } else {
+                                            selectedPoint = nil
                                         }
                                     }
                                 }
@@ -440,7 +494,8 @@ struct MonthChartView: View {
     let strictLevel: StrictLevel
     let tdee: Double
     @State private var isDragging = false
-    
+    let viewingMonth: Date // Add the current viewing month
+
     var body: some View {
         if (monthData["Protein"]?.isEmpty ?? true) &&
            (monthData["Carbs"]?.isEmpty ?? true) &&
@@ -481,7 +536,7 @@ struct MonthChartView: View {
                 
                 ForEach(monthData["Protein"] ?? []) { point in
                     PointMark(
-                        x: .value("Week", point.weekOfMonth),
+                        x: .value("Week", weekNumber(for: point.weekStart, in: viewingMonth)),
                         y: .value("Grams", point.averageValue)
                     )
                     .foregroundStyle(.red)
@@ -489,7 +544,7 @@ struct MonthChartView: View {
                 
                 ForEach(monthData["Carbs"] ?? []) { point in
                     PointMark(
-                        x: .value("Week", point.weekOfMonth),
+                        x: .value("Week", weekNumber(for: point.weekStart, in: viewingMonth)),
                         y: .value("Grams", point.averageValue)
                     )
                     .foregroundStyle(.green)
@@ -497,7 +552,7 @@ struct MonthChartView: View {
                 
                 ForEach(monthData["Fats"] ?? []) { point in
                     PointMark(
-                        x: .value("Week", point.weekOfMonth),
+                        x: .value("Week", weekNumber(for: point.weekStart, in: viewingMonth)),
                         y: .value("Grams", point.averageValue)
                     )
                     .foregroundStyle(.blue)
@@ -505,18 +560,27 @@ struct MonthChartView: View {
                 
                 if let selected = selectedPoint {
                     RuleMark(
-                        x: .value("Selected", Calendar.current.component(.weekOfMonth, from: selected.date))
+                        x: .value("Selected", weekNumber(for: selected.date, in: viewingMonth))
                     )
                     .foregroundStyle(.gray.opacity(0.3))
                 }
             }
             .chartXScale(domain: 1...5)
             .chartXAxis {
-                AxisMarks { value in
+                AxisMarks(values: Array(1...5)) { value in
                     AxisGridLine()
                     AxisTick()
                     AxisValueLabel {
-                        Text("Week \(value.index + 1)")
+                        Text("Week \(value.as(Int.self) ?? 0)")
+                    }
+                }
+            }
+            .chartYAxis {
+                AxisMarks() { value in
+                    AxisGridLine()
+                    AxisTick()
+                    AxisValueLabel {
+                        Text("\(value.as(Double.self) ?? 0, specifier: "%.0f")")
                     }
                 }
             }
@@ -534,15 +598,24 @@ struct MonthChartView: View {
                                     
                                     let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
                                     if let week = chartProxy.value(atX: xPosition) as Double? {
-                                        let newPoint = monthData.values
-                                            .flatMap { $0 }
-                                            .first { $0.weekOfMonth == Int(week) }
-                                            .map { NutrientDataPoint(date: $0.weekStart, value: $0.averageValue, nutrient: $0.nutrient) }
+                                        let weekIndex = Int(week.rounded())
+                                        let points = monthData.values.flatMap { $0 }
+                                        let closest = points.first { weekNumber(for: $0.weekStart, in: viewingMonth) == weekIndex }
                                         
-                                        if newPoint?.date != selectedPoint?.date {
-                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
-                                            generator.impactOccurred()
-                                            selectedPoint = newPoint
+                                        if let closest = closest {
+                                            let newPoint = NutrientDataPoint(
+                                                date: closest.weekStart,
+                                                value: closest.averageValue,
+                                                nutrient: closest.nutrient
+                                            )
+                                            
+                                            if newPoint.date != selectedPoint?.date {
+                                                let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                                generator.impactOccurred()
+                                                selectedPoint = newPoint
+                                            }
+                                        } else {
+                                            selectedPoint = nil
                                         }
                                     }
                                 }
@@ -554,8 +627,30 @@ struct MonthChartView: View {
             }
         }
     }
+    
+    private func weekNumber(for date: Date, in viewingMonth: Date) -> Int {
+        let calendar = Calendar.current
+        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: viewingMonth))!
+        let weekOfMonth = calendar.dateComponents([.weekOfMonth], from: monthStart, to: date).weekOfMonth ?? 0
+        return weekOfMonth + 1
+    }
 }
 
+extension Date {
+    func startOfMonth() -> Date {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: self)
+        return calendar.date(from: components)!
+    }
+
+    func endOfMonth() -> Date {
+        let calendar = Calendar.current
+        var components = DateComponents()
+        components.month = 1
+        components.day = -1
+        return calendar.date(byAdding: components, to: startOfMonth())!
+    }
+}
 struct SixMonthChartView: View {
     let sixMonthData: [String: [SixMonthNutrientData]]
     @Binding var selectedPoint: NutrientDataPoint?
@@ -617,15 +712,24 @@ struct SixMonthChartView: View {
                                 
                                 let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
                                 if let monthIndex = chartProxy.value(atX: xPosition) as Double? {
-                                    let newPoint = sixMonthData.values
-                                        .flatMap { $0 }
-                                        .first { $0.monthIndex == Int(monthIndex) }
-                                        .map { NutrientDataPoint(date: $0.monthStart, value: $0.averageValue, nutrient: $0.nutrient) }
+                                    let points = sixMonthData.values.flatMap { $0 }
+                                    let closest = points.min(by: { point1, point2 in
+                                        abs(Double(point1.monthIndex) - monthIndex) < abs(Double(point2.monthIndex) - monthIndex)
+                                    })
                                     
-                                    if newPoint?.date != selectedPoint?.date {
-                                        let generator = UIImpactFeedbackGenerator(style: .rigid)
-                                        generator.impactOccurred()
-                                        selectedPoint = newPoint
+                                    if let closest = closest,
+                                       abs(Double(closest.monthIndex) - monthIndex) <= 0.5 {
+                                        let newPoint = NutrientDataPoint(
+                                            date: closest.monthStart,
+                                            value: closest.averageValue,
+                                            nutrient: closest.nutrient
+                                        )
+                                        
+                                        if newPoint.date != selectedPoint?.date {
+                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                            generator.impactOccurred()
+                                            selectedPoint = newPoint
+                                        }
                                     }
                                 }
                             }
@@ -694,15 +798,24 @@ struct YearChartView: View {
                                 
                                 let xPosition = value.location.x - geometryProxy.frame(in: .local).origin.x
                                 if let monthIndex = chartProxy.value(atX: xPosition) as Double? {
-                                    let newPoint = yearData.values
-                                        .flatMap { $0 }
-                                        .first { $0.monthOfYear - 1 == Int(monthIndex) }
-                                        .map { NutrientDataPoint(date: $0.monthStart, value: $0.averageValue, nutrient: $0.nutrient) }
+                                    let points = yearData.values.flatMap { $0 }
+                                    let closest = points.min(by: { point1, point2 in
+                                        abs(Double(point1.monthOfYear - 1) - monthIndex) < abs(Double(point2.monthOfYear - 1) - monthIndex)
+                                    })
                                     
-                                    if newPoint?.date != selectedPoint?.date {
-                                        let generator = UIImpactFeedbackGenerator(style: .rigid)
-                                        generator.impactOccurred()
-                                        selectedPoint = newPoint
+                                    if let closest = closest,
+                                       abs(Double(closest.monthOfYear - 1) - monthIndex) <= 0.5 {
+                                        let newPoint = NutrientDataPoint(
+                                            date: closest.monthStart,
+                                            value: closest.averageValue,
+                                            nutrient: closest.nutrient
+                                        )
+                                        
+                                        if newPoint.date != selectedPoint?.date {
+                                            let generator = UIImpactFeedbackGenerator(style: .rigid)
+                                            generator.impactOccurred()
+                                            selectedPoint = newPoint
+                                        }
                                     }
                                 }
                             }
@@ -892,7 +1005,15 @@ struct HealthInsightsView: View {
         case .week:
             AnyView(WeekChartView(weekData: weekData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee))
         case .month:
-            AnyView(MonthChartView(monthData: monthData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee))
+            AnyView(
+                MonthChartView(
+                    monthData: monthData,
+                    selectedPoint: $selectedPoint,
+                    selectedDiet: selectedDiet,
+                    strictLevel: strictLevel,
+                    tdee: viewModel.tdee,
+                    viewingMonth: selectedDate
+                ))
         case .sixMonth:
             AnyView(SixMonthChartView(sixMonthData: sixMonthData, selectedPoint: $selectedPoint, selectedDiet: selectedDiet, strictLevel: strictLevel, tdee: viewModel.tdee)
                 .task {
@@ -909,6 +1030,7 @@ struct HealthInsightsView: View {
                 .font(.title2.bold())
                 .onLongPressGesture {
                     showDatePicker.toggle()
+                    selectedPoint = nil
                     let generator = UIImpactFeedbackGenerator(style: .medium)
                     generator.impactOccurred()
                 }
@@ -969,12 +1091,13 @@ struct HealthInsightsView: View {
                     case .week:
                         selectedDate = Calendar.current.date(byAdding: .weekOfYear, value: -1, to: selectedDate)!
                     case .month:
-                        selectedDate = Calendar.current.date(byAdding: .month, value: -1, to: selectedDate)!
+                           selectedDate = Calendar.current.date(byAdding: .month, value: -1, to: selectedDate)!
                     case .sixMonth:
                         selectedDate = Calendar.current.date(byAdding: .month, value: -6, to: selectedDate)!
                     case .year:
                         selectedDate = Calendar.current.date(byAdding: .year, value: -1, to: selectedDate)!
                     }
+                    selectedPoint = nil
                     Task {
                         await fetchData()
                     }
@@ -993,12 +1116,13 @@ struct HealthInsightsView: View {
                     case .week:
                         selectedDate = Calendar.current.date(byAdding: .weekOfYear, value: 1, to: selectedDate)!
                     case .month:
-                        selectedDate = Calendar.current.date(byAdding: .month, value: 1, to: selectedDate)!
+                           selectedDate = Calendar.current.date(byAdding: .month, value: 1, to: selectedDate)!
                     case .sixMonth:
                         selectedDate = Calendar.current.date(byAdding: .month, value: 6, to: selectedDate)!
                     case .year:
                         selectedDate = Calendar.current.date(byAdding: .year, value: 1, to: selectedDate)!
                     }
+                    selectedPoint = nil
                     Task {
                         await fetchData()
                     }
@@ -1028,9 +1152,9 @@ struct HealthInsightsView: View {
             let selectedWeekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selectedDate))!
             return selectedWeekStart >= currentWeekStart
         case .month:
-            let currentMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now))!
-            let selectedMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedDate))!
-            return selectedMonthStart >= currentMonthStart
+           let currentMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now))!
+           let selectedMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedDate))!
+           return selectedMonthStart >= currentMonthStart
         case .sixMonth:
             let currentMonth = calendar.component(.month, from: now)
             let currentYear = calendar.component(.year, from: now)
@@ -1059,7 +1183,7 @@ struct HealthInsightsView: View {
                     case .year: return !(yearData.values.allSatisfy { $0.isEmpty })
                 }
             }()
-            
+
             if hasData {
                 VStack {
                     HStack(spacing: 0) {
@@ -1109,10 +1233,12 @@ struct HealthInsightsView: View {
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
             case .month:
-                let weekEnd = Calendar.current.date(byAdding: .day, value: 6, to: selected.date)!
-                Text("\(selected.date.formatted(.dateTime.month(.abbreviated).day())) - \(weekEnd.formatted(.dateTime.month(.abbreviated).day())), \(selected.date.formatted(.dateTime.year())) (average):")
-                    .font(.footnote.bold())
-                    .foregroundStyle(.secondary)
+                let weekStart = Calendar.current.date(from: Calendar.current.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selected.date))!
+                let weekEnd = Calendar.current.date(byAdding: .day, value: 6, to: weekStart)!
+                Text("\(weekStart.formatted(.dateTime.month().day())) - \(weekEnd.formatted(.dateTime.month().day())) (average):")
+                 .font(.footnote.bold())
+                 .foregroundStyle(.secondary)
+              
             case .sixMonth:
                 Text("\(selected.date.formatted(.dateTime.month(.abbreviated).year())) (average):")
                     .font(.footnote.bold())
@@ -1137,7 +1263,7 @@ struct HealthInsightsView: View {
                         })?.totalValue ?? 0
                     case .month:
                         return monthData[nutrient]?.first(where: {
-                            Calendar.current.compare($0.weekStart, to: selected.date, toGranularity: .weekOfMonth) == .orderedSame
+                            Calendar.current.compare($0.weekStart, to: selected.date, toGranularity: .weekOfYear) == .orderedSame
                         })?.averageValue ?? 0
                     case .sixMonth:
                         return sixMonthData[nutrient]?.first(where: {
@@ -1188,6 +1314,7 @@ struct HealthInsightsView: View {
                 .onChange(of: selectedTimePeriod) { oldValue, newValue in
                     let generator = UIImpactFeedbackGenerator(style: .medium)
                     generator.impactOccurred()
+                    selectedPoint = nil
                     Task {
                         await fetchData()
                     }
@@ -1463,56 +1590,65 @@ struct HealthInsightsView: View {
                 }
                 
             case .month:
-                let calendar = Calendar.current
-                let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedDate))!
-                let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart)!
-                
-                for nutrient in ["Protein", "Carbs", "Fats"] {
-                    var monthlyData: [MonthNutrientData] = []
-                    var currentWeekStart = monthStart
-                    var weekNumber = 1
-                    
-                    while currentWeekStart < nextMonth {
-                        let weekEnd = calendar.date(byAdding: .weekOfMonth, value: 1, to: currentWeekStart)!
-                        var weekTotal: Double = 0
-                        var validDays = 0
-                        
-                        var currentDay = currentWeekStart
-                        while currentDay < weekEnd {
-                            let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
-                            let value = await withCheckedContinuation { continuation in
-                                healthStore.fetchNutrientDataForInterval(
-                                    nutrientType: nutrient.lowercased(),
-                                    start: currentDay,
-                                    end: nextDay
-                                ) { value, _ in
-                                    continuation.resume(returning: value)
-                                }
-                            }
-                            
-                            if let value = value, value > 0 {
-                                weekTotal += value
-                                validDays += 1
-                            }
-                            currentDay = nextDay
-                        }
-                        
-                        if validDays > 0 {
-                            monthlyData.append(MonthNutrientData(
-                                weekStart: currentWeekStart,
-                                averageValue: weekTotal / Double(validDays),
-                                nutrient: nutrient,
-                                weekOfMonth: weekNumber
-                            ))
-                        }
-                        
-                        currentWeekStart = weekEnd
-                        weekNumber += 1
-                    }
-                    
-                    monthData[nutrient] = monthlyData
-                }
-                
+               let calendar = Calendar.current
+               let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedDate))!
+               let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+               
+               // Find the closest Sunday before the start of the month
+               var firstWeekStart = calendar.date(byAdding: .day, value: -calendar.component(.weekday, from: monthStart), to: monthStart)!
+               if calendar.component(.weekday, from: monthStart) != 1 {
+                   firstWeekStart = calendar.date(byAdding: .day, value: -(calendar.component(.weekday, from: monthStart) - 1), to: monthStart)!
+               }
+               
+               // Find the closest Saturday after the end of the month
+               var lastWeekEnd = calendar.date(byAdding: .day, value: 6 - calendar.component(.weekday, from: nextMonth), to: nextMonth)!
+               if calendar.component(.weekday, from: nextMonth) != 7 {
+                   lastWeekEnd = calendar.date(byAdding: .day, value: 7 - calendar.component(.weekday, from: nextMonth), to: nextMonth)!
+               }
+               
+               for nutrient in ["Protein", "Carbs", "Fats"] {
+                   var monthlyData: [MonthNutrientData] = []
+                   let weekRange = stride(from: firstWeekStart, to: lastWeekEnd, by: 7 * 24 * 60 * 60)
+                   
+                   for (weekNumber, weekStart) in weekRange.enumerated() {
+                       let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart)!
+                       var weekTotal: Double = 0
+                       var validDays = 0
+                       
+                       let dayRange = stride(from: weekStart, through: min(weekEnd, lastWeekEnd), by: 24 * 60 * 60)
+                       
+                       for currentDay in dayRange {
+                           let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay)!
+                           let value = await withCheckedContinuation { continuation in
+                               healthStore.fetchNutrientDataForInterval(
+                                   nutrientType: nutrient.lowercased(),
+                                   start: currentDay,
+                                   end: nextDay
+                               ) { value, _ in
+                                   continuation.resume(returning: value)
+                               }
+                           }
+                           
+                           if let value = value, value > 0 {
+                               weekTotal += value
+                               validDays += 1
+                           }
+                       }
+                       
+                       if validDays > 0 {
+                           monthlyData.append(MonthNutrientData(
+                               weekStart: weekStart,
+                               weekEnd: weekEnd,
+                               averageValue: weekTotal / Double(validDays),
+                               nutrient: nutrient,
+                               weekNumber: weekNumber + 1
+                           ))
+                       }
+                   }
+                   
+                   monthData[nutrient] = monthlyData
+               }
+            
         case .sixMonth:
             let calendar = Calendar.current
             let month = calendar.component(.month, from: selectedDate)

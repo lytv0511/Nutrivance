@@ -14,13 +14,13 @@ struct ContentView: View {
     var body: some View {
         Group {
             if UIDevice.current.userInterfaceIdiom == .pad {
-                if horizontalSizeClass == .regular {
+//                if horizontalSizeClass == .regular {
                     ContentView_iPad()
                         .environmentObject(appState)
-                } else {
-                    ContentView_iPad()
-                        .environmentObject(appState)
-                }
+//                } else {
+//                    ContentView_iPad()
+//                        .environmentObject(appState)
+//                }
             } else if UIDevice.current.userInterfaceIdiom == .phone {
                 ContentView_iPhone_alt()
             }

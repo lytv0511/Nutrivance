@@ -141,7 +141,7 @@ struct ContentView_iPad: View {
                             }
                         }
                         .padding(8)
-                        .background(Color(.systemGray5))
+                        .background(.ultraThinMaterial)
                         .cornerRadius(8)
                         
                         if searchBarFocused {
