@@ -145,7 +145,6 @@ class DashboardViewModel: ObservableObject {
     @Published var isLoading = false
     
     var availableComplications: [ComplicationData] {
-        // General Health Metrics
         [
             ComplicationData(title: "Active Energy", value: metrics.activeEnergy, unit: "kcal", icon: "flame.fill", category: .general, isActivityRing: true),
             ComplicationData(title: "Resting Energy", value: metrics.restingEnergy, unit: "kcal", icon: "bed.double.fill", category: .general, isActivityRing: false),
@@ -173,7 +172,6 @@ class DashboardViewModel: ObservableObject {
             ComplicationData(title: "Stand Time", value: metrics.standTime, unit: "min", icon: "figure.stand", category: .general, isActivityRing: true),
             ComplicationData(title: "Mindfulness", value: metrics.mindfulnessMinutes, unit: "min", icon: "brain.head.profile", category: .general, isActivityRing: false),
             
-            // Sport Specific Metrics
             ComplicationData(title: "Swimming Strokes", value: metrics.swimmingStrokes, unit: "count", icon: "figure.pool.swim", category: .sports , isActivityRing: false),
             ComplicationData(title: "Swimming Distance", value: metrics.swimmingDistance, unit: "m", icon: "figure.pool.swim", category: .sports, isActivityRing: false),
             ComplicationData(title: "Swimming Laps", value: metrics.swimmingLapCount, unit: "laps", icon: "figure.pool.swim", category: .sports, isActivityRing: false),
@@ -723,7 +721,6 @@ struct DashboardView: View {
                                     .frame(minHeight: UIDevice.current.userInterfaceIdiom == .phone ? 360 : 510)
                                         .frame(maxHeight: .infinity)
                                     .padding()
-//                                    .frame(maxheight: UIDevice.current.userInterfaceIdiom == .phone ? 250 : 550)
                             },
                             label: {
                                 Label("Activity Rings", systemImage: "circle.circle")
@@ -787,7 +784,6 @@ struct DashboardView: View {
                             )
                         }
                         
-                        // Add Complication Button
                         if viewModel.selectedComplications.count < maxVisibleComplications {
                             Button {
                                 viewModel.showComplicationPicker = true
@@ -807,7 +803,6 @@ struct DashboardView: View {
                     }
                     .padding(.horizontal)
                     
-                    // Workouts Section
                     if !viewModel.metrics.workouts.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Recent Workouts")
@@ -1417,11 +1412,11 @@ struct ActivityRingCreator: View {
     
     private func getLayerColor(for index: Int) -> (red: Double, green: Double, blue: Double) {
         switch index {
-        case 0: return (red: 0.9, green: 0.2, blue: 0.3)  // Deep red
-        case 1: return (red: 0.3, green: 0.85, blue: 0.3) // Rich green
-        case 2: return (red: 0.1, green: 0.5, blue: 0.9)  // Deep blue
-        case 3: return (red: 0.6, green: 0.2, blue: 0.8)  // Rich purple
-        default: return (red: 0.5, green: 0.5, blue: 0.5) // Gray
+        case 0: return (red: 0.9, green: 0.2, blue: 0.3)
+        case 1: return (red: 0.3, green: 0.85, blue: 0.3)
+        case 2: return (red: 0.1, green: 0.5, blue: 0.9)
+        case 3: return (red: 0.6, green: 0.2, blue: 0.8)
+        default: return (red: 0.5, green: 0.5, blue: 0.5)
         }
     }
     
@@ -1499,11 +1494,11 @@ private struct EmptyRingView: View {
     
     private func getDefaultColors(for index: Int) -> (red: Double, green: Double, blue: Double) {
         switch index {
-        case 0: return (red: 0.9, green: 0.2, blue: 0.3)  // Deep red
-        case 1: return (red: 0.3, green: 0.85, blue: 0.3) // Rich green
-        case 2: return (red: 0.1, green: 0.5, blue: 0.9)  // Deep blue
-        case 3: return (red: 0.6, green: 0.2, blue: 0.8)  // Rich purple
-        default: return (red: 0.5, green: 0.5, blue: 0.5) // Gray
+        case 0: return (red: 0.9, green: 0.2, blue: 0.3)
+        case 1: return (red: 0.3, green: 0.85, blue: 0.3)
+        case 2: return (red: 0.1, green: 0.5, blue: 0.9)
+        case 3: return (red: 0.6, green: 0.2, blue: 0.8)
+        default: return (red: 0.5, green: 0.5, blue: 0.5)
         }
     }
     
@@ -2180,11 +2175,11 @@ struct FormTipsStyleRingScroll: View {
     
     private func getLayerColor(for index: Int) -> (red: Double, green: Double, blue: Double) {
         switch index {
-        case 0: return (0.9, 0.2, 0.3)  // Deep red
-        case 1: return (0.3, 0.85, 0.3) // Rich green
-        case 2: return (0.1, 0.5, 0.9)  // Deep blue
-        case 3: return (0.6, 0.2, 0.8)  // Rich purple
-        default: return (0.5, 0.5, 0.5) // Gray
+        case 0: return (0.9, 0.2, 0.3)
+        case 1: return (0.3, 0.85, 0.3)
+        case 2: return (0.1, 0.5, 0.9)
+        case 3: return (0.6, 0.2, 0.8)
+        default: return (0.5, 0.5, 0.5)
         }
     }
 }
