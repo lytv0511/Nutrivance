@@ -69,6 +69,7 @@
 		157C20B62D6E6E7200D1FA9A /* SleepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20B52D6E6E7200D1FA9A /* SleepView.swift */; };
 		157C20B82D6E6E7C00D1FA9A /* StressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20B72D6E6E7C00D1FA9A /* StressView.swift */; };
 		157C20BA2D715C1500D1FA9A /* WidgetType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20B92D715C1500D1FA9A /* WidgetType.swift */; };
+		15900D3D2D822D6800ACAC37 /* SearchView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15900D3C2D822D6800ACAC37 /* SearchView_iPhone.swift */; };
 		1593A59E2D40386A00FCD9CD /* NutrivanceIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1593A59D2D40386A00FCD9CD /* NutrivanceIntents.swift */; };
 		159F516F2CD5591E001F5FFC /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F516E2CD5591E001F5FFC /* HealthKitManager.swift */; };
 		159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */; };
@@ -215,6 +216,7 @@
 		157C20B52D6E6E7200D1FA9A /* SleepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepView.swift; sourceTree = "<group>"; };
 		157C20B72D6E6E7C00D1FA9A /* StressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressView.swift; sourceTree = "<group>"; };
 		157C20B92D715C1500D1FA9A /* WidgetType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetType.swift; sourceTree = "<group>"; };
+		15900D3C2D822D6800ACAC37 /* SearchView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView_iPhone.swift; sourceTree = "<group>"; };
 		1593A59D2D40386A00FCD9CD /* NutrivanceIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceIntents.swift; sourceTree = "<group>"; };
 		159F516D2CD55871001F5FFC /* Nutrivance.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Nutrivance.entitlements; sourceTree = "<group>"; };
 		159F516E2CD5591E001F5FFC /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
@@ -591,6 +593,7 @@
 				1568141D2D5C0F2D003C861E /* ActivityRingsView.swift */,
 				15F586622CF7846A006D3A9C /* AddMealView.swift */,
 				15D7FFA62CD1426A0048E050 /* Assets.xcassets */,
+				1567DE072D79150500881AD5 /* BarcodeScannerView.swift */,
 				157C20B32D6E6E6600D1FA9A /* BreathingView.swift */,
 				1568141E2D5C0F2D003C861E /* CaloriesBurnedView.swift */,
 				15FE8B8F2CE40B2F00495A2D /* CameraOCRView.swift */,
@@ -601,11 +604,10 @@
 				15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */,
 				15D7FFA22CD142690048E050 /* ContentView.swift */,
 				159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */,
-				1567DE092D7BB5E000881AD5 /* UnifiedLogView.swift */,
 				159F517B2CD715AA001F5FFC /* ContentView_iPad_alt.swift */,
+				153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */,
 				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
 				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
-				153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */,
 				1568141F2D5C0F2D003C861E /* DashboardView.swift */,
 				156814202D5C0F2D003C861E /* DistanceView.swift */,
 				156814212D5C0F2D003C861E /* ExerciseLibraryView.swift */,
@@ -617,7 +619,6 @@
 				15F5865C2CF783F3006D3A9C /* HealthInsightsView.swift */,
 				15CB57112CEEC22F00A6E970 /* HealthKitImportView.swift */,
 				159F516E2CD5591E001F5FFC /* HealthKitManager.swift */,
-				1567DE072D79150500881AD5 /* BarcodeScannerView.swift */,
 				156814242D5C0F2D003C861E /* HeartZonesView.swift */,
 				15F5865E2CF7840F006D3A9C /* HistoryView.swift */,
 				1557A0592CD26FA6004E1D13 /* HomeView.swift */,
@@ -669,6 +670,7 @@
 				156AA8EA2D76A80200DA0845 /* RingDetailView.swift */,
 				15F586602CF7845B006D3A9C /* SavedMealsView.swift */,
 				15561A422D6AE865006B8741 /* SearchView.swift */,
+				15900D3C2D822D6800ACAC37 /* SearchView_iPhone.swift */,
 				156814322D5C0F2D003C861E /* ShareWorkoutsView.swift */,
 				156814332D5C0F2D003C861E /* SleepAnalysisView.swift */,
 				157C20B52D6E6E7200D1FA9A /* SleepView.swift */,
@@ -680,6 +682,7 @@
 				15CB57032CEEB86800A6E970 /* TableDetection.metal */,
 				156814362D5C0F2D003C861E /* TodaysPlanView.swift */,
 				156814372D5C0F2D003C861E /* TrainingCalendarView.swift */,
+				1567DE092D7BB5E000881AD5 /* UnifiedLogView.swift */,
 				157C20B92D715C1500D1FA9A /* WidgetType.swift */,
 				156814382D5C0F2D003C861E /* WorkoutGeneratorView.swift */,
 				156814392D5C0F2D003C861E /* WorkoutHistoryView.swift */,
@@ -912,6 +915,7 @@
 				15F586612CF7845B006D3A9C /* SavedMealsView.swift in Sources */,
 				157C20AE2D6E6DDA00D1FA9A /* JournalView.swift in Sources */,
 				15B9D5962D5AEDB700D2B629 /* nutrition_prediction_model.mlpackage in Sources */,
+				15900D3D2D822D6800ACAC37 /* SearchView_iPhone.swift in Sources */,
 				1568141B2D5C0E80003C861E /* ComingSoonView.swift in Sources */,
 				156AA8EB2D76A80200DA0845 /* RingDetailView.swift in Sources */,
 				15F5865D2CF783F3006D3A9C /* HealthInsightsView.swift in Sources */,

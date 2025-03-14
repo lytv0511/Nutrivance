@@ -27,6 +27,7 @@ struct ContentView_iPad: View {
     
     private let searchKeywords = [
         "home": ["home", "main", "dashboard", "start", "welcome", "homepage"],
+        "playground": ["playground", "sandbox", "testing", "experiment", "explore"],
         "insights": ["insights", "health insights", "analysis", "trends", "statistics", "data", "reports", "overview"],
         "labels": ["labels", "scan", "camera", "photo", "nutrition facts", "food label", "scanner", "capture"],
         "search": ["search", "find", "lookup", "nutrients", "add nutrients", "input", "track"],
@@ -45,7 +46,7 @@ struct ContentView_iPad: View {
     var filteredItems: [String] {
         let allItems = [
             // Nutrition
-            "Home", "Insights", "Labels", "Log", "Saved Meals",
+            "Home", "Playground", "Insights", "Labels", "Log", "Saved Meals",
             
             // Macronutrients
             "Calories", "Carbs", "Protein", "Fats", "Water",
@@ -336,6 +337,8 @@ struct ContentView_iPad: View {
                         AnyView(SleepView())
                     case "Stress":
                         AnyView(StressView())
+                    case "Playground":
+                        AnyView(PlaygroundView())
                     
                     default:
                         AnyView(HomeView())
@@ -376,7 +379,15 @@ struct ContentView_iPad: View {
     private var nutritionSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Home", "Insights", "Labels", "Log", "Saved Meals"], id: \.self) { item in
+                ForEach(["Home", "Playground"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Label(item, systemImage: getIconName(for: item))
+                            .tag(item)
+                    }
+                }
+            }
+            Section(header: Text("Nutrivance Tools")) {
+                ForEach(["Insights", "Labels", "Log", "Saved Meals"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -406,6 +417,14 @@ struct ContentView_iPad: View {
 
     private var fitnessSections: some View {
         Group {
+            Section(header: Text("Main")) {
+                ForEach(["Home", "Playground"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Label(item, systemImage: getIconName(for: item))
+                            .tag(item)
+                    }
+                }
+            }
             Section(header: Text("Training")) {
                 ForEach(["Dashboard", "Today's Plan", "Workout History", "Training Calendar", "Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
@@ -455,6 +474,14 @@ struct ContentView_iPad: View {
 
     private var mentalHealthSections: some View {
         Group {
+            Section(header: Text("Main")) {
+                ForEach(["Home", "Playground"], id: \.self) { item in
+                    if filteredItems.contains(item) {
+                        Label(item, systemImage: getIconName(for: item))
+                            .tag(item)
+                    }
+                }
+            }
             Section(header: Text("Mental Health")) {
                 ForEach(["Mindfulness Realm", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
@@ -532,6 +559,7 @@ private func getIconName(for item: String) -> String {
     case "Insights": return "chart.bar.fill"
     case "Labels": return "barcode.viewfinder"
     case "Log": return "square.and.pencil"
+    case "Playground": return "arrow.triangle.2.circlepath"
     
     // Nutrition
     case "Calories": return "flame.fill"

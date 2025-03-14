@@ -631,11 +631,11 @@ struct MonthChartView: View {
     private func weekNumber(for date: Date, in viewingMonth: Date) -> Int {
         let calendar = Calendar.current
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: viewingMonth))!
-        let weekOfMonth = calendar.dateComponents([.weekOfMonth], from: monthStart, to: date).weekOfMonth ?? 0
+        let firstSunday = calendar.nextDate(after: monthStart, matching: DateComponents(weekday: 1), matchingPolicy: .nextTime, direction: .backward)!
+        let weekOfMonth = calendar.dateComponents([.weekOfMonth], from: firstSunday, to: date).weekOfMonth ?? 0
         return weekOfMonth + 1
     }
 }
-
 extension Date {
     func startOfMonth() -> Date {
         let calendar = Calendar.current

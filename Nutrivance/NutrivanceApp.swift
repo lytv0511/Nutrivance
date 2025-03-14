@@ -9,11 +9,26 @@ enum AppFocus: String, CaseIterable {
 }
 
 class NavigationState: ObservableObject {
-    @Published var selectedView: String = "Insights"
+    @Published var selectedView: String = "Dashboard"
     @Published var dismissAction: (() -> Void)?
     @Published var canGoBack: Bool = false
     @Published var showFocusSwitcher = false
-    @Published var appFocus: AppFocus = .nutrition
+    @Published var appFocus: AppFocus = .fitness {
+        didSet {
+            if oldValue != appFocus {
+                DispatchQueue.main.async {
+                    switch self.appFocus {
+                    case .nutrition:
+                        self.selectedView = "Insights"
+                    case .fitness:
+                        self.selectedView = "Dashboard"
+                    case .mentalHealth:
+                        self.selectedView = "Mindfulness Realm"
+                    }
+                }
+            }
+        }
+    }
     @Published var tempFocus: AppFocus = .nutrition
     @Published var navigationPath = NavigationPath()
     @Published var isSearchBarFocused = false
@@ -46,8 +61,10 @@ class NavigationState: ObservableObject {
     }
     
     func commitFocusChange() {
-        appFocus = tempFocus
-        showFocusSwitcher = false
+        DispatchQueue.main.async {
+            self.appFocus = self.tempFocus
+            self.showFocusSwitcher = false
+        }
     }
 }
 

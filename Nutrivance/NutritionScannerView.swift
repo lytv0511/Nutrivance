@@ -46,31 +46,24 @@ public struct NutritionScannerView: View {
                                 showingImagePreview = true
                             }
                             .fullScreenCover(isPresented: $showingImagePreview) {
-                                ZStack {
-                                    Color.black.ignoresSafeArea()
-                                    
-                                    Image(uiImage: image)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .ignoresSafeArea()
-                                    
-                                    VStack {
-                                        HStack {
-                                            Spacer()
-                                            Button {
-                                                showingImagePreview = false
-                                            } label: {
-                                                Text("Done")
-                                            }
-                                            .padding(8)
-                                            .hoverEffect()
-                                            .padding()
-                                        }
-                                        Spacer()
+                                NavigationStack {
+                                    ZStack {
+                                        Color.black.ignoresSafeArea()
+                                        Image(uiImage: image)
+                                            .resizable()
+                                            .scaledToFit()
+                                            .ignoresSafeArea()
                                     }
+                                    .toolbar {
+                                        ToolbarItem(placement: .navigationBarTrailing) {
+                                            Button("Done") {
+                                                 showingImagePreview = false
+                                            }
+                                        }
+                                    }
+                                    .navigationBarTitleDisplayMode(.inline)
                                 }
                             }
-
                     } else {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(Color.gray.opacity(0.2))

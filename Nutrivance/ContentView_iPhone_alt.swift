@@ -26,48 +26,49 @@ struct ContentView_iPhone_alt: View {
         TabView {
             // Nutrivance Section
                 Tab("Home", systemImage: "house") {
-                    HomeView()
+//                    HomeView()
+                    DashboardView()
                 }
                 .customizationID( "iPhone.tab.home")
                 .defaultVisibility(.visible, for: .tabBar)
             
-//                Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
-//                    PlaygroundView()
-//                }
-//                .customizationID("iPhone.tab.playground")
-//                .defaultVisibility(.visible, for: .tabBar)
+                Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
+                    PlaygroundView()
+                }
+                .customizationID("iPhone.tab.playground")
+                .defaultVisibility(.visible, for: .tabBar)
                 
                 Tab(role: .search) {
-                    SearchView()
+                    SearchView_iPhone()
                 }
-                .customizationID("iPhone.tab.search")
+                .customizationID("iPhone.tab.searchiPhone")
                 
-            TabSection {
-                Tab("Nutrivance", systemImage: "leaf") {
-                    NutrivanceView()
-                }
-                .customizationID( "iPhone.tab.nutrivance")
-                .defaultVisibility(.visible, for: .tabBar)
-                
-                Tab("Movance", systemImage: "figure.run") {
-                    MovanceView()
-                }
-                .customizationID( "iPhone.tab.movance")
-                .defaultVisibility(.visible, for: .tabBar)
-                
-                Tab("Spirivance", systemImage: "brain.head.profile") {
-                    SpirivanceView()
-                }
-                .customizationID("iPhone.tab.spririvance")
-                .defaultVisibility(.visible, for: .tabBar)
-            } header: {
-                Text("Focus Modes")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-            .defaultVisibility(.visible, for: .tabBar)
-            .customizationID("iPhone.tabsection.focusModes")
+//            TabSection {
+//                Tab("Nutrivance", systemImage: "leaf") {
+//                    NutrivanceView()
+//                }
+//                .customizationID( "iPhone.tab.nutrivance")
+//                .defaultVisibility(.visible, for: .tabBar)
+//                
+//                Tab("Movance", systemImage: "figure.run") {
+//                    MovanceView()
+//                }
+//                .customizationID( "iPhone.tab.movance")
+//                .defaultVisibility(.visible, for: .tabBar)
+//                
+//                Tab("Spirivance", systemImage: "brain.head.profile") {
+//                    SpirivanceView()
+//                }
+//                .customizationID("iPhone.tab.spririvance")
+//                .defaultVisibility(.visible, for: .tabBar)
+//            } header: {
+//                Text("Focus Modes")
+//                    .font(.headline)
+//                    .padding(.leading, 16)
+//                    .padding(.top, 8)
+//            }
+//            .defaultVisibility(.visible, for: .tabBar)
+//            .customizationID("iPhone.tabsection.focusModes")
                
 //            TabSection {
 //                Tab("Log", systemImage: "square.and.pencil") {

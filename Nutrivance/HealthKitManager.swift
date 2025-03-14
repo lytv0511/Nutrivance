@@ -81,14 +81,60 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
     
     nonisolated func unit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
         switch identifier {
+        // Energy Metrics
         case .activeEnergyBurned, .basalEnergyBurned:
             return .kilocalorie()
-        case .distanceWalkingRunning, .distanceCycling:
+            
+        // Distance Metrics
+        case .distanceWalkingRunning, .distanceCycling, .distanceSwimming,
+             .distanceDownhillSnowSports, .distanceWheelchair:
             return .meter()
-        case .stepCount, .flightsClimbed:
+            
+        // Count-based Metrics
+        case .stepCount, .flightsClimbed, .pushCount, .swimmingStrokeCount:
             return .count()
+            
+        // Time-based Metrics
         case .appleExerciseTime, .appleStandTime:
             return .minute()
+            
+        // Speed Metrics
+        case .walkingSpeed, .runningSpeed:
+            return .meter().unitDivided(by: .second())
+            
+        // Percentage Metrics
+        case .walkingAsymmetryPercentage, .walkingDoubleSupportPercentage:
+            return .percent()
+            
+        // Length Metrics
+        case .walkingStepLength:
+            return .meter()
+            
+        // Heart Rate Metrics
+        case .heartRate, .restingHeartRate:
+            return .count().unitDivided(by: .minute())
+            
+        // Heart Rate Variability
+        case .heartRateVariabilitySDNN:
+            return .secondUnit(with: .milli)
+            
+        // Power Metrics
+        case .runningPower, .cyclingPower:
+            return .watt()
+            
+        // Cadence Metrics
+        case .cyclingCadence:
+            return .count().unitDivided(by: .minute())
+            
+        // Respiratory Metrics
+        case .respiratoryRate:
+            return .count().unitDivided(by: .minute())
+            
+        // Specialized Metrics
+        case .vo2Max:
+            return HKUnit(from: "ml/kg/min")
+            
+        // Default case
         default:
             return .count()
         }
@@ -129,8 +175,10 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             return .minute()
         case .activeEnergyBurned:
             return .kilocalorie()
-        case .stepCount:
+        case .stepCount, .flightsClimbed:
             return .count()
+        case .distanceWalkingRunning:
+            return .meter()
         default:
             return .gram()
         }
@@ -905,11 +953,12 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         }
         
         group.enter()
-        fetchHeartRateData(from: startDate, to: endDate) { heartData in
+        Task {
+            let heartData = await fetchHeartRateData(from: startDate, to: endDate)
             results["heart_rate"] = heartData
             group.leave()
         }
-        
+
         group.notify(queue: .main) {
             completion(results)
         }
@@ -1062,31 +1111,36 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         healthStore.execute(query)
     }
 
-    private func fetchHeartRateData(from startDate: Date, to endDate: Date, completion: @escaping ([String: Double]) -> Void) {
+    private func fetchHeartRateData(from startDate: Date, to endDate: Date) async -> [String: Double] {
         guard let heartRateType = HKObjectType.quantityType(forIdentifier: .heartRate) else {
-            completion([:])
-            return
+            return [:]
         }
         
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
-        let query = HKStatisticsQuery(quantityType: heartRateType, quantitySamplePredicate: predicate, options: [.discreteAverage, .discreteMin, .discreteMax]) { _, result, _ in
-            var heartData: [String: Double] = [:]
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: heartRateType,
+                quantitySamplePredicate: predicate,
+                options: [.discreteAverage, .discreteMin, .discreteMax]
+            ) { _, result, _ in
+                var heartData: [String: Double] = [:]
+                
+                if let avg = result?.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+                    heartData["average"] = avg
+                }
+                if let min = result?.minimumQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+                    heartData["minimum"] = min
+                }
+                if let max = result?.maximumQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+                    heartData["maximum"] = max
+                }
+                
+                continuation.resume(returning: heartData)
+            }
             
-            if let avg = result?.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
-                heartData["average"] = avg
-            }
-            if let min = result?.minimumQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
-                heartData["minimum"] = min
-            }
-            if let max = result?.maximumQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
-                heartData["maximum"] = max
-            }
-            
-            DispatchQueue.main.async {
-                completion(heartData)
-            }
+            healthStore.execute(query)
         }
-        healthStore.execute(query)
     }
 }
 
@@ -1301,32 +1355,104 @@ extension HealthKitManager {
 }
 
 extension HealthKitManager {
+    private func statisticsOptions(for identifier: HKQuantityTypeIdentifier) -> HKStatisticsOptions {
+        switch identifier {
+        // Discrete measurements that need averaging
+        case .walkingSpeed,
+             .walkingAsymmetryPercentage,
+             .walkingStepLength,
+             .walkingDoubleSupportPercentage,
+             .heartRate,
+             .restingHeartRate,
+             .heartRateVariabilitySDNN,
+             .respiratoryRate,
+             .vo2Max,
+             .runningSpeed,
+             .runningPower,
+             .cyclingPower,
+             .cyclingCadence:
+            return .discreteAverage
+            
+        // Cumulative measurements that need summing
+        case .activeEnergyBurned,
+             .basalEnergyBurned,
+             .stepCount,
+             .distanceWalkingRunning,
+             .distanceCycling,
+             .distanceSwimming,
+             .distanceDownhillSnowSports,
+             .distanceWheelchair,
+             .flightsClimbed,
+             .pushCount,
+             .swimmingStrokeCount,
+             .appleExerciseTime,
+             .appleStandTime:
+            return .cumulativeSum
+            
+        // Default to cumulative sum for any new types
+        default:
+            return .cumulativeSum
+        }
+    }
+   
+    enum HealthError: Error {
+        case invalidType
+    }
+
     func fetchTodayQuantity(for identifier: HKQuantityTypeIdentifier) async throws -> Double {
+        guard let quantityType = HKQuantityType.quantityType(forIdentifier: identifier) else {
+            throw HealthError.invalidType
+        }
+        
         let now = Date()
         let startOfDay = Calendar.current.startOfDay(for: now)
         let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: now, options: .strictStartDate)
         
-        let quantityType = HKQuantityType(identifier)
-        let unit = getUnit(for: identifier)
+        let options: HKStatisticsOptions = switch identifier {
+            case .walkingHeartRateAverage,
+                 .walkingSpeed,
+                 .walkingAsymmetryPercentage,
+                 .walkingDoubleSupportPercentage,
+                 .walkingStepLength,
+                 .heartRate,
+                 .restingHeartRate,
+                 .heartRateVariabilitySDNN,
+                 .heartRateRecoveryOneMinute,
+                 .respiratoryRate,
+                 .vo2Max,
+                 .runningSpeed,
+                 .runningPower,
+                 .cyclingPower,
+                 .cyclingCadence:
+                .discreteAverage
+            default:
+                .cumulativeSum
+        }
         
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKStatisticsQuery(
                 quantityType: quantityType,
                 quantitySamplePredicate: predicate,
-                options: .cumulativeSum
+                options: options
             ) { _, statistics, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                     return
                 }
                 
-                let value = statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0
+                let value = switch options {
+                    case .discreteAverage:
+                        statistics?.averageQuantity()?.doubleValue(for: self.unit(for: identifier)) ?? 0
+                    default:
+                        statistics?.sumQuantity()?.doubleValue(for: self.unit(for: identifier)) ?? 0
+                }
+                
                 continuation.resume(returning: value)
             }
-            
             healthStore.execute(query)
         }
     }
+
     
     func fetchDashboardMetrics() async throws -> DashboardMetrics {
             var metrics = DashboardMetrics()

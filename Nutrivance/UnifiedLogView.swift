@@ -12,82 +12,84 @@ struct UnifiedLogView: View {
     
     var body: some View {
         NavigationStack {
-            VStack {
-                CameraPreview(session: viewModel.session)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(4/3, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(alignment: .trailing) {
-                        VStack(spacing: 12) {
-                            if viewModel.hasVisibleText {
-                                Image(systemName: "doc.text.viewfinder")
-                                    .foregroundStyle(.blue)
+            ScrollView {
+                VStack {
+                    CameraPreview(session: viewModel.session)
+                        .frame(maxWidth: .infinity)
+                        .aspectRatio(4/3, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(alignment: .trailing) {
+                            VStack(spacing: 12) {
+                                if viewModel.hasVisibleText {
+                                    Image(systemName: "doc.text.viewfinder")
+                                        .foregroundStyle(.blue)
+                                }
+                                if viewModel.hasVisibleBarcode {
+                                    Image(systemName: "barcode.viewfinder")
+                                        .foregroundStyle(.green)
+                                }
+                                if viewModel.hasVisibleFood {
+                                    Image(systemName: "camera.metering.center")
+                                        .foregroundStyle(.orange)
+                                }
                             }
-                            if viewModel.hasVisibleBarcode {
-                                Image(systemName: "barcode.viewfinder")
-                                    .foregroundStyle(.green)
-                            }
-                            if viewModel.hasVisibleFood {
-                                Image(systemName: "camera.metering.center")
-                                    .foregroundStyle(.orange)
+                            .font(.title2)
+                            .padding()
+                        }
+                        .padding()
+                        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+                            if let connection = viewModel.session.connections.first,
+                               let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+                               let previewLayer = (connection.videoPreviewLayer) {
+                                if #available(iOS 17.0, *) {
+                                    let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+                                    connection.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+                                }
                             }
                         }
-                        .font(.title2)
+                    
+                    VStack(spacing: 16) {
+                        TextField("Describe what you're logging...", text: $description)
+                            .textFieldStyle(.roundedBorder)
+                            .padding(.horizontal)
+                        
+                        HStack(spacing: 20) {
+                            Button(action: viewModel.capturePhoto) {
+                                Image(systemName: "camera.circle.fill")
+                                    .font(.system(size: 64))
+                            }
+                            .disabled(!viewModel.canTakePhoto)
+                            
+                            Button("Analyze") {
+                                Task {
+                                    await viewModel.analyzeInput(description: description, image: capturedImage)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!viewModel.canAnalyze)
+                        }
                         .padding()
                     }
-                    .padding()
-                    .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-                        if let connection = viewModel.session.connections.first,
-                           let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-                           let previewLayer = (connection.videoPreviewLayer) {
-                            if #available(iOS 17.0, *) {
-                                let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
-                                connection.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelCapture
-                            }
-                        }
-                    }
-                
-                VStack(spacing: 16) {
-                    TextField("Describe what you're logging...", text: $description)
-                        .textFieldStyle(.roundedBorder)
-                        .padding(.horizontal)
-                    
-                    HStack(spacing: 20) {
-                        Button(action: viewModel.capturePhoto) {
-                            Image(systemName: "camera.circle.fill")
-                                .font(.system(size: 64))
-                        }
-                        .disabled(!viewModel.canTakePhoto)
-                        
-                        Button("Analyze") {
-                            Task {
-                                await viewModel.analyzeInput(description: description, image: capturedImage)
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!viewModel.canAnalyze)
-                    }
-                    .padding()
+                }
+                .sheet(isPresented: $viewModel.showingResults) {
+                    NutrientResultsView(results: viewModel.analysisResults)
+                }
+                .onAppear {
+                    UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+                }
+                .onDisappear {
+                    UIDevice.current.endGeneratingDeviceOrientationNotifications()
                 }
             }
-            .navigationTitle("Log Nutrients")
-            .sheet(isPresented: $viewModel.showingResults) {
-                NutrientResultsView(results: viewModel.analysisResults)
-            }
-            .onAppear {
-                UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            }
-            .onDisappear {
-                UIDevice.current.endGeneratingDeviceOrientationNotifications()
-            }
             .background(
-               GradientBackgrounds().natureGradient(animationPhase: $animationPhase)
-                   .onAppear {
-                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                           animationPhase = 20
-                       }
-                   }
-           )
+                GradientBackgrounds().natureGradient(animationPhase: $animationPhase)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
+                        }
+                    }
+            )
+            .navigationTitle("Log Nutrients")
         }
     }
 }

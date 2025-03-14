@@ -17,7 +17,7 @@ struct SearchView: View {
 //    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     // Update items when needed
-    private let nutritionItems = ["Insights", "Labels", "Log", "Barcode",
+    private let nutritionItems = ["Insights", "Labels", "Log",
                                   "Calories", "Carbs", "Protein", "Fats", "Water",
                                   "Fiber", "Vitamins", "Minerals", "Phytochemicals",
                                   "Antioxidants", "Electrolytes"]
@@ -47,7 +47,7 @@ struct SearchView: View {
         "home": ["home", "main", "start", "welcome", "homepage"],
         "insights": ["insights", "health insights", "analysis", "trends", "statistics", "data", "reports", "overview"],
         "labels": ["labels", "scan", "camera", "photo", "nutrition facts", "food label", "scanner", "capture"],
-        "barcode": ["barcode", "scan", "upc", "product lookup", "food scan", "scanner"],
+//        "barcode": ["barcode", "scan", "upc", "product lookup", "food scan", "scanner"],
         "search": ["search", "find", "lookup", "nutrients", "add nutrients", "input", "track"],
         "calories": ["calories", "calorie", "kcal", "cal", "energy", "dietary energy"],
         "protein": ["protein", "proteins", "whey", "casein", "amino acid", "amino acids"],
@@ -62,7 +62,7 @@ struct SearchView: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     var filteredItems: [String] {
-        let allItems = ["Home", "Insights", "Labels", "Log",    "Barcode",
+        let allItems = ["Insights", "Labels", "Log",
                        "Calories", "Carbs", "Protein", "Fats", "Water",
                        "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes",
                        "Dashboard", "Today's Plan", "Workout History", "Training Calendar",
@@ -439,7 +439,7 @@ struct SearchView: View {
     private var nutritionSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Home", "Insights", "Labels", "Log", "Barcode"], id: \.self) { item in
+                ForEach(["Home", "Insights", "Labels", "Log"/*, "Barcode"*/], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -600,7 +600,7 @@ private func getIconName(for item: String) -> String {
     case "Insights": return "chart.bar.fill"
     case "Labels": return "barcode.viewfinder"
     case "Log": return "square.and.pencil"
-    case "Barcode": return "barcode.viewfinder"
+//    case "Barcode": return "barcode.viewfinder"
     
     // Nutrition
     case "Calories": return "flame.fill"
