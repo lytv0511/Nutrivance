@@ -189,7 +189,8 @@ struct SearchView: View {
                                     case "Labels":
                                         NutritionScannerView()
                                     case "Log":
-                                        UnifiedLogView()
+//                                        UnifiedLogView()
+                                        LogView()
                                     case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
                                         NutrientDetailView(nutrientName: item)
 //                                    case "Barcode":
@@ -197,7 +198,7 @@ struct SearchView: View {
                                     case "Dashboard":
                                         DashboardView()
                                     case "Today's Plan":
-                                        TodaysPlanView()
+                                        TodaysPlanView(planType: .all)
                                     case "Workout History":
                                         WorkoutHistoryView()
                                     case "Training Calendar":
@@ -355,7 +356,7 @@ struct SearchView: View {
         case "Dashboard":
             return AnyView(DashboardView())
         case "Today's Plan":
-            return AnyView(TodaysPlanView())
+            return AnyView(TodaysPlanView(planType: .all))
         case "Workout History":
             return AnyView(WorkoutHistoryView())
         case "Training Calendar":

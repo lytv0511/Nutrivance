@@ -1,6 +1,12 @@
 import HealthKit
 import SwiftUI
 
+enum HealthError: Error {
+    case invalidType
+    case noData
+    case queryFailed
+}
+
 let types = [
     (HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!, "calories"),
     (HKObjectType.quantityType(forIdentifier: .dietaryProtein)!, "protein"),
@@ -79,6 +85,26 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         self.healthStore = HKHealthStore()
     }
     
+    private func fetchMindfulnessMinutes(from startDate: Date, to endDate: Date, completion: @escaping (Double) -> Void) {
+        guard let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) else {
+            completion(0)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let query = HKSampleQuery(sampleType: mindfulType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+            let totalMinutes = samples?.reduce(0.0) { total, sample in
+                let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
+                return total + duration
+            } ?? 0.0
+            
+            DispatchQueue.main.async {
+                completion(totalMinutes)
+            }
+        }
+        healthStore.execute(query)
+    }
+    
     nonisolated func unit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
         switch identifier {
         // Energy Metrics
@@ -132,7 +158,7 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             
         // Specialized Metrics
         case .vo2Max:
-            return HKUnit(from: "ml/kg/min")
+            return HKUnit(from: "ml/kg·min")
             
         // Default case
         default:
@@ -964,26 +990,6 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func fetchMindfulnessMinutes(from startDate: Date, to endDate: Date, completion: @escaping (Double) -> Void) {
-        guard let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) else {
-            completion(0)
-            return
-        }
-        
-        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
-        let query = HKSampleQuery(sampleType: mindfulType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
-            let totalMinutes = samples?.reduce(0.0) { total, sample in
-                let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
-                return total + duration
-            } ?? 0.0
-            
-            DispatchQueue.main.async {
-                completion(totalMinutes)
-            }
-        }
-        healthStore.execute(query)
-    }
-
     private func fetchStepCount(from startDate: Date, to endDate: Date, completion: @escaping (Int) -> Void) {
         guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
             completion(0)
@@ -1141,6 +1147,267 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             
             healthStore.execute(query)
         }
+    }
+    struct TSBMetrics: Codable {
+        let date: Date
+        let workout_Duration: Double
+        let avg_Heart_Rate: Double
+        let active_Energy: Double
+        let exercise_Time: Double
+        let steps_Count: Double
+        let distance: Double
+        let resting_HR: Double
+        let sleep_Duration: Double
+        let training_Load: Double
+        let workout_Intensity: Double
+        let vo2_Max: Double
+        let hrv: Double
+        let sleep_Awake: Double
+        let sleep_Light: Double
+        let sleep_Deep: Double
+        let sleep_REM: Double
+        let mindfulness: Double
+        let bp_Systolic: Double
+        let bp_Diastolic: Double
+        let glucose: Double
+        let o2_Saturation: Double
+        let body_Temp: Double
+    }
+
+    func fetchReadinessMetrics(days: Int = 42) async throws -> [TSBMetrics] {
+        let calendar = Calendar.current
+        let endDate = Date()
+        let startDate = calendar.date(byAdding: .day, value: -days, to: endDate)!
+        
+        var metrics: [TSBMetrics] = []
+        var currentDate = startDate
+        
+        while currentDate <= endDate {
+            let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate)!
+            let metricDate = currentDate // Create local copy
+            async let workoutMetrics = fetchWorkoutMetrics(from: metricDate, to: nextDate)
+            async let sleepMetrics = fetchSleepMetrics(from: metricDate, to: nextDate)
+            async let vitalsMetrics = fetchVitalsMetrics(from: metricDate, to: nextDate)
+            async let activityMetrics = fetchActivityMetrics(from: metricDate, to: nextDate)
+            
+            let dailyMetrics = TSBMetrics(
+                date: currentDate,
+                workout_Duration: try await workoutMetrics.duration,
+                avg_Heart_Rate: try await workoutMetrics.avgHeartRate,
+                active_Energy: try await activityMetrics.activeEnergy,
+                exercise_Time: try await activityMetrics.exerciseTime,
+                steps_Count: try await activityMetrics.steps,
+                distance: try await activityMetrics.distance / 1000, // Convert to km
+                resting_HR: try await vitalsMetrics.restingHR,
+                sleep_Duration: try await sleepMetrics.totalDuration,
+                training_Load: try await workoutMetrics.trainingLoad,
+                workout_Intensity: try await workoutMetrics.intensity,
+                vo2_Max: try await vitalsMetrics.vo2Max,
+                hrv: try await vitalsMetrics.hrv,
+                sleep_Awake: try await sleepMetrics.awake,
+                sleep_Light: try await sleepMetrics.light,
+                sleep_Deep: try await sleepMetrics.deep,
+                sleep_REM: try await sleepMetrics.rem,
+                mindfulness: try await activityMetrics.mindfulness,
+                bp_Systolic: try await vitalsMetrics.systolic,
+                bp_Diastolic: try await vitalsMetrics.diastolic,
+                glucose: try await vitalsMetrics.glucose,
+                o2_Saturation: try await vitalsMetrics.o2Saturation,
+                body_Temp: try await vitalsMetrics.bodyTemp
+            )
+            
+            metrics.append(dailyMetrics)
+            currentDate = nextDate
+        }
+        
+        return metrics
+    }
+
+    func fetchWorkoutMetrics(from start: Date, to end: Date) async throws -> (duration: Double, avgHeartRate: Double, trainingLoad: Double, intensity: Double) {
+        let workoutType = HKObjectType.workoutType()
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        
+        let workouts = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKWorkout], Error>) in
+            let query = HKSampleQuery(sampleType: workoutType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                continuation.resume(returning: samples as? [HKWorkout] ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+        
+        let duration = workouts.reduce(0.0) { $0 + $1.duration / 60.0 }
+        let avgHeartRate = try await calculateAverageHeartRate(for: workouts)
+        let trainingLoad = workouts.reduce(0.0) { total, workout in
+            let energyStats = workout.statistics(for: HKQuantityType(.activeEnergyBurned))
+            let energy = energyStats?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+            return total + energy
+        }
+        let intensity = try await calculateWorkoutIntensity(for: workouts)
+        
+        return (duration, avgHeartRate, trainingLoad, intensity)
+    }
+
+    private func fetchSleepMetrics(from start: Date, to end: Date) async throws -> (totalDuration: Double, awake: Double, light: Double, deep: Double, rem: Double) {
+        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
+            throw HealthError.invalidType
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                
+                var awake = 0.0, light = 0.0, deep = 0.0, rem = 0.0
+                let total = samples?.reduce(0.0) { total, sample in
+                    guard let categorySample = sample as? HKCategorySample else { return total }
+                    let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
+                    
+                    switch categorySample.value {
+                    case HKCategoryValueSleepAnalysis.inBed.rawValue:
+                        awake += duration
+                    case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
+                        light += duration
+                    case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
+                        deep += duration
+                    case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
+                        rem += duration
+                    default:
+                        break
+                    }
+                    return total + duration
+                } ?? 0.0
+                
+                continuation.resume(returning: (total, awake, light, deep, rem))
+            }
+            self.healthStore.execute(query)
+        }
+    }
+
+    private func fetchVitalsMetrics(from start: Date, to end: Date) async throws -> (restingHR: Double, vo2Max: Double, hrv: Double, systolic: Double, diastolic: Double, glucose: Double, o2Saturation: Double, bodyTemp: Double) {
+        async let restingHR = try fetchAverageQuantity(for: .restingHeartRate, from: start, to: end)
+        async let vo2Max = try fetchAverageQuantity(for: .vo2Max, from: start, to: end)
+        async let hrv = try fetchAverageQuantity(for: .heartRateVariabilitySDNN, from: start, to: end)
+        async let systolic = try fetchAverageQuantity(for: .bloodPressureSystolic, from: start, to: end)
+        async let diastolic = try fetchAverageQuantity(for: .bloodPressureDiastolic, from: start, to: end)
+        async let glucose = try fetchAverageQuantity(for: .bloodGlucose, from: start, to: end)
+        async let o2Saturation = try fetchAverageQuantity(for: .oxygenSaturation, from: start, to: end)
+        async let bodyTemp = try fetchAverageQuantity(for: .bodyTemperature, from: start, to: end)
+        
+        return (
+            try await restingHR,
+            try await vo2Max,
+            try await hrv,
+            try await systolic,
+            try await diastolic,
+            try await glucose,
+            try await o2Saturation,
+            try await bodyTemp
+        )
+    }
+
+    private func fetchActivityMetrics(from start: Date, to end: Date) async throws -> (activeEnergy: Double, exerciseTime: Double, steps: Double, distance: Double, mindfulness: Double) {
+        async let activeEnergy = fetchSumQuantity(for: .activeEnergyBurned, from: start, to: end)
+        async let exerciseTime = fetchSumQuantity(for: .appleExerciseTime, from: start, to: end)
+        async let steps = fetchSumQuantity(for: .stepCount, from: start, to: end)
+        async let distance = fetchSumQuantity(for: .distanceWalkingRunning, from: start, to: end)
+        
+        // Use the existing mindfulness function
+        let mindfulness = await withCheckedContinuation { continuation in
+            fetchMindfulnessMinutes(from: start, to: end) { minutes in
+                continuation.resume(returning: minutes)
+            }
+        }
+        
+        return (
+            try await activeEnergy,
+            try await exerciseTime,
+            try await steps,
+            try await distance,
+            mindfulness
+        )
+    }
+
+    private func fetchAverageQuantity(for identifier: HKQuantityTypeIdentifier, from start: Date, to end: Date) async throws -> Double {
+        guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else {
+            throw HealthError.invalidType
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .discreteAverage
+            ) { _, result, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                let value = result?.averageQuantity()?.doubleValue(for: self.unit(for: identifier)) ?? 0
+                continuation.resume(returning: value)
+            }
+            self.healthStore.execute(query)
+        }
+    }
+
+    private func fetchSumQuantity(for identifier: HKQuantityTypeIdentifier, from start: Date, to end: Date) async throws -> Double {
+        guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else {
+            throw HealthError.invalidType
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKStatisticsQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, result, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                let value = result?.sumQuantity()?.doubleValue(for: self.unit(for: identifier)) ?? 0
+                continuation.resume(returning: value)
+            }
+            self.healthStore.execute(query)
+        }
+    }
+
+    private func calculateAverageHeartRate(for workouts: [HKWorkout]) async throws -> Double {
+        var totalHeartRate = 0.0
+        var count = 0
+        
+        for workout in workouts {
+            if let heartRateStats = workout.statistics(for: HKQuantityType(.heartRate)) {
+                if let avg = heartRateStats.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+                    totalHeartRate += avg
+                    count += 1
+                }
+            }
+        }
+        
+        return count > 0 ? totalHeartRate / Double(count) : 0
+    }
+
+    // Update where totalEnergyBurned is used
+    private func calculateWorkoutIntensity(for workouts: [HKWorkout]) async throws -> Double {
+        var totalIntensity = 0.0
+        
+        for workout in workouts {
+            let energyBurned = await calculateWorkoutEnergy(workout: workout)
+            let duration = workout.duration / 60.0 // Convert to minutes
+            let intensity = energyBurned / duration
+            totalIntensity += intensity
+        }
+        
+        return totalIntensity
     }
 }
 
@@ -1394,10 +1661,6 @@ extension HealthKitManager {
             return .cumulativeSum
         }
     }
-   
-    enum HealthError: Error {
-        case invalidType
-    }
 
     func fetchTodayQuantity(for identifier: HKQuantityTypeIdentifier) async throws -> Double {
         guard let quantityType = HKQuantityType.quantityType(forIdentifier: identifier) else {
@@ -1453,7 +1716,6 @@ extension HealthKitManager {
         }
     }
 
-    
     func fetchDashboardMetrics() async throws -> DashboardMetrics {
             var metrics = DashboardMetrics()
             
@@ -1472,8 +1734,6 @@ extension HealthKitManager {
                     switch type {
                     case .activeEnergyBurned:
                         metrics.activeEnergy = String(format: "%.0f", quantity)
-                    case .basalEnergyBurned:
-                        metrics.restingEnergy = String(format: "%.0f", quantity)
                     case .stepCount:
                         metrics.steps = String(format: "%.0f", quantity)
                     case .distanceWalkingRunning:
@@ -1486,6 +1746,17 @@ extension HealthKitManager {
                         metrics.flights = String(format: "%.0f", quantity)
                     default:
                         break
+                    }
+                }
+                if let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) {
+                    let mindfulPredicate = HKQuery.predicateForSamples(
+                        withStart: Calendar.current.startOfDay(for: Date()),
+                        end: Date(),
+                        options: .strictStartDate
+                    )
+                    
+                    if let minutes = try? await healthStore.fetchSum(for: mindfulType, predicate: mindfulPredicate) {
+                        metrics.mindfulnessMinutes = String(format: "%.0f", minutes)
                     }
                 }
             }
@@ -1515,6 +1786,31 @@ extension HealthKitManager {
             
             healthStore.execute(query)
             healthStore.enableBackgroundDelivery(for: type, frequency: HKUpdateFrequency.immediate) { _, _ in }
+        }
+    }
+}
+
+extension HKHealthStore {
+    func fetchSum(for categoryType: HKCategoryType, predicate: NSPredicate) async throws -> Double {
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: categoryType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                
+                let totalMinutes = samples?.reduce(0.0) { total, sample in
+                    total + sample.endDate.timeIntervalSince(sample.startDate) / 60.0
+                } ?? 0.0
+                
+                continuation.resume(returning: totalMinutes)
+            }
+            self.execute(query)
         }
     }
 }

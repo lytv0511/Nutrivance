@@ -349,4 +349,3 @@ struct ReadinessGauge: View {
         }
     }
 }
-

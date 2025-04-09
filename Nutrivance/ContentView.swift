@@ -30,14 +30,14 @@ struct ContentView: View {
         }
     }
     private func requestHealthDataPermissions() {
-            appState.healthKitManager.requestAuthorization { success, error in
-                if let error = error {
-                    print("Error requesting health data permissions: \(error.localizedDescription)")
-                } else if success {
-                    print("Health data permissions granted.")
-                } else {
-                    print("Health data permissions not granted.")
-                }
+        appState.healthKitManager.requestAuthorization { success, error in
+            if let error = error {
+                print("Error requesting health data permissions: \(error.localizedDescription)")
+            } else if success {
+                print("Health data permissions granted.")
+            } else {
+                print("Health data permissions not granted.")
             }
         }
+    }
 }

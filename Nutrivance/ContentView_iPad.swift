@@ -223,36 +223,35 @@ struct ContentView_iPad: View {
                     case "Saved Meals":
                         AnyView(SavedMealsView())
                     
-                        // Detailed Nutrients
-                        case "Calories":
-                            AnyView(NutrientDetailView(nutrientName: "Calories", columnVisibility: columnVisibility))
-                        case "Carbs":
-                            AnyView(NutrientDetailView(nutrientName: "Carbs", columnVisibility: columnVisibility))
-                        case "Protein":
-                            AnyView(NutrientDetailView(nutrientName: "Protein", columnVisibility: columnVisibility))
-                        case "Fats":
-                            AnyView(NutrientDetailView(nutrientName: "Fats", columnVisibility: columnVisibility))
-                        case "Water":
-                            AnyView(NutrientDetailView(nutrientName: "Water", columnVisibility: columnVisibility))
-                        case "Fiber":
-                            AnyView(NutrientDetailView(nutrientName: "Fiber", columnVisibility: columnVisibility))
-                        case "Vitamins":
-                            AnyView(NutrientDetailView(nutrientName: "Vitamins", columnVisibility: columnVisibility))
-                        case "Minerals":
-                            AnyView(NutrientDetailView(nutrientName: "Minerals", columnVisibility: columnVisibility))
-                        case "Phytochemicals":
-                            AnyView(NutrientDetailView(nutrientName: "Phytochemicals", columnVisibility: columnVisibility))
-                        case "Antioxidants":
-                            AnyView(NutrientDetailView(nutrientName: "Antioxidants", columnVisibility: columnVisibility))
-                        case "Electrolytes":
-                            AnyView(NutrientDetailView(nutrientName: "Electrolytes", columnVisibility: columnVisibility))
-
+                    // Detailed Nutrients
+                    case "Calories":
+                        AnyView(NutrientDetailView(nutrientName: "Calories", columnVisibility: columnVisibility))
+                    case "Carbs":
+                        AnyView(NutrientDetailView(nutrientName: "Carbs", columnVisibility: columnVisibility))
+                    case "Protein":
+                        AnyView(NutrientDetailView(nutrientName: "Protein", columnVisibility: columnVisibility))
+                    case "Fats":
+                        AnyView(NutrientDetailView(nutrientName: "Fats", columnVisibility: columnVisibility))
+                    case "Water":
+                        AnyView(NutrientDetailView(nutrientName: "Water", columnVisibility: columnVisibility))
+                    case "Fiber":
+                        AnyView(NutrientDetailView(nutrientName: "Fiber", columnVisibility: columnVisibility))
+                    case "Vitamins":
+                        AnyView(NutrientDetailView(nutrientName: "Vitamins", columnVisibility: columnVisibility))
+                    case "Minerals":
+                        AnyView(NutrientDetailView(nutrientName: "Minerals", columnVisibility: columnVisibility))
+                    case "Phytochemicals":
+                        AnyView(NutrientDetailView(nutrientName: "Phytochemicals", columnVisibility: columnVisibility))
+                    case "Antioxidants":
+                        AnyView(NutrientDetailView(nutrientName: "Antioxidants", columnVisibility: columnVisibility))
+                    case "Electrolytes":
+                        AnyView(NutrientDetailView(nutrientName: "Electrolytes", columnVisibility: columnVisibility))
                     
                     // Fitness Focus - Training
                     case "Dashboard":
                         AnyView(DashboardView())
                     case "Today's Plan":
-                        AnyView(TodaysPlanView())
+                        AnyView(TodaysPlanView(planType: .all))
                     case "Workout History":
                         AnyView(WorkoutHistoryView())
                     case "Training Calendar":

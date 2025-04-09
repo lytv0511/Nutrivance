@@ -159,6 +159,7 @@ struct SingleNutrientMonthData: Identifiable {
 
 struct NutrientDetailView: View {
     let nutrientName: String
+    @State private var showDetailSheet = false
     @StateObject private var healthStore = HealthKitManager()
     @State private var selectedDate = Date()
     @State private var showDatePicker = false
@@ -255,6 +256,9 @@ struct NutrientDetailView: View {
                 strictLevel: .medium,
                 tdee: 2000
             )
+            .frame(height: horizontalSizeClass == .compact ? 250 : 300)
+            .padding()
+            
         case .weekly:
             WeekChartView(
                 weekData: [nutrientName: weekData],
@@ -263,6 +267,9 @@ struct NutrientDetailView: View {
                 strictLevel: .medium,
                 tdee: 2000
             )
+            .frame(height: horizontalSizeClass == .compact ? 250 : 300)
+            .padding()
+            
         case .monthly:
             MonthChartView(
                 monthData: [nutrientName: monthData],
@@ -272,6 +279,8 @@ struct NutrientDetailView: View {
                 tdee: 2000,
                 viewingMonth: selectedDate
             )
+            .frame(height: horizontalSizeClass == .compact ? 250 : 300)
+            .padding()
         case .recommended:
             RecommendedIntakeDetailView(nutrientName: nutrientName)
         case .foods:
@@ -424,6 +433,9 @@ struct NutrientDetailView: View {
                                         withAnimation(.spring()) {
                                             selectedCard = cardType
                                             selectedPoint = nil
+                                            if horizontalSizeClass == .compact {
+                                                showDetailSheet.toggle() // This will trigger the sheet
+                                            }
                                         }
                                         let generator = UIImpactFeedbackGenerator(style: .medium)
                                         generator.impactOccurred()
@@ -436,21 +448,36 @@ struct NutrientDetailView: View {
                             if let selected = selectedPoint {
                                 selectedPointDetail(selected)
                             }
-                            selectedDetailView
-                                .task {
-                                    await fetchAllData()
-                                }
-                                .onChange(of: selectedDate) { _, _ in
-                                    Task {
+                            
+                            if horizontalSizeClass == .regular {
+                                // iPad layout - show at bottom
+                                selectedDetailView
+                                    .task {
                                         await fetchAllData()
                                     }
-                                }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 300)
-                                .padding()
+                                    .onChange(of: selectedDate) { _, _ in
+                                        Task {
+                                            await fetchAllData()
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 300)
+                                    .padding()
+                            }
                         }
                     }
                 }
+            }
+            .sheet(isPresented: $showDetailSheet) {
+                selectedDetailView
+                    .task {
+                        await fetchAllData()
+                    }
+                    .onChange(of: selectedDate) { _, _ in
+                        Task {
+                            await fetchAllData()
+                        }
+                    }
             }
             .navigationTitle(nutrientName)
             .toolbar {

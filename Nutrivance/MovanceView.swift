@@ -152,7 +152,7 @@ struct MovanceView: View {
                                         case "Dashboard":
                                             DashboardView()
                                         case "Today's Plan":
-                                            TodaysPlanView()
+                                            TodaysPlanView(planType: .all)
                                         case "Workout History":
                                             WorkoutHistoryView()
                                         case "Training Calendar":
@@ -267,7 +267,7 @@ struct MovanceView: View {
         case "Dashboard":
             return AnyView(DashboardView())
         case "Today's Plan":
-            return AnyView(TodaysPlanView())
+            return AnyView(TodaysPlanView(planType: .all))
         case "Workout History":
             return AnyView(WorkoutHistoryView())
         case "Training Calendar":

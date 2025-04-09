@@ -4,73 +4,30 @@ import HealthKit
 
 struct DashboardMetrics {
     // General Health Metrics
-    var runningDistance: String = "0"
-    var walkingDistance: String = "0"
-    var hikingDistance: String = "0"
     var activeEnergy: String = "0"
-    var restingEnergy: String = "0"
     var steps: String = "0"
     var distance: String = "0"
-    var standMinutes: String = "0"
-    var physicalEffort: String = "0"
+    var exercise: String = "0"
     var standHours: String = "0"
     var flights: String = "0"
-    var exercise: String = "0"
-    var pushCount: String = "0"
-    var walkingSpeed: String = "0"
-    var walkingAsymmetry: String = "0"
-    var walkingStepLength: String = "0"
-    var walkingDoubleSupport: String = "0"
-    var walkingHeartRate: String = "0"
-    var runningSpeed: String = "0"
-    var runningPower: String = "0"
-    var cyclingDistance: String = "0"
-    var cyclingPower: String = "0"
-    var cyclingCadence: String = "0"
-    var exerciseCalories: String = "0"
-    var basalEnergyBurned: String = "0"
-    var vo2Max: String = "0"
-    var cardioFitness: String = "0"
-    var respiratoryRate: String = "0"
-    var heartRateRecovery: String = "0"
-    var restingHeartRate: String = "0"
-    var heartRateVariability: String = "0"
-    var moveTime: String = "0"
-    var standTime: String = "0"
     var mindfulnessMinutes: String = "0"
-    var highIntensityTrainingMinutes: String = "0"
-    var functionalStrengthTraining: String = "0"
-    var handCyclingDistance: String = "0"
-    var wheelchairDistance: String = "0"
-    var stairClimbingSpeed: String = "0"
-    var stairDescentSpeed: String = "0"
-    var jumpCount: String = "0"
-    var recoveryTime: String = "0"
     
-    // Sport Specific Metrics
-    var swimmingStrokes: String = "0"
+    // Sports Metrics
+    var runningDistance: String = "0"
+    var walkingDistance: String = "0"
+    var cyclingDistance: String = "0"
     var swimmingDistance: String = "0"
-    var swimmingLapCount: String = "0"
-    var tennisStrokeCount: String = "0"
-    var badmintonMinutes: String = "0"
-    var paddleSportsTime: String = "0"
-    var pickleballMinutes: String = "0"
-    var golfStrokes: String = "0"
-    var jumpRopeReps: String = "0"
-    var snowboardingDistance: String = "0"
-    var skiingDistance: String = "0"
-    var downhillSkiingVertical: String = "0"
-    var rowingDistance: String = "0"
-    var rowingStrokes: String = "0"
-    var ellipticalDistance: String = "0"
-    var stairStepperFloors: String = "0"
-    var taiChiMinutes: String = "0"
+    var hikingDistance: String = "0"
     var yogaTime: String = "0"
-    var flexibilityMinutes: String = "0"
-    var handballMinutes: String = "0"
-    var discSportsDistance: String = "0"
-    var curlingMinutes: String = "0"
-    var equestrianMinutes: String = "0"
+    var functionalStrengthTraining: String = "0"
+    var rowingDistance: String = "0"
+    var ellipticalDistance: String = "0"
+    var highIntensityTrainingMinutes: String = "0"
+    var basketballMinutes: String = "0"
+    var tennisMinutes: String = "0"
+    var soccerMinutes: String = "0"
+    var volleyballMinutes: String = "0"
+    var golfMinutes: String = "0"
     
     // Workout Data
     var workouts: [HKWorkout] = []
@@ -147,54 +104,17 @@ class DashboardViewModel: ObservableObject {
     var availableComplications: [ComplicationData] {
         [
             ComplicationData(title: "Active Energy", value: metrics.activeEnergy, unit: "kcal", icon: "flame.fill", category: .general, isActivityRing: true),
-            ComplicationData(title: "Resting Energy", value: metrics.restingEnergy, unit: "kcal", icon: "bed.double.fill", category: .general, isActivityRing: false),
+            
             ComplicationData(title: "Steps", value: metrics.steps, unit: "steps", icon: "figure.walk", category: .general, isActivityRing: false),
+            
             ComplicationData(title: "Distance", value: metrics.distance, unit: "km", icon: "figure.walk", category: .general, isActivityRing: false),
-            ComplicationData(title: "Stand Time", value: metrics.standMinutes, unit: "min", icon: "figure.stand", category: .general, isActivityRing: true),
-            ComplicationData(title: "Physical Effort", value: metrics.physicalEffort, unit: "pts", icon: "heart.fill", category: .general, isActivityRing: false),
+            
             ComplicationData(title: "Stand Hours", value: metrics.standHours, unit: "hr", icon: "figure.stand", category: .general, isActivityRing: true),
             ComplicationData(title: "Flights Climbed", value: metrics.flights, unit: "floors", icon: "stairs", category: .general, isActivityRing: false),
-            ComplicationData(title: "Exercise", value: metrics.exercise, unit: "min", icon: "figure.run", category: .general, isActivityRing: true),
-            ComplicationData(title: "Walking Speed", value: metrics.walkingSpeed, unit: "m/s", icon: "speedometer", category: .general, isActivityRing: false),
-            ComplicationData(title: "Walking Asymmetry", value: metrics.walkingAsymmetry, unit: "%", icon: "figure.walk.motion", category: .general, isActivityRing: false),
-            ComplicationData(title: "Step Length", value: metrics.walkingStepLength, unit: "m", icon: "ruler", category: .general, isActivityRing: false),
-            ComplicationData(title: "Double Support", value: metrics.walkingDoubleSupport, unit: "%", icon: "figure.walk", category: .general, isActivityRing: false),
-            ComplicationData(title: "Walking Heart Rate", value: metrics.walkingHeartRate, unit: "bpm", icon: "heart.fill", category: .general, isActivityRing: false),
-            ComplicationData(title: "Running Speed", value: metrics.runningSpeed, unit: "m/s", icon: "figure.run", category: .general, isActivityRing: false),
-            ComplicationData(title: "Running Power", value: metrics.runningPower, unit: "W", icon: "bolt.fill", category: .general, isActivityRing: false),
-            ComplicationData(title: "VO2 Max", value: metrics.vo2Max, unit: "mL/kg/min", icon: "lungs.fill", category: .general, isActivityRing: false),
-            ComplicationData(title: "Cardio Fitness", value: metrics.cardioFitness, unit: "pts", icon: "heart.circle.fill", category: .general, isActivityRing: false),
-            ComplicationData(title: "Respiratory Rate", value: metrics.respiratoryRate, unit: "br/min", icon: "lungs", category: .general, isActivityRing: false),
-            ComplicationData(title: "Heart Recovery", value: metrics.heartRateRecovery, unit: "bpm", icon: "heart.slash.fill", category: .general, isActivityRing: false),
-            ComplicationData(title: "Resting Heart Rate", value: metrics.restingHeartRate, unit: "bpm", icon: "heart", category: .general, isActivityRing: false),
-            ComplicationData(title: "Heart Rate Variability", value: metrics.heartRateVariability, unit: "ms", icon: "waveform.path.ecg", category: .general, isActivityRing: false),
-            ComplicationData(title: "Move Time", value: metrics.moveTime, unit: "min", icon: "figure.walk", category: .general, isActivityRing: false),
-            ComplicationData(title: "Stand Time", value: metrics.standTime, unit: "min", icon: "figure.stand", category: .general, isActivityRing: true),
-            ComplicationData(title: "Mindfulness", value: metrics.mindfulnessMinutes, unit: "min", icon: "brain.head.profile", category: .general, isActivityRing: false),
             
-            ComplicationData(title: "Swimming Strokes", value: metrics.swimmingStrokes, unit: "count", icon: "figure.pool.swim", category: .sports , isActivityRing: false),
-            ComplicationData(title: "Swimming Distance", value: metrics.swimmingDistance, unit: "m", icon: "figure.pool.swim", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Swimming Laps", value: metrics.swimmingLapCount, unit: "laps", icon: "figure.pool.swim", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Tennis Strokes", value: metrics.tennisStrokeCount, unit: "count", icon: "figure.tennis", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Badminton", value: metrics.badmintonMinutes, unit: "min", icon: "figure.badminton", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Paddle Sports", value: metrics.paddleSportsTime, unit: "min", icon: "figure.rowing", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Pickleball", value: metrics.pickleballMinutes, unit: "min", icon: "figure.tennis", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Golf Strokes", value: metrics.golfStrokes, unit: "count", icon: "figure.golf", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Jump Rope", value: metrics.jumpRopeReps, unit: "count", icon: "figure.jumprope", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Snowboarding", value: metrics.snowboardingDistance, unit: "km", icon: "figure.snowboarding", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Skiing", value: metrics.skiingDistance, unit: "km", icon: "figure.skiing.downhill", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Vertical Descent", value: metrics.downhillSkiingVertical, unit: "m", icon: "arrow.down.circle", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Rowing Distance", value: metrics.rowingDistance, unit: "m", icon: "figure.rowing", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Rowing Strokes", value: metrics.rowingStrokes, unit: "count", icon: "figure.rowing", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Elliptical", value: metrics.ellipticalDistance, unit: "km", icon: "figure.elliptical", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Stair Stepper", value: metrics.stairStepperFloors, unit: "floors", icon: "stairs", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Tai Chi", value: metrics.taiChiMinutes, unit: "min", icon: "figure.martial.arts", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Yoga", value: metrics.yogaTime, unit: "min", icon: "figure.yoga", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Flexibility", value: metrics.flexibilityMinutes, unit: "min", icon: "figure.flexibility", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Handball", value: metrics.handballMinutes, unit: "min", icon: "figure.handball", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Disc Sports", value: metrics.discSportsDistance, unit: "m", icon: "circle.fill", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Curling", value: metrics.curlingMinutes, unit: "min", icon: "figure.curling", category: .sports, isActivityRing: false),
-            ComplicationData(title: "Equestrian", value: metrics.equestrianMinutes, unit: "min", icon: "figure.equestrians", category: .sports, isActivityRing: false)
+            ComplicationData(title: "Exercise", value: metrics.exercise, unit: "min", icon: "figure.run", category: .general, isActivityRing: true),
+           
+            ComplicationData(title: "Mindfulness", value: metrics.mindfulnessMinutes, unit: "min", icon: "brain.head.profile", category: .general, isActivityRing: false),
         ]
     }
     
@@ -329,29 +249,12 @@ class DashboardViewModel: ObservableObject {
                 await MainActor.run {
                     switch type {
                     case .activeEnergyBurned: metrics.activeEnergy = String(format: "%.0f", quantity)
-                    case .basalEnergyBurned: metrics.restingEnergy = String(format: "%.0f", quantity)
                     case .stepCount: metrics.steps = String(format: "%.0f", quantity)
                     case .distanceWalkingRunning: metrics.distance = String(format: "%.1f", quantity/1000)
                     case .appleExerciseTime: metrics.exercise = String(format: "%.0f", quantity)
                     case .appleStandTime:
-                        metrics.standMinutes = String(format: "%.0f", quantity)
                         metrics.standHours = String(format: "%.0f", quantity/60)
-                        metrics.standTime = String(format: "%.0f", quantity)
                     case .flightsClimbed: metrics.flights = String(format: "%.0f", quantity)
-                    case .walkingSpeed: metrics.walkingSpeed = String(format: "%.1f", quantity)
-                    case .walkingAsymmetryPercentage: metrics.walkingAsymmetry = String(format: "%.0f", quantity)
-                    case .walkingStepLength: metrics.walkingStepLength = String(format: "%.2f", quantity)
-                    case .walkingDoubleSupportPercentage: metrics.walkingDoubleSupport = String(format: "%.0f", quantity)
-                    case .walkingHeartRateAverage: metrics.walkingHeartRate = String(format: "%.0f", quantity)
-                    case .runningSpeed: metrics.runningSpeed = String(format: "%.1f", quantity)
-                    case .runningPower: metrics.runningPower = String(format: "%.0f", quantity)
-                    case .vo2Max: metrics.vo2Max = String(format: "%.1f", quantity)
-                    case .respiratoryRate: metrics.respiratoryRate = String(format: "%.1f", quantity)
-                    case .heartRateRecoveryOneMinute: metrics.heartRateRecovery = String(format: "%.0f", quantity)
-                    case .restingHeartRate: metrics.restingHeartRate = String(format: "%.0f", quantity)
-                    case .heartRateVariabilitySDNN: metrics.heartRateVariability = String(format: "%.0f", quantity)
-                    case .distanceSwimming: metrics.swimmingDistance = String(format: "%.0f", quantity)
-                    case .distanceCycling: metrics.ellipticalDistance = String(format: "%.1f", quantity/1000)
                     default: break
                     }
                 }
@@ -369,11 +272,6 @@ class DashboardViewModel: ObservableObject {
                 metrics.mindfulnessMinutes = String(format: "%.0f", minutes)
             }
         }
-        
-        let stepsScore = (Double(metrics.steps) ?? 0) / 10000 * 100
-        let exerciseScore = (Double(metrics.exercise) ?? 0) / 30 * 100
-        let energyScore = (Double(metrics.activeEnergy) ?? 0) / 600 * 100
-        metrics.physicalEffort = String(format: "%.0f", (stepsScore + exerciseScore + energyScore) / 3)
         
         await loadWorkoutMetrics()
     }
@@ -403,56 +301,18 @@ class DashboardViewModel: ObservableObject {
             .distanceCycling
         ]
         
-        let workoutTypes: [HKWorkoutActivityType] = [
-            .swimming,
-            .tennis,
-            .badminton,
-            .paddleSports,
-            .pickleball,
-            .golf,
-            .jumpRope,
-            .snowSports,
-            .rowing,
-            .elliptical,
-            .stairClimbing,
-            .taiChi,
-            .yoga,
-            .flexibility,
-            .handball,
-            .discSports,
-            .curling,
-            .equestrianSports
-        ]
-        
         // Load health data
         for type in types {
             if let quantity = try? await healthStore.fetchTodayQuantity(for: type) {
                 await MainActor.run {
                     switch type {
                     case .activeEnergyBurned: metrics.activeEnergy = String(format: "%.0f", quantity)
-                    case .basalEnergyBurned: metrics.restingEnergy = String(format: "%.0f", quantity)
                     case .stepCount: metrics.steps = String(format: "%.0f", quantity)
                     case .distanceWalkingRunning: metrics.distance = String(format: "%.1f", quantity/1000)
                     case .appleExerciseTime: metrics.exercise = String(format: "%.0f", quantity)
                     case .appleStandTime:
-                        metrics.standMinutes = String(format: "%.0f", quantity)
                         metrics.standHours = String(format: "%.0f", quantity/60)
-                        metrics.standTime = String(format: "%.0f", quantity)
                     case .flightsClimbed: metrics.flights = String(format: "%.0f", quantity)
-                    case .walkingSpeed: metrics.walkingSpeed = String(format: "%.1f", quantity)
-                    case .walkingAsymmetryPercentage: metrics.walkingAsymmetry = String(format: "%.0f", quantity)
-                    case .walkingStepLength: metrics.walkingStepLength = String(format: "%.2f", quantity)
-                    case .walkingDoubleSupportPercentage: metrics.walkingDoubleSupport = String(format: "%.0f", quantity)
-                    case .walkingHeartRateAverage: metrics.walkingHeartRate = String(format: "%.0f", quantity)
-                    case .runningSpeed: metrics.runningSpeed = String(format: "%.1f", quantity)
-                    case .runningPower: metrics.runningPower = String(format: "%.0f", quantity)
-                    case .vo2Max: metrics.vo2Max = String(format: "%.1f", quantity)
-                    case .respiratoryRate: metrics.respiratoryRate = String(format: "%.1f", quantity)
-                    case .heartRateRecoveryOneMinute: metrics.heartRateRecovery = String(format: "%.0f", quantity)
-                    case .restingHeartRate: metrics.restingHeartRate = String(format: "%.0f", quantity)
-                    case .heartRateVariabilitySDNN: metrics.heartRateVariability = String(format: "%.0f", quantity)
-                    case .distanceSwimming: metrics.swimmingDistance = String(format: "%.0f", quantity)
-                    case .distanceCycling: metrics.ellipticalDistance = String(format: "%.1f", quantity/1000)
                     default: break
                     }
                 }
@@ -478,99 +338,6 @@ class DashboardViewModel: ObservableObject {
                 }
             }
         }
-        
-        let today = Calendar.current.startOfDay(for: Date())
-        if let workouts = try? await healthStore.fetchWorkouts(from: today, to: Date()) {
-            await MainActor.run {
-                for workoutType in workoutTypes {
-                    let filteredWorkouts = workouts.filter { $0.workoutActivityType == workoutType }
-                    
-                    switch workoutType {
-                    case .tennis:
-                        metrics.tennisStrokeCount = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .badminton:
-                        metrics.badmintonMinutes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .paddleSports:
-                        metrics.paddleSportsTime = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .pickleball:
-                        metrics.pickleballMinutes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .golf:
-                        metrics.golfStrokes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .jumpRope:
-                        metrics.jumpRopeReps = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .snowSports:
-                        let distance = filteredWorkouts.compactMap { $0.totalDistance?.doubleValue(for: HKUnit.meterUnit(with: .kilo)) }.reduce(0, +)
-                        let vertical = filteredWorkouts.compactMap {
-                            $0.metadata?[HKMetadataKeyElevationDescended] as? Double
-                        }.reduce(0, +)
-                        metrics.snowboardingDistance = String(format: "%.1f", distance)
-                        metrics.skiingDistance = String(format: "%.1f", distance)
-                        metrics.downhillSkiingVertical = String(format: "%.0f", vertical)
-                    case .rowing:
-                        metrics.rowingDistance = String(format: "%.0f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meter())
-                        }.reduce(0, +))
-                    case .elliptical:
-                        metrics.ellipticalDistance = String(format: "%.1f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meterUnit(with: .kilo))
-                        }.reduce(0, +))
-                    case .stairClimbing:
-                        metrics.stairStepperFloors = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .taiChi:
-                        metrics.taiChiMinutes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .yoga:
-                        metrics.yogaTime = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .flexibility:
-                        metrics.flexibilityMinutes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .handball:
-                        metrics.handballMinutes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .discSports:
-                        metrics.discSportsDistance = String(format: "%.0f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meter())
-                        }.reduce(0, +))
-                    case .curling:
-                        metrics.curlingMinutes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .equestrianSports:
-                        metrics.equestrianMinutes = String(format: "%.0f", filteredWorkouts.map { $0.duration / 60 }.reduce(0, +))
-                    case .running:
-                        metrics.runningDistance = String(format: "%.1f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meterUnit(with: .kilo))
-                        }.reduce(0, +))
-                    case .walking:
-                        metrics.walkingDistance = String(format: "%.1f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meterUnit(with: .kilo))
-                        }.reduce(0, +))
-                    case .cycling:
-                        metrics.cyclingDistance = String(format: "%.1f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meterUnit(with: .kilo))
-                        }.reduce(0, +))
-                    case .swimming:
-                        metrics.swimmingStrokes = String(format: "%.0f", filteredWorkouts.compactMap {
-                            $0.statistics(for: HKQuantityType(.swimmingStrokeCount))?.sumQuantity()?.doubleValue(for: HKUnit.count())
-                        }.reduce(0, +))
-                        
-                        metrics.swimmingDistance = String(format: "%.0f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meter())
-                        }.reduce(0, +))
-                    case .hiking:
-                        metrics.hikingDistance = String(format: "%.1f", filteredWorkouts.compactMap {
-                            $0.totalDistance?.doubleValue(for: HKUnit.meterUnit(with: .kilo))
-                        }.reduce(0, +))
-                    default:
-                        break
-                    }
-                }
-            }
-        }
-
-        
-        // Calculate physical effort score
-        let stepsScore = (Double(metrics.steps) ?? 0) / 10000 * 100
-        let exerciseScore = (Double(metrics.exercise) ?? 0) / 30 * 100
-        let energyScore = (Double(metrics.activeEnergy) ?? 0) / 600 * 100
-        await MainActor.run {
-            metrics.physicalEffort = String(format: "%.0f", (stepsScore + exerciseScore + energyScore) / 3)
-        }
     }
     
     @MainActor
@@ -578,56 +345,16 @@ class DashboardViewModel: ObservableObject {
         switch type {
         case .activeEnergyBurned:
             metrics.activeEnergy = String(format: "%.0f", value)
-        case .basalEnergyBurned:
-            metrics.restingEnergy = String(format: "%.0f", value)
         case .stepCount:
             metrics.steps = String(format: "%.0f", value)
         case .distanceWalkingRunning:
             metrics.distance = String(format: "%.1f", value/1000)
-        case .appleStandTime:
-            metrics.standMinutes = String(format: "%.0f", value)
         case .appleExerciseTime:
             metrics.exercise = String(format: "%.0f", value)
+        case .appleStandTime:
+            metrics.standHours = String(format: "%.0f", value/60)
         case .flightsClimbed:
             metrics.flights = String(format: "%.0f", value)
-        case .walkingSpeed:
-            metrics.walkingSpeed = String(format: "%.1f", value)
-        case .walkingAsymmetryPercentage:
-            metrics.walkingAsymmetry = String(format: "%.1f", value)
-        case .walkingStepLength:
-            metrics.walkingStepLength = String(format: "%.2f", value)
-        case .walkingDoubleSupportPercentage:
-            metrics.walkingDoubleSupport = String(format: "%.1f", value)
-        case .heartRate:
-            metrics.walkingHeartRate = String(format: "%.0f", value)
-        case .runningSpeed:
-            metrics.runningSpeed = String(format: "%.1f", value)
-        case .runningPower:
-            metrics.runningPower = String(format: "%.0f", value)
-        case .distanceCycling:
-            metrics.cyclingDistance = String(format: "%.1f", value/1000)
-        case .cyclingPower:
-            metrics.cyclingPower = String(format: "%.0f", value)
-        case .cyclingCadence:
-            metrics.cyclingCadence = String(format: "%.0f", value)
-        case .vo2Max:
-            metrics.vo2Max = String(format: "%.1f", value)
-        case .respiratoryRate:
-            metrics.respiratoryRate = String(format: "%.1f", value)
-        case .restingHeartRate:
-            metrics.restingHeartRate = String(format: "%.0f", value)
-        case .heartRateVariabilitySDNN:
-            metrics.heartRateVariability = String(format: "%.0f", value)
-        case .pushCount:
-            metrics.pushCount = String(format: "%.0f", value)
-        case .distanceSwimming:
-            metrics.swimmingDistance = String(format: "%.0f", value)
-        case .swimmingStrokeCount:
-            metrics.swimmingStrokes = String(format: "%.0f", value)
-        case .distanceDownhillSnowSports:
-            metrics.skiingDistance = String(format: "%.1f", value/1000)
-        case .distanceWheelchair:
-            metrics.wheelchairDistance = String(format: "%.1f", value/1000)
         default:
             break
         }
@@ -636,6 +363,7 @@ class DashboardViewModel: ObservableObject {
 
 struct ActivityRingView: View {
     let metric: DashboardViewModel.RingMetric
+    @State private var animatedValues: [UUID: Double] = [:]
     
     var body: some View {
         VStack(spacing: 16) {
@@ -648,13 +376,20 @@ struct ActivityRingView: View {
                         .foregroundColor(layer.color)
                     
                     Circle()
-                        .trim(from: 0, to: min(layer.value / layer.goal, 1.0))
+                        .trim(from: 0, to: min(animatedValues[layer.id] ?? 0, 1.0))
                         .stroke(style: StrokeStyle(lineWidth: 20, lineCap: .round))
                         .foregroundColor(layer.color)
                         .rotationEffect(.degrees(-90))
                 }
             }
             .aspectRatio(1, contentMode: .fit)
+            .onAppear {
+                for layer in metric.layers {
+                    withAnimation(.spring(response: 1.5, dampingFraction: 0.8, blendDuration: 0.8)) {
+                        animatedValues[layer.id] = layer.value / layer.goal
+                    }
+                }
+            }
             
             // Name and Metrics Row
             HStack(alignment: .center, spacing: 12) {
@@ -842,7 +577,7 @@ struct DashboardView: View {
             }
             .sheet(isPresented: $viewModel.showComplicationPicker) {
                 NavigationStack {
-                    ComplicationPickerView(viewModel: viewModel, rings: $rings)
+                    ComplicationPickerView(viewModel: viewModel, healthStore: HealthKitManager(), rings: $rings)
                 }
             }
         }
@@ -1103,115 +838,131 @@ struct ComplicationInfo: Identifiable {
 
 struct ComplicationPickerView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var healthStore: HealthKitManager
+    @Binding var rings: [DashboardViewModel.RingMetric]
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
-    @Binding var rings: [DashboardViewModel.RingMetric]
     
     private let categories = [
         "General Health": [
             ComplicationInfo(title: "Active Energy", valueKey: "activeEnergy", unit: "kcal", icon: "flame.fill", isActivityRing: true, category: .general),
             ComplicationInfo(title: "Steps", valueKey: "steps", unit: "steps", icon: "figure.walk", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Distance", valueKey: "distance", unit: "km", icon: "figure.run", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Exercise", valueKey: "exercise", unit: "min", icon: "timer", isActivityRing: true, category: .general),
-            ComplicationInfo(title: "Stand", valueKey: "standHours", unit: "hr", icon: "figure.stand", isActivityRing: true, category: .general),
-            ComplicationInfo(title: "Flights", valueKey: "flights", unit: "floors", icon: "stairs", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Resting Energy", valueKey: "restingEnergy", unit: "kcal", icon: "bed.double.fill", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Walking Speed", valueKey: "walkingSpeed", unit: "km/h", icon: "figure.walk.motion", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Walking Asymmetry", valueKey: "walkingAsymmetry", unit: "%", icon: "figure.walk.departure", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Step Length", valueKey: "walkingStepLength", unit: "cm", icon: "ruler", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Double Support", valueKey: "walkingDoubleSupport", unit: "%", icon: "figure.walk.arrival", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Walking Heart Rate", valueKey: "walkingHeartRate", unit: "bpm", icon: "heart.fill", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "VO2 Max", valueKey: "vo2Max", unit: "ml/kg/min", icon: "lungs.fill", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Cardio Fitness", valueKey: "cardioFitness", unit: "score", icon: "heart.text.square.fill", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Respiratory Rate", valueKey: "respiratoryRate", unit: "br/min", icon: "wind", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Heart Rate Recovery", valueKey: "heartRateRecovery", unit: "bpm", icon: "heart.slash.fill", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Resting Heart Rate", valueKey: "restingHeartRate", unit: "bpm", icon: "heart.circle.fill", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Heart Rate Variability", valueKey: "heartRateVariability", unit: "ms", icon: "waveform.path.ecg", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "Mindfulness", valueKey: "mindfulnessMinutes", unit: "min", icon: "brain.head.profile", isActivityRing: false, category: .general),
-            ComplicationInfo(title: "High Intensity", valueKey: "highIntensityTrainingMinutes", unit: "min", icon: "bolt.heart.fill", isActivityRing: false, category: .general)
+            ComplicationInfo(title: "Distance", valueKey: "distance", unit: "km", icon: "figure.walk.motion", isActivityRing: false, category: .general),
+            ComplicationInfo(title: "Exercise", valueKey: "exercise", unit: "min", icon: "figure.run", isActivityRing: true, category: .general),
+            ComplicationInfo(title: "Stand", valueKey: "standHours", unit: "hrs", icon: "figure.stand", isActivityRing: true, category: .general),
+            ComplicationInfo(title: "Flights Climbed", valueKey: "flights", unit: "floors", icon: "stairs", isActivityRing: false, category: .general),
+            ComplicationInfo(title: "Mindfulness", valueKey: "mindfulnessMinutes", unit: "min", icon: "brain.head.profile", isActivityRing: false, category: .general)
         ],
-        "Sports": [
-            ComplicationInfo(title: "Swimming Distance", valueKey: "swimmingDistance", unit: "m", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Swimming Strokes", valueKey: "swimmingStrokes", unit: "count", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Swimming Laps", valueKey: "swimmingLapCount", unit: "laps", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Tennis", valueKey: "tennisStrokeCount", unit: "strokes", icon: "figure.tennis", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Badminton", valueKey: "badmintonMinutes", unit: "min", icon: "figure.badminton", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Paddle Sports", valueKey: "paddleSportsTime", unit: "min", icon: "figure.rowing", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Pickleball", valueKey: "pickleballMinutes", unit: "min", icon: "figure.tennis", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Golf", valueKey: "golfStrokes", unit: "strokes", icon: "figure.golf", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Jump Rope", valueKey: "jumpRopeReps", unit: "jumps", icon: "figure.jumprope", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Snowboarding", valueKey: "snowboardingDistance", unit: "km", icon: "snowflake", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Skiing", valueKey: "skiingDistance", unit: "km", icon: "figure.skiing.downhill", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Downhill Vertical", valueKey: "downhillSkiingVertical", unit: "m", icon: "mountain.2.fill", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Rowing Distance", valueKey: "rowingDistance", unit: "m", icon: "figure.rower", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Rowing Strokes", valueKey: "rowingStrokes", unit: "strokes", icon: "figure.rower", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Elliptical", valueKey: "ellipticalDistance", unit: "km", icon: "figure.elliptical", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Stair Stepper", valueKey: "stairStepperFloors", unit: "floors", icon: "figure.stair.stepper", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Tai Chi", valueKey: "taiChiMinutes", unit: "min", icon: "figure.mind.and.body", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Yoga", valueKey: "yogaTime", unit: "min", icon: "figure.yoga", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Flexibility", valueKey: "flexibilityMinutes", unit: "min", icon: "figure.flexibility", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Handball", valueKey: "handballMinutes", unit: "min", icon: "figure.handball", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Disc Sports", valueKey: "discSportsDistance", unit: "m", icon: "circle.fill", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Curling", valueKey: "curlingMinutes", unit: "min", icon: "figure.curling", isActivityRing: false, category: .sports),
-            ComplicationInfo(title: "Equestrian", valueKey: "equestrianMinutes", unit: "min", icon: "figure.equestrian.sports", isActivityRing: false, category: .sports)
-        ]
+//        "Sports": [
+//            ComplicationInfo(title: "Swimming Distance", valueKey: "swimmingDistance", unit: "m", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Swimming Strokes", valueKey: "swimmingStrokes", unit: "count", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Swimming Laps", valueKey: "swimmingLapCount", unit: "laps", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Tennis", valueKey: "tennisStrokeCount", unit: "strokes", icon: "figure.tennis", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Badminton", valueKey: "badmintonMinutes", unit: "min", icon: "figure.badminton", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Paddle Sports", valueKey: "paddleSportsTime", unit: "min", icon: "figure.rowing", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Pickleball", valueKey: "pickleballMinutes", unit: "min", icon: "figure.tennis", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Golf", valueKey: "golfStrokes", unit: "strokes", icon: "figure.golf", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Jump Rope", valueKey: "jumpRopeReps", unit: "jumps", icon: "figure.jumprope", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Snowboarding", valueKey: "snowboardingDistance", unit: "km", icon: "snowflake", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Skiing", valueKey: "skiingDistance", unit: "km", icon: "figure.skiing.downhill", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Downhill Vertical", valueKey: "downhillSkiingVertical", unit: "m", icon: "mountain.2.fill", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Rowing Distance", valueKey: "rowingDistance", unit: "m", icon: "figure.rower", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Rowing Strokes", valueKey: "rowingStrokes", unit: "strokes", icon: "figure.rower", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Elliptical", valueKey: "ellipticalDistance", unit: "km", icon: "figure.elliptical", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Stair Stepper", valueKey: "stairStepperFloors", unit: "floors", icon: "figure.stair.stepper", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Tai Chi", valueKey: "taiChiMinutes", unit: "min", icon: "figure.mind.and.body", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Yoga", valueKey: "yogaTime", unit: "min", icon: "figure.yoga", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Flexibility", valueKey: "flexibilityMinutes", unit: "min", icon: "figure.flexibility", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Handball", valueKey: "handballMinutes", unit: "min", icon: "figure.handball", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Disc Sports", valueKey: "discSportsDistance", unit: "m", icon: "circle.fill", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Curling", valueKey: "curlingMinutes", unit: "min", icon: "figure.curling", isActivityRing: false, category: .sports),
+//            ComplicationInfo(title: "Equestrian", valueKey: "equestrianMinutes", unit: "min", icon: "figure.equestrian.sports", isActivityRing: false, category: .sports)
+//        ]
     ]
-
+    
+    private var availableComplications: [String: [ComplicationInfo]] {
+        var filtered = categories
+        for (category, complications) in filtered {
+            filtered[category] = complications.filter { complication in
+                !rings.contains { ring in
+                    ring.layers.contains { layer in
+                        layer.title == complication.title
+                    }
+                }
+            }
+        }
+        filtered = filtered.filter { !$0.value.isEmpty }
+        return filtered
+    }
     
     var filteredCategories: [String: [ComplicationInfo]] {
         if searchText.isEmpty {
-            return categories
+            return availableComplications
         }
-        return categories.mapValues { metrics in
+        return availableComplications.mapValues { metrics in
             metrics.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
         }.filter { !$0.value.isEmpty }
     }
     
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(filteredCategories.keys.sorted(), id: \.self) { category in
-                    Section(category) {
-                        ForEach(filteredCategories[category] ?? [], id: \.title) { info in
-                            Button(action: {
-                                addComplication(info)
-                                dismiss()
-                            }) {
-                                HStack {
-                                    Label(info.title, systemImage: info.icon)
-                                    Spacer()
-                                    Text(info.unit)
-                                        .foregroundStyle(.secondary)
-                                    Image(systemName: "plus.circle.fill")
-                                        .foregroundStyle(.blue)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .searchable(text: $searchText, prompt: "Search metrics")
-            .navigationTitle("Add Complication")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+    private func getValue(for key: String) async -> String {
+        let metrics: [String: HKQuantityTypeIdentifier] = [
+            "activeEnergy": .activeEnergyBurned,
+            "restingEnergy": .basalEnergyBurned,
+            "steps": .stepCount,
+            "distance": .distanceWalkingRunning,
+            "standHours": .appleStandTime,
+            "flights": .flightsClimbed,
+            "exercise": .appleExerciseTime,
+            "walkingSpeed": .walkingSpeed,
+            "walkingAsymmetry": .walkingAsymmetryPercentage,
+            "walkingStepLength": .walkingStepLength,
+            "walkingDoubleSupport": .walkingDoubleSupportPercentage,
+            "walkingHeartRate": .heartRate,
+            "runningSpeed": .runningSpeed,
+            "runningPower": .runningPower,
+            "runningDistance": .distanceWalkingRunning,
+            "cyclingDistance": .distanceCycling,
+            "cyclingPower": .cyclingPower,
+            "cyclingCadence": .cyclingCadence,
+            "vo2Max": .vo2Max,
+            "respiratoryRate": .respiratoryRate,
+            "heartRateRecovery": .heartRate,
+            "restingHeartRate": .restingHeartRate,
+            "heartRateVariability": .heartRateVariabilitySDNN,
+            "swimmingStrokes": .swimmingStrokeCount,
+            "swimmingDistance": .distanceSwimming,
+            "snowboardingDistance": .distanceDownhillSnowSports,
+            "skiingDistance": .distanceDownhillSnowSports,
+            "wheelchairDistance": .distanceWheelchair
+        ]
+        
+        if let typeIdentifier = metrics[key] {
+            let value = try? await healthStore.fetchTodayQuantity(for: typeIdentifier)
+            if let value = value {
+                switch key {
+                case "distance", "cyclingDistance", "swimmingDistance", "snowboardingDistance", "skiingDistance", "wheelchairDistance":
+                    return String(format: "%.1f", value/1000)
+                case "standHours":
+                    return String(format: "%.0f", value/60)
+                case "walkingAsymmetry", "walkingDoubleSupport":
+                    return String(format: "%.1f", value*100)
+                default:
+                    return String(format: "%.0f", value)
                 }
             }
         }
-    }
-    
-    private func getValue(for key: String) -> String {
+        
         let mirror = Mirror(reflecting: viewModel.metrics)
         return mirror.children
             .first(where: { $0.label == key })?
             .value as? String ?? "0"
     }
     
-    private func addComplication(_ info: ComplicationInfo) {
+    private func addComplication(_ info: ComplicationInfo) async {
+        let value = await getValue(for: info.valueKey)
         let complication = ComplicationData(
             title: info.title,
-            value: getValue(for: info.valueKey),
+            value: value,
             unit: info.unit,
             icon: info.icon,
             category: info.category,
@@ -1226,7 +977,7 @@ struct ComplicationPickerView: View {
                 let newLayer = DashboardViewModel.RingLayer(
                     id: UUID(),
                     title: complication.title,
-                    value: Double(complication.value) ?? 0,
+                    value: Double(value) ?? 0,
                     goal: getDefaultGoalFor(complication.title),
                     colorRed: colors.red,
                     colorGreen: colors.green,
@@ -1259,7 +1010,55 @@ struct ComplicationPickerView: View {
         default: return 100
         }
     }
+    
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(filteredCategories.keys.sorted(), id: \.self) { category in
+                    Section(category) {
+                        ForEach(filteredCategories[category] ?? [], id: \.title) { info in
+                            Button {
+                                Task {
+                                    await addComplication(info)
+                                    dismiss()
+                                }
+                            } label: {
+                                HStack {
+                                    Label(info.title, systemImage: info.icon)
+                                    Spacer()
+                                    Text(info.unit)
+                                        .foregroundStyle(.secondary)
+                                    Image(systemName: "plus.circle.fill")
+                                        .foregroundStyle(.blue)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $searchText, prompt: "Search metrics")
+            .navigationTitle("Add Complication")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private let generalHealthMetrics = [
+        ComplicationInfo(title: "Active Energy", valueKey: "activeEnergy", unit: "kcal", icon: "flame.fill", isActivityRing: true, category: .general),
+        ComplicationInfo(title: "Steps", valueKey: "steps", unit: "steps", icon: "figure.walk", isActivityRing: false, category: .general),
+        ComplicationInfo(title: "Distance", valueKey: "distance", unit: "km", icon: "figure.walk.motion", isActivityRing: false, category: .general),
+        ComplicationInfo(title: "Exercise", valueKey: "exercise", unit: "min", icon: "figure.run", isActivityRing: true, category: .general),
+        ComplicationInfo(title: "Stand", valueKey: "standHours", unit: "hrs", icon: "figure.stand", isActivityRing: true, category: .general),
+        ComplicationInfo(title: "Flights Climbed", valueKey: "flights", unit: "floors", icon: "stairs", isActivityRing: false, category: .general),
+        ComplicationInfo(title: "Mindfulness", valueKey: "mindfulnessMinutes", unit: "min", icon: "brain.head.profile", isActivityRing: false, category: .general)
+    ]
+
 }
+
 
 
 // Separate list view component
@@ -1750,6 +1549,41 @@ struct RingItemView: View {
                 )
                 .frame(width: baseSize - layerSpacing * CGFloat(index + 1),
                        height: baseSize - layerSpacing * CGFloat(index + 1))
+            }
+        }
+    }
+
+    struct ActivityRing: View {
+        let progress: Double
+        let gradient: Gradient
+        let backgroundGradient: Gradient
+        @State private var animatedProgress: Double = 0
+        
+        var body: some View {
+            ZStack {
+                Circle()
+                    .stroke(
+                        AngularGradient(gradient: backgroundGradient, center: .center),
+                        style: StrokeStyle(lineWidth: 20, lineCap: .round)
+                    )
+                Circle()
+                    .trim(from: 0, to: animatedProgress)
+                    .stroke(
+                        AngularGradient(gradient: gradient, center: .center),
+                        style: StrokeStyle(lineWidth: 20, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+            }
+            .onChange(of: progress) { oldValue, newValue in
+                animatedProgress = 0
+                withAnimation(.spring(response: 1.2, dampingFraction: 0.9, blendDuration: 0.9)) {
+                    animatedProgress = min(newValue, 1.0)
+                }
+            }
+            .onAppear {
+                withAnimation(.spring(response: 1.2, dampingFraction: 0.9, blendDuration: 0.9)) {
+                    animatedProgress = min(progress, 1.0)
+                }
             }
         }
     }

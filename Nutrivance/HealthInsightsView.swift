@@ -896,52 +896,52 @@ struct HealthInsightsView: View {
     
     let dietPlans = [
         DietPlan(name: "Balanced Diet",
-                 strictRanges: (carbs: 0.4...0.4, protein: 0.3...0.3, fat: 0.3...0.3),
-                 lenientRanges: (carbs: 0.45...0.5, protein: 0.2...0.3, fat: 0.25...0.35)),
+                 strictRanges: (carbs: 0.1...0.1, protein: 0.075...0.075, fat: 0.033...0.033),
+                 lenientRanges: (carbs: 0.11...0.125, protein: 0.05...0.075, fat: 0.028...0.039)),
         
         DietPlan(name: "High-Protein Diet",
-                 strictRanges: (carbs: 0.3...0.3, protein: 0.4...0.4, fat: 0.3...0.3),
-                 lenientRanges: (carbs: 0.25...0.35, protein: 0.35...0.45, fat: 0.2...0.3)),
+                 strictRanges: (carbs: 0.075...0.075, protein: 0.1...0.1, fat: 0.033...0.033),
+                 lenientRanges: (carbs: 0.063...0.088, protein: 0.088...0.113, fat: 0.022...0.033)),
         
         DietPlan(name: "Low-Carb Diet",
-                 strictRanges: (carbs: 0.15...0.2, protein: 0.35...0.4, fat: 0.4...0.5),
-                 lenientRanges: (carbs: 0.2...0.3, protein: 0.25...0.35, fat: 0.35...0.45)),
+                 strictRanges: (carbs: 0.038...0.05, protein: 0.088...0.1, fat: 0.044...0.056),
+                 lenientRanges: (carbs: 0.05...0.075, protein: 0.063...0.088, fat: 0.039...0.05)),
         
         DietPlan(name: "Ketogenic Diet",
-                 strictRanges: (carbs: 0.05...0.1, protein: 0.2...0.25, fat: 0.65...0.75),
-                 lenientRanges: (carbs: 0.05...0.15, protein: 0.15...0.3, fat: 0.6...0.8)),
+                 strictRanges: (carbs: 0.013...0.025, protein: 0.05...0.063, fat: 0.072...0.083),
+                 lenientRanges: (carbs: 0.013...0.038, protein: 0.038...0.075, fat: 0.067...0.089)),
         
         DietPlan(name: "Paleo Diet",
-                 strictRanges: (carbs: 0.2...0.3, protein: 0.3...0.4, fat: 0.3...0.4),
-                 lenientRanges: (carbs: 0.25...0.4, protein: 0.25...0.35, fat: 0.3...0.45)),
+                 strictRanges: (carbs: 0.05...0.075, protein: 0.075...0.1, fat: 0.033...0.044),
+                 lenientRanges: (carbs: 0.063...0.1, protein: 0.063...0.088, fat: 0.033...0.05)),
         
         DietPlan(name: "Mediterranean Diet",
-                 strictRanges: (carbs: 0.4...0.5, protein: 0.2...0.3, fat: 0.3...0.4),
-                 lenientRanges: (carbs: 0.45...0.55, protein: 0.15...0.25, fat: 0.25...0.35)),
+                 strictRanges: (carbs: 0.1...0.125, protein: 0.05...0.075, fat: 0.033...0.044),
+                 lenientRanges: (carbs: 0.113...0.138, protein: 0.038...0.063, fat: 0.028...0.039)),
         
         DietPlan(name: "Vegetarian Diet",
-                 strictRanges: (carbs: 0.5...0.55, protein: 0.2...0.25, fat: 0.2...0.3),
-                 lenientRanges: (carbs: 0.45...0.6, protein: 0.15...0.25, fat: 0.2...0.35)),
+                 strictRanges: (carbs: 0.125...0.138, protein: 0.05...0.063, fat: 0.022...0.033),
+                 lenientRanges: (carbs: 0.113...0.15, protein: 0.038...0.063, fat: 0.022...0.039)),
         
         DietPlan(name: "Vegan Diet",
-                 strictRanges: (carbs: 0.5...0.6, protein: 0.2...0.25, fat: 0.15...0.25),
-                 lenientRanges: (carbs: 0.45...0.65, protein: 0.15...0.25, fat: 0.15...0.3)),
+                 strictRanges: (carbs: 0.125...0.15, protein: 0.05...0.063, fat: 0.017...0.028),
+                 lenientRanges: (carbs: 0.113...0.163, protein: 0.038...0.063, fat: 0.017...0.033)),
         
         DietPlan(name: "Carnivore Diet",
-                 strictRanges: (carbs: 0.0...0.05, protein: 0.35...0.5, fat: 0.5...0.65),
-                 lenientRanges: (carbs: 0.0...0.1, protein: 0.3...0.45, fat: 0.5...0.7)),
+                 strictRanges: (carbs: 0.0...0.013, protein: 0.088...0.125, fat: 0.056...0.072),
+                 lenientRanges: (carbs: 0.0...0.025, protein: 0.075...0.113, fat: 0.056...0.078)),
         
         DietPlan(name: "DASH Diet",
-                 strictRanges: (carbs: 0.5...0.55, protein: 0.2...0.25, fat: 0.2...0.3),
-                 lenientRanges: (carbs: 0.45...0.6, protein: 0.15...0.3, fat: 0.2...0.35)),
+                 strictRanges: (carbs: 0.125...0.138, protein: 0.05...0.063, fat: 0.022...0.033),
+                 lenientRanges: (carbs: 0.113...0.15, protein: 0.038...0.075, fat: 0.022...0.039)),
         
         DietPlan(name: "Zone Diet",
-                 strictRanges: (carbs: 0.4...0.4, protein: 0.3...0.3, fat: 0.3...0.3),
-                 lenientRanges: (carbs: 0.35...0.45, protein: 0.25...0.35, fat: 0.25...0.35)),
+                 strictRanges: (carbs: 0.1...0.1, protein: 0.075...0.075, fat: 0.033...0.033),
+                 lenientRanges: (carbs: 0.088...0.113, protein: 0.063...0.088, fat: 0.028...0.039)),
         
         DietPlan(name: "Intermittent Fasting",
-                 strictRanges: (carbs: 0.0...1.0, protein: 0.0...1.0, fat: 0.0...1.0),
-                 lenientRanges: (carbs: 0.0...1.0, protein: 0.0...1.0, fat: 0.0...1.0))
+                 strictRanges: (carbs: 0.0...0.25, protein: 0.0...0.25, fat: 0.0...0.11),
+                 lenientRanges: (carbs: 0.0...0.25, protein: 0.0...0.25, fat: 0.0...0.11))
     ]
     
     enum TimePeriod: String, CaseIterable {
@@ -952,7 +952,7 @@ struct HealthInsightsView: View {
         case year = "Year"
     }
     
-    @State private var selectedTimePeriod: TimePeriod = .day
+    @State private var selectedTimePeriod: TimePeriod = .week
     @StateObject private var healthStore = HealthKitManager()
     @State private var nutrientData: [String: [NutrientDataPoint]] = [:]
     

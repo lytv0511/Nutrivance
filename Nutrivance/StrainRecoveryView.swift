@@ -36,9 +36,10 @@ struct StrainScoreCard: View {
     var body: some View {
         HStack {
             Spacer()
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading) {
                 Text("Daily Strain")
                     .font(.title2.bold())
+                    .padding()
                 
                 if isLoading {
                     ProgressView()
@@ -49,6 +50,7 @@ struct StrainScoreCard: View {
                         Text("/10")
                             .font(.title2)
                             .foregroundStyle(.secondary)
+                            .padding()
                     }
                 }
             }
