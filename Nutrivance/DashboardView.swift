@@ -34,14 +34,53 @@ struct DashboardMetrics {
     var timeInWorkoutZones: [String: String] = [:]
 }
 
-struct ComplicationData: Identifiable, Hashable {
-    let id = UUID()
+struct ComplicationData: Identifiable, Hashable, Codable {
+    var id: UUID
     let title: String
     let value: String
     let unit: String
     let icon: String
     let category: ComplicationCategory
     let isActivityRing: Bool
+
+    // Add this custom initializer
+    init(title: String, value: String, unit: String, icon: String, category: ComplicationCategory, isActivityRing: Bool) {
+        self.id = UUID()
+        self.title = title
+        self.value = value
+        self.unit = unit
+        self.icon = icon
+        self.category = category
+        self.isActivityRing = isActivityRing
+    }
+
+    // Keep the existing Codable implementation
+    enum CodingKeys: String, CodingKey {
+        case id, title, value, unit, icon, category, isActivityRing
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(value, forKey: .value)
+        try container.encode(unit, forKey: .unit)
+        try container.encode(icon, forKey: .icon)
+        try container.encode(category == .general ? "general" : "sports", forKey: .category)
+        try container.encode(isActivityRing, forKey: .isActivityRing)
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        value = try container.decode(String.self, forKey: .value)
+        unit = try container.decode(String.self, forKey: .unit)
+        icon = try container.decode(String.self, forKey: .icon)
+        let categoryString = try container.decode(String.self, forKey: .category)
+        category = categoryString == "general" ? .general : .sports
+        isActivityRing = try container.decode(Bool.self, forKey: .isActivityRing)
+    }
 }
 
 struct ComplicationSection: View {
@@ -83,7 +122,99 @@ struct ComplicationRow: View {
     }
 }
 
+@MainActor
 class DashboardViewModel: ObservableObject {
+    @Published var selectedComplications: Set<ComplicationData> = []
+    let healthStore: HealthKitManager
+       
+   @AppStorage("savedComplications") private var savedComplicationsData: Data = {
+       let defaultComplications = [
+           ComplicationData(
+               title: "Active Energy",
+               value: "0",
+               unit: "cal",
+               icon: "flame.fill",
+               category: .general,
+               isActivityRing: true
+           ),
+           ComplicationData(
+               title: "Steps",
+               value: "0",
+               unit: "steps",
+               icon: "figure.walk",
+               category: .general,
+               isActivityRing: false
+           ),
+           ComplicationData(
+               title: "Distance",
+               value: "0",
+               unit: "km",
+               icon: "figure.walk.motion",
+               category: .general,
+               isActivityRing: false
+           ),
+           ComplicationData(
+               title: "Exercise",
+               value: "0",
+               unit: "min",
+               icon: "figure.run",
+               category: .general,
+               isActivityRing: true
+           )
+       ]
+       return try! JSONEncoder().encode(defaultComplications)
+   }()
+   
+    init() {
+        let defaultComplications = [
+            ComplicationData(
+                title: "Active Energy",
+                value: "0",
+                unit: "cal",
+                icon: "flame.fill",
+                category: .general,
+                isActivityRing: true
+            ),
+            ComplicationData(
+                title: "Steps",
+                value: "0",
+                unit: "steps",
+                icon: "figure.walk",
+                category: .general,
+                isActivityRing: false
+            ),
+            ComplicationData(
+                title: "Distance",
+                value: "0",
+                unit: "km",
+                icon: "figure.walk.motion",
+                category: .general,
+                isActivityRing: false
+            ),
+            ComplicationData(
+                title: "Exercise",
+                value: "0",
+                unit: "min",
+                icon: "figure.run",
+                category: .general,
+                isActivityRing: true
+            )
+        ]
+        
+        let initialData = (try? JSONEncoder().encode(defaultComplications)) ?? Data()
+        
+        self.healthStore = HealthKitManager()
+        self.selectedComplications = Set(defaultComplications)
+        self.savedComplicationsData = initialData
+        self.showComplicationPicker = false
+    }
+
+   func saveComplications() {
+       if let encoded = try? JSONEncoder().encode(Array(selectedComplications)) {
+           savedComplicationsData = encoded
+       }
+   }
+    
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Published var metrics: DashboardMetrics = DashboardMetrics()
     @Published var showRingCard = false
@@ -97,7 +228,7 @@ class DashboardViewModel: ObservableObject {
             UserDefaults.standard.set(isRingSectionExpanded, forKey: "ringSectionExpanded")
         }
     }
-    @Published var selectedComplications: Set<ComplicationData> = []
+
     @Published var showComplicationPicker = false
     @Published var isLoading = false
     
@@ -120,7 +251,6 @@ class DashboardViewModel: ObservableObject {
     
     private let goalsKey = "complicationGoals"
     private let ringsKey = "activeRings"
-    let healthStore: HealthKitManager
     
     struct RingLayer: Identifiable, Codable {
         let id: UUID
