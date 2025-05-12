@@ -17,7 +17,9 @@ struct MeditationView: View {
             HStack {
                 Spacer()
                 VStack {
+                    Spacer()
                     Text("Meditation")
+                    Spacer()
                 }
                 Spacer()
             }

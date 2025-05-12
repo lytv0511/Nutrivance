@@ -17,7 +17,9 @@ struct SleepView: View {
             HStack {
                 Spacer()
                 VStack {
+                    Spacer()
                     Text("Sleep")
+                    Spacer()
                 }
                 Spacer()
             }

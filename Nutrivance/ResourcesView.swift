@@ -17,7 +17,9 @@ struct ResourcesView: View {
             HStack {
                 Spacer()
                 VStack {
+                    Spacer()
                     Text("Resources")
+                    Spacer()
                 }
                 Spacer()
             }

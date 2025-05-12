@@ -17,7 +17,9 @@ struct MoodTrackerView: View {
             HStack {
                 Spacer()
                 VStack {
+                    Spacer()
                     Text("Mood Tracker")
+                    Spacer()
                 }
                 Spacer()
             }

@@ -160,8 +160,33 @@ class DashboardViewModel: ObservableObject {
                icon: "figure.run",
                category: .general,
                isActivityRing: true
+           ),
+           ComplicationData(
+               title: "Stand",
+               value: "0",
+               unit: "hr",
+               icon: "figure.stand",
+               category: .general,
+               isActivityRing: true
+           ),
+           ComplicationData(
+               title: "Flights Climbed",
+               value: "0",
+               unit: "floors",
+               icon: "stairs",
+               category: .general,
+               isActivityRing: false
+           ),
+           ComplicationData(
+               title: "Mindfulness",
+               value: "0",
+               unit: "min",
+               icon: "brain.head.profile",
+               category: .general,
+               isActivityRing: false
            )
        ]
+
        return try! JSONEncoder().encode(defaultComplications)
    }()
    
@@ -198,8 +223,33 @@ class DashboardViewModel: ObservableObject {
                 icon: "figure.run",
                 category: .general,
                 isActivityRing: true
+            ),
+            ComplicationData(
+                title: "Stand",
+                value: "0",
+                unit: "hr",
+                icon: "figure.stand",
+                category: .general,
+                isActivityRing: true
+            ),
+            ComplicationData(
+                title: "Flights Climbed",
+                value: "0",
+                unit: "floors",
+                icon: "stairs",
+                category: .general,
+                isActivityRing: false
+            ),
+            ComplicationData(
+                title: "Mindfulness",
+                value: "0",
+                unit: "min",
+                icon: "brain.head.profile",
+                category: .general,
+                isActivityRing: false
             )
         ]
+
         
         let initialData = (try? JSONEncoder().encode(defaultComplications)) ?? Data()
         
@@ -559,6 +609,7 @@ struct DashboardView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var animationPhase: Double = 0
     @State private var rings: [DashboardViewModel.RingMetric] = []
+    @StateObject private var healthStore = HealthKitManager()
     
     init() {
         let healthStore = HealthKitManager()
@@ -571,7 +622,7 @@ struct DashboardView: View {
     }
     
     private var maxVisibleComplications: Int {
-        horizontalSizeClass == .regular ? 8 : 4
+        horizontalSizeClass == .regular ? 8 : 8
     }
     
     var body: some View {
@@ -667,6 +718,8 @@ struct DashboardView: View {
                         }
                     }
                     .padding(.horizontal)
+                    
+                    AnchorlineSection(viewModel: viewModel, healthStore: healthStore)
                     
                     if !viewModel.metrics.workouts.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
@@ -982,42 +1035,15 @@ struct ComplicationPickerView: View {
             ComplicationInfo(title: "Stand", valueKey: "standHours", unit: "hrs", icon: "figure.stand", isActivityRing: true, category: .general),
             ComplicationInfo(title: "Flights Climbed", valueKey: "flights", unit: "floors", icon: "stairs", isActivityRing: false, category: .general),
             ComplicationInfo(title: "Mindfulness", valueKey: "mindfulnessMinutes", unit: "min", icon: "brain.head.profile", isActivityRing: false, category: .general)
-        ],
-//        "Sports": [
-//            ComplicationInfo(title: "Swimming Distance", valueKey: "swimmingDistance", unit: "m", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Swimming Strokes", valueKey: "swimmingStrokes", unit: "count", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Swimming Laps", valueKey: "swimmingLapCount", unit: "laps", icon: "figure.pool.swim", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Tennis", valueKey: "tennisStrokeCount", unit: "strokes", icon: "figure.tennis", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Badminton", valueKey: "badmintonMinutes", unit: "min", icon: "figure.badminton", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Paddle Sports", valueKey: "paddleSportsTime", unit: "min", icon: "figure.rowing", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Pickleball", valueKey: "pickleballMinutes", unit: "min", icon: "figure.tennis", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Golf", valueKey: "golfStrokes", unit: "strokes", icon: "figure.golf", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Jump Rope", valueKey: "jumpRopeReps", unit: "jumps", icon: "figure.jumprope", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Snowboarding", valueKey: "snowboardingDistance", unit: "km", icon: "snowflake", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Skiing", valueKey: "skiingDistance", unit: "km", icon: "figure.skiing.downhill", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Downhill Vertical", valueKey: "downhillSkiingVertical", unit: "m", icon: "mountain.2.fill", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Rowing Distance", valueKey: "rowingDistance", unit: "m", icon: "figure.rower", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Rowing Strokes", valueKey: "rowingStrokes", unit: "strokes", icon: "figure.rower", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Elliptical", valueKey: "ellipticalDistance", unit: "km", icon: "figure.elliptical", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Stair Stepper", valueKey: "stairStepperFloors", unit: "floors", icon: "figure.stair.stepper", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Tai Chi", valueKey: "taiChiMinutes", unit: "min", icon: "figure.mind.and.body", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Yoga", valueKey: "yogaTime", unit: "min", icon: "figure.yoga", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Flexibility", valueKey: "flexibilityMinutes", unit: "min", icon: "figure.flexibility", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Handball", valueKey: "handballMinutes", unit: "min", icon: "figure.handball", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Disc Sports", valueKey: "discSportsDistance", unit: "m", icon: "circle.fill", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Curling", valueKey: "curlingMinutes", unit: "min", icon: "figure.curling", isActivityRing: false, category: .sports),
-//            ComplicationInfo(title: "Equestrian", valueKey: "equestrianMinutes", unit: "min", icon: "figure.equestrian.sports", isActivityRing: false, category: .sports)
-//        ]
+        ]
     ]
     
     private var availableComplications: [String: [ComplicationInfo]] {
         var filtered = categories
         for (category, complications) in filtered {
             filtered[category] = complications.filter { complication in
-                !rings.contains { ring in
-                    ring.layers.contains { layer in
-                        layer.title == complication.title
-                    }
+                !viewModel.selectedComplications.contains { existing in
+                    existing.title == complication.title
                 }
             }
         }
@@ -1037,45 +1063,21 @@ struct ComplicationPickerView: View {
     private func getValue(for key: String) async -> String {
         let metrics: [String: HKQuantityTypeIdentifier] = [
             "activeEnergy": .activeEnergyBurned,
-            "restingEnergy": .basalEnergyBurned,
             "steps": .stepCount,
             "distance": .distanceWalkingRunning,
-            "standHours": .appleStandTime,
-            "flights": .flightsClimbed,
             "exercise": .appleExerciseTime,
-            "walkingSpeed": .walkingSpeed,
-            "walkingAsymmetry": .walkingAsymmetryPercentage,
-            "walkingStepLength": .walkingStepLength,
-            "walkingDoubleSupport": .walkingDoubleSupportPercentage,
-            "walkingHeartRate": .heartRate,
-            "runningSpeed": .runningSpeed,
-            "runningPower": .runningPower,
-            "runningDistance": .distanceWalkingRunning,
-            "cyclingDistance": .distanceCycling,
-            "cyclingPower": .cyclingPower,
-            "cyclingCadence": .cyclingCadence,
-            "vo2Max": .vo2Max,
-            "respiratoryRate": .respiratoryRate,
-            "heartRateRecovery": .heartRate,
-            "restingHeartRate": .restingHeartRate,
-            "heartRateVariability": .heartRateVariabilitySDNN,
-            "swimmingStrokes": .swimmingStrokeCount,
-            "swimmingDistance": .distanceSwimming,
-            "snowboardingDistance": .distanceDownhillSnowSports,
-            "skiingDistance": .distanceDownhillSnowSports,
-            "wheelchairDistance": .distanceWheelchair
+            "standHours": .appleStandTime,
+            "flights": .flightsClimbed
         ]
         
         if let typeIdentifier = metrics[key] {
             let value = try? await healthStore.fetchTodayQuantity(for: typeIdentifier)
             if let value = value {
                 switch key {
-                case "distance", "cyclingDistance", "swimmingDistance", "snowboardingDistance", "skiingDistance", "wheelchairDistance":
+                case "distance":
                     return String(format: "%.1f", value/1000)
                 case "standHours":
                     return String(format: "%.0f", value/60)
-                case "walkingAsymmetry", "walkingDoubleSupport":
-                    return String(format: "%.1f", value*100)
                 default:
                     return String(format: "%.0f", value)
                 }
@@ -1176,20 +1178,7 @@ struct ComplicationPickerView: View {
             }
         }
     }
-
-    private let generalHealthMetrics = [
-        ComplicationInfo(title: "Active Energy", valueKey: "activeEnergy", unit: "kcal", icon: "flame.fill", isActivityRing: true, category: .general),
-        ComplicationInfo(title: "Steps", valueKey: "steps", unit: "steps", icon: "figure.walk", isActivityRing: false, category: .general),
-        ComplicationInfo(title: "Distance", valueKey: "distance", unit: "km", icon: "figure.walk.motion", isActivityRing: false, category: .general),
-        ComplicationInfo(title: "Exercise", valueKey: "exercise", unit: "min", icon: "figure.run", isActivityRing: true, category: .general),
-        ComplicationInfo(title: "Stand", valueKey: "standHours", unit: "hrs", icon: "figure.stand", isActivityRing: true, category: .general),
-        ComplicationInfo(title: "Flights Climbed", valueKey: "flights", unit: "floors", icon: "stairs", isActivityRing: false, category: .general),
-        ComplicationInfo(title: "Mindfulness", valueKey: "mindfulnessMinutes", unit: "min", icon: "brain.head.profile", isActivityRing: false, category: .general)
-    ]
-
 }
-
-
 
 // Separate list view component
 private struct ComplicationsListView: View {
@@ -2221,5 +2210,169 @@ struct SendablePredicate: @unchecked Sendable {
     
     init(_ predicate: NSPredicate) {
         self.predicate = predicate
+    }
+}
+
+struct AnchorSlot: Identifiable, Equatable {
+    let id: UUID
+    var metric: ComplicationData?
+    var weeklyAverage: Double = 0
+    var todayValue: Double = 0
+    var trend: TrendDirection = .steady
+    
+    static func == (lhs: AnchorSlot, rhs: AnchorSlot) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.metric?.title == rhs.metric?.title &&
+        lhs.weeklyAverage == rhs.weeklyAverage &&
+        lhs.todayValue == rhs.todayValue &&
+        lhs.trend == rhs.trend
+    }
+}
+
+enum TrendDirection: Equatable {
+    case up, down, steady
+    
+    var color: Color {
+        switch self {
+        case .up: return .green
+        case .down: return .red
+        case .steady: return .blue
+        }
+    }
+}
+
+struct AnchorlineSection: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var healthStore: HealthKitManager
+    @State private var autoScroll = false
+    @State private var slots: [AnchorSlot] = Array(repeating: AnchorSlot(id: UUID()), count: 5)
+    @State private var currentIndex = 0
+    
+    let timer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+    
+    var body: some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text("Anchorline Charts")
+                    .font(.title2)
+                    .bold()
+                
+                Spacer()
+                
+                Toggle("Auto-scroll", isOn: $autoScroll)
+                    .labelsHidden()
+            }
+            .padding(.horizontal)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 20) {
+                    ForEach(0..<slots.count, id: \.self) { index in
+                        AnchorlineCard(slot: $slots[index])
+                            .frame(width: 300, height: 200)
+                            .dropDestination(for: ActivityComplicationTransferData.self) { items, location in
+                                if let item = items.first {
+                                    // Only update this specific slot
+                                    slots[index].metric = ComplicationData(
+                                        title: item.title,
+                                        value: item.value,
+                                        unit: item.unit,
+                                        icon: "chart.line.uptrend.xyaxis",
+                                        category: .general,
+                                        isActivityRing: false
+                                    )
+                                    
+                                    // Update just this slot's comparison data
+                                    Task {
+                                        await updateMetricComparison(for: index)
+                                    }
+                                }
+                                return true
+                            }
+                    }
+                }
+                .padding()
+            }
+            .onReceive(timer) { _ in
+                if autoScroll {
+                    withAnimation {
+                        currentIndex = (currentIndex + 1) % slots.count
+                    }
+                }
+            }
+        }
+    }
+    
+    private func updateMetricComparison(for index: Int) async {
+        guard index < slots.count, let metric = slots[index].metric else { return }
+        
+        let metrics: [String: HKQuantityTypeIdentifier] = [
+            "Active Energy": .activeEnergyBurned,
+            "Steps": .stepCount,
+            "Distance": .distanceWalkingRunning,
+            "Exercise": .appleExerciseTime,
+            "Stand": .appleStandTime,
+            "Flights Climbed": .flightsClimbed
+        ]
+        
+        if let typeIdentifier = metrics[metric.title] {
+            let todayValue = try? await healthStore.fetchTodayQuantity(for: typeIdentifier)
+            
+            if let todayValue = todayValue {
+                // Update only this specific slot
+                slots[index].todayValue = todayValue
+                slots[index].weeklyAverage = todayValue // Temporary until weekly average implementation
+                
+                let difference = abs(todayValue - slots[index].weeklyAverage)
+                let threshold = slots[index].weeklyAverage * 0.15
+                
+                if difference <= threshold {
+                    slots[index].trend = .steady
+                } else if todayValue > slots[index].weeklyAverage {
+                    slots[index].trend = .up
+                } else {
+                    slots[index].trend = .down
+                }
+            }
+        }
+    }
+}
+
+
+struct AnchorlineCard: View {
+    @Binding var slot: AnchorSlot
+    
+    var body: some View {
+        VStack {
+            if let metric = slot.metric {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(metric.title)
+                        .font(.headline)
+                    
+                    HStack {
+                        Text("Today: \(slot.todayValue, specifier: "%.1f") \(metric.unit)")
+                        Spacer()
+                        Image(systemName: trendArrow)
+                            .foregroundColor(slot.trend.color)
+                    }
+                    
+                    Text("7-day avg: \(slot.weeklyAverage, specifier: "%.1f") \(metric.unit)")
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                Text("Drop metric here")
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(15)
+    }
+    
+    private var trendArrow: String {
+        switch slot.trend {
+        case .up: return "arrow.up.circle.fill"
+        case .down: return "arrow.down.circle.fill"
+        case .steady: return "equal.circle.fill"
+        }
     }
 }

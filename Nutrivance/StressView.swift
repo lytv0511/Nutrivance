@@ -17,7 +17,9 @@ struct StressView: View {
             HStack {
                 Spacer()
                 VStack {
+                    Spacer()
                     Text("Stress")
+                    Spacer()
                 }
                 Spacer()
             }

@@ -366,58 +366,26 @@ struct NutrientDetailView: View {
                 )
                 .ignoresSafeArea()
                 
-                GeometryReader { geometry in
-                    let layout = computeLayout(for: geometry.size)
+                VStack(spacing: 0) {
+                    HStack {
+                        Text(selectedDate.formatted(.dateTime.day().month().year()))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
                     
-                    ScrollView {
-                        LazyVGrid(
-                            columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: layout.columns),
-                            spacing: 16
-                        ) {
-                            if ["Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(nutrientName),
-                               let _ = nutrientDetails[nutrientName] {
-                                NutrientCard(
-                                    type: .today,
-                                    nutrientName: nutrientName,
-                                    selectedDate: $selectedDate,
-                                    isSelected: selectedCard == .today,
-                                    healthStore: healthStore,
-                                    titleColor: getNutrientColor(),
-                                    symbolName: getSymbolName(for: .today),
-                                    cardWidth: layout.cardWidth
-                                )
-                                .onTapGesture {
-                                    withAnimation(.spring()) {
-                                        selectedCard = .today
-                                    }
-                                    let generator = UIImpactFeedbackGenerator(style: .medium)
-                                    generator.impactOccurred()
-                                }
-                                
-                                ForEach([CardType.weekly, .monthly, .recommended, .foods, .benefits], id: \.self) { cardType in
-                                    NutrientCard(
-                                        type: cardType,
-                                        nutrientName: nutrientName,
-                                        selectedDate: $selectedDate,
-                                        isSelected: selectedCard == cardType,
-                                        healthStore: healthStore,
-                                        titleColor: getCardColor(for: cardType),
-                                        symbolName: getSymbolName(for: cardType),
-                                        cardWidth: layout.cardWidth
-                                    )
-                                    .onTapGesture {
-                                        withAnimation(.spring()) {
-                                            selectedCard = cardType
-                                            selectedPoint = nil
-                                        }
-                                        let generator = UIImpactFeedbackGenerator(style: .medium)
-                                        generator.impactOccurred()
-                                    }
-                                }
-                                
-                                CategoryDetailView(category: nutrientName)
-                                    .padding()
-                            } else {
+                    GeometryReader { geometry in
+                        let layout = computeLayout(for: geometry.size)
+                        
+                        ScrollView {
+                            LazyVGrid(
+                                columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: layout.columns),
+                                spacing: 16
+                            ) {
+                                // Use the same card layout for all nutrient types
                                 ForEach([CardType.today, .weekly, .monthly, .recommended, .foods, .benefits], id: \.self) { cardType in
                                     NutrientCard(
                                         type: cardType,
@@ -442,9 +410,8 @@ struct NutrientDetailView: View {
                                     }
                                 }
                             }
-                        }
-                        .padding()
-                        if !["Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(nutrientName) {
+                            .padding()
+                            
                             if let selected = selectedPoint {
                                 selectedPointDetail(selected)
                             }
@@ -462,6 +429,13 @@ struct NutrientDetailView: View {
                                     }
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 300)
+                                    .padding()
+                            }
+                            
+                            // Add CategoryDetailView at the bottom for special categories
+                            if ["Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"].contains(nutrientName),
+                               let _ = nutrientDetails[nutrientName] {
+                                CategoryDetailView(category: nutrientName)
                                     .padding()
                             }
                         }
@@ -487,7 +461,6 @@ struct NutrientDetailView: View {
             }
         }
     }
-
 }
 
 struct NutrientCard: View {
@@ -1582,6 +1555,8 @@ struct NutrientSubcategoryCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: {
                 withAnimation { isExpanded.toggle() }
+                let generator = UIImpactFeedbackGenerator(style: .heavy)
+                    generator.impactOccurred()
             }) {
                 HStack {
                     Text(title)
@@ -1592,7 +1567,13 @@ struct NutrientSubcategoryCard: View {
                         .foregroundColor(.blue)
                 }
                 .padding()
-                .background(Color(.systemGray6))
+                .background(.ultraThinMaterial.opacity(0.8))
+                .overlay(
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.1))
+                        .allowsHitTesting(false)
+                )
+                .cornerRadius(12, corners: [.topLeft, .topRight])
             }
             
             if isExpanded {
@@ -1614,10 +1595,10 @@ struct NutrientSubcategoryCard: View {
                 }
             }
         }
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(radius: 1)
-        .padding(.horizontal)
+        .frame(maxWidth: .infinity)
         .task {
             await fetchNutrientValues()
         }
@@ -1665,5 +1646,26 @@ struct NutrientSubcategoryCard: View {
         default:
             return baseName
         }
+    }
+}
+
+// Add this extension for rounded corners if not already present
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+    
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
     }
 }

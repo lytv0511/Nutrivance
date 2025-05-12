@@ -17,7 +17,9 @@ struct JournalView: View {
             HStack {
                 Spacer()
                 VStack {
+                    Spacer()
                     Text("Journal")
+                    Spacer()
                 }
                 Spacer()
             }
