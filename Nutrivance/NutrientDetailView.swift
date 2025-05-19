@@ -725,6 +725,46 @@ struct NutrientCard: View {
                     "Nutrient absorption",
                     "Brain development",
                     "Cell membrane structure"]
+        case "Calories":
+            return ["Provide energy for all bodily functions",
+                    "Support physical activity",
+                    "Essential for metabolism",
+                    "Maintain body weight and function"]
+        case "Water":
+            return ["Hydration and fluid balance",
+                    "Temperature regulation",
+                    "Nutrient transport",
+                    "Joint lubrication and detoxification"]
+        case "Fiber":
+            return ["Promotes digestive health",
+                    "Supports healthy blood sugar levels",
+                    "Helps manage cholesterol",
+                    "Enhances satiety and weight control"]
+        case "Vitamins":
+            return ["Support immune function",
+                    "Aid in energy production",
+                    "Protect vision and skin health",
+                    "Help blood clotting and red blood cell formation"]
+        case "Minerals":
+            return ["Build strong bones and teeth",
+                    "Support nerve function",
+                    "Regulate muscle contraction",
+                    "Maintain fluid and electrolyte balance"]
+        case "Phytochemicals":
+            return ["Support immune health",
+                    "May reduce risk of chronic diseases",
+                    "Provide anti-inflammatory effects",
+                    "Protect against cell damage"]
+        case "Antioxidants":
+            return ["Combat oxidative stress",
+                    "Protect cells from damage",
+                    "May reduce risk of chronic diseases",
+                    "Support healthy aging"]
+        case "Electrolytes":
+            return ["Regulate fluid balance",
+                    "Support nerve and muscle function",
+                    "Maintain pH balance",
+                    "Prevent dehydration and cramping"]
         default:
             return []
         }
