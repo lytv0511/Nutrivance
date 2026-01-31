@@ -90,7 +90,6 @@
 		15BFD16F2D0E252E00E7847E /* NutrientCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD16E2D0E252E00E7847E /* NutrientCharts.swift */; };
 		15BFD1712D106F9600E7847E /* GoalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD1702D106F9600E7847E /* GoalsView.swift */; };
 		15BFD1732D108D7500E7847E /* NutrientInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BFD1722D108D7500E7847E /* NutrientInfo.swift */; };
-		15C034142D0DDA1B000EBCD2 /* ios.yml in Resources */ = {isa = PBXBuildFile; fileRef = 15C034132D0DDA1B000EBCD2 /* ios.yml */; };
 		15CB57042CEEB87100A6E970 /* TableDetection.metal in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57032CEEB86800A6E970 /* TableDetection.metal */; };
 		15CB57082CEEBD7900A6E970 /* NutritionDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */; };
 		15CB570A2CEEBED000A6E970 /* NutritionScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CB57092CEEBED000A6E970 /* NutritionScannerView.swift */; };
@@ -206,7 +205,6 @@
 		156814622D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = movement_prediction_sequential_model.mlpackage; sourceTree = "<group>"; };
 		156AA8EA2D76A80200DA0845 /* RingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingDetailView.swift; sourceTree = "<group>"; };
 		156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionUnit.swift; sourceTree = "<group>"; };
-		15701F572D67A13D0044DB01 /* libmlc_llm.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = libmlc_llm.dylib; sourceTree = "<group>"; };
 		1570E2662D67B75300F42CB5 /* FuelCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuelCheckView.swift; sourceTree = "<group>"; };
 		15741EA42CEFE2F400CDE4F9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindfulnessRealmView.swift; sourceTree = "<group>"; };
@@ -270,7 +268,6 @@
 		15C033F02D0DD504000EBCD2 /* HEAD */ = {isa = PBXFileReference; lastKnownFileType = text; path = HEAD; sourceTree = "<group>"; };
 		15C033F12D0DD504000EBCD2 /* index */ = {isa = PBXFileReference; lastKnownFileType = file; path = index; sourceTree = "<group>"; };
 		15C033F22D0DD504000EBCD2 /* packed-refs */ = {isa = PBXFileReference; lastKnownFileType = text; path = "packed-refs"; sourceTree = "<group>"; };
-		15C034132D0DDA1B000EBCD2 /* ios.yml */ = {isa = PBXFileReference; lastKnownFileType = text.yaml; path = ios.yml; sourceTree = "<group>"; };
 		15CB57032CEEB86800A6E970 /* TableDetection.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = TableDetection.metal; sourceTree = "<group>"; };
 		15CB57072CEEBD7900A6E970 /* NutritionDetection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionDetection.swift; sourceTree = "<group>"; };
 		15CB57092CEEBED000A6E970 /* NutritionScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionScannerView.swift; sourceTree = "<group>"; };
@@ -299,18 +296,8 @@
 		15FE8B8F2CE40B2F00495A2D /* CameraOCRView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraOCRView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		15AC8EA22CDCF4FE0002101A /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-			);
-			target = 15AC8E872CDCF4FC0002101A /* WaterWidgetExtension */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		15AC8E8E2CDCF4FC0002101A /* WaterWidget */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (15AC8EA22CDCF4FE0002101A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = WaterWidget; sourceTree = "<group>"; };
+		15AC8E8E2CDCF4FC0002101A /* WaterWidget */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = WaterWidget; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -354,7 +341,6 @@
 				151F14792D77BE1900B51F88 /* UIKit.framework */,
 				15AC8E8A2CDCF4FC0002101A /* WidgetKit.framework */,
 				15AC8E8C2CDCF4FC0002101A /* SwiftUI.framework */,
-				15701F572D67A13D0044DB01 /* libmlc_llm.dylib */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -549,7 +535,6 @@
 		15C033F52D0DD504000EBCD2 /* workflows */ = {
 			isa = PBXGroup;
 			children = (
-				15C034132D0DDA1B000EBCD2 /* ios.yml */,
 			);
 			path = workflows;
 			sourceTree = "<group>";
@@ -864,7 +849,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				15C034142D0DDA1B000EBCD2 /* ios.yml in Resources */,
 				1595140D2E12F31100FC466B /* readiness_model.tflite in Resources */,
 				15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */,
 				15D7FFAA2CD1426A0048E050 /* Preview Assets.xcassets in Resources */,
