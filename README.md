@@ -1,6 +1,9 @@
-# Nutrivance v0.1
+# Nutrivance v0.2
 
 A nutrition and wellness advancement platform designed to help users achieve their health goals through personalized guidance and tracking.
+
+## Development log
+- SleepView is in development, showing sleep stages when paired with an Apple Watch compatible with sleep tracking. The app shows major and minor sleep stages and provides analysis based on the duration occurance of said sleep stage while taking into account the average respiratory rate and average heart rate. A condensed views provides quick metrics at a glance while a detailed view showcases all sleep stages. A comprehensive textual summary is provided below. Sleep hours are still under development and might not provide the most accurate metrics at this stage. Weekly, monthly, and yearly filters are still under development.
 
 ## Features
 
@@ -9,6 +12,7 @@ A nutrition and wellness advancement platform designed to help users achieve the
 - Progress monitoring
 - Dietary recommendations
 - Health metrics dashboard
+- (NEW) Sleep metrics (beta)
 
 ## Getting Started
 
