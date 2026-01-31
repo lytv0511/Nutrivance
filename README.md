@@ -18,9 +18,9 @@ A nutrition and wellness advancement platform designed to help users achieve the
 
 ### Prerequisites
 
-- Xcode 16+
-- iOS or iPadOS 18+ device or simulator
-- macOS Sonoma or later for development
+- Xcode 26+
+- iOS or iPadOS 26+ device or simulator
+- macOS 26 Tahoe or later for development
 - Apple Developer Account (for deployment)
 
 ### Installation
@@ -49,7 +49,7 @@ cd nutrivance && npm install
 - Backend: Swift, Objective-C, Objective-C++, Metal
 - Frameworks: HealthKit
 - Camera: VisionKit
-- Platform: iOS 18+ or iPadOS 18+
+- Platform: iOS 26+ or iPadOS 26+
 
 ## Contributing
 
@@ -80,4 +80,5 @@ Project Link: [https://github.com/lytv0511/nutrivance](https://github.com/lytv05
   - Initial Release
   - Interactive nutrient selection interface
   - Nutrition label scanning capability
-
+- 0.2
+    - SleepView enhancements and DashboardView bug fixes
