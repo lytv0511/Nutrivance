@@ -119,6 +119,7 @@ class SleepViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var selectedPeriod: SleepPeriod = .lastNight
     @Published var earliestSleepDate: Date? = nil
+    @Published var last7AvgSleepHours: Double? = nil // average *actual* sleep (excludes awake)
     
     private let healthStore = HealthKitManager()
     
@@ -244,6 +245,23 @@ class SleepViewModel: ObservableObject {
 
         // Merge consecutive stages of the same type
         let consolidatedStages = consolidateSleepStages(stages)
+        // --- Compute past 7-day average actual sleep (excluding awake) ---
+        let cal = Calendar.current
+        var totals: [Double] = [] // hours of actual sleep
+        for offset in 0..<7 {
+            let d = cal.date(byAdding: .day, value: -offset, to: nightStart)!
+            let startOfDay = cal.startOfDay(for: d)
+            let endOfDay = cal.date(byAdding: .day, value: 1, to: startOfDay)!
+            Task {
+                let summary = await self.fetchDaySleepSummary(startDate: startOfDay, endDate: endOfDay)
+                let actualMinutes = max(0, summary.totalMinutes - summary.awakeMinutes)
+                totals.append(actualMinutes / 60.0)
+                if totals.count == 7 {
+                    let avg = totals.reduce(0,+) / 7.0
+                    await MainActor.run { self.last7AvgSleepHours = avg }
+                }
+            }
+        }
         self.sleepData = consolidatedStages
     }
     
@@ -255,9 +273,9 @@ class SleepViewModel: ObservableObject {
             let startOfDay = calendar.startOfDay(for: day)
             let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
             let summary = await fetchDaySleepSummary(startDate: startOfDay, endDate: endOfDay)
-            if summary.totalMinutes > 0 {
-                summaries.append(summary)
-            }
+            // Always keep all 7 days so Saturday is not dropped from the chart.
+            // (Zeros can be handled later in averaging logic, but the bar should still exist.)
+            summaries.append(summary)
         }
         self.dailySummaries = summaries
     }
@@ -511,10 +529,17 @@ class SleepViewModel: ObservableObject {
     /// Computes per-stage averages for the current and previous period (week/month/year),
     /// returning an array suitable for SleepSummaryCard.
     /// Returns: [(stage, currentAvgMinutes, prevAvgMinutes, percentOfTotal)]
-    func computeStageAveragesForPeriod(summaries: [DailySleepSummary], period: SleepPeriod) -> [(stage: SleepStage, current: Double, previous: Double, percent: Double)] {
+    func computeStageAveragesForPeriod(summaries: [DailySleepSummary], period: SleepPeriod, referenceDate: Date) async -> [(stage: SleepStage, current: Double, previous: Double, percent: Double)] {
         guard !summaries.isEmpty else { return [] }
 
-        // Helper to get stage minutes from a summary
+        let stages: [SleepStage] = [.awake, .deep, .core, .rem]
+
+        // Current period summaries are passed in
+        let currentSummaries = summaries
+
+        // Load previous period independently
+        let prevSummaries = await loadPreviousPeriodSummaries(reference: referenceDate, period: period)
+
         func stageMinutes(_ summary: DailySleepSummary, _ stage: SleepStage) -> Double {
             switch stage {
             case .awake: return summary.awakeMinutes
@@ -524,54 +549,12 @@ class SleepViewModel: ObservableObject {
             }
         }
 
-        // Determine current and previous period slices
-        let stages: [SleepStage] = [.awake, .deep, .core, .rem]
-        var currentSummaries: [DailySleepSummary] = []
-        var prevSummaries: [DailySleepSummary] = []
-
-        switch period {
-        case .thisWeek:
-            // Last 7 items = current, previous 7 = prev (if available)
-            if summaries.count >= 7 {
-                currentSummaries = Array(summaries.suffix(7))
-                if summaries.count >= 14 {
-                    prevSummaries = Array(summaries.dropLast(7).suffix(7))
-                } else {
-                    prevSummaries = Array(summaries.prefix(summaries.count - 7))
-                }
-            } else {
-                currentSummaries = summaries
-                prevSummaries = []
-            }
-        case .thisMonth:
-            // Assume summaries are per day in month (1...n)
-            let days = summaries.count
-            let half = days/2
-            if days > 0 {
-                currentSummaries = Array(summaries.suffix(half == 0 ? days : days - half))
-                prevSummaries = Array(summaries.prefix(half))
-            }
-        case .thisYear:
-            // Assume summaries are per month (12)
-            let months = summaries.count
-            let half = months/2
-            if months > 0 {
-                currentSummaries = Array(summaries.suffix(half == 0 ? months : months - half))
-                prevSummaries = Array(summaries.prefix(half))
-            }
-        case .lastNight:
-            // Only one summary
-            currentSummaries = summaries
-            prevSummaries = []
-        }
-
-        // Compute averages per stage for current and previous period
         func avg(_ arr: [Double]) -> Double {
             guard !arr.isEmpty else { return 0 }
             return arr.reduce(0,+)/Double(arr.count)
         }
+
         let totalCurrentMinutes = avg(currentSummaries.map { $0.totalMinutes })
-        // For percent, percent of total sleep time in current period
 
         return stages.map { stage in
             let currAvg = avg(currentSummaries.map { stageMinutes($0, stage) })
@@ -579,6 +562,62 @@ class SleepViewModel: ObservableObject {
             let percent = totalCurrentMinutes > 0 ? (currAvg / totalCurrentMinutes) * 100 : 0
             return (stage, currAvg, prevAvg, percent)
         }
+    }
+
+    /// Fetches summaries for the previous interval relative to a reference date (week/month/year)
+    func loadPreviousPeriodSummaries(reference date: Date, period: SleepPeriod) async -> [DailySleepSummary] {
+        let calendar = Calendar.current
+        var results: [DailySleepSummary] = []
+
+        switch period {
+        case .thisWeek:
+            // Previous week = 7 days immediately before the reference date (Sunday)
+            let prevWeekStart = calendar.date(byAdding: .day, value: -7, to: date)!
+            for offset in 0..<7 {
+                let day = calendar.date(byAdding: .day, value: offset, to: prevWeekStart)!
+                let startOfDay = calendar.startOfDay(for: day)
+                let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+                let summary = await fetchDaySleepSummary(startDate: startOfDay, endDate: endOfDay)
+                results.append(summary)
+            }
+
+        case .thisMonth:
+            // Previous month relative to the 1st of the selected month
+            let prevMonthStart = calendar.date(byAdding: .month, value: -1, to: date)!
+            let range = calendar.range(of: .day, in: .month, for: prevMonthStart)!
+            let comps = calendar.dateComponents([.year, .month], from: prevMonthStart)
+            for day in 1...range.count {
+                let d = calendar.date(from: DateComponents(year: comps.year, month: comps.month, day: day))!
+                let startOfDay = calendar.startOfDay(for: d)
+                let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+                let summary = await fetchDaySleepSummary(startDate: startOfDay, endDate: endOfDay)
+                results.append(summary)
+            }
+
+        case .thisYear:
+            // Previous calendar year relative to Jan 1 of selected year
+            let prevYear = calendar.component(.year, from: date) - 1
+            for month in 1...12 {
+                let startOfMonth = calendar.date(from: DateComponents(year: prevYear, month: month, day: 1))!
+                let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth)!
+                let monthSummary = await fetchMonthSleepSummary(startDate: startOfMonth, endDate: endOfMonth)
+                let daysInMonth = Double(calendar.range(of: .day, in: .month, for: startOfMonth)!.count)
+                let avgSummary = DailySleepSummary(
+                    date: startOfMonth,
+                    totalMinutes: monthSummary.totalMinutes / daysInMonth,
+                    awakeMinutes: monthSummary.awakeMinutes / daysInMonth,
+                    deepMinutes: monthSummary.deepMinutes / daysInMonth,
+                    coreMinutes: monthSummary.coreMinutes / daysInMonth,
+                    remMinutes: monthSummary.remMinutes / daysInMonth
+                )
+                results.append(avgSummary)
+            }
+
+        case .lastNight:
+            return []
+        }
+
+        return results
     }
 }
 
@@ -1263,33 +1302,50 @@ struct SleepBarChart: View {
 
 struct SleepQualityCard: View {
     let stages: [SleepStageData]
-    
+    @EnvironmentObject private var viewModel: SleepViewModel
+
     private var qualityAnalysis: String {
         guard !stages.isEmpty else { return "Insufficient data" }
-        
+
+        let totalDuration = stages.reduce(0) { $0 + $1.duration }
+        let awakeDuration = stages.filter { $0.stage == .awake }
+            .reduce(0) { $0 + $1.duration }
+        let actualHours = max(0, totalDuration - awakeDuration) / 3600.0
+
+        var analysis = ""
+
+        // --- 7–9 hour guidance ---
+        if actualHours < 7 {
+            analysis = "You slept less than the recommended 7–9 hours. Try to extend your sleep duration."
+        } else if actualHours > 9 {
+            analysis = "You exceeded 9 hours. Quality over quantity—consider keeping a more regular schedule."
+        } else {
+            analysis = "Your sleep duration is within the recommended 7–9 hour range."
+        }
+
+        // --- CONSISTENCY TREND vs past 7 days (strict) ---
+        if let avg7 = viewModel.last7AvgSleepHours {
+            let diff = actualHours - avg7
+            let symbol: String
+            if diff > 0.75 { symbol = "↑" }
+            else if diff < -0.75 { symbol = "↓" }
+            else { symbol = "=" }
+
+            analysis += String(format: " Sleep consistency: %@ (last night %.1f h vs 7-day avg %.1f h).",
+                               symbol, actualHours, avg7)
+        }
+
         let remCount = stages.filter { $0.stage == .rem }.count
         let coreCount = stages.filter { $0.stage == .core }.count
-        let totalDuration = stages.reduce(0) { $0 + $1.duration }
-        let hours = totalDuration / 3600
-        
-        var analysis = ""
-        
-        if hours < 7 {
-            analysis = "You got less than your recommended 7–9 hours. Try to extend your sleep duration."
-        } else if hours > 9 {
-            analysis = "You exceeded 9 hours. Quality over quantity—consider optimizing your sleep schedule."
-        } else {
-            analysis = "Your sleep duration is within the optimal range (7–9 hours)."
-        }
-        
+
         if remCount > coreCount * 2 {
-            analysis += " You had extended REM sleep, which is great for cognitive function and emotional processing."
+            analysis += " You had extended REM sleep, which supports learning and emotional processing."
         }
-        
+
         if stages.first?.stage == .rem {
-            analysis += " ⚠️ You entered REM quickly—possible sleep deficit recovery."
+            analysis += " ⚠️ You entered REM very quickly—possible sleep deficit recovery."
         }
-        
+
         return analysis
     }
 
@@ -1313,57 +1369,60 @@ struct SleepQualityCard: View {
     }
 
     private var nextDayReadinessAnalysis: String {
-        // Compute the last 7 sleep nights (using anchor hour) for deep sleep sessions
         let calendar = Calendar.current
         let todayNight = sleepNightStart(for: Date(), calendar: calendar)
+
+        // --- Build the last 7 sleep nights window ---
         let last7Nights: Set<Date> = (0..<7).compactMap { offset in
             calendar.date(byAdding: .day, value: -offset, to: todayNight)
         }.reduce(into: Set<Date>()) { $0.insert($1) }
 
-        // 1. Filter for deep sleep samples (precisely, not core/unspecified)
-        let deepSamples = stages.filter { $0.stage == .deep }
-
-        // 2. Only sessions in last 7 sleep nights
-        let recentDeepSamples = deepSamples.filter {
-            last7Nights.contains(sleepNightStart(for: $0.startTime, calendar: calendar))
-        }
-
-        // 3. Merge contiguous intervals (within 5 minutes)
-        let deepIntervals = mergeIntervals(
-            recentDeepSamples.map { ($0.startTime, $0.endTime) }
-        )
-
-        // 4. Build session objects: start, end, durationMinutes
-        let recentDeepSessions = deepIntervals.map {
-            (
-                start: $0.0,
-                end: $0.1,
-                durationMinutes: $0.1.timeIntervalSince($0.0) / 60
+        // --- 1) Get only deep sessions in the last 7 sleep nights ---
+        let recentDeepSamples = stages.filter {
+            $0.stage == .deep && last7Nights.contains(
+                sleepNightStart(for: $0.startTime, calendar: calendar)
             )
         }
 
-        // 5. “Long” deep sessions: duration >= 20 min
-        let longDeepSessions = recentDeepSessions.filter {
-            $0.durationMinutes >= 20
+        // --- 2) Compute average deep-session length (matches your card logic) ---
+        let deepDurations = recentDeepSamples.map { $0.duration / 60.0 } // minutes per session
+        let avgDeepMinutes = deepDurations.isEmpty
+            ? 0
+            : deepDurations.reduce(0, +) / Double(deepDurations.count)
+
+        // Threshold for a "long" deep session = 1.5 × recent average (same idea as statsPerStage)
+        let longThreshold = avgDeepMinutes * 1.5
+
+        // --- 3) Count long deep sessions using THIS threshold (not a fixed 20 min) ---
+        let longDeepSessions = recentDeepSamples.filter {
+            ($0.duration / 60.0) >= longThreshold && longThreshold > 0
         }
 
-        // 6. Compute total deep sleep minutes in the window
-        let totalDeepMinutes = recentDeepSessions
-            .map { $0.durationMinutes }
+        // --- 4) Total deep minutes in the window ---
+        let totalDeepMinutes = recentDeepSamples
+            .map { $0.duration / 60.0 }
             .reduce(0, +)
 
-        // Average HR for deep sessions (use original samples for HR)
-        let avgDeepHR = recentDeepSamples.compactMap { $0.averageHeartRate }.reduce(0, +) / max(1, recentDeepSamples.compactMap { $0.averageHeartRate }.count)
+        // --- 5) Average HR for deep sessions ---
+        let deepHRValues = recentDeepSamples.compactMap { $0.averageHeartRate }
+        let avgDeepHR = deepHRValues.isEmpty
+            ? 0
+            : deepHRValues.reduce(0, +) / deepHRValues.count
 
-        // REM sessions and average HR (unchanged)
+        // --- 6) REM stats (unchanged) ---
         let remSessions = stages.filter { $0.stage == .rem }
-        let avgRemHR = remSessions.compactMap { $0.averageHeartRate }.reduce(0, +) / max(1, remSessions.compactMap { $0.averageHeartRate }.count)
+        let remHRValues = remSessions.compactMap { $0.averageHeartRate }
+        let avgRemHR = remHRValues.isEmpty
+            ? 0
+            : remHRValues.reduce(0, +) / remHRValues.count
 
+        // --- Build the analysis text ---
         var analysis = "Next-Day Readiness:\n"
 
-        // Physical recovery
+        // Physical recovery uses the SAME notion of "long" as your dropdown card
         if totalDeepMinutes >= 30 {
-            analysis += "Physical recovery: \(longDeepSessions.count) long deep sleep session(s) with average HR \(avgDeepHR) bpm—supports muscle and immune recovery.\n"
+            analysis += "Physical recovery: \(longDeepSessions.count) long deep sleep session(s) "
+            analysis += "(threshold ≈ \(Int(longThreshold)) min) with average HR \(avgDeepHR) bpm—supports muscle and immune recovery.\n"
         } else {
             analysis += "Physical recovery: limited deep sleep detected; consider improving sleep hygiene.\n"
         }
@@ -1376,8 +1435,9 @@ struct SleepQualityCard: View {
         }
 
         // Emotional balance
-        analysis += "Emotional balance: assessed based on REM and deep sleep patterns; your sleep appears " +
-            (remSessions.count >= 2 && !longDeepSessions.isEmpty ? "balanced." : "somewhat irregular.")
+        let balanced = (remSessions.count >= 2 && !longDeepSessions.isEmpty)
+        analysis += "Emotional balance: assessed based on REM and deep sleep patterns; your sleep appears "
+            + (balanced ? "balanced." : "somewhat irregular.")
 
         return analysis
     }
@@ -1486,9 +1546,27 @@ struct SleepSummaryCard: View {
 
     @EnvironmentObject private var viewModel: SleepViewModel
 
-    // Use viewModel's computeStageAveragesForPeriod to get data
-    private var stageComparisonData: [(stage: SleepStage, current: Double, previous: Double, percent: Double)] {
-        viewModel.computeStageAveragesForPeriod(summaries: summaries, period: period)
+    @State private var previousStageAverages: [SleepStage: Double] = [:]
+
+    // Non-async computed property for stage comparison
+    private var stageComparisonData: [(stage: SleepStage, current: Double, previous: Double?, percent: Double)] {
+        let stages: [SleepStage] = [.awake, .deep, .core, .rem]
+        let totalCurrent = summaries.map { $0.totalMinutes }.reduce(0,+)
+
+        return stages.map { stage in
+            let currentAvg = summaries.map { summary -> Double in
+                switch stage {
+                case .awake: return summary.awakeMinutes
+                case .core: return summary.coreMinutes
+                case .deep: return summary.deepMinutes
+                case .rem: return summary.remMinutes
+                }
+            }.reduce(0,+) / Double(summaries.count)
+
+            let prevAvg = previousStageAverages[stage]
+            let percent = totalCurrent > 0 ? (currentAvg / totalCurrent) * 100 : 0
+            return (stage, currentAvg, prevAvg, percent)
+        }
     }
 
     var body: some View {
@@ -1508,13 +1586,13 @@ struct SleepSummaryCard: View {
                             .foregroundColor(.white)
                         Spacer()
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text(String(format: "%.1f h", data.current / 60))
+                            Text(String(format: "%.3f h", data.current / 60))
                                 .font(.headline)
                                 .foregroundColor(.white)
                             // Show actual sleep (excluding awake) for non-awake stages
                             if data.stage != .awake {
                                 let totalSleep = data.current
-                                Text(String(format: "(%.1f h actual sleep)", totalSleep / 60))
+                                Text(String(format: "(%.3f h actual sleep)", totalSleep / 60))
                                     .font(.caption2)
                                     .foregroundColor(.gray)
                             }
@@ -1522,13 +1600,13 @@ struct SleepSummaryCard: View {
                     }
                     HStack {
                         if period != .lastNight {
-                            let diff = data.current - data.previous
+                            let diff = data.previous != nil ? data.current - data.previous! : 0
                             let diffSign = diff >= 0 ? "+" : "-"
-                            Text(String(format: "(%@%.1f h vs prev) • %.0f%%", diffSign, abs(diff)/60, data.percent))
+                            Text(String(format: "(%@%.3f h vs prev) • %.0f%%", diffSign, abs(diff)/60, data.percent))
                                 .font(.caption2)
                                 .foregroundColor(.gray)
                         } else {
-                            Text(String(format: "%.0f%% of total", data.percent))
+                            Text(String(format: "%.0xrf%% of total", data.percent))
                                 .font(.caption2)
                                 .foregroundColor(.gray)
                         }
@@ -1540,6 +1618,27 @@ struct SleepSummaryCard: View {
         }
         .padding(16)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+        .onAppear {
+            Task {
+                guard let firstDate = summaries.first?.date else { return }
+                let prevSummaries = await viewModel.loadPreviousPeriodSummaries(reference: firstDate, period: period)
+                var dict: [SleepStage: Double] = [:]
+                for stage in [SleepStage.awake, SleepStage.deep, SleepStage.core, SleepStage.rem] {
+                    let avgValue = prevSummaries.map { summary -> Double in
+                        switch stage {
+                        case .awake: return summary.awakeMinutes
+                        case .core: return summary.coreMinutes
+                        case .deep: return summary.deepMinutes
+                        case .rem: return summary.remMinutes
+                        }
+                    }.reduce(0,+) / Double(prevSummaries.count)
+                    dict[stage] = avgValue
+                }
+                await MainActor.run {
+                    previousStageAverages = dict
+                }
+            }
+        }
     }
 }
 
@@ -1660,18 +1759,21 @@ struct SleepStagesDropdownCard: View {
                     // --- Begin Awake Row Addition ---
                     if let awakeCounts = statsPerStage[.awake] {
                         let awakeSessions = stages.filter { $0.stage == .awake }
-                        let totalAwakeDuration = awakeSessions.reduce(0) { $0 + $1.duration } / 3600.0
-                        let avgHR = awakeSessions.compactMap { $0.averageHeartRate }.reduce(0, +) / max(1, awakeSessions.compactMap { $0.averageHeartRate }.count)
-                        let avgRR = awakeSessions.compactMap { $0.averageRespiratoryRate }.reduce(0, +) / max(1, awakeSessions.compactMap { $0.averageRespiratoryRate }.count)
-
                         let interruptionType = awakeSessions.contains { $0.duration / 60 > 5 || ($0.averageHeartRate ?? 0) > 80 || ($0.averageRespiratoryRate ?? 0) > 20 } ? "Major" : "Minor"
 
                         VStack(spacing: 4) {
                             Text("Awake")
                                 .font(.caption)
                                 .foregroundColor(.gray)
+
+                            // Awake time in MINUTES (not hours)
+                            let totalAwakeMinutes = awakeSessions.reduce(0) { $0 + $1.duration } / 60.0
+                            // Total actual sleep (excluding awake)
+                            let totalSleepHours = stages.filter { $0.stage != .awake }
+                                .reduce(0) { $0 + $1.duration } / 3600.0
+
                             HStack(spacing: 2) {
-                                Text(String(format: "%.1f h", totalAwakeDuration))
+                                Text(String(format: "%.0f min", totalAwakeMinutes))
                                     .font(.title2)
                                     .fontWeight(.bold)
                                     .foregroundColor(.white)
@@ -1679,7 +1781,11 @@ struct SleepStagesDropdownCard: View {
                                     .font(.caption2)
                                     .foregroundColor(.gray)
                             }
-                            // Optional short analysis
+
+                            // Text(String(format: "Total sleep: %.1f h", totalSleepHours))
+                            //     .font(.caption2)
+                            //     .foregroundColor(.gray)
+
                             Text(interruptionType == "Major" ? "Frequent/long interruptions may reduce sleep quality." : "Brief interruptions—minimal impact on recovery.")
                                 .font(.caption2)
                                 .foregroundColor(.gray)
@@ -1687,6 +1793,22 @@ struct SleepStagesDropdownCard: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 8)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.02)))
+
+                        // --- Insert new Total Sleep row ---
+                        VStack(spacing: 4) {
+                            Text("Total Sleep")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+
+                            Text(String(format: "%.1f h", stages.filter { $0.stage != .awake }
+                                .reduce(0) { $0 + $1.duration } / 3600.0))
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 6)
                         .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.02)))
                     }
                     // --- End Awake Row Addition ---
