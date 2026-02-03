@@ -24,39 +24,38 @@ struct ContentView_iPad_alt: View {
                 .customizationID( "iPad.tab.home")
                 .defaultVisibility(.visible, for: .tabBar)
             
-            TabSection {
-                Tab("Nutrivance", systemImage: "leaf") {
-                    NutrivanceView()
-                }
-                .customizationID( "iPad.tab.nutrivance")
-                .defaultVisibility(.visible, for: .tabBar)
-                
-                Tab("Movance", systemImage: "figure.run") {
-                    MovanceView()
-                }
-                .customizationID( "iPad.tab.movance")
-                .defaultVisibility(.visible, for: .tabBar)
-                
-                Tab("Spirivance", systemImage: "brain.head.profile") {
-                    SpirivanceView()
-                }
-                .customizationID("iPad.tab.spririvance")
-                .defaultVisibility(.visible, for: .tabBar)
-            } header: {
-                Text("Focus Modes")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                    .padding(.top, 8)
-            }
-            .defaultVisibility(.visible, for: .tabBar)
-            .customizationID("iPad.tabsection.focusModes")
+//            TabSection {
+//                Tab("Nutrivance", systemImage: "leaf") {
+//                    NutrivanceView()
+//                }
+//                .customizationID( "iPad.tab.nutrivance")
+//                .defaultVisibility(.visible, for: .tabBar)
+//                
+//                Tab("Movance", systemImage: "figure.run") {
+//                    MovanceView()
+//                }
+//                .customizationID( "iPad.tab.movance")
+//                .defaultVisibility(.visible, for: .tabBar)
+//                
+//                Tab("Spirivance", systemImage: "brain.head.profile") {
+//                    SpirivanceView()
+//                }
+//                .customizationID("iPad.tab.spririvance")
+//                .defaultVisibility(.visible, for: .tabBar)
+//            } header: {
+//                Text("Focus Modes")
+//                    .font(.headline)
+//                    .padding(.leading, 16)
+//                    .padding(.top, 8)
+//            }
+//            .defaultVisibility(.visible, for: .tabBar)
+//            .customizationID("iPad.tabsection.focusModes")
             
                 Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
                     PlaygroundView()
                 }
                 .customizationID("iPad.tab.playground")
                 .defaultVisibility(.visible, for: .tabBar)
-            
                
 //            TabSection {
 //                Tab("Log", systemImage: "square.and.pencil") {
@@ -92,10 +91,10 @@ struct ContentView_iPad_alt: View {
 //            .defaultVisibility(.hidden, for: .tabBar)
 //            .customizationID("iPad.tabsection.nutrivanceTools")
 //                
-//                Tab(role: .search) {
-//                    SearchView()
-//                }
-//                .customizationID("iPad.tab.search")
+                Tab(role: .search) {
+                    SearchView_iPhone()
+                }
+                .customizationID("iPad.tab.search")
 //            
 //            // Macronutrients Section
 //            TabSection {

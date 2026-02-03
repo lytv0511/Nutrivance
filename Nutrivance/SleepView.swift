@@ -95,6 +95,21 @@ struct DailySleepSummary: Identifiable {
     }
 }
 
+// Formats a minutes value into a human-friendly hours/minutes string.
+// Examples: 125 -> "2h 5m", 45 -> "45m", 60 -> "1h". Returns "0m" for non-positive values.
+func formatMinutesToHoursMinutes(_ minutesDouble: Double) -> String {
+    guard minutesDouble.isFinite else { return "" }
+    let totalMinutes = Int(round(minutesDouble))
+    if totalMinutes <= 0 { return "0m" }
+    let h = totalMinutes / 60
+    let m = totalMinutes % 60
+    if h > 0 {
+        if m > 0 { return "\(h)h \(m)m" }
+        return "\(h)h"
+    }
+    return "\(m)m"
+}
+
 let sleepAnchorHour = 18 // 6pm anchor for sleep night
 
 // Helper: Given a date, returns the start of the "sleep night" for that date according to the anchor hour.
@@ -395,7 +410,7 @@ class SleepViewModel: ObservableObject {
         let remMinutes = calculateStageMinutes(samples: samples, stageValue: 5, nightStart: nightStart, calendar: calendar)
         let totalMinutes = awakeMinutes + coreMinutes + deepMinutes + remMinutes
         return DailySleepSummary(
-            date: nightStart,
+            date: startDate,
             totalMinutes: totalMinutes,
             awakeMinutes: awakeMinutes,
             deepMinutes: deepMinutes,
@@ -672,13 +687,56 @@ struct SleepView: View {
         case .lastNight:
             return today
         case .thisWeek:
-            // Most recent Sunday
-            return calendar.nextDate(after: today, matching: DateComponents(weekday: 1), matchingPolicy: .previousTimePreservingSmallerComponents) ?? today
+            // Most recent Sunday on or before today
+            let currentWeekday = calendar.component(.weekday, from: today)
+            let daysBack = currentWeekday == 1 ? 0 : (currentWeekday - 1)
+            return calendar.date(byAdding: .day, value: -daysBack, to: today)!
         case .thisMonth:
             return calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
         case .thisYear:
             return calendar.date(from: DateComponents(year: calendar.component(.year, from: today), month: 1, day: 1))!
         }
+    }
+    
+    private func nextPeriodComponent() -> Calendar.Component {
+        switch viewModel.selectedPeriod {
+        case .lastNight:
+            return .day
+        case .thisWeek:
+            return .weekOfYear
+        case .thisMonth:
+            return .month
+        case .thisYear:
+            return .year
+        }
+    }
+    
+    private func isValidDate(_ date: Date, for period: SleepPeriod) -> Bool {
+        let calendar = Calendar.current
+        switch period {
+        case .lastNight:
+            return date <= calendar.startOfDay(for: Date())
+        case .thisWeek:
+            // Only Sundays and must be before or equal to this week's Sunday
+            let thisSunday = calendar.nextDate(after: calendar.startOfDay(for: Date()), matching: DateComponents(weekday: 1), matchingPolicy: .previousTimePreservingSmallerComponents) ?? calendar.startOfDay(for: Date())
+            return calendar.component(.weekday, from: date) == 1 && date <= thisSunday
+        case .thisMonth:
+            // Only first of month and must be before or equal to this month
+            let today = calendar.startOfDay(for: Date())
+            let thisMonthFirst = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+            let comps = calendar.dateComponents([.day], from: date)
+            return comps.day == 1 && date <= thisMonthFirst
+        case .thisYear:
+            // Only Jan 1 and must be before or equal to this year
+            let today = calendar.startOfDay(for: Date())
+            let thisYearFirst = calendar.date(from: DateComponents(year: calendar.component(.year, from: today), month: 1, day: 1))!
+            let comps = calendar.dateComponents([.month, .day], from: date)
+            return comps.month == 1 && comps.day == 1 && date <= thisYearFirst
+        }
+    }
+    
+    private var calendar: Calendar {
+        Calendar.current
     }
     
     var body: some View {
@@ -747,7 +805,7 @@ struct SleepView: View {
                         } else {
                             VStack(spacing: 16) {
                                 ForEach(viewModel.dailySummaries) { summary in
-                                    SleepBarChart(summary: summary)
+                                    SleepBarChart(summary: summary, period: viewModel.selectedPeriod)
                                 }
                                 SleepSummaryCard(summaries: viewModel.dailySummaries, period: viewModel.selectedPeriod)
                             }
@@ -759,6 +817,32 @@ struct SleepView: View {
             }
             .navigationTitle("Sleep")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        let newDate = calendar.date(byAdding: nextPeriodComponent(), value: -1, to: selectedDate) ?? selectedDate
+                        if isValidDate(newDate, for: viewModel.selectedPeriod) {
+                            selectedDate = newDate
+                            Task { await viewModel.loadSleepData(for: newDate) }
+                        }
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .font(.body)
+                    }
+                }
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        let newDate = calendar.date(byAdding: nextPeriodComponent(), value: 1, to: selectedDate) ?? selectedDate
+                        if isValidDate(newDate, for: viewModel.selectedPeriod) {
+                            selectedDate = newDate
+                            Task { await viewModel.loadSleepData(for: newDate) }
+                        }
+                    }) {
+                        Image(systemName: "chevron.right")
+                            .font(.body)
+                    }
+                }
+            }
         }
         .task {
             let defaultD = defaultDate(for: viewModel.selectedPeriod)
@@ -1200,10 +1284,11 @@ struct SleepStageRow: View {
 
 struct SleepBarChart: View {
     let summary: DailySleepSummary
+    let period: SleepPeriod
 
     private var dateString: String {
         let formatter = DateFormatter()
-        formatter.dateFormat = Calendar.current.component(.day, from: summary.date) == 1 ? "MMM" : "MMM d"
+        formatter.dateFormat = period == .thisYear ? "MMM" : "MMM d"
         return formatter.string(from: summary.date)
     }
 
@@ -1217,16 +1302,13 @@ struct SleepBarChart: View {
                 Spacer()
 
                 // Total including awake
-                let totalHours = summary.totalMinutes / 60
-                let actualSleepHours = (summary.totalMinutes - summary.awakeMinutes) / 60
-
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(String(format: "%.1f h", totalHours))
+                    Text(formatMinutesToHoursMinutes(summary.totalMinutes))
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
-                    
-                    Text(String(format: "(%.1f h actual sleep)", actualSleepHours))
+
+                    Text("(\(formatMinutesToHoursMinutes(summary.totalMinutes - summary.awakeMinutes)) actual sleep)")
                         .font(.caption2)
                         .foregroundColor(.gray)
                 }
@@ -1331,8 +1413,10 @@ struct SleepQualityCard: View {
             else if diff < -0.75 { symbol = "↓" }
             else { symbol = "=" }
 
-            analysis += String(format: " Sleep consistency: %@ (last night %.1f h vs 7-day avg %.1f h).",
-                               symbol, actualHours, avg7)
+            // Convert hours -> minutes for pretty formatting
+            let lastMinutes = actualHours * 60.0
+            let avg7Minutes = avg7 * 60.0
+            analysis += " Sleep consistency: \(symbol) (last night \(formatMinutesToHoursMinutes(lastMinutes)) vs 7-day avg \(formatMinutesToHoursMinutes(avg7Minutes)))."
         }
 
         let remCount = stages.filter { $0.stage == .rem }.count
@@ -1548,10 +1632,30 @@ struct SleepSummaryCard: View {
 
     @State private var previousStageAverages: [SleepStage: Double] = [:]
 
+    // Helper to calculate stage percentages
+    private func getStagPercentages() -> (deep: Int, core: Int, rem: Int) {
+        let totalCurrentAvg = summaries.map { $0.totalMinutes }.reduce(0,+) / Double(max(1, summaries.count))
+        
+        if totalCurrentAvg <= 0 {
+            return (0, 0, 0)
+        }
+        
+        let deepAvg = summaries.map { $0.deepMinutes }.reduce(0,+) / Double(summaries.count)
+        let coreAvg = summaries.map { $0.coreMinutes }.reduce(0,+) / Double(summaries.count)
+        let remAvg = summaries.map { $0.remMinutes }.reduce(0,+) / Double(summaries.count)
+        
+        let deepPercent = Int(deepAvg / totalCurrentAvg * 100)
+        let corePercent = Int(coreAvg / totalCurrentAvg * 100)
+        let remPercent = Int(remAvg / totalCurrentAvg * 100)
+        
+        return (deepPercent, corePercent, remPercent)
+    }
+
     // Non-async computed property for stage comparison
     private var stageComparisonData: [(stage: SleepStage, current: Double, previous: Double?, percent: Double)] {
         let stages: [SleepStage] = [.awake, .deep, .core, .rem]
-        let totalCurrent = summaries.map { $0.totalMinutes }.reduce(0,+)
+        let totalCurrentAvg = summaries.map { $0.totalMinutes }.reduce(0,+)
+            / Double(max(1, summaries.count))
 
         return stages.map { stage in
             let currentAvg = summaries.map { summary -> Double in
@@ -1564,7 +1668,7 @@ struct SleepSummaryCard: View {
             }.reduce(0,+) / Double(summaries.count)
 
             let prevAvg = previousStageAverages[stage]
-            let percent = totalCurrent > 0 ? (currentAvg / totalCurrent) * 100 : 0
+            let percent = totalCurrentAvg > 0 ? (currentAvg / totalCurrentAvg) * 100 : 0
             return (stage, currentAvg, prevAvg, percent)
         }
     }
@@ -1578,37 +1682,60 @@ struct SleepSummaryCard: View {
             ForEach(stageComparisonData, id: \.stage) { data in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Circle()
-                            .fill(data.stage.color)
-                            .frame(width: 8, height: 8)
-                        Text(data.stage.label)
-                            .font(.caption)
-                            .foregroundColor(.white)
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text(String(format: "%.3f h", data.current / 60))
+                            Circle()
+                                .fill(data.stage.color)
+                                .frame(width: 8, height: 8)
+
+                            // Stage label + indicator
+                            HStack(spacing: 6) {
+                                Text(data.stage.label)
+                                    .foregroundColor(.white)
+
+                                // Indicator next to the label: up / down / = based on change vs previous
+                                if period != .lastNight, let prev = data.previous {
+                                    let diff = data.current - prev
+                                    // relative change vs previous; if previous is zero, treat as significant unless exactly equal
+                                    let relChange = prev != 0 ? diff / prev : (diff == 0 ? 0 : 1)
+
+                                    if abs(relChange) <= 0.20 {
+                                        Text("=")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    } else if diff > 0 {
+                                        Image(systemName: "chevron.up")
+                                            .foregroundColor(data.stage == .awake ? .red : .green)
+                                    } else {
+                                        Image(systemName: "chevron.down")
+                                            .foregroundColor(data.stage == .awake ? .green : .red)
+                                    }
+                                }
+                            }
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 2) {
+                            Text(formatMinutesToHoursMinutes(data.current))
                                 .font(.headline)
                                 .foregroundColor(.white)
-                            // Show actual sleep (excluding awake) for non-awake stages
+                            // Show only corresponding stage percentage
                             if data.stage != .awake {
-                                let totalSleep = data.current
-                                Text(String(format: "(%.3f h actual sleep)", totalSleep / 60))
+                                let percentages = getStagPercentages()
+                                let percentageText: String = {
+                                    switch data.stage {
+                                    case .deep:
+                                        return "\(percentages.deep)% on average"
+                                    case .core:
+                                        return "\(percentages.core)% on average"
+                                    case .rem:
+                                        return "\(percentages.rem)% on average"
+                                    case .awake:
+                                        return ""
+                                    }
+                                }()
+                                Text(percentageText)
                                     .font(.caption2)
                                     .foregroundColor(.gray)
                             }
-                        }
-                    }
-                    HStack {
-                        if period != .lastNight {
-                            let diff = data.previous != nil ? data.current - data.previous! : 0
-                            let diffSign = diff >= 0 ? "+" : "-"
-                            Text(String(format: "(%@%.3f h vs prev) • %.0f%%", diffSign, abs(diff)/60, data.percent))
-                                .font(.caption2)
-                                .foregroundColor(.gray)
-                        } else {
-                            Text(String(format: "%.0xrf%% of total", data.percent))
-                                .font(.caption2)
-                                .foregroundColor(.gray)
                         }
                     }
                 }
@@ -1734,14 +1861,14 @@ struct SleepStagesDropdownCard: View {
 
                                     // Total and average duration (now split into two lines)
                                     let stageSessions = stages.filter { $0.stage == stageType }
-                                    let totalDuration = stageSessions.reduce(0) { $0 + $1.duration } / 3600.0
-                                    let avgDuration = stageSessions.isEmpty ? 0 : totalDuration / Double(stageSessions.count)
+                                    let totalDurationMinutes = stageSessions.reduce(0) { $0 + $1.duration } / 60.0
+                                    let avgDurationMinutes = stageSessions.isEmpty ? 0 : totalDurationMinutes / Double(stageSessions.count)
                                     VStack(spacing: 2) {
-                                        Text(String(format: "%.1f h total", totalDuration))
+                                        Text("\(formatMinutesToHoursMinutes(totalDurationMinutes)) total")
                                             .font(.caption2)
                                             .foregroundColor(.gray)
 
-                                        Text(String(format: "%.1f h × %d sessions", avgDuration, stageSessions.count))
+                                        Text("\(formatMinutesToHoursMinutes(avgDurationMinutes)) × \(stageSessions.count) sessions")
                                             .font(.caption2)
                                             .foregroundColor(.gray)
                                     }
@@ -1766,14 +1893,14 @@ struct SleepStagesDropdownCard: View {
                                 .font(.caption)
                                 .foregroundColor(.gray)
 
-                            // Awake time in MINUTES (not hours)
+                            // Awake time
                             let totalAwakeMinutes = awakeSessions.reduce(0) { $0 + $1.duration } / 60.0
-                            // Total actual sleep (excluding awake)
-                            let totalSleepHours = stages.filter { $0.stage != .awake }
-                                .reduce(0) { $0 + $1.duration } / 3600.0
+                            // Total actual sleep (excluding awake) in minutes
+                            let totalSleepMinutes = stages.filter { $0.stage != .awake }
+                                .reduce(0) { $0 + $1.duration } / 60.0
 
                             HStack(spacing: 2) {
-                                Text(String(format: "%.0f min", totalAwakeMinutes))
+                                Text(formatMinutesToHoursMinutes(totalAwakeMinutes))
                                     .font(.title2)
                                     .fontWeight(.bold)
                                     .foregroundColor(.white)
@@ -1801,8 +1928,9 @@ struct SleepStagesDropdownCard: View {
                                 .font(.caption)
                                 .foregroundColor(.gray)
 
-                            Text(String(format: "%.1f h", stages.filter { $0.stage != .awake }
-                                .reduce(0) { $0 + $1.duration } / 3600.0))
+                            let totalSleepMinutes = stages.filter { $0.stage != .awake }
+                                .reduce(0) { $0 + $1.duration } / 60.0
+                            Text(formatMinutesToHoursMinutes(totalSleepMinutes))
                                 .font(.title2)
                                 .fontWeight(.bold)
                                 .foregroundColor(.white)
