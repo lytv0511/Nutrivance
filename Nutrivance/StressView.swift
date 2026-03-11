@@ -78,6 +78,8 @@ struct StressView: View {
                             .datePickerStyle(.compact)
                             .onChange(of: selectedDate) { _ in
                                 updateAggregatedData()
+                                let impact = UIImpactFeedbackGenerator(style: .medium)
+                                impact.impactOccurred()
                             }
                             .padding(.horizontal)
                             
