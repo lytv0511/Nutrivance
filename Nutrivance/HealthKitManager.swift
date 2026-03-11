@@ -1303,27 +1303,45 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
                     return
                 }
                 
-                var awake = 0.0, light = 0.0, deep = 0.0, rem = 0.0
-                let total = samples?.reduce(0.0) { total, sample in
-                    guard let categorySample = sample as? HKCategorySample else { return total }
-                    let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
-                    
-                    switch categorySample.value {
-                    case HKCategoryValueSleepAnalysis.inBed.rawValue:
-                        awake += duration
-                    case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
-                        light += duration
-                    case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
-                        deep += duration
-                    case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
-                        rem += duration
-                    default:
-                        break
-                    }
-                    return total + duration
-                } ?? 0.0
+                // Initialize accumulators for each sleep category
+                var awakeDuration = 0.0
+                var coreSleepduration = 0.0
+                var deepSleepDuration = 0.0
+                var remSleepDuration = 0.0
+                var unspecifiedAsleepDuration = 0.0
                 
-                continuation.resume(returning: (total, awake, light, deep, rem))
+                // Process all samples
+                if let samples = samples as? [HKCategorySample] {
+                    for sample in samples {
+                        let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
+                        
+                        switch sample.value {
+                        case HKCategoryValueSleepAnalysis.awake.rawValue:
+                            awakeDuration += duration
+                        case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
+                            coreSleepduration += duration
+                        case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
+                            deepSleepDuration += duration
+                        case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
+                            remSleepDuration += duration
+                        case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
+                            unspecifiedAsleepDuration += duration
+                        default:
+                            break
+                        }
+                    }
+                }
+                
+                // Sum all durations for total
+                let totalDuration = awakeDuration + coreSleepduration + deepSleepDuration + remSleepDuration + unspecifiedAsleepDuration
+                
+                // Return tuple with correct mappings:
+                // awake: actual awake time
+                // light: unspecified asleep (since we don't have explicit light sleep, this is the closest)
+                // deep: actual deep sleep
+                // rem: actual REM sleep
+                // Note: coreSleepduration is counted in the total but not separated in the tuple
+                continuation.resume(returning: (totalDuration, awakeDuration, unspecifiedAsleepDuration, deepSleepDuration, remSleepDuration))
             }
             self.healthStore.execute(query)
         }

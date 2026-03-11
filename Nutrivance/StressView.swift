@@ -993,7 +993,7 @@ struct StressView: View {
                     .padding(.vertical, 12)
                 metricSection(
                     symbol: "heart",
-                    title: "Health",
+                    title: "Regulation",
                     value: Int(nervousBalance),
                     baseline: Int(nervousBalanceBaseline)
                 )

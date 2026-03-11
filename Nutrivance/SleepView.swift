@@ -33,6 +33,7 @@ struct SleepStageData: Identifiable {
 
 enum SleepStage: Int {
     case awake = 2      // awake during sleep
+    case unspecifiedAsleep = 1  // asleepUnspecified (generic asleep)
     case core = 3       // asleepCore
     case deep = 4       // asleepDeep
     case rem = 5        // asleepREM
@@ -40,6 +41,7 @@ enum SleepStage: Int {
     var label: String {
         switch self {
         case .awake: return "Awake"
+        case .unspecifiedAsleep: return "Asleep"
         case .core: return "Core Sleep"
         case .deep: return "Deep Sleep"
         case .rem: return "REM Sleep"
@@ -50,6 +52,8 @@ enum SleepStage: Int {
         switch self {
         case .awake:
             return "Time awake during your sleep period. Some brief awakenings during sleep are normal."
+        case .unspecifiedAsleep:
+            return "Generic asleep time recorded by your device. This contributes to your total sleep duration but doesn't specify the sleep stage."
         case .core:
             return "Core sleep is your body's main restorative stage. It helps regulate temperature, process emotions, and prepare for the day ahead."
         case .deep:
@@ -62,6 +66,7 @@ enum SleepStage: Int {
     var color: Color {
         switch self {
         case .awake: return Color(red: 0.5, green: 0.5, blue: 0.5)  // Gray
+        case .unspecifiedAsleep: return Color(red: 0.3, green: 0.3, blue: 0.6)  // Darker gray-blue
         case .core: return Color(red: 0.6, green: 0.3, blue: 0.8)
         case .deep: return Color(red: 0.4, green: 0.2, blue: 0.6)  // Darker purple
         case .rem: return Color(red: 1.0, green: 0.4, blue: 0.6)
@@ -77,21 +82,27 @@ struct DailySleepSummary: Identifiable {
     let deepMinutes: Double
     let coreMinutes: Double
     let remMinutes: Double
+    let unspecifiedAsleepMinutes: Double  // Generic/malformed asleep data
+    
+    // Percentages are calculated only from specific stages (not including unspecified)
+    private var specificSleepMinutes: Double {
+        awakeMinutes + deepMinutes + coreMinutes + remMinutes
+    }
     
     var awakePercentage: Double {
-        totalMinutes > 0 ? (awakeMinutes / totalMinutes) * 100 : 0
+        specificSleepMinutes > 0 ? (awakeMinutes / specificSleepMinutes) * 100 : 0
     }
     
     var deepPercentage: Double {
-        totalMinutes > 0 ? (deepMinutes / totalMinutes) * 100 : 0
+        specificSleepMinutes > 0 ? (deepMinutes / specificSleepMinutes) * 100 : 0
     }
     
     var corePercentage: Double {
-        totalMinutes > 0 ? (coreMinutes / totalMinutes) * 100 : 0
+        specificSleepMinutes > 0 ? (coreMinutes / specificSleepMinutes) * 100 : 0
     }
     
     var remPercentage: Double {
-        totalMinutes > 0 ? (remMinutes / totalMinutes) * 100 : 0
+        specificSleepMinutes > 0 ? (remMinutes / specificSleepMinutes) * 100 : 0
     }
 }
 
@@ -214,7 +225,8 @@ class SleepViewModel: ObservableObject {
             sleepNightStart(for: $0.startDate, calendar: calendar) == nightStart
         }
 
-        // Convert to SleepStageData - include values 2 (awake), 3 (core), 4 (deep), 5 (rem)
+        // Convert to SleepStageData - include values matching SleepStage enum raw values
+        // awake=2, unspecifiedAsleep=1, core=3, deep=4, rem=5 (these are HealthKit values from the device)
         var stages: [SleepStageData] = []
         for sample in filteredSamples {
             let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60
@@ -223,7 +235,7 @@ class SleepViewModel: ObservableObject {
                 continue
             }
             let metrics = await fetchMetricsDuringStage(startTime: sample.startDate, endTime: sample.endDate)
-            if sample.value == 2 {
+            if sample.value == SleepStage.awake.rawValue {
                 stages.append(SleepStageData(
                     startTime: sample.startDate,
                     endTime: sample.endDate,
@@ -231,7 +243,15 @@ class SleepViewModel: ObservableObject {
                     averageHeartRate: metrics.heartRate,
                     averageRespiratoryRate: metrics.respiratoryRate
                 ))
-            } else if sample.value == 3 {
+            } else if sample.value == SleepStage.unspecifiedAsleep.rawValue {
+                stages.append(SleepStageData(
+                    startTime: sample.startDate,
+                    endTime: sample.endDate,
+                    stage: .unspecifiedAsleep,
+                    averageHeartRate: metrics.heartRate,
+                    averageRespiratoryRate: metrics.respiratoryRate
+                ))
+            } else if sample.value == SleepStage.core.rawValue {
                 stages.append(SleepStageData(
                     startTime: sample.startDate,
                     endTime: sample.endDate,
@@ -239,7 +259,7 @@ class SleepViewModel: ObservableObject {
                     averageHeartRate: metrics.heartRate,
                     averageRespiratoryRate: metrics.respiratoryRate
                 ))
-            } else if sample.value == 4 {
+            } else if sample.value == SleepStage.deep.rawValue {
                 stages.append(SleepStageData(
                     startTime: sample.startDate,
                     endTime: sample.endDate,
@@ -247,7 +267,7 @@ class SleepViewModel: ObservableObject {
                     averageHeartRate: metrics.heartRate,
                     averageRespiratoryRate: metrics.respiratoryRate
                 ))
-            } else if sample.value == 5 {
+            } else if sample.value == SleepStage.rem.rawValue {
                 stages.append(SleepStageData(
                     startTime: sample.startDate,
                     endTime: sample.endDate,
@@ -328,7 +348,8 @@ class SleepViewModel: ObservableObject {
                 awakeMinutes: monthSummary.awakeMinutes / nights,
                 deepMinutes: monthSummary.deepMinutes / nights,
                 coreMinutes: monthSummary.coreMinutes / nights,
-                remMinutes: monthSummary.remMinutes / nights
+                remMinutes: monthSummary.remMinutes / nights,
+                unspecifiedAsleepMinutes: monthSummary.unspecifiedAsleepMinutes / nights
             )
             monthlySummaries.append(avgSummary)
         }
@@ -383,7 +404,7 @@ class SleepViewModel: ObservableObject {
     // Returns summary for a sleep night (anchor hour to anchor hour next day)
     private func fetchDaySleepSummary(startDate: Date, endDate: Date) async -> DailySleepSummary {
         guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
-            return DailySleepSummary(date: startDate, totalMinutes: 0, awakeMinutes: 0, deepMinutes: 0, coreMinutes: 0, remMinutes: 0)
+            return DailySleepSummary(date: startDate, totalMinutes: 0, awakeMinutes: 0, deepMinutes: 0, coreMinutes: 0, remMinutes: 0, unspecifiedAsleepMinutes: 0)
         }
         let calendar = Calendar.current
         // Compute nightStart for this "date" (which is the selection, e.g., Sunday)
@@ -404,24 +425,27 @@ class SleepViewModel: ObservableObject {
             healthStore.healthStore.execute(query)
         }
         // Only count samples whose segment for this night is attributed to this night (by anchor rule)
-        let awakeMinutes = calculateStageMinutes(samples: samples, stageValue: 2, nightStart: nightStart, calendar: calendar)
-        let coreMinutes = calculateStageMinutes(samples: samples, stageValue: 3, nightStart: nightStart, calendar: calendar)
-        let deepMinutes = calculateStageMinutes(samples: samples, stageValue: 4, nightStart: nightStart, calendar: calendar)
-        let remMinutes = calculateStageMinutes(samples: samples, stageValue: 5, nightStart: nightStart, calendar: calendar)
-        let totalMinutes = awakeMinutes + coreMinutes + deepMinutes + remMinutes
+        // Use enum raw values which correspond to actual HealthKit values sent by device
+        let asleepUnspecifiedMinutes = calculateStageMinutes(samples: samples, stageValue: SleepStage.unspecifiedAsleep.rawValue, nightStart: nightStart, calendar: calendar)
+        let awakeMinutes = calculateStageMinutes(samples: samples, stageValue: SleepStage.awake.rawValue, nightStart: nightStart, calendar: calendar)
+        let coreMinutes = calculateStageMinutes(samples: samples, stageValue: SleepStage.core.rawValue, nightStart: nightStart, calendar: calendar)
+        let deepMinutes = calculateStageMinutes(samples: samples, stageValue: SleepStage.deep.rawValue, nightStart: nightStart, calendar: calendar)
+        let remMinutes = calculateStageMinutes(samples: samples, stageValue: SleepStage.rem.rawValue, nightStart: nightStart, calendar: calendar)
+        let totalMinutes = asleepUnspecifiedMinutes + awakeMinutes + coreMinutes + deepMinutes + remMinutes
         return DailySleepSummary(
             date: startDate,
             totalMinutes: totalMinutes,
             awakeMinutes: awakeMinutes,
             deepMinutes: deepMinutes,
             coreMinutes: coreMinutes,
-            remMinutes: remMinutes
+            remMinutes: remMinutes,
+            unspecifiedAsleepMinutes: asleepUnspecifiedMinutes
         )
     }
     
     private func fetchMonthSleepSummary(startDate: Date, endDate: Date) async -> DailySleepSummary {
         guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
-            return DailySleepSummary(date: startDate, totalMinutes: 0, awakeMinutes: 0, deepMinutes: 0, coreMinutes: 0, remMinutes: 0)
+            return DailySleepSummary(date: startDate, totalMinutes: 0, awakeMinutes: 0, deepMinutes: 0, coreMinutes: 0, remMinutes: 0, unspecifiedAsleepMinutes: 0)
         }
 
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
@@ -445,15 +469,18 @@ class SleepViewModel: ObservableObject {
         var deepMinutes: Double = 0
         var remMinutes: Double = 0
 
+        var asleepUnspecifiedMinutes: Double = 0
         var night = sleepNightStart(for: startDate, calendar: calendar)
         while night < endDate {
-            awakeMinutes += calculateStageMinutes(samples: samples, stageValue: 2, nightStart: night, calendar: calendar)
-            coreMinutes  += calculateStageMinutes(samples: samples, stageValue: 3, nightStart: night, calendar: calendar)
-            deepMinutes  += calculateStageMinutes(samples: samples, stageValue: 4, nightStart: night, calendar: calendar)
-            remMinutes   += calculateStageMinutes(samples: samples, stageValue: 5, nightStart: night, calendar: calendar)
+            // Use enum raw values which correspond to actual HealthKit values sent by device
+            asleepUnspecifiedMinutes += calculateStageMinutes(samples: samples, stageValue: SleepStage.unspecifiedAsleep.rawValue, nightStart: night, calendar: calendar)
+            awakeMinutes += calculateStageMinutes(samples: samples, stageValue: SleepStage.awake.rawValue, nightStart: night, calendar: calendar)
+            coreMinutes  += calculateStageMinutes(samples: samples, stageValue: SleepStage.core.rawValue, nightStart: night, calendar: calendar)
+            deepMinutes  += calculateStageMinutes(samples: samples, stageValue: SleepStage.deep.rawValue, nightStart: night, calendar: calendar)
+            remMinutes   += calculateStageMinutes(samples: samples, stageValue: SleepStage.rem.rawValue, nightStart: night, calendar: calendar)
             night = calendar.date(byAdding: .day, value: 1, to: night)!
         }
-        let totalMinutes = awakeMinutes + coreMinutes + deepMinutes + remMinutes
+        let totalMinutes = asleepUnspecifiedMinutes + awakeMinutes + coreMinutes + deepMinutes + remMinutes
 
         return DailySleepSummary(
             date: startDate,
@@ -461,7 +488,8 @@ class SleepViewModel: ObservableObject {
             awakeMinutes: awakeMinutes,
             deepMinutes: deepMinutes,
             coreMinutes: coreMinutes,
-            remMinutes: remMinutes
+            remMinutes: remMinutes,
+            unspecifiedAsleepMinutes: asleepUnspecifiedMinutes
         )
     }
     
@@ -547,7 +575,7 @@ class SleepViewModel: ObservableObject {
     func computeStageAveragesForPeriod(summaries: [DailySleepSummary], period: SleepPeriod, referenceDate: Date) async -> [(stage: SleepStage, current: Double, previous: Double, percent: Double)] {
         guard !summaries.isEmpty else { return [] }
 
-        let stages: [SleepStage] = [.awake, .deep, .core, .rem]
+        let stages: [SleepStage] = [.awake, .deep, .core, .rem, .unspecifiedAsleep]
 
         // Current period summaries are passed in
         let currentSummaries = summaries
@@ -561,6 +589,7 @@ class SleepViewModel: ObservableObject {
             case .core:  return summary.coreMinutes
             case .deep:  return summary.deepMinutes
             case .rem:   return summary.remMinutes
+            case .unspecifiedAsleep: return summary.unspecifiedAsleepMinutes
             }
         }
 
@@ -623,7 +652,8 @@ class SleepViewModel: ObservableObject {
                     awakeMinutes: monthSummary.awakeMinutes / daysInMonth,
                     deepMinutes: monthSummary.deepMinutes / daysInMonth,
                     coreMinutes: monthSummary.coreMinutes / daysInMonth,
-                    remMinutes: monthSummary.remMinutes / daysInMonth
+                    remMinutes: monthSummary.remMinutes / daysInMonth,
+                    unspecifiedAsleepMinutes: monthSummary.unspecifiedAsleepMinutes / daysInMonth
                 )
                 results.append(avgSummary)
             }
@@ -825,6 +855,8 @@ struct SleepView: View {
                             selectedDate = newDate
                             Task { await viewModel.loadSleepData(for: newDate) }
                         }
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
                     }) {
                         Image(systemName: "chevron.left")
                             .font(.body)
@@ -837,6 +869,8 @@ struct SleepView: View {
                             selectedDate = newDate
                             Task { await viewModel.loadSleepData(for: newDate) }
                         }
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
                     }) {
                         Image(systemName: "chevron.right")
                             .font(.body)
@@ -961,22 +995,61 @@ struct SleepStageRow: View {
     
     @EnvironmentObject private var viewModel: SleepViewModel
     
+    // Quality ranges for sleep stages (HR and RR thresholds)
+    private func qualityRanges(for stage: SleepStage) -> (hrMin: Int?, hrMax: Int?, rrMin: Int?, rrMax: Int?) {
+        switch stage {
+        case .awake:
+            return (nil, nil, nil, nil)
+        case .core:
+            return (50, 70, 10, 18)
+        case .deep:
+            return (nil, 55, 10, 16)
+        case .rem:
+            return (60, 80, 12, 22)
+        case .unspecifiedAsleep:
+            return (nil, nil, nil, nil)
+        }
+    }
+    
+    // Check if HR is within quality range
+    private func isHRInRange(hr: Int, for stage: SleepStage) -> Bool {
+        let ranges = qualityRanges(for: stage)
+        if let min = ranges.hrMin, let max = ranges.hrMax {
+            return hr >= min && hr <= max
+        } else if let max = ranges.hrMax {
+            return hr < max
+        }
+        return false
+    }
+    
+    // Check if RR is within quality range
+    private func isRRInRange(rr: Int, for stage: SleepStage) -> Bool {
+        let ranges = qualityRanges(for: stage)
+        if let min = ranges.rrMin, let max = ranges.rrMax {
+            return rr >= min && rr <= max
+        }
+        return false
+    }
+    
     private var glowOpacity: Double {
-        guard let hr = stage.averageHeartRate, let rr = stage.averageRespiratoryRate else { return 0.3 }
+        guard let hr = stage.averageHeartRate, let rr = stage.averageRespiratoryRate else { return 0.0 }
         
         switch stage.stage {
         case .awake:
-            // Slightly more glow for long awake periods
-            return stage.duration / 300 > 1 ? 0.5 : 0.3
+            // Slightly more glow for quality awake periods
+            return stage.duration / 300 > 1 ? 1.0 : 0.4
         case .core:
-            // Stronger glow for long, restorative core sessions
-            return (stage.duration > Double(averageDuration(for: .core) * 60) && hr >= 50 && hr <= 60 && rr >= 10 && rr <= 14) ? 0.8 : 0.4
+            // Stronger glow for quality, restorative core sessions
+            return (stage.duration > Double(averageDuration(for: .core) * 60) && isHRInRange(hr: hr, for: .core) && isRRInRange(rr: rr, for: .core)) ? 1.0 : 0.4
         case .deep:
-            // Strongest glow for long, restorative deep sessions
-            return (stage.duration > Double(averageDuration(for: .deep) * 60) && hr < 55 && rr >= 10 && rr <= 14) ? 0.9 : 0.4
+            // Strongest glow for quality, restorative deep sessions
+            return (stage.duration > Double(averageDuration(for: .deep) * 60) && isHRInRange(hr: hr, for: .deep) && isRRInRange(rr: rr, for: .deep)) ? 1.0 : 0.4
         case .rem:
-            // Stronger glow for long, healthy REM sessions
-            return (stage.duration > Double(averageDuration(for: .rem) * 60) && hr >= 65 && hr <= 75 && rr >= 12 && rr <= 18) ? 0.8 : 0.4
+            // Stronger glow for quality, healthy REM sessions
+            return (stage.duration > Double(averageDuration(for: .rem) * 60) && isHRInRange(hr: hr, for: .rem) && isRRInRange(rr: rr, for: .rem)) ? 1.0 : 0.4
+        case .unspecifiedAsleep:
+            // Moderate glow for unspecified asleep
+            return 0.75
         }
     }
     
@@ -1019,7 +1092,7 @@ struct SleepStageRow: View {
             insight = "REM sleep is when your brain dances through dreams. This session lasted \(comparison)."
             if isShort {
                 insight += " A short trip through REM—may not have contributed much to memory processing this time."
-            } else if isLong && hr >= 65 && hr <= 75 && rr >= 12 && rr <= 18 {
+            } else if isLong && isHRInRange(hr: hr, for: .rem) && isRRInRange(rr: rr, for: .rem) {
                 insight += " Wow, this was a long, healthy REM session—time to store up what you learned! I guess some great dreams were happening."
             } else {
                 insight += " Solid REM, your brain got some valuable processing done."
@@ -1028,7 +1101,7 @@ struct SleepStageRow: View {
             insight = "Deep sleep is your body's repair shop. This session lasted \(comparison)."
             if isShort {
                 insight += " A brief visit—your body may have done a little repair, but not a full restorative cycle."
-            } else if isLong && hr < 55 && rr >= 10 && rr <= 14 {
+            } else if isLong && isHRInRange(hr: hr, for: .deep) && isRRInRange(rr: rr, for: .deep) {
                 insight += " Excellent! A long deep sleep session—muscles and immune system probably feeling recharged."
             } else {
                 insight += " Good deep sleep—your body got some well-deserved repair time."
@@ -1037,7 +1110,7 @@ struct SleepStageRow: View {
             insight = "Core sleep keeps your cycles steady and energy balanced. This session lasted \(comparison)."
             if isShort {
                 insight += " A short core stretch—just a little stabilizing action."
-            } else if isLong && hr >= 50 && hr <= 60 && rr >= 10 && rr <= 14 {
+            } else if isLong && isHRInRange(hr: hr, for: .core) && isRRInRange(rr: rr, for: .core) {
                 insight += " Strong core session—your sleep rhythm is looking happy tonight."
             } else {
                 insight += " Nice core session—your body is keeping a steady pace."
@@ -1048,6 +1121,13 @@ struct SleepStageRow: View {
                 insight += " Brief interruptions—nothing to worry about, just a blink in your night."
             } else if isLong {
                 insight += " Longer awake session—sometimes the mind takes a little stroll, but all is fine."
+            }
+        case .unspecifiedAsleep:
+            insight = "Unspecified asleep time recorded by your device. This session lasted \(comparison)."
+            if isLong {
+                insight += " A longer recording—contributes to your total sleep duration."
+            } else {
+                insight += " Brief unspecified asleep time—still counts toward your total sleep."
             }
         }
         
@@ -1256,28 +1336,80 @@ struct SleepStageRow: View {
     }
     
     private func hrAnalysis(for stage: SleepStage, hr: Int) -> String {
+        let ranges = qualityRanges(for: stage)
+        let inRange = isHRInRange(hr: hr, for: stage)
+        
         switch stage {
         case .awake:
             return hr > 80 ? "Elevated HR while awake—may indicate brief arousal." : "Normal HR during wake time."
         case .core:
-            return hr < 50 ? "Very low HR—good cardiovascular rest during core sleep." : hr < 60 ? "Healthy HR during core sleep." : "Slightly elevated HR during core sleep."
+            let (_, hrMax, _, _) = ranges
+            if hr < 50 {
+                return "Very low HR—good cardiovascular rest during core sleep."
+            } else if hr >= 50 && hr <= hrMax! {
+                return "Healthy HR during core sleep (within quality range)."
+            } else {
+                return "Slightly elevated HR during core sleep."
+            }
         case .deep:
-            return hr < 50 ? "Excellent—very low HR during restorative deep sleep." : hr < 60 ? "Good—HR is resting during deep sleep." : "Slightly elevated HR during deep sleep."
+            let (_, hrMax, _, _) = ranges
+            if hr < 50 {
+                return "Excellent—very low HR during restorative deep sleep."
+            } else if hr < hrMax! {
+                return "Good—HR is resting during deep sleep (within quality range)."
+            } else {
+                return "Slightly elevated HR during deep sleep."
+            }
         case .rem:
-            return hr > 70 ? "REM sleep HR elevated—active dreaming with higher heart rate." : "Moderate HR during REM sleep."
+            let (hrMin, hrMax, _, _) = ranges
+            if hr >= hrMin! && hr <= hrMax! {
+                return "REM sleep HR in optimal quality range—supports healthy dreaming."
+            } else if hr > 70 {
+                return "REM sleep HR elevated—active dreaming with higher heart rate."
+            } else {
+                return "Moderate HR during REM sleep."
+            }
+        case .unspecifiedAsleep:
+            return "HR during generic asleep time recorded by device."
         }
     }
     
     private func rrAnalysis(for stage: SleepStage, rr: Int) -> String {
+        let ranges = qualityRanges(for: stage)
+        let inRange = isRRInRange(rr: rr, for: stage)
+        
         switch stage {
         case .awake:
             return rr > 20 ? "Higher breathing rate while awake." : "Normal breathing rate while awake."
         case .core:
-            return rr < 12 ? "Slow, steady breathing during core sleep—very restful." : rr < 14 ? "Good—regular breathing during core sleep." : "Slightly elevated breathing during core sleep."
+            let (_, _, rrMin, rrMax) = ranges
+            if rr < 12 {
+                return "Slow, steady breathing during core sleep—very restful."
+            } else if rr >= rrMin! && rr <= rrMax! {
+                return "Good—regular breathing during core sleep (within quality range)."
+            } else {
+                return "Slightly elevated breathing during core sleep."
+            }
         case .deep:
-            return rr < 12 ? "Excellent—slow, deep breathing during restorative sleep." : "Normal breathing pattern during deep sleep."
+            let (_, _, rrMin, rrMax) = ranges
+            if rr < 12 {
+                return "Excellent—slow, deep breathing during restorative sleep."
+            } else if rr >= rrMin! && rr <= rrMax! {
+                return "Good—breathing within quality range during deep sleep."
+            } else {
+                return "Normal breathing pattern during deep sleep."
+            }
         case .rem:
-            return rr > 14 ? "REM sleep typically has variable, slightly elevated breathing." : "Regular breathing during REM sleep."
+            let (_, _, rrMin, rrMax) = ranges
+            if rr >= rrMin! && rr <= rrMax! {
+                return "REM sleep breathing in optimal quality range—supports memory consolidation."
+            } else if rr > 14 {
+                return "REM sleep typically has variable, slightly elevated breathing."
+            } else {
+                return "Regular breathing during REM sleep."
+            }
+        case .unspecifiedAsleep:
+            return "Breathing rate during generic asleep time recorded by device."
         }
     }
 }
@@ -1308,9 +1440,17 @@ struct SleepBarChart: View {
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
 
-                    Text("(\(formatMinutesToHoursMinutes(summary.totalMinutes - summary.awakeMinutes)) actual sleep)")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(formatMinutesToHoursMinutes(summary.totalMinutes - summary.awakeMinutes))
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                        
+                        if summary.unspecifiedAsleepMinutes > 0 {
+                            Text("(+\(formatMinutesToHoursMinutes(summary.unspecifiedAsleepMinutes)) unspecified)")
+                                .font(.caption2)
+                                .foregroundColor(.gray.opacity(0.7))
+                        }
+                    }
                 }
             }
 
@@ -1653,7 +1793,7 @@ struct SleepSummaryCard: View {
 
     // Non-async computed property for stage comparison
     private var stageComparisonData: [(stage: SleepStage, current: Double, previous: Double?, percent: Double)] {
-        let stages: [SleepStage] = [.awake, .deep, .core, .rem]
+        let stages: [SleepStage] = [.awake, .deep, .core, .rem, .unspecifiedAsleep]
         let totalCurrentAvg = summaries.map { $0.totalMinutes }.reduce(0,+)
             / Double(max(1, summaries.count))
 
@@ -1664,6 +1804,7 @@ struct SleepSummaryCard: View {
                 case .core: return summary.coreMinutes
                 case .deep: return summary.deepMinutes
                 case .rem: return summary.remMinutes
+                case .unspecifiedAsleep: return summary.unspecifiedAsleepMinutes
                 }
             }.reduce(0,+) / Double(summaries.count)
 
@@ -1730,6 +1871,8 @@ struct SleepSummaryCard: View {
                                         return "\(percentages.rem)% on average"
                                     case .awake:
                                         return ""
+                                    case .unspecifiedAsleep:
+                                        return ""
                                     }
                                 }()
                                 Text(percentageText)
@@ -1750,13 +1893,14 @@ struct SleepSummaryCard: View {
                 guard let firstDate = summaries.first?.date else { return }
                 let prevSummaries = await viewModel.loadPreviousPeriodSummaries(reference: firstDate, period: period)
                 var dict: [SleepStage: Double] = [:]
-                for stage in [SleepStage.awake, SleepStage.deep, SleepStage.core, SleepStage.rem] {
+                for stage in [SleepStage.awake, SleepStage.deep, SleepStage.core, SleepStage.rem, SleepStage.unspecifiedAsleep] {
                     let avgValue = prevSummaries.map { summary -> Double in
                         switch stage {
                         case .awake: return summary.awakeMinutes
                         case .core: return summary.coreMinutes
                         case .deep: return summary.deepMinutes
                         case .rem: return summary.remMinutes
+                        case .unspecifiedAsleep: return summary.unspecifiedAsleepMinutes
                         }
                     }.reduce(0,+) / Double(prevSummaries.count)
                     dict[stage] = avgValue
@@ -1780,13 +1924,16 @@ struct SleepStagesDropdownCard: View {
         var dict: [SleepStage: (Int, Int)] = [:]
         let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast
         
-        for stageType in [SleepStage.core, .deep, .rem, .awake] {
-            let sessions = stages.filter { $0.stage == stageType }
-            let avg = sessions.filter { $0.startTime >= oneWeekAgo }
-                              .map { $0.duration / 60 }.reduce(0, +) / max(1, Double(sessions.count))
+        for stageType in [SleepStage.core, .deep, .rem, .awake, .unspecifiedAsleep] {
+            let allSessions = stages.filter { $0.stage == stageType }
+            let recentSessions = allSessions.filter { $0.startTime >= oneWeekAgo }
             
-            let long = sessions.filter { $0.duration / 60 >= avg * 1.5 }.count
-            let short = sessions.filter { $0.duration / 60 < avg * 0.5 }.count
+            // Calculate average duration from recent sessions
+            let avgDuration: Double = recentSessions.isEmpty ? 0 : recentSessions.map { $0.duration / 60 }.reduce(0, +) / Double(recentSessions.count)
+            
+            // Count long and short sessions from recent data only
+            let long = recentSessions.filter { ($0.duration / 60) >= avgDuration * 1.5 && avgDuration > 0 }.count
+            let short = recentSessions.filter { ($0.duration / 60) < avgDuration * 0.5 && avgDuration > 0 }.count
             dict[stageType] = (long, short)
         }
         return dict
@@ -1837,7 +1984,7 @@ struct SleepStagesDropdownCard: View {
                 }
             } else {
                 VStack(spacing: 12) {
-                    // Stage labels row
+                    // Stage labels row - only show core, rem, deep (not awake or unspecifiedAsleep)
                     HStack(spacing: 0) {
                         ForEach([SleepStage.core, .rem, SleepStage.deep], id: \.self) { stageType in
                             if let counts = statsPerStage[stageType] {
@@ -1846,21 +1993,27 @@ struct SleepStagesDropdownCard: View {
                                         .font(.caption)
                                         .foregroundColor(.gray)
 
-                                    // Long + short sessions
+                                    // Long + short sessions - rewritten logic
+                                    let stageSessions = stages.filter { $0.stage == stageType }
+                                    let recentSessions = stageSessions.filter { $0.startTime >= (Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast) }
+                                    let avgDuration: Double = recentSessions.isEmpty ? 0 : recentSessions.map { $0.duration / 60 }.reduce(0, +) / Double(recentSessions.count)
+                                    
                                     HStack(spacing: 2) {
-                                        Text("\(counts.longCount)")
+                                        Text("\(stageSessions.count)")
                                             .font(.title2)
                                             .fontWeight(.bold)
                                             .foregroundColor(.white)
-                                        if counts.shortCount > 0 {
-                                            Text("(+\(counts.shortCount))")
-                                                .font(.caption2)
-                                                .foregroundColor(.gray)
+                                        if avgDuration > 0 {
+                                            let qualityCount = recentSessions.filter { ($0.duration / 60) >= avgDuration * 1.5 }.count
+                                            if qualityCount > 0 {
+                                                Text("(\(qualityCount) quality)")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.yellow)
+                                            }
                                         }
                                     }
 
                                     // Total and average duration (now split into two lines)
-                                    let stageSessions = stages.filter { $0.stage == stageType }
                                     let totalDurationMinutes = stageSessions.reduce(0) { $0 + $1.duration } / 60.0
                                     let avgDurationMinutes = stageSessions.isEmpty ? 0 : totalDurationMinutes / Double(stageSessions.count)
                                     VStack(spacing: 2) {
@@ -1868,7 +2021,7 @@ struct SleepStagesDropdownCard: View {
                                             .font(.caption2)
                                             .foregroundColor(.gray)
 
-                                        Text("\(formatMinutesToHoursMinutes(avgDurationMinutes)) × \(stageSessions.count) sessions")
+                                        Text("\(formatMinutesToHoursMinutes(avgDurationMinutes)) avg")
                                             .font(.caption2)
                                             .foregroundColor(.gray)
                                     }

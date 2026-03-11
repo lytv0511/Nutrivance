@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1514E7982F620AF30027B222 /* HealthStateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1514E7972F620AF30027B222 /* HealthStateEngine.swift */; };
 		151F147A2D77BE1900B51F88 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 151F14792D77BE1900B51F88 /* UIKit.framework */; };
 		152C743A2CF79BE300DB118D /* HealthAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152C74392CF79BE300DB118D /* HealthAnalysisService.swift */; };
 		153DD1902D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */; };
@@ -144,6 +145,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		1514E7972F620AF30027B222 /* HealthStateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthStateEngine.swift; sourceTree = "<group>"; };
 		151F14792D77BE1900B51F88 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		152C74392CF79BE300DB118D /* HealthAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthAnalysisService.swift; sourceTree = "<group>"; };
 		153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad_compact.swift; sourceTree = "<group>"; };
@@ -636,6 +638,7 @@
 				1568142F2D5C0F2D003C861E /* ProgramBuilderView.swift */,
 				15E567802D88B1FD009A0AED /* readiness_prediction_model.mlpackage */,
 				156814302D5C0F2D003C861E /* ReadinessCheckView.swift */,
+				1514E7972F620AF30027B222 /* HealthStateEngine.swift */,
 				156814312D5C0F2D003C861E /* RecoveryScoreView.swift */,
 				15561A6E2D6B88EC006B8741 /* ResizableWidgetView.swift */,
 				157C20AF2D6E6E1A00D1FA9A /* ResourcesView.swift */,
@@ -862,6 +865,7 @@
 				15561A712D6B8945006B8741 /* PlaygroundTypes.swift in Sources */,
 				159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */,
 				15A53B672D3AF4880043287C /* SubcategoryDetailView.swift in Sources */,
+				1514E7982F620AF30027B222 /* HealthStateEngine.swift in Sources */,
 				157C20B02D6E6E1A00D1FA9A /* ResourcesView.swift in Sources */,
 				157C20B82D6E6E7C00D1FA9A /* StressView.swift in Sources */,
 				15561A692D6B8718006B8741 /* PlaygroundView.swift in Sources */,
