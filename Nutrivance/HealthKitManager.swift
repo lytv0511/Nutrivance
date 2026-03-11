@@ -1913,3 +1913,55 @@ extension HKHealthStore {
         }
     }
 }
+
+extension HealthKitManager {
+    func fetchHRVSamples(days: Int = 10, completion: @escaping ([Double]) -> Void) {
+
+        guard let hrvType = HKObjectType.quantityType(
+            forIdentifier: .heartRateVariabilitySDNN
+        ) else {
+            completion([])
+            return
+        }
+
+        let startDate = Calendar.current.date(
+            byAdding: .day,
+            value: -days,
+            to: Date()
+        )!
+
+        let predicate = HKQuery.predicateForSamples(
+            withStart: startDate,
+            end: Date(),
+            options: .strictStartDate
+        )
+
+        let sortDescriptor = NSSortDescriptor(
+            key: HKSampleSortIdentifierStartDate,
+            ascending: true
+        )
+
+        let query = HKSampleQuery(
+            sampleType: hrvType,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: [sortDescriptor]
+        ) { _, samples, error in
+
+            guard let samples = samples as? [HKQuantitySample], error == nil else {
+                completion([])
+                return
+            }
+
+            let values = samples.map {
+                $0.quantity.doubleValue(
+                    for: HKUnit.secondUnit(with: .milli)
+                )
+            }
+
+            completion(values)
+        }
+
+        healthStore.execute(query)
+    }
+}

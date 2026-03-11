@@ -27,7 +27,7 @@ struct ContentView_iPhone_alt: View {
             // Nutrivance Section
                 Tab("Home", systemImage: "house") {
 //                    HomeView()
-                    SleepView()
+                    StressView()
                 }
                 .customizationID( "iPhone.tab.home")
                 .defaultVisibility(.visible, for: .tabBar)
