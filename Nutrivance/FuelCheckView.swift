@@ -170,13 +170,16 @@ struct NutrientTimingCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Nutrient Timing")
-                .font(.title2.bold())
+            HStack {
+                Text("Nutrient Timing")
+                    .font(.title2.bold())
+                Spacer()
+            }
             
             if isLoading {
                 ProgressView()
             } else {
-                HStack(spacing: 20) {
+                HStack {
                     VStack(alignment: .leading, spacing: 12) {
                         if let lastMeal = lastMealTime {
                             TimingRow(title: "Last Meal",
@@ -197,11 +200,10 @@ struct NutrientTimingCard: View {
                                      color: windowColor)
                         .frame(width: 150, height: 150)
                         .padding()
-                        .padding(.trailing)
                 }
             }
         }
-//        .frame(width: 465, height: 300)
+        .frame(maxWidth: .infinity)
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))

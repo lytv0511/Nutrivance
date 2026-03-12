@@ -1037,16 +1037,16 @@ struct SleepStageRow: View {
         switch stage.stage {
         case .awake:
             // Slightly more glow for quality awake periods
-            return stage.duration / 300 > 1 ? 1.0 : 0.4
+            return stage.duration / 300 > 1 ? 1.0 : 0.0
         case .core:
             // Stronger glow for quality, restorative core sessions
-            return (stage.duration > Double(averageDuration(for: .core) * 60) && isHRInRange(hr: hr, for: .core) && isRRInRange(rr: rr, for: .core)) ? 1.0 : 0.4
+            return (stage.duration > Double(averageDuration(for: .core) * 60) && isHRInRange(hr: hr, for: .core) && isRRInRange(rr: rr, for: .core)) ? 1.0 : 0.0
         case .deep:
             // Strongest glow for quality, restorative deep sessions
-            return (stage.duration > Double(averageDuration(for: .deep) * 60) && isHRInRange(hr: hr, for: .deep) && isRRInRange(rr: rr, for: .deep)) ? 1.0 : 0.4
+            return (stage.duration > Double(averageDuration(for: .deep) * 60) && isHRInRange(hr: hr, for: .deep) && isRRInRange(rr: rr, for: .deep)) ? 1.0 : 0.0
         case .rem:
             // Stronger glow for quality, healthy REM sessions
-            return (stage.duration > Double(averageDuration(for: .rem) * 60) && isHRInRange(hr: hr, for: .rem) && isRRInRange(rr: rr, for: .rem)) ? 1.0 : 0.4
+            return (stage.duration > Double(averageDuration(for: .rem) * 60) && isHRInRange(hr: hr, for: .rem) && isRRInRange(rr: rr, for: .rem)) ? 1.0 : 0.0
         case .unspecifiedAsleep:
             // Moderate glow for unspecified asleep
             return 0.75
@@ -1056,9 +1056,10 @@ struct SleepStageRow: View {
     // MARK: - Sleep Insights
     
     private func averageDuration(for stageType: SleepStage) -> Int {
-        // Flatten all sleep stage segments from the last 7 days
-        let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast
-        let recentStages = viewModel.sleepData.filter { $0.startTime >= oneWeekAgo }
+        // Calculate baseline from 7 days relative to the current stage's date, not from today
+        // This ensures old data is compared against its own historical context
+        let oneWeekBeforeStage = Calendar.current.date(byAdding: .day, value: -7, to: stage.startTime) ?? Date.distantPast
+        let recentStages = viewModel.sleepData.filter { $0.startTime >= oneWeekBeforeStage && $0.startTime <= stage.startTime }
         
         // Collect all segments of the requested stage type
         let stageSegments = recentStages.filter { $0.stage == stageType }
@@ -1920,6 +1921,56 @@ struct SleepStagesDropdownCard: View {
     @State private var isExpanded: Bool = false
     @State private var expandedStageIds: [UUID: Bool] = [:]
     
+    // Quality ranges for sleep stages (HR and RR thresholds) - matches SleepStageRow
+    private func qualityRanges(for stage: SleepStage) -> (hrMin: Int?, hrMax: Int?, rrMin: Int?, rrMax: Int?) {
+        switch stage {
+        case .awake:
+            return (nil, nil, nil, nil)
+        case .core:
+            return (50, 70, 10, 18)
+        case .deep:
+            return (nil, 55, 10, 16)
+        case .rem:
+            return (60, 80, 12, 22)
+        case .unspecifiedAsleep:
+            return (nil, nil, nil, nil)
+        }
+    }
+    
+    // Check if HR is within quality range
+    private func isHRInRange(hr: Int, for stage: SleepStage) -> Bool {
+        let ranges = qualityRanges(for: stage)
+        if let min = ranges.hrMin, let max = ranges.hrMax {
+            return hr >= min && hr <= max
+        } else if let max = ranges.hrMax {
+            return hr < max
+        }
+        return false
+    }
+    
+    // Check if RR is within quality range
+    private func isRRInRange(rr: Int, for stage: SleepStage) -> Bool {
+        let ranges = qualityRanges(for: stage)
+        if let min = ranges.rrMin, let max = ranges.rrMax {
+            return rr >= min && rr <= max
+        }
+        return false
+    }
+    
+    // Check if a session meets quality criteria (matching glowOpacity logic)
+    private func isQualitySession(_ session: SleepStageData, avgDuration: Double) -> Bool {
+        guard let hr = session.averageHeartRate, let rr = session.averageRespiratoryRate else { return false }
+        
+        switch session.stage {
+        case .awake:
+            return session.duration / 300 > 1  // More than 5 minutes
+        case .core, .deep, .rem:
+            return (session.duration > avgDuration * 60) && isHRInRange(hr: hr, for: session.stage) && isRRInRange(rr: rr, for: session.stage)
+        case .unspecifiedAsleep:
+            return false
+        }
+    }
+    
     private var statsPerStage: [SleepStage: (longCount: Int, shortCount: Int)] {
         var dict: [SleepStage: (Int, Int)] = [:]
         let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast
@@ -1995,8 +2046,7 @@ struct SleepStagesDropdownCard: View {
 
                                     // Long + short sessions - rewritten logic
                                     let stageSessions = stages.filter { $0.stage == stageType }
-                                    let recentSessions = stageSessions.filter { $0.startTime >= (Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast) }
-                                    let avgDuration: Double = recentSessions.isEmpty ? 0 : recentSessions.map { $0.duration / 60 }.reduce(0, +) / Double(recentSessions.count)
+                                    let avgDuration: Double = stageSessions.isEmpty ? 0 : stageSessions.map { $0.duration / 60 }.reduce(0, +) / Double(stageSessions.count)
                                     
                                     HStack(spacing: 2) {
                                         Text("\(stageSessions.count)")
@@ -2004,7 +2054,7 @@ struct SleepStagesDropdownCard: View {
                                             .fontWeight(.bold)
                                             .foregroundColor(.white)
                                         if avgDuration > 0 {
-                                            let qualityCount = recentSessions.filter { ($0.duration / 60) >= avgDuration * 1.5 }.count
+                                            let qualityCount = stageSessions.filter { isQualitySession($0, avgDuration: avgDuration) }.count
                                             if qualityCount > 0 {
                                                 Text("(\(qualityCount) quality)")
                                                     .font(.caption2)

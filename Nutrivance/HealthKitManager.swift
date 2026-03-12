@@ -1833,53 +1833,53 @@ extension HealthKitManager {
         }
     }
 
-    func fetchDashboardMetrics() async throws -> DashboardMetrics {
-            var metrics = DashboardMetrics()
-            
-            let types: [HKQuantityTypeIdentifier] = [
-                .activeEnergyBurned,
-                .basalEnergyBurned,
-                .stepCount,
-                .distanceWalkingRunning,
-                .appleStandTime,
-                .appleExerciseTime,
-                .flightsClimbed
-            ]
-            
-            for type in types {
-                if let quantity = try? await fetchTodayQuantity(for: type) {
-                    switch type {
-                    case .activeEnergyBurned:
-                        metrics.activeEnergy = String(format: "%.0f", quantity)
-                    case .stepCount:
-                        metrics.steps = String(format: "%.0f", quantity)
-                    case .distanceWalkingRunning:
-                        metrics.distance = String(format: "%.1f", quantity/1000)
-                    case .appleStandTime:
-                        metrics.standHours = String(format: "%.0f", quantity)
-                    case .appleExerciseTime:
-                        metrics.exercise = String(format: "%.0f", quantity)
-                    case .flightsClimbed:
-                        metrics.flights = String(format: "%.0f", quantity)
-                    default:
-                        break
-                    }
-                }
-                if let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) {
-                    let mindfulPredicate = HKQuery.predicateForSamples(
-                        withStart: Calendar.current.startOfDay(for: Date()),
-                        end: Date(),
-                        options: .strictStartDate
-                    )
-                    
-                    if let minutes = try? await healthStore.fetchSum(for: mindfulType, predicate: mindfulPredicate) {
-                        metrics.mindfulnessMinutes = String(format: "%.0f", minutes)
-                    }
-                }
-            }
-            
-            return metrics
-        }
+//    func fetchDashboardMetrics() async throws -> DashboardMetrics {
+//            var metrics = DashboardMetrics()
+//            
+//            let types: [HKQuantityTypeIdentifier] = [
+//                .activeEnergyBurned,
+//                .basalEnergyBurned,
+//                .stepCount,
+//                .distanceWalkingRunning,
+//                .appleStandTime,
+//                .appleExerciseTime,
+//                .flightsClimbed
+//            ]
+//            
+//            for type in types {
+//                if let quantity = try? await fetchTodayQuantity(for: type) {
+//                    switch type {
+//                    case .activeEnergyBurned:
+//                        metrics.activeEnergy = String(format: "%.0f", quantity)
+//                    case .stepCount:
+//                        metrics.steps = String(format: "%.0f", quantity)
+//                    case .distanceWalkingRunning:
+//                        metrics.distance = String(format: "%.1f", quantity/1000)
+//                    case .appleStandTime:
+//                        metrics.standHours = String(format: "%.0f", quantity)
+//                    case .appleExerciseTime:
+//                        metrics.exercise = String(format: "%.0f", quantity)
+//                    case .flightsClimbed:
+//                        metrics.flights = String(format: "%.0f", quantity)
+//                    default:
+//                        break
+//                    }
+//                }
+//                if let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) {
+//                    let mindfulPredicate = HKQuery.predicateForSamples(
+//                        withStart: Calendar.current.startOfDay(for: Date()),
+//                        end: Date(),
+//                        options: .strictStartDate
+//                    )
+//                    
+//                    if let minutes = try? await healthStore.fetchSum(for: mindfulType, predicate: mindfulPredicate) {
+//                        metrics.mindfulnessMinutes = String(format: "%.0f", minutes)
+//                    }
+//                }
+//            }
+//            
+//            return metrics
+//        }
 }
 
 extension HealthKitManager {

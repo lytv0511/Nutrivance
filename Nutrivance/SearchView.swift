@@ -22,15 +22,9 @@ struct SearchView: View {
                                   "Fiber", "Vitamins", "Minerals", "Phytochemicals",
                                   "Antioxidants", "Electrolytes"]
     
-    private let fitnessItems = ["Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                                "Coach", "Movement Analysis", "Exercise Library", "Program Builder",
-                                "Workout Generator", "Recovery Score", "Sleep Analysis", "Mobility Test",
-                                "Readiness Check", "Strain vs Recovery", "Activity Rings", "Heart Zones",
-                                "Step Count", "Distance", "Calories Burned", "Personal Records",
-                                "Pre-Workout Timing", "Post-Workout Window", "Performance Foods",
-                                "Hydration Status", "Macro Balance"]
+    private let fitnessItems = ["Dashboard","Readiness Check", "Strain vs Recovery"]
     
-    let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Resources", "Meditation", "Breathing", "Sleep", "Stress"]
+    let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress"]
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -59,32 +53,122 @@ struct SearchView: View {
         "minerals": ["minerals", "calcium", "iron", "magnesium", "zinc", "selenium"],
         "phytochemicals": ["phytochemicals", "plant compounds", "bioactive compounds"],
         "antioxidants": ["antioxidants", "antioxidant", "free radicals"],
-        "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
+        "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"],
+        "dashboard": ["dashboard", "metrics", "fitness"],
+        "journal": ["journal", "write"],
+        "mood": ["mood tracker", "emotion tracker", "mental health", "feeling"],
+        "sleep": ["sleep", "rest", "resting", "recovery"],
+        "stress": ["hrv", "stress", "anxiety", "mental health", "energy", "nervous balance"],
+        "log": ["log", "record", "entry", "history"],
+        "recovery score": ["recovery score", "recovery", "score"],
+        "fuel": ["fuel check", "energy levels", "energy", "stamina", "food"],
+        "strain": ["strain vs recovery", "strain", "hrv"],
+        "readiness": ["readiness check", "readiness", "assessment", "hrv"],
+        "mindfulness": ["mindfulness realm", "mindfulness", "meditation", "breathing exercises", "stress reduction", "mental health"]
     ]
+    
     var filteredItems: [String] {
-        let allItems = ["Insights", "Labels", "Log",
-                       "Calories", "Carbs", "Protein", "Fats", "Water",
-                       "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes",
-                       "Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                       "Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator",
-                       "Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery",
-                       "Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records",
-                       "Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status", "Macro Balance",
-                        "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards", "Fuel Check", "Mindfulness Realm", "Mood Tracker", "Journal", "Resources", "Meditation", "Breathing", "Sleep", "Stress"]
-        
-        if searchState.searchText.isEmpty {
-            return allItems
-        }
-        
-        return allItems.filter { item in
-            let lowercasedItem = item.lowercased()
-            if let keywords = searchKeywords[lowercasedItem] {
-                return keywords.contains { keyword in
-                    keyword.localizedCaseInsensitiveContains(searchState.searchText)
-                } || lowercasedItem.localizedCaseInsensitiveContains(searchState.searchText)
+        let allItems = ["Dashboard", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
+
+        let query = searchState.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            // No query: sort by usage
+            return allItems.sorted {
+                let usageA = UserDefaults.standard.integer(forKey: "usage_\($0)")
+                let usageB = UserDefaults.standard.integer(forKey: "usage_\($1)")
+                return usageA > usageB
             }
-            return lowercasedItem.localizedCaseInsensitiveContains(searchState.searchText)
         }
+
+        let words = query.split(separator: " ").map { String($0) }
+
+        // Filter and score only items that match the query
+        let scored: [(item: String, score: Int)] = allItems.compactMap { item in
+            let lowerItem = item.lowercased()
+            var score = 0
+            var isRelevant = false
+
+            // Exact or partial title match
+            for word in words {
+                if lowerItem.contains(word) {
+                    score += 60
+                    isRelevant = true
+                }
+            }
+
+            if lowerItem == query {
+                score += 100
+                isRelevant = true
+            }
+
+            // Keyword scoring
+            for (_, keywords) in searchKeywords {
+                for keyword in keywords {
+                    let k = keyword.lowercased()
+
+                    if k == query || k.replacingOccurrences(of: " ", with: "") == query.replacingOccurrences(of: " ", with: "") {
+                        score += 90
+                        isRelevant = true
+                    } else if k.contains(query) {
+                        score += 70
+                        isRelevant = true
+                    } else {
+                        let keywordWords = k.split(separator: " ").map { String($0) }
+                        if words.allSatisfy({ keywordWords.contains($0) }) {
+                            score += 80
+                            isRelevant = true
+                        }
+                    }
+
+                    for word in words {
+                        if k.contains(word) {
+                            score += 20
+                            isRelevant = true
+                        }
+                    }
+                }
+            }
+
+            return isRelevant ? (item, score) : nil
+        }
+
+        return scored.sorted { $0.score > $1.score }.map { $0.item }
+    }
+
+    // MARK: - Usage Tracking
+    private func recordUsage(for item: String) {
+        let key = "usage_\(item)"
+        let current = UserDefaults.standard.integer(forKey: key)
+        UserDefaults.standard.set(current + 1, forKey: key)
+    }
+
+    // MARK: - Typo Tolerance (Levenshtein Distance)
+    private func levenshtein(_ a: String, _ b: String) -> Int {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        var dist = Array(
+            repeating: Array(repeating: 0, count: bChars.count + 1),
+            count: aChars.count + 1
+        )
+
+        for i in 0...aChars.count { dist[i][0] = i }
+        for j in 0...bChars.count { dist[0][j] = j }
+
+        for i in 1...aChars.count {
+            for j in 1...bChars.count {
+                if aChars[i-1] == bChars[j-1] {
+                    dist[i][j] = dist[i-1][j-1]
+                } else {
+                    dist[i][j] = min(
+                        dist[i-1][j] + 1,
+                        dist[i][j-1] + 1,
+                        dist[i-1][j-1] + 1
+                    )
+                }
+            }
+        }
+
+        return dist[aChars.count][bChars.count]
     }
     
     private func getAppTitle(_ focus: AppFocus) -> String {
@@ -181,100 +265,44 @@ struct SearchView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
                             ForEach(filteredItems, id: \.self) { item in
                                 NavigationLink {
-                                    switch item {
-                                    case "Home":
-                                        HomeView()
-                                    case "Insights":
-                                        HealthInsightsView()
-                                    case "Labels":
-                                        NutritionScannerView()
-                                    case "Log":
-//                                        UnifiedLogView()
-                                        LogView()
-                                    case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                        NutrientDetailView(nutrientName: item)
-//                                    case "Barcode":
-//                                        BarcodeScannerView()
-                                    case "Dashboard":
-                                        DashboardView()
-                                    case "Today's Plan":
-                                        TodaysPlanView(planType: .all)
-                                    case "Workout History":
-                                        WorkoutHistoryView()
-                                    case "Training Calendar":
-                                        TrainingCalendarView()
-                                    case "Coach":
-                                        CoachView()
-                                    case "Movement Analysis":
-                                        MovementAnalysisView()
-                                    case "Exercise Library":
-                                        ExerciseLibraryView()
-                                    case "Program Builder":
-                                        ProgramBuilderView()
-                                    case "Workout Generator":
-                                        WorkoutGeneratorView()
-                                    case "Recovery Score":
-                                        RecoveryScoreView()
-                                    case "Sleep Analysis":
-                                        SleepAnalysisView()
-                                    case "Mobility Test":
-                                        MobilityTestView()
-                                    case "Readiness Check":
-                                        ReadinessCheckView()
-                                    case "Strain vs Recovery":
-                                        StrainRecoveryView()
-                                    case "Activity Rings":
-                                        ActivityRingsView()
-                                    case "Heart Zones":
-                                        HeartZonesView()
-                                    case "Step Count":
-                                        StepCountView()
-                                    case "Distance":
-                                        DistanceView()
-                                    case "Calories Burned":
-                                        CaloriesBurnedView()
-                                    case "Personal Records":
-                                        PersonalRecordsView()
-                                    case "Pre-Workout Timing":
-                                        PreWorkoutTimingView()
-                                    case "Post-Workout Window":
-                                        PostWorkoutWindowView()
-                                    case "Performance Foods":
-                                        PerformanceFoodsView()
-                                    case "Hydration Status":
-                                        HydrationStatusView()
-                                    case "Macro Balance":
-                                        MacroBalanceView()
-                                    case "Live Challenges":
-                                        LiveChallengesView()
-                                    case "Friend Activity":
-                                        FriendActivityView()
-                                    case "Achievements":
-                                        AchievementsView()
-                                    case "Share Workouts":
-                                        ShareWorkoutsView()
-                                    case "Leaderboards":
-                                        LeaderboardsView()
-                                    case "Fuel Check":
-                                        FuelCheckView()
-                                    case "Mindfulness Realm":
-                                        MindfulnessRealmView()
-                                    case "Mood Tracker":
-                                        MoodTrackerView()
-                                    case "Journal":
-                                        JournalView()
-                                    case "Resources":
-                                        ResourcesView()
-                                    case "Meditation":
-                                        MeditationView()
-                                    case "Breathing":
-                                        BreathingView()
-                                    case "Sleep":
-                                        SleepView()
-                                    case "Stress":
-                                        StressView()
-                                    default:
-                                        HomeView()
+                                    Group {
+                                        switch item {
+                                        case "Dashboard":
+                                            DashboardView()
+                                        case "Recovery Score":
+                                            RecoveryScoreView()
+                                        case "Readiness Check":
+                                            ReadinessCheckView()
+                                        case "Strain vs Recovery":
+                                            StrainRecoveryView()
+                                        case "Fuel Check":
+                                            FuelCheckView()
+                                        case "Mindfulness Realm":
+                                            MindfulnessRealmView()
+                                        case "Mood Tracker":
+                                            MoodTrackerView()
+                                        case "Journal":
+                                            JournalView()
+                                        case "Sleep":
+                                            SleepView()
+                                        case "Stress":
+                                            StressView()
+                                        case "Home":
+                                            HomeView()
+                                        case "Insights":
+                                            HealthInsightsView()
+                                        case "Labels":
+                                            NutritionScannerView()
+                                        case "Log":
+                                            LogView()
+                                        case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+                                            NutrientDetailView(nutrientName: item)
+                                        default:
+                                            HomeView()
+                                        }
+                                    }
+                                    .onAppear {
+                                        recordUsage(for: item)
                                     }
                                 } label: {
                                     VStack {
@@ -296,7 +324,6 @@ struct SearchView: View {
                                     .cornerRadius(12)
                                 }
                             }
-                            
                         }
                         .padding()
                     }

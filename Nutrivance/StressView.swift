@@ -45,7 +45,7 @@ struct StressView: View {
     @State private var previousHRVs: [Double] = []
     @State private var hrvHistory: [HRVSession] = []
     
-    @State private var timeFilter: TimeFilter = .dailyMonth
+    @State private var timeFilter: TimeFilter = .hourly24
     @State private var selectedDate: Date = Date()
     @State private var selectedSession: HRVSession?
     @State private var aggregatedData: [HRVSession] = []
@@ -796,8 +796,11 @@ struct StressView: View {
             
             switch timeFilter {
             case .hourly24:
-                // For hourly view, select the first data point of the selected day
-                selectedSession = aggregatedData.first
+                // For hourly view, select the latest available data point
+                if let last = aggregatedData.last {
+                    selectedSession = last
+                    selectedDate = last.date
+                }
                 
             case .dailyWeek:
                 // For weekly view, find the data point that matches the selected date
