@@ -35,7 +35,7 @@
 //    }
 //    
 //    var body: some View {
-//        NavigationStack {
+//        NavigationStack(path: $navigationPath) {
 //            ZStack {
 //                LinearGradient(
 //                    gradient: Gradient(colors: [Color.black, Color.blue, Color(red: 0.0, green: 0.5, blue: 0.0)]),
@@ -54,6 +54,7 @@
 //                                    ViewGridItem(viewName: view, isSelected: selectedView == view)
 //                                        .onTapGesture {
 //                                            navigationState.selectedView = view
+//                                            selectedView = view
 //                                        }
 //                                }
 //                            }
@@ -95,7 +96,6 @@
 //                case "Antioxidants": NutrientDetailView(nutrientName: "Antioxidants")
 //                case "Electrolytes": NutrientDetailView(nutrientName: "Electrolytes")
 //                case "Dashboard": DashboardView()
-//                case "Today's Plan": TodaysPlanView()
 //                case "Workout History": WorkoutHistoryView()
 //                case "Training Calendar": TrainingCalendarView()
 //                case "Coach": CoachView()
@@ -132,6 +132,9 @@
 //                FocusModeSelectorButton(wheelPickerItems: $choices, updateChoicesAndIcons: updateChoicesAndIcons)
 //                    .padding()
 //            }
+//        }
+//        .onChange(of: navigationState.selectedView) { _, newView in
+//            navigationPath.append(newView)
 //        }
 //    }
 //

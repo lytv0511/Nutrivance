@@ -82,6 +82,7 @@ struct StressView: View {
                                 impact.impactOccurred()
                             }
                             .padding(.horizontal)
+                            .buttonStyle(.glass)
                             
                             // Chart View
                             if aggregatedData.count > 0 {
@@ -114,7 +115,10 @@ struct StressView: View {
                                         }
                                     }
                                     .padding()
-                                    .background(RoundedRectangle(cornerRadius: 12).fill(Color(UIColor.tertiarySystemBackground)))
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 18)
+                                            .fill(.ultraThinMaterial)
+                                    )
                                 }
                                 .padding(.horizontal)
                             } else {
@@ -178,7 +182,7 @@ struct StressView: View {
                                         explanation: "Adjusted HRV accounts for how stable your HRV is over time, not just its level. It helps filter out random fluctuations, giving a more reliable picture of your body's stress and recovery state."
                                     )
                                 }
-                                .padding(.horizontal, 8)
+                                .padding()
                             }
                         }
                     }
@@ -461,7 +465,10 @@ struct StressView: View {
                 }
                 .padding(.vertical, 20)
                 .padding(.horizontal, 18)
-                .background(RoundedRectangle(cornerRadius: 16).fill(Color(UIColor.secondarySystemBackground)))
+                .background(
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(.ultraThinMaterial)
+                )
                 .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
             }
         }
@@ -1005,7 +1012,10 @@ struct StressView: View {
             }
             .frame(maxWidth: .infinity)
             .padding()
-            .background(RoundedRectangle(cornerRadius: 16).fill(Color(UIColor.secondarySystemBackground)))
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(.ultraThinMaterial)
+            )
             .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 2)
         }
         
@@ -1084,6 +1094,7 @@ struct FilterButton: View {
                 .padding(.vertical, 12)
         }
         .background(FilterButtonBackground(isSelected: isSelected))
+        .buttonStyle(.glass)
     }
 }
 

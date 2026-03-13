@@ -605,31 +605,77 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Training Load
 
-    private func fetchTrainingLoad() {
 
+    // Improved: Calculate rolling acute (7d) and chronic (28d) loads with exponential decay, and update strain/ACWR
+    private func fetchTrainingLoad() {
         let calendar = Calendar.current
         let endDate = Date()
-
         guard
-            let start7 = calendar.date(byAdding: .day, value: -7, to: endDate),
             let start28 = calendar.date(byAdding: .day, value: -28, to: endDate)
         else { return }
 
-        let group = DispatchGroup()
-        var acuteLoad: Double?
-
-        group.enter()
-        fetchWorkoutLoad(start: start7, end: endDate) { value in
-            acuteLoad = value
-            group.leave()
-        }
-
-        group.notify(queue: .main) {
-            if let acute = acuteLoad {
-                self.activityLoad = acute
-                self.strainScore = min(100, acute)
+        // Fetch all workouts in the last 28 days
+        let predicate = HKQuery.predicateForSamples(withStart: start28, end: endDate)
+        let query = HKSampleQuery(
+            sampleType: HKObjectType.workoutType(),
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: nil
+        ) { _, samples, _ in
+            let workouts = (samples as? [HKWorkout]) ?? []
+            // Build a daily load array for the last 28 days
+            var dailyLoads = Array(repeating: 0.0, count: 28)
+            for workout in workouts {
+                let dayIndex = calendar.dateComponents([.day], from: start28, to: calendar.startOfDay(for: workout.endDate)).day ?? 0
+                if dayIndex >= 0 && dayIndex < 28 {
+                    let durationMinutes = workout.duration / 60.0
+                    let effortRating: Double
+                    if let energy = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()), durationMinutes > 0 {
+                        let intensity = energy / durationMinutes
+                        effortRating = min(10, max(1, intensity / 8))
+                    } else {
+                        effortRating = 5
+                    }
+                    dailyLoads[dayIndex] += durationMinutes * effortRating
+                }
+            }
+            // Calculate EWMA for acute (7d) and chronic (28d) loads
+            // EWMA: load_today = lambda * today + (1-lambda) * load_yesterday
+            func ewma(_ loads: [Double], lambda: Double) -> Double {
+                var avg = 0.0
+                for load in loads {
+                    avg = lambda * load + (1 - lambda) * avg
+                }
+                return avg
+            }
+            // Higher lambda = more weight to recent days
+            let acuteLambda = 2.0 / (7.0 + 1.0) // ~0.25
+            let chronicLambda = 2.0 / (28.0 + 1.0) // ~0.069
+            let acuteLoad = ewma(dailyLoads.suffix(7), lambda: acuteLambda)
+            let chronicLoad = ewma(dailyLoads, lambda: chronicLambda)
+            DispatchQueue.main.async {
+                self.activityLoad = acuteLoad
+                // Avoid divide by zero
+                let acwr = chronicLoad > 0 ? acuteLoad / chronicLoad : 0
+                // Strain score: optimal 0.8-1.3, high 1.3-1.5, overload >1.5, low <0.8
+                let strain: Double
+                switch acwr {
+                case ..<0.8: strain = 30
+                case 0.8..<1.3: strain = 50
+                case 1.3..<1.5: strain = 75
+                default: strain = 95
+                }
+                // Decay strain if no recent load
+                let daysSinceLast = dailyLoads.lastIndex(where: { $0 > 0 })
+                var decayFactor = 1.0
+                if let lastDay = daysSinceLast, lastDay < 27 {
+                    let daysNoLoad = 27 - lastDay
+                    decayFactor = pow(0.85, Double(daysNoLoad)) // 15% decay per day without load
+                }
+                self.strainScore = min(100, strain * decayFactor)
             }
         }
+        healthStore.execute(query)
     }
 
     private func fetchWorkoutLoad(
@@ -960,4 +1006,3 @@ final class HealthStateEngine: ObservableObject {
         return max(0, min(100, ratio * 100))
     }
 }
-

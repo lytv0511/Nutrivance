@@ -188,6 +188,7 @@ struct DashboardView: View {
                         Capsule()
                             .fill(selectedChartRange == range ? Color.accentColor : Color.gray.opacity(0.2))
                     )
+                    .buttonStyle(.glass)
                 }
                 Spacer(minLength: 0)
             }
@@ -283,6 +284,7 @@ struct DashboardView: View {
                     Text("/100")
                         .foregroundColor(.secondary)
                         .font(.subheadline)
+                    Spacer()
                 }
                 .padding(.horizontal)
                 Text("Your overall physiological readiness and recovery, based on multiple metrics.")
@@ -291,7 +293,10 @@ struct DashboardView: View {
                     .padding(.horizontal)
             }
             .padding(.vertical, 8)
-            .background(Color(.systemGray6))
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(.ultraThinMaterial)
+            )
             .cornerRadius(12)
             .shadow(radius: 2)
             .padding(.horizontal)
@@ -407,7 +412,10 @@ struct DashboardView: View {
                     .foregroundColor(.secondary)
             }
             .padding()
-            .background(Color(.systemGray6))
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(.ultraThinMaterial)
+            )
             .cornerRadius(12)
             .shadow(radius: 2)
         }
@@ -471,6 +479,7 @@ struct MetricDetailModal: View {
                         .font(.title)
                         .foregroundColor(.secondary)
                 }
+                .buttonStyle(.glass)
             }
             .padding(.bottom, 8)
 

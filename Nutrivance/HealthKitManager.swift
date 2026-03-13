@@ -556,6 +556,7 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKObjectType.quantityType(forIdentifier: .dietaryFatPolyunsaturated)!,
             HKObjectType.quantityType(forIdentifier: .dietaryFatSaturated)!,
             HKObjectType.quantityType(forIdentifier: .dietaryCaffeine)!,
+            HKSampleType.stateOfMindType(),
             
             // Workouts
             HKObjectType.workoutType()
@@ -578,7 +579,8 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             
             // Sleep and Mindfulness
             HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!,
-            HKObjectType.categoryType(forIdentifier: .mindfulSession)!
+            HKObjectType.categoryType(forIdentifier: .mindfulSession)!,
+            HKSampleType.stateOfMindType()
         ]).union(typesToShare)
         
         healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { success, error in

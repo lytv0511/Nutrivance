@@ -399,6 +399,45 @@ struct GradientBackgrounds {
             Color(red: 0.95, green: 0.90, blue: 0.80),  // Faded Beige
         ]
     }
+    
+    private var lightHealingColors: [Color] {
+        [
+            Color(red: 0.85, green: 0.95, blue: 0.90),  // Soft Mint
+            Color(red: 0.75, green: 0.92, blue: 0.88),  // Light Teal
+            Color(red: 0.90, green: 0.98, blue: 0.95),  // Very Light Cyan
+            Color(.systemBackground),
+            Color(red: 0.80, green: 0.94, blue: 0.92),  // Pale Blue-Green
+            Color(.systemBackground),
+            Color(red: 0.85, green: 0.95, blue: 0.90),  // Soft Mint
+            Color(red: 0.75, green: 0.92, blue: 0.88),  // Light Teal
+            Color(red: 0.90, green: 0.98, blue: 0.95)   // Very Light Cyan
+        ]
+    }
+
+    private var darkHealingColors: [Color] {
+        [
+            Color(red: 0.20, green: 0.50, blue: 0.45),  // Medium Teal
+            Color(red: 0.15, green: 0.45, blue: 0.42),  // Muted Teal
+            Color(red: 0.25, green: 0.60, blue: 0.55),  // Soft Blue-Green
+            Color(.systemBackground),
+            Color(red: 0.18, green: 0.52, blue: 0.48),  // Calm Teal
+            Color(.systemBackground),
+            Color(red: 0.20, green: 0.50, blue: 0.45),  // Medium Teal
+            Color(red: 0.15, green: 0.45, blue: 0.42),  // Muted Teal
+            Color(red: 0.25, green: 0.60, blue: 0.55)   // Soft Blue-Green
+        ]
+    }
+    
+    func healingGradientFull(animationPhase: Binding<Double>) -> some View {
+        MeshGradientView(colors: lightHealingColors, darkColors: darkHealingColors, animationPhase: animationPhase)
+    }
+    
+    func healingGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            healingGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
 }
 
 struct MeshGradientView: View {

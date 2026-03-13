@@ -231,4 +231,3 @@ struct WorkoutRow: View {
         return "\(hours)h \(minutes)m"
     }
 }
-
