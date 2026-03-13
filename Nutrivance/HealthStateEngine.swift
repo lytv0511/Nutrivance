@@ -79,30 +79,113 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Vitals Fetch (respiratory rate, temp, SpO2, post-workout HR, VO2 max)
     private func fetchVitals() {
+        fetchRespiratoryRate(days: 28)
+        fetchWristTemperature(days: 28)
+        fetchSpO2(days: 28)
+        // Keep demo for postWorkoutHR and vo2Max for now
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        var resp: [Date: Double] = [:]
-        var temp: [Date: Double] = [:]
-        var spo: [Date: Double] = [:]
         var postHR: [Date: Double] = [:]
         var vo2: [Date: Double] = [:]
         for i in 0..<28 {
             let date = calendar.date(byAdding: .day, value: -i, to: today)!
-            resp[date] = Double.random(in: 12.0...18.0)
-            temp[date] = Double.random(in: 36.0...37.5)
-            spo[date] = Double.random(in: 95.0...99.0)
             postHR[date] = Double.random(in: 80.0...120.0)
             vo2[date] = Double.random(in: 35.0...55.0)
         }
-        print("[fetchVitals] resp count: \(resp.count), temp count: \(temp.count), spo count: \(spo.count)")
         DispatchQueue.main.async {
-            self.respiratoryRate = resp
-            self.wristTemperature = temp
-            self.spO2 = spo
             self.postWorkoutHR = postHR
             self.vo2Max = vo2
-            print("[fetchVitals] assigned respiratoryRate: \(self.respiratoryRate.count), wristTemperature: \(self.wristTemperature.count), spO2: \(self.spO2.count)")
         }
+    }
+
+    private func fetchRespiratoryRate(days: Int) {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .respiratoryRate) else { return }
+        let endDate = Date()
+        guard let startDate = Calendar.current.date(byAdding: .day, value: -days, to: endDate) else { return }
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+        let query = HKSampleQuery(
+            sampleType: type,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: [sort]
+        ) { _, samples, _ in
+            guard let quantitySamples = samples as? [HKQuantitySample] else { return }
+            let calendar = Calendar.current
+            let grouped = Dictionary(grouping: quantitySamples) {
+                calendar.startOfDay(for: $0.endDate)
+            }
+            var daily: [Date: Double] = [:]
+            for (day, samples) in grouped {
+                let vals = samples.map { $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) }
+                let avg = vals.reduce(0, +) / Double(vals.count)
+                daily[day] = avg
+            }
+            DispatchQueue.main.async {
+                self.respiratoryRate = daily
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    private func fetchWristTemperature(days: Int) {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature) else { return }
+        let endDate = Date()
+        guard let startDate = Calendar.current.date(byAdding: .day, value: -days, to: endDate) else { return }
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+        let query = HKSampleQuery(
+            sampleType: type,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: [sort]
+        ) { _, samples, _ in
+            guard let quantitySamples = samples as? [HKQuantitySample] else { return }
+            let calendar = Calendar.current
+            let grouped = Dictionary(grouping: quantitySamples) {
+                calendar.startOfDay(for: $0.endDate)
+            }
+            var daily: [Date: Double] = [:]
+            for (day, samples) in grouped {
+                let vals = samples.map { $0.quantity.doubleValue(for: HKUnit.degreeCelsius()) }
+                let avg = vals.reduce(0, +) / Double(vals.count)
+                daily[day] = avg
+            }
+            DispatchQueue.main.async {
+                self.wristTemperature = daily
+            }
+        }
+        healthStore.execute(query)
+    }
+
+    private func fetchSpO2(days: Int) {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation) else { return }
+        let endDate = Date()
+        guard let startDate = Calendar.current.date(byAdding: .day, value: -days, to: endDate) else { return }
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+        let query = HKSampleQuery(
+            sampleType: type,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: [sort]
+        ) { _, samples, _ in
+            guard let quantitySamples = samples as? [HKQuantitySample] else { return }
+            let calendar = Calendar.current
+            let grouped = Dictionary(grouping: quantitySamples) {
+                calendar.startOfDay(for: $0.endDate)
+            }
+            var daily: [Date: Double] = [:]
+            for (day, samples) in grouped {
+                let vals = samples.map { $0.quantity.doubleValue(for: HKUnit.percent()) }
+                let avg = vals.reduce(0, +) / Double(vals.count)
+                daily[day] = avg * 100.0 // convert to percentage
+            }
+            DispatchQueue.main.async {
+                self.spO2 = daily
+            }
+        }
+        healthStore.execute(query)
     }
 
     // MARK: - Intensity Metrics Fetch (effort, kcal, HR zones)
@@ -304,8 +387,11 @@ final class HealthStateEngine: ObservableObject {
         let hrv = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!
         let rhr = HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!
         let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!
+        let respRate = HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!
+        let wristTemp = HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature)!
+        let spo2 = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!
 
-        let readTypes: Set<HKObjectType> = [hrv, rhr, sleep]
+        let readTypes: Set<HKObjectType> = [hrv, rhr, sleep, respRate, wristTemp, spo2]
 
         healthStore.requestAuthorization(toShare: [], read: readTypes) { success, error in
             if success {
