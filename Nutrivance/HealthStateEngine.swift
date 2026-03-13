@@ -30,10 +30,26 @@ final class HealthStateEngine: ObservableObject {
     @Published var lastSleepStart: Date?
     @Published var lastSleepEnd: Date?
 
-    // MARK: - Baselines
+    // MARK: - Baselines (7-day and 28-day windows)
 
-    @Published var hrvBaseline: Double?
-    @Published var rhrBaseline: Double?
+    @Published var hrvBaseline7Day: Double?      // 7-day average
+    @Published var rhrBaseline7Day: Double?      // 7-day average
+    @Published var sleepBaseline7Day: Double?    // 7-day average
+    @Published var hrvBaseline28Day: Double?     // 28-day average
+    @Published var rhrBaseline28Day: Double?     // 28-day average
+    
+    @Published var recoveryBaseline7Day: Double?      // 7-day recovery score average
+    @Published var strainBaseline7Day: Double?        // 7-day strain score average
+    @Published var circadianBaseline7Day: Double?     // 7-day circadian score average
+    @Published var autonomicBaseline7Day: Double?     // 7-day autonomic balance average
+    @Published var moodBaseline7Day: Double?          // 7-day mood score average
+    
+    // Rolling history for baseline calculations
+    private var recoveryScoreHistory: [Double] = []
+    private var strainScoreHistory: [Double] = []
+    private var circadianScoreHistory: [Double] = []
+    private var autonomicScoreHistory: [Double] = []
+    private var moodScoreHistory: [Double] = []
 
     // MARK: - Baseline / Load Models
 
@@ -136,12 +152,49 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Public Refresh
 
     func refreshAllMetrics() {
-        fetchLatestHRV()
-        fetchHRVHistory(days: 30)
-        fetchRestingHeartRate()
-        fetchSleep()
-        fetchBaselines()
-        fetchTrainingLoad()
+        let group = DispatchGroup()
+        
+        // Start all fetch operations without calling updateScores individually
+        group.enter()
+        DispatchQueue.global().async {
+            self.fetchLatestHRV()
+            group.leave()
+        }
+        
+        group.enter()
+        DispatchQueue.global().async {
+            self.fetchHRVHistory(days: 30)
+            group.leave()
+        }
+        
+        group.enter()
+        DispatchQueue.global().async {
+            self.fetchRestingHeartRate()
+            group.leave()
+        }
+        
+        group.enter()
+        DispatchQueue.global().async {
+            self.fetchSleep()
+            group.leave()
+        }
+        
+        group.enter()
+        DispatchQueue.global().async {
+            self.fetchBaselines()
+            group.leave()
+        }
+        
+        group.enter()
+        DispatchQueue.global().async {
+            self.fetchTrainingLoad()
+            group.leave()
+        }
+        
+        // After all fetches complete, update scores once on main thread
+        group.notify(queue: .main) {
+            self.updateScores()
+        }
     }
 
     // MARK: - Fetch HRV
@@ -163,7 +216,6 @@ final class HealthStateEngine: ObservableObject {
 
             DispatchQueue.main.async {
                 self.latestHRV = value
-                self.updateScores()
             }
         }
 
@@ -250,7 +302,6 @@ final class HealthStateEngine: ObservableObject {
 
             DispatchQueue.main.async {
                 self.restingHeartRate = value
-                self.updateScores()
             }
         }
 
@@ -263,9 +314,11 @@ final class HealthStateEngine: ObservableObject {
 
         guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return }
 
-        let start = Calendar.current.date(byAdding: .day, value: -2, to: Date())!
+        // Fetch last 3 days to capture sleep that spans midnight
+        let start = Calendar.current.date(byAdding: .day, value: -3, to: Date())!
+        let end = Date()
 
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: Date(), options: .strictStartDate)
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
 
         let query = HKSampleQuery(sampleType: sleepType,
                                   predicate: predicate,
@@ -274,41 +327,49 @@ final class HealthStateEngine: ObservableObject {
 
             guard let samples = samples as? [HKCategorySample] else { return }
 
-            // Updated sleep processing: sum all .asleep, ignore fragments <10min, cap total to 9h
-            var totalSleep: TimeInterval = 0
+            let calendar = Calendar.current
+            
+            // Categorize all samples by stage type and group by day
+            // Stage values: awake=2, unspecifiedAsleep=1, core=3, deep=4, rem=5
+            var stagesByDay: [Date: [Int: [HKCategorySample]]] = [:]  // [day: [stageValue: [samples]]]
+            
+            for sample in samples {
+                let day = calendar.startOfDay(for: sample.startDate)
+                
+                if stagesByDay[day] == nil {
+                    stagesByDay[day] = [:]
+                }
+                if stagesByDay[day]![sample.value] == nil {
+                    stagesByDay[day]![sample.value] = []
+                }
+                stagesByDay[day]![sample.value]?.append(sample)
+            }
+            
+            // Get the most recent day with sleep
+            guard let mostRecentDay = stagesByDay.keys.max() else { return }
+            guard let stageSamples = stagesByDay[mostRecentDay] else { return }
+            
+            // Aggregate sleep: sum unspecified (1), core (3), deep (4), rem (5) — exclude awake (2)
+            var totalSleep: Double = 0
             var earliestStart: Date?
             var latestEnd: Date?
-
-            // Find the last completed sleep session (latest one that ended before now)
-            var lastSleepStart: Date?
-            var lastSleepEnd: Date?
-            let now = Date()
-            let sleepSessions = samples
-                .filter { $0.value == HKCategoryValueSleepAnalysis.asleep.rawValue }
-                .filter { $0.endDate <= now }
-                .filter { $0.endDate.timeIntervalSince($0.startDate) >= 600 }
-                .sorted { $0.endDate > $1.endDate }
-
-            if let last = sleepSessions.first {
-                lastSleepStart = last.startDate
-                lastSleepEnd = last.endDate
-            }
-
-            for sleepSample in samples {
-                // Only consider actual sleep (asleep)
-                if sleepSample.value == HKCategoryValueSleepAnalysis.asleep.rawValue {
-                    let duration = sleepSample.endDate.timeIntervalSince(sleepSample.startDate)
-
-                    // Ignore fragments <10 minutes
-                    if duration < 600 { continue }
-
-                    totalSleep += duration
-
-                    if earliestStart == nil || sleepSample.startDate < earliestStart! {
-                        earliestStart = sleepSample.startDate
-                    }
-                    if latestEnd == nil || sleepSample.endDate > latestEnd! {
-                        latestEnd = sleepSample.endDate
+            
+            let sleepStageValues = [1, 3, 4, 5]  // unspecified, core, deep, rem
+            
+            for stageValue in sleepStageValues {
+                if let stageAmples = stageSamples[stageValue] {
+                    for sample in stageAmples {
+                        let duration = sample.endDate.timeIntervalSince(sample.startDate)
+                        if duration > 0 {  // >= 10 minutes
+                            totalSleep += duration
+                            
+                            if earliestStart == nil || sample.startDate < earliestStart! {
+                                earliestStart = sample.startDate
+                            }
+                            if latestEnd == nil || sample.endDate > latestEnd! {
+                                latestEnd = sample.endDate
+                            }
+                        }
                     }
                 }
             }
@@ -318,12 +379,10 @@ final class HealthStateEngine: ObservableObject {
 
             DispatchQueue.main.async {
                 self.sleepHours = cappedSleepHours
-                if let start = lastSleepStart, let end = lastSleepEnd {
+                if let start = earliestStart, let end = latestEnd {
                     self.lastSleepStart = start
                     self.lastSleepEnd = end
-                    self.fetchHRVDuringSleep(start: start, end: end)
                 }
-                self.updateScores()
             }
         }
 
@@ -350,10 +409,8 @@ final class HealthStateEngine: ObservableObject {
                 $0.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli))
             }
 
-            let avg = values.reduce(0, +) / Double(values.count)
-            self.sleepHRVAverage = avg
-
             if !values.isEmpty {
+                let avg = values.reduce(0, +) / Double(values.count)
                 DispatchQueue.main.async {
                     self.sleepHRVAverage = avg
                     self.sleepHRVScore = self.analyzeSleepWeightedHRV()
@@ -367,21 +424,139 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Baseline Fetching
 
     private func fetchBaselines() {
-
         let calendar = Calendar.current
         let endDate = Date()
-        guard let startDate = calendar.date(byAdding: .day, value: -60, to: endDate) else { return }
 
-        fetchAverage(for: .heartRateVariabilitySDNN, start: startDate, end: endDate) { hrvAvg in
-            self.fetchAverage(for: .restingHeartRate, start: startDate, end: endDate) { rhrAvg in
-
-                DispatchQueue.main.async {
-                    if let hrvAvg { self.hrvBaseline = hrvAvg }
-                    if let rhrAvg { self.rhrBaseline = rhrAvg }
-                    self.updateScores()
+        // Fetch 7-day baselines
+        guard let start7Day = calendar.date(byAdding: .day, value: -7, to: endDate) else { return }
+        
+        // Use a dispatch group to coordinate all baseline fetches
+        let group = DispatchGroup()
+        var hrvAvg7: Double?
+        var rhrAvg7: Double?
+        var sleepAvg7: Double?
+        var hrvAvg28: Double?
+        var rhrAvg28: Double?
+        
+        // 7-day baselines
+        group.enter()
+        fetchAverage(for: .heartRateVariabilitySDNN, start: start7Day, end: endDate) { value in
+            hrvAvg7 = value
+            group.leave()
+        }
+        
+        group.enter()
+        fetchAverage(for: .restingHeartRate, start: start7Day, end: endDate) { value in
+            rhrAvg7 = value
+            group.leave()
+        }
+        
+        group.enter()
+        fetchSleepBaseline(days: 7) { value in
+            sleepAvg7 = value
+            group.leave()
+        }
+        
+        // 28-day baselines
+        guard let start28Day = calendar.date(byAdding: .day, value: -28, to: endDate) else { return }
+        
+        group.enter()
+        fetchAverage(for: .heartRateVariabilitySDNN, start: start28Day, end: endDate) { value in
+            hrvAvg28 = value
+            group.leave()
+        }
+        
+        group.enter()
+        fetchAverage(for: .restingHeartRate, start: start28Day, end: endDate) { value in
+            rhrAvg28 = value
+            group.leave()
+        }
+        
+        // When all fetches complete, update on main thread
+        group.notify(queue: .main) {
+            if let hrvAvg7 { self.hrvBaseline7Day = hrvAvg7 }
+            if let rhrAvg7 { self.rhrBaseline7Day = rhrAvg7 }
+            if let sleepAvg7 { self.sleepBaseline7Day = sleepAvg7 }
+            if let hrvAvg28 { self.hrvBaseline28Day = hrvAvg28 }
+            if let rhrAvg28 { self.rhrBaseline28Day = rhrAvg28 }
+        }
+    }
+    
+    private func fetchSleepBaseline(days: Int, completion: @escaping (Double?) -> Void) {
+        
+        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
+            completion(nil)
+            return
+        }
+        
+        let endDate = Date()
+        guard let startDate = Calendar.current.date(byAdding: .day, value: -days, to: endDate) else {
+            completion(nil)
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        
+        let query = HKSampleQuery(sampleType: sleepType,
+                                  predicate: predicate,
+                                  limit: HKObjectQueryNoLimit,
+                                  sortDescriptors: nil) { _, samples, _ in
+            
+            guard let samples = samples as? [HKCategorySample] else {
+                completion(nil)
+                return
+            }
+            
+            let calendar = Calendar.current
+            var dailySleepHours: [Double] = []
+            
+            // Group samples by calendar day
+            var stagesByDay: [Date: [Int: [HKCategorySample]]] = [:]
+            
+            for sample in samples {
+                let day = calendar.startOfDay(for: sample.startDate)
+                if stagesByDay[day] == nil {
+                    stagesByDay[day] = [:]
+                }
+                if stagesByDay[day]![sample.value] == nil {
+                    stagesByDay[day]![sample.value] = []
+                }
+                stagesByDay[day]![sample.value]?.append(sample)
+            }
+            
+            // For each day, sum sleep stages (1, 3, 4, 5) — exclude awake (2)
+            let sleepStageValues = [1, 3, 4, 5]
+            
+            for (_, stageSamples) in stagesByDay.sorted(by: { $0.key < $1.key }) {
+                var totalSleep: Double = 0
+                
+                for stageValue in sleepStageValues {
+                    if let stageAmples = stageSamples[stageValue] {
+                        for sample in stageAmples {
+                            let duration = sample.endDate.timeIntervalSince(sample.startDate)
+                            if duration > 0 {
+                                totalSleep += duration
+                            }
+                        }
+                    }
+                }
+                
+                let cappedSleep = min(totalSleep / 3600, 9.0)
+                if cappedSleep > 0 {
+                    dailySleepHours.append(cappedSleep)
                 }
             }
+            
+            // Calculate average of daily values
+            if !dailySleepHours.isEmpty {
+                let average = dailySleepHours.reduce(0, +) / Double(dailySleepHours.count)
+                completion(average)
+            } else {
+                completion(nil)
+            }
         }
+        
+        healthStore.execute(query)
     }
 
     private func fetchAverage(
@@ -440,17 +615,19 @@ final class HealthStateEngine: ObservableObject {
             let start28 = calendar.date(byAdding: .day, value: -28, to: endDate)
         else { return }
 
-        fetchWorkoutLoad(start: start7, end: endDate) { acute in
-            self.fetchWorkoutLoad(start: start28, end: endDate) { chronic in
+        let group = DispatchGroup()
+        var acuteLoad: Double?
 
-                guard let acute, let chronic, chronic > 0 else { return }
+        group.enter()
+        fetchWorkoutLoad(start: start7, end: endDate) { value in
+            acuteLoad = value
+            group.leave()
+        }
 
-                let acwr = acute / chronic
-
-                DispatchQueue.main.async {
-                    self.activityLoad = acute
-                    self.strainScore = min(100, acute)
-                }
+        group.notify(queue: .main) {
+            if let acute = acuteLoad {
+                self.activityLoad = acute
+                self.strainScore = min(100, acute)
             }
         }
     }
@@ -504,6 +681,41 @@ final class HealthStateEngine: ObservableObject {
         healthStore.execute(query)
     }
 
+    // MARK: - Feel-Good Score
+    @Published var feelGoodScore: Double = 50
+
+    /// Calculate the overall Feel-Good Score based on multiple metrics
+    private func calculateFeelGoodScore(subjectiveInput: Double = 0.5) -> Double {
+        guard let hrv = latestHRV, let rhr = restingHeartRate, let sleep = sleepHours else {
+            return 50
+        }
+
+        // Normalize components using 7-day baselines
+        let hrvNorm = min(hrv / (hrvBaseline7Day ?? hrv), 1)
+        let rhrNorm = max(0, min((80 - rhr) / 20, 1)) // 60-80 bpm optimal
+        let sleepNorm = min(sleep / 8.0, 1)
+        let recoveryNorm = min(recoveryScore / 100, 1)
+        let strainNorm = max(0, min(1 - strainScore / 100, 1))
+        let circadianNorm = min(circadianHRVScore / 100, 1)
+        let moodNorm = subjectiveInput // 0-1 from user feedback
+
+        // Weighted combination
+        let score = 0.25*hrvNorm
+                  + 0.15*rhrNorm
+                  + 0.2*sleepNorm
+                  + 0.2*recoveryNorm
+                  + 0.1*strainNorm
+                  + 0.05*circadianNorm
+                  + 0.05*moodNorm
+
+        return max(0, min(100, score * 100))
+    }
+
+    /// Update Feel-Good Score whenever scores refresh
+    private func updateFeelGoodScore() {
+        feelGoodScore = calculateFeelGoodScore()
+    }
+
     // MARK: - Score Calculations
 
     private func updateScores() {
@@ -524,6 +736,45 @@ final class HealthStateEngine: ObservableObject {
                       - (strainScore * 0.30)
 
         readinessScore = max(0, min(100, readiness))
+        
+        // Update 7-day rolling averages for score baselines
+        updateScoreBaselines()
+
+        // Update Feel-Good Score
+        updateFeelGoodScore()
+    }
+    
+    private func updateScoreBaselines() {
+        // Add current scores to rolling history (keep only 7 days worth)
+        recoveryScoreHistory.append(recoveryScore)
+        strainScoreHistory.append(strainScore)
+        circadianScoreHistory.append(circadianHRVScore)
+        autonomicScoreHistory.append(autonomicBalanceScore)
+        moodScoreHistory.append(moodScore)
+        
+        // Keep only 7 most recent values
+        if recoveryScoreHistory.count > 7 { recoveryScoreHistory.removeFirst() }
+        if strainScoreHistory.count > 7 { strainScoreHistory.removeFirst() }
+        if circadianScoreHistory.count > 7 { circadianScoreHistory.removeFirst() }
+        if autonomicScoreHistory.count > 7 { autonomicScoreHistory.removeFirst() }
+        if moodScoreHistory.count > 7 { moodScoreHistory.removeFirst() }
+        
+        // Calculate 7-day averages
+        if !recoveryScoreHistory.isEmpty {
+            recoveryBaseline7Day = recoveryScoreHistory.reduce(0, +) / Double(recoveryScoreHistory.count)
+        }
+        if !strainScoreHistory.isEmpty {
+            strainBaseline7Day = strainScoreHistory.reduce(0, +) / Double(strainScoreHistory.count)
+        }
+        if !circadianScoreHistory.isEmpty {
+            circadianBaseline7Day = circadianScoreHistory.reduce(0, +) / Double(circadianScoreHistory.count)
+        }
+        if !autonomicScoreHistory.isEmpty {
+            autonomicBaseline7Day = autonomicScoreHistory.reduce(0, +) / Double(autonomicScoreHistory.count)
+        }
+        if !moodScoreHistory.isEmpty {
+            moodBaseline7Day = moodScoreHistory.reduce(0, +) / Double(moodScoreHistory.count)
+        }
     }
 
     // MARK: - Recovery
@@ -557,7 +808,7 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Sleep-Weighted HRV
 
     private func analyzeSleepWeightedHRV() -> Double {
-        guard let baseline = hrvBaseline else { return 50 }
+        guard let baseline = hrvBaseline7Day else { return 50 }
         guard let avgHRV = sleepHRVAverage else { return 50 }
 
         var score = PhysiologySignal(
@@ -591,7 +842,7 @@ final class HealthStateEngine: ObservableObject {
         let firstAvg = firstHalf.reduce(0, +) / Double(firstHalf.count)
         let secondAvg = secondHalf.reduce(0, +) / Double(secondHalf.count)
 
-        guard let baseline = hrvBaseline else { return 50 }
+        guard let baseline = hrvBaseline7Day else { return 50 }
 
         // healthy circadian rhythm usually shows higher nighttime HRV
         let circadianDelta = (secondAvg - firstAvg) / baseline
@@ -610,7 +861,7 @@ final class HealthStateEngine: ObservableObject {
         let last7 = hrvHistory.suffix(7)
         let avg7 = last7.reduce(0, +) / Double(last7.count)
 
-        guard let baseline = hrvBaseline else { return 50 }
+        guard let baseline = hrvBaseline7Day else { return 50 }
 
         // deviation of recent trend from baseline
         let deviation = (avg7 - baseline) / baseline
@@ -626,8 +877,8 @@ final class HealthStateEngine: ObservableObject {
 
         guard let hrv = latestHRV, let rhr = restingHeartRate else { return 50 }
 
-        let hrvSignal = PhysiologySignal(value: hrv, baseline: hrvBaseline ?? hrv, direction: .higherIsBetter)
-        let rhrSignal = PhysiologySignal(value: rhr, baseline: rhrBaseline ?? rhr, direction: .lowerIsBetter)
+        let hrvSignal = PhysiologySignal(value: hrv, baseline: hrvBaseline7Day ?? hrv, direction: .higherIsBetter)
+        let rhrSignal = PhysiologySignal(value: rhr, baseline: rhrBaseline7Day ?? rhr, direction: .lowerIsBetter)
 
         // Combine HRV and RHR for autonomic balance, equal weighting
         let balance = (hrvSignal.score * 0.5) + (rhrSignal.score * 0.5)
@@ -642,12 +893,12 @@ final class HealthStateEngine: ObservableObject {
         var stress: Double = 0
 
         if let hrv = latestHRV {
-            let hrvSignal = PhysiologySignal(value: hrv, baseline: hrvBaseline ?? hrv, direction: .higherIsBetter)
+            let hrvSignal = PhysiologySignal(value: hrv, baseline: hrvBaseline28Day ?? hrv, direction: .higherIsBetter)
             stress += (100 - hrvSignal.score) * 0.35
         }
 
         if let rhr = restingHeartRate {
-            let rhrSignal = PhysiologySignal(value: rhr, baseline: rhrBaseline ?? rhr, direction: .lowerIsBetter)
+            let rhrSignal = PhysiologySignal(value: rhr, baseline: rhrBaseline28Day ?? rhr, direction: .lowerIsBetter)
             stress += (100 - rhrSignal.score) * 0.25
         }
 
@@ -688,14 +939,14 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Normalization Helpers
 
     private func normalizeHRV(_ hrv: Double) -> Double {
-        guard let baseline = hrvBaseline else { return 50 }
+        guard let baseline = hrvBaseline7Day else { return 50 }
 
         let signal = PhysiologySignal(value: hrv, baseline: baseline, direction: .higherIsBetter)
         return signal.score
     }
 
     private func normalizeRHR(_ rhr: Double) -> Double {
-        guard let baseline = rhrBaseline else { return 50 }
+        guard let baseline = rhrBaseline7Day else { return 50 }
 
         let signal = PhysiologySignal(value: rhr, baseline: baseline, direction: .lowerIsBetter)
         return signal.score

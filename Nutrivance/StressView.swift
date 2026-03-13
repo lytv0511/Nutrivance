@@ -52,7 +52,7 @@ struct StressView: View {
     @State private var averageValue: Double = 0
     
     var body: some View {
-        return NavigationView {
+        NavigationStack {
             ZStack {
                 // Dreamy sleep background - isolated to prevent view hierarchy updates
                 AnimatedBackgroundView()
@@ -279,44 +279,47 @@ struct StressView: View {
         let aggregatedData: [StressView.HRVSession]
         @Binding var selectedSession: StressView.HRVSession?
         let onChartTap: (CGPoint) -> Void
-        
-        let chartWidth: CGFloat = 800
-        
+
         var body: some View {
-            ScrollViewReader { scrollProxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    ZStack(alignment: .leading) {
-                        MonthlyChartContent(
-                            aggregatedData: aggregatedData,
-                            selectedSession: selectedSession
-                        )
-                        
-                        // Invisible scroll anchors positioned at each data point
-                        if !aggregatedData.isEmpty {
-                            let itemWidth = chartWidth / CGFloat(aggregatedData.count)
-                            HStack(spacing: 0) {
-                                ForEach(Array(aggregatedData.enumerated()), id: \.element.id) { index, session in
-                                    Color.clear
-                                        .frame(width: itemWidth, height: 0)
-                                        .id(session.id)
+            GeometryReader { geometry in
+                let chartWidth = max(CGFloat(aggregatedData.count) * 40, geometry.size.width)
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        ZStack(alignment: .leading) {
+                            MonthlyChartContent(
+                                aggregatedData: aggregatedData,
+                                selectedSession: selectedSession
+                            )
+                            .frame(width: chartWidth)
+                            
+                            // Invisible scroll anchors positioned at each data point
+                            if !aggregatedData.isEmpty {
+                                let itemWidth = chartWidth / CGFloat(aggregatedData.count)
+                                HStack(spacing: 0) {
+                                    ForEach(Array(aggregatedData.enumerated()), id: \.element.id) { index, session in
+                                        Color.clear
+                                            .frame(width: itemWidth, height: 0)
+                                            .id(session.id)
+                                    }
                                 }
                             }
-                            .frame(width: chartWidth)
                         }
                     }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { location in
-                    onChartTap(location)
-                }
-                .onChange(of: selectedSession?.id) { _ in
-                    if let selectedId = selectedSession?.id {
-                        withAnimation {
-                            scrollProxy.scrollTo(selectedId, anchor: .center)
+                    .contentShape(Rectangle())
+                    .onTapGesture { location in
+                        onChartTap(location)
+                    }
+                    .onChange(of: selectedSession?.id) { _ in
+                        if let selectedId = selectedSession?.id {
+                            withAnimation {
+                                scrollProxy.scrollTo(selectedId, anchor: .center)
+                            }
                         }
                     }
                 }
             }
+            .frame(height: 250)
+            .padding()
         }
     }
     
@@ -350,7 +353,6 @@ struct StressView: View {
                 }
             }
             .frame(height: 250)
-            .frame(minWidth: 800)
             .padding()
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 10)) { value in

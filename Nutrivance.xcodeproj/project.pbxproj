@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1508BD992F63745D00DFE65A /* FeelGoodScoreDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1508BD982F63745D00DFE65A /* FeelGoodScoreDetailView.swift */; };
 		1514E7982F620AF30027B222 /* HealthStateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1514E7972F620AF30027B222 /* HealthStateEngine.swift */; };
 		151F147A2D77BE1900B51F88 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 151F14792D77BE1900B51F88 /* UIKit.framework */; };
 		152C743A2CF79BE300DB118D /* HealthAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152C74392CF79BE300DB118D /* HealthAnalysisService.swift */; };
@@ -145,6 +146,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		1508BD982F63745D00DFE65A /* FeelGoodScoreDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeelGoodScoreDetailView.swift; sourceTree = "<group>"; };
 		1514E7972F620AF30027B222 /* HealthStateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthStateEngine.swift; sourceTree = "<group>"; };
 		151F14792D77BE1900B51F88 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		152C74392CF79BE300DB118D /* HealthAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthAnalysisService.swift; sourceTree = "<group>"; };
@@ -582,6 +584,7 @@
 				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
 				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
 				1568141F2D5C0F2D003C861E /* DashboardView.swift */,
+				1508BD982F63745D00DFE65A /* FeelGoodScoreDetailView.swift */,
 				156814202D5C0F2D003C861E /* DistanceView.swift */,
 				156814212D5C0F2D003C861E /* ExerciseLibraryView.swift */,
 				156814232D5C0F2D003C861E /* FriendActivityView.swift */,
@@ -846,6 +849,7 @@
 				156814632D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage in Sources */,
 				159F517E2CD7C8FB001F5FFC /* NutrientCardView.swift in Sources */,
 				15CB570E2CEEC03B00A6E970 /* NutritionResultsView.swift in Sources */,
+				1508BD992F63745D00DFE65A /* FeelGoodScoreDetailView.swift in Sources */,
 				15A70DB52CF119AD007FBC5D /* CloudKitImportView.swift in Sources */,
 				15A70DB72CF119DE007FBC5D /* CloudKitManager.swift in Sources */,
 				15561A672D6B78FB006B8741 /* GradientBackgrounds.swift in Sources */,
