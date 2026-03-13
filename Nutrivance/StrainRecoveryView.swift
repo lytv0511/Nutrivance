@@ -1,233 +1,407 @@
 import SwiftUI
-import HealthKit
+
+// Main technical view for strain/recovery analytics
 
 struct StrainRecoveryView: View {
+    @StateObject private var engine = HealthStateEngine()
     @State private var animationPhase: Double = 0
-    
+
     var body: some View {
         NavigationStack {
-                ScrollView {
-                    VStack(spacing: 20) {
-                        StrainScoreCard()
-                        RecoveryMetricsCard()
-                        WorkoutHistoryAnalysis()
-                        OvertrainingRiskAssessment()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    // ML-powered summary (placeholder)
+                    Section {
+                        Text("\u{1F916} ML-powered summary goes here.\nExplain how your sleep, HRV, RHR, mood, and workouts contributed to your current strain and recovery.")
+                            .font(.headline)
+                            .padding(.bottom, 8)
+                    } header: {
+                        Text("AI Coach Summary").font(.title2.bold())
                     }
-                    .padding()
+
+                    // Strain & Recovery Math
+                    StrainRecoveryMathSection(engine: engine)
+
+                    // Sleep & Recovery
+                    SleepRecoverySection(engine: engine)
+
+                    // HRV & RHR
+                    HRVSection(engine: engine)
+
+                    // Workout Contributions
+                    WorkoutContributionsSection(engine: engine)
+
+                    // Mood & Recovery
+                    MoodSection(engine: engine)
+
+                    // Post-Workout HR & VO2 Max
+                    PostWorkoutSection(engine: engine)
+
+                    // Training Schedule & Favorite Sport
+                    TrainingScheduleSection(engine: engine)
+
+                    // Vitals Table/Graph
+                    VitalsSection(engine: engine)
                 }
+                .padding()
+            }
             .background(
-               GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
-                   .onAppear {
-                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                           animationPhase = 20
-                       }
-                   }
-           )
+                GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
+                        }
+                    }
+            )
             .navigationTitle("Strain vs Recovery")
         }
     }
 }
 
-struct StrainScoreCard: View {
-    @StateObject private var healthStore = HealthKitManager()
-    @State private var strainScore: Double = 0
-    @State private var isLoading = true
-    
+// MARK: - Technical Sections
+
+import Charts
+
+struct StrainRecoveryMathSection: View {
+    @ObservedObject var engine: HealthStateEngine
     var body: some View {
-        HStack {
-            Spacer()
-            VStack(alignment: .leading) {
-                Text("Daily Strain")
-                    .font(.title2.bold())
-                    .padding()
-                
-                if isLoading {
-                    ProgressView()
-                } else {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("\(Int(strainScore))")
-                            .font(.system(size: 64, weight: .bold))
-                        Text("/10")
-                            .font(.title2)
-                            .foregroundStyle(.secondary)
-                            .padding()
+        HealthCard(
+            symbol: "flame.fill",
+            title: "Strain",
+            value: String(Int(engine.strainScore)),
+            unit: "/100",
+            trend: "ACWR: " + String(format: "%.2f", engine.activityLoad / max(engine.activityLoad / 4, 1)),
+            color: Color.orange,
+            chartData: engine.timeSeries(for: "effort", days: 28),
+            chartLabel: "Effort",
+            chartUnit: "pts",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Recovery Score: \(Int(engine.recoveryScore))")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("Readiness Score: \(Int(engine.readinessScore))")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
+struct SleepRecoverySection: View {
+    @ObservedObject var engine: HealthStateEngine
+    var body: some View {
+        let today = Calendar.current.startOfDay(for: Date())
+        let stages = engine.sleepStages[today] ?? [:]
+        let totalStages = ["core", "deep", "rem", "awake"].compactMap { stages[$0] }.reduce(0, +)
+        HealthCard(
+            symbol: "bed.double.fill",
+            title: "Sleep",
+            value: String(format: "%.1f", engine.sleepHours ?? 0),
+            unit: "hrs",
+            trend: "7d avg: " + String(format: "%.1f", engine.sleepBaseline7Day ?? 0),
+            color: .blue,
+            chartData: engine.timeSeries(for: "sleep", days: 28),
+            chartLabel: "Sleep",
+            chartUnit: "hrs",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Consistency: " + String(format: "%.2f", engine.sleepConsistency ?? 0) + "h stddev")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("Efficiency: " + String(format: "%.0f%%", (engine.sleepEfficiency[engine.sleepEfficiency.keys.max() ?? Date()] ?? 0) * 100))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    if !stages.isEmpty {
+                        HStack(spacing: 12) {
+                            ForEach(["core", "deep", "rem", "awake"], id: \ .self) { stage in
+                                let hours = stages[stage] ?? 0
+                                Text("\(stage.capitalized): " + String(format: "%.1f", hours) + "h")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Text("Total: " + String(format: "%.1f", totalStages) + "h (should match main value)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
-            Spacer()
-        }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .task {
-            await fetchStrainData()
-        }
-    }
-    
-    private func fetchStrainData() async {
-        healthStore.calculateWorkoutStrain { strain in
-            strainScore = strain
-            isLoading = false
-        }
+        )
     }
 }
 
-struct RecoveryMetricsCard: View {
-    @StateObject private var healthStore = HealthKitManager()
-    @State private var hrvValue: Double = 0
-    @State private var rhrValue: Double = 0
-    @State private var isLoading = true
-    
+struct HRVSection: View {
+    @ObservedObject var engine: HealthStateEngine
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Recovery Status")
-                .font(.title2.bold())
-            
-            if isLoading {
-                ProgressView()
+        HealthCard(
+            symbol: "waveform.path.ecg",
+            title: "HRV",
+            value: String(format: "%.0f", engine.latestHRV ?? 0),
+            unit: "ms",
+            trend: "7d avg: " + String(format: "%.0f", engine.hrvBaseline7Day ?? 0),
+            color: .purple,
+            chartData: engine.timeSeries(for: "hrv", days: 28),
+            chartLabel: "HRV",
+            chartUnit: "ms",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Current HRV is your most recent SDNN measurement. 7d avg is the rolling average.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text("RHR: " + String(format: "%.0f", engine.restingHeartRate ?? 0) + " bpm")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("RHR 7d avg: " + String(format: "%.0f", engine.rhrBaseline7Day ?? 0))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    HealthLineChart(data: engine.timeSeries(for: "rhr", days: 28), label: "RHR", unit: "bpm", color: .red)
+                        .frame(height: 60)
+                }
+            }
+        )
+    }
+}
+
+struct WorkoutContributionsSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    var body: some View {
+        HealthCard(
+            symbol: "figure.strengthtraining.traditional",
+            title: "Workouts",
+            value: String(format: "%.0f", engine.activityLoad),
+            unit: "load",
+            trend: "Effort 7d avg",
+            color: .green,
+            chartData: engine.timeSeries(for: "effort", days: 28),
+            chartLabel: "Effort",
+            chartUnit: "pts",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Training Load is a composite score based on effort, duration, and intensity. Higher is more strenuous.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text("Kcal Burned (28d)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    HealthLineChart(data: engine.timeSeries(for: "kcal", days: 28), label: "Kcal", unit: "kcal", color: .orange)
+                        .frame(height: 60)
+                    if let latestDate = engine.heartRateZones.keys.max(), let zones = engine.heartRateZones[latestDate] {
+                        HStack(spacing: 12) {
+                            ForEach(zones.sorted(by: { $0.key < $1.key }), id: \ .key) { zone, min in
+                                Text("\(zone): " + String(format: "%.0f", min) + " min")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+}
+
+struct MoodSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    var body: some View {
+        HealthCard(
+            symbol: "face.smiling",
+            title: "Mood",
+            value: String(format: "%.0f", engine.moodScore),
+            unit: "/100",
+            trend: "7d avg: " + String(format: "%.0f", engine.moodBaseline7Day ?? 0),
+            color: .yellow,
+            chartData: engine.timeSeries(for: "mood", days: 28),
+            chartLabel: "Mood",
+            chartUnit: "pts",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Mood trend and notes coming soon.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
+struct PostWorkoutSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    var body: some View {
+        HealthCard(
+            symbol: "heart.fill",
+            title: "Post-Workout HR",
+            value: {
+                if let latestDate = engine.postWorkoutHR.keys.max(), let hr = engine.postWorkoutHR[latestDate] {
+                    return String(format: "%.0f", hr)
+                } else {
+                    return "-"
+                }
+            }(),
+            unit: "bpm",
+            trend: "VO2 Max: " + {
+                if let latestDate = engine.vo2Max.keys.max(), let vo2 = engine.vo2Max[latestDate] {
+                    return String(format: "%.1f", vo2)
+                } else {
+                    return "-"
+                }
+            }() + " ml/kg/min",
+            color: .red,
+            chartData: engine.timeSeries(for: "postworkouthr", days: 28),
+            chartLabel: "Post-Workout HR",
+            chartUnit: "bpm",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("VO2 Max (28d)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    HealthLineChart(data: engine.timeSeries(for: "vo2max", days: 28), label: "VO2 Max", unit: "ml/kg/min", color: .blue)
+                        .frame(height: 60)
+                }
+            }
+        )
+    }
+}
+
+struct TrainingScheduleSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    var body: some View {
+        HealthCard(
+            symbol: "calendar",
+            title: "Training Schedule",
+            value: String(format: "%.1f", engine.trainingFrequency ?? 0),
+            unit: "/week",
+            trend: "Favorite: " + (engine.favoriteSport ?? "-"),
+            color: .teal,
+            chartData: engine.timeSeries(for: "trainingfreq", days: 28),
+            chartLabel: "Frequency",
+            chartUnit: "/week",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Favorite Sport: " + (engine.favoriteSport ?? "-"))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
+struct VitalsSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    @State private var isLoading = true
+    var body: some View {
+        let today = Calendar.current.startOfDay(for: Date())
+        let respCurrent = engine.respiratoryRate[today] ?? 0
+        let resp7dAvg = engine.vitalsSummary["RespiratoryRate"]?.baseline ?? 0
+        let spo2Current = engine.spO2[today] ?? 0
+        let spo27dAvg = engine.vitalsSummary["SpO2"]?.baseline ?? 0
+        let respArray = engine.timeSeries(for: "respiratoryrate", days: 28)
+        let tempArray = engine.timeSeries(for: "wristtemp", days: 28)
+        let spo2Array = engine.timeSeries(for: "spo2", days: 28)
+        let hasData = !respArray.isEmpty || !tempArray.isEmpty || !spo2Array.isEmpty
+        VStack {
+            if isLoading && !hasData {
+                ProgressView("Loading vitals...")
+                    .onAppear {
+                        // Force refresh in case data is not loaded
+                        engine.refreshAllMetrics()
+                        // Simulate loading delay for demo; in production, observe data changes
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            isLoading = false
+                        }
+                    }
             } else {
-                HStack {
-                    MetricItem(
-                        title: "HRV",
-                        value: String(format: "%.0f ms", hrvValue),
-                        icon: "heart.text.square.fill"
-                    )
-                    
-                    Divider()
-                    
-                    MetricItem(
-                        title: "Resting HR",
-                        value: String(format: "%.0f bpm", rhrValue),
-                        icon: "heart.fill"
-                    )
+                HealthCard(
+                    symbol: "lungs.fill",
+                    title: "Respiratory Rate",
+                    value: String(format: "%.1f", respCurrent),
+                    unit: "bpm",
+                    trend: "7d avg: " + String(format: "%.1f", resp7dAvg),
+                    color: .indigo,
+                    chartData: respArray,
+                    chartLabel: "Respiratory Rate",
+                    chartUnit: "bpm"
+                ) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if respArray.isEmpty {
+                            Text("No respiratory rate data available.")
+                                .foregroundColor(.red)
+                        }
+                        Text("Wrist Temp (28d)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        if tempArray.isEmpty {
+                            Text("No wrist temperature data available.")
+                                .foregroundColor(.red)
+                        }
+                        HealthLineChart(data: tempArray, label: "Wrist Temp", unit: "°C", color: .pink)
+//                            .frame(height: 60)
+                        Text("SpO₂ (28d)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text("Current: " + String(format: "%.1f", spo2Current) + "% | 7d avg: " + String(format: "%.1f", spo27dAvg) + "%")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        if spo2Array.isEmpty {
+                            Text("No SpO₂ data available.")
+                                .foregroundColor(.red)
+                        }
+                        HealthLineChart(data: spo2Array, label: "SpO₂", unit: "%", color: .mint)
+//                            .frame(height: 60)
+                        Divider().padding(.vertical, 2)
+                        ForEach(engine.vitalsSummary.sorted(by: { $0.key < $1.key }), id: \ .key) { key, val in
+                            HStack {
+                                Text("\(key):")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("Current: \(val.current.map { String(format: "%.1f", $0) } ?? "-")")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("7d Avg: \(val.baseline.map { String(format: "%.1f", $0) } ?? "-")")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .task {
-            await fetchRecoveryMetrics()
-        }
     }
-    
-    private func fetchRecoveryMetrics() async {
-       hrvValue = await healthStore.fetchHRVAsync()
-       rhrValue = await healthStore.fetchRHRAsync()
-       isLoading = false
-   }
 }
 
-struct WorkoutHistoryAnalysis: View {
-    @StateObject private var healthStore = HealthKitManager()
-    @State private var recentWorkouts: [HKWorkout] = []
-    @State private var isLoading = true
-    
+// MARK: - Simple Line Graph (placeholder)
+struct MetricLineGraph: View {
+    let title: String
+    let data: [(Date, Double)]
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Workout History")
-                .font(.title2.bold())
-            
-            if isLoading {
-                ProgressView()
+        VStack(alignment: .leading) {
+            Text(title).font(.caption.bold())
+            if data.isEmpty {
+                Text("No data").foregroundColor(.secondary)
             } else {
-                ForEach(recentWorkouts, id: \.uuid) { workout in
-                    WorkoutRow(workout: workout)
+                GeometryReader { geo in
+                    let maxVal = data.map { $0.1 }.max() ?? 1
+                    let minVal = data.map { $0.1 }.min() ?? 0
+                    let points = data.enumerated().map { (i, pair) in
+                        CGPoint(
+                            x: geo.size.width * CGFloat(i) / CGFloat(max(data.count-1,1)),
+                            y: geo.size.height * CGFloat(1 - (pair.1 - minVal) / max(0.01, maxVal - minVal))
+                        )
+                    }
+                    Path { path in
+                        if let first = points.first {
+                            path.move(to: first)
+                            for pt in points.dropFirst() { path.addLine(to: pt) }
+                        }
+                    }
+                    .stroke(Color.accentColor, lineWidth: 2)
                 }
+                .frame(height: 60)
             }
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .task {
-            await fetchWorkoutHistory()
-        }
-    }
-    
-    @MainActor
-    private func fetchWorkoutHistory() async {
-        let endDate = Date()
-        let startDate = Calendar.current.date(byAdding: .day, value: -7, to: endDate)!
-        
-        await withCheckedContinuation { continuation in
-            healthStore.fetchWorkouts(from: startDate, to: endDate) { workouts in
-                recentWorkouts = workouts
-                isLoading = false
-                continuation.resume()
-            }
-        }
+        .padding(.vertical, 4)
     }
 }
 
-struct OvertrainingRiskAssessment: View {
-    @StateObject private var healthStore = HealthKitManager()
-    @State private var riskScore: Double = 0
-    @State private var isLoading = true
-    
-    var riskLevel: String {
-        switch riskScore {
-        case 0..<3: return "Low"
-        case 3..<7: return "Moderate"
-        default: return "High"
-        }
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Overtraining Risk")
-                .font(.title2.bold())
-            
-            if isLoading {
-                ProgressView()
-            } else {
-                HStack {
-                    MetricItem(
-                        title: "Risk Level",
-                        value: riskLevel,
-                        icon: "exclamationmark.triangle.fill"
-                    )
-                }
-            }
-        }
-        .padding()
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .task {
-            await calculateRiskScore()
-        }
-    }
-    
-    private func calculateRiskScore() async {
-        let hrv = await healthStore.fetchHRVAsync()
-        riskScore = hrv < 30 ? 8 : hrv < 50 ? 5 : 2
-        isLoading = false
-    }
-}
-
-struct WorkoutRow: View {
-    let workout: HKWorkout
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text(workout.workoutActivityType.name)
-                    .font(.headline)
-                Text(formatDuration(workout.duration))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            
-            Spacer()
-            
-            let energyType = HKQuantityType(.activeEnergyBurned)
-            Text(String(format: "%.0f kcal", workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
-    
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = Int(duration) / 60 % 60
-        return "\(hours)h \(minutes)m"
-    }
-}

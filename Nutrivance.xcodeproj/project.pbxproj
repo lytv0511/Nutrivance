@@ -10,6 +10,7 @@
 		1508BD992F63745D00DFE65A /* FeelGoodScoreDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1508BD982F63745D00DFE65A /* FeelGoodScoreDetailView.swift */; };
 		1514E7982F620AF30027B222 /* HealthStateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1514E7972F620AF30027B222 /* HealthStateEngine.swift */; };
 		151F147A2D77BE1900B51F88 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 151F14792D77BE1900B51F88 /* UIKit.framework */; };
+		1525B1472F6495DA00E85899 /* HealthCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1525B1462F6495DA00E85899 /* HealthCard.swift */; };
 		152C743A2CF79BE300DB118D /* HealthAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152C74392CF79BE300DB118D /* HealthAnalysisService.swift */; };
 		153DD1902D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */; };
 		15561A432D6AE865006B8741 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A422D6AE865006B8741 /* SearchView.swift */; };
@@ -149,6 +150,7 @@
 		1508BD982F63745D00DFE65A /* FeelGoodScoreDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeelGoodScoreDetailView.swift; sourceTree = "<group>"; };
 		1514E7972F620AF30027B222 /* HealthStateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthStateEngine.swift; sourceTree = "<group>"; };
 		151F14792D77BE1900B51F88 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		1525B1462F6495DA00E85899 /* HealthCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthCard.swift; sourceTree = "<group>"; };
 		152C74392CF79BE300DB118D /* HealthAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthAnalysisService.swift; sourceTree = "<group>"; };
 		153DD18F2D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPad_compact.swift; sourceTree = "<group>"; };
 		15561A422D6AE865006B8741 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
@@ -584,6 +586,7 @@
 				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
 				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
 				1568141F2D5C0F2D003C861E /* DashboardView.swift */,
+				1525B1462F6495DA00E85899 /* HealthCard.swift */,
 				1508BD982F63745D00DFE65A /* FeelGoodScoreDetailView.swift */,
 				156814202D5C0F2D003C861E /* DistanceView.swift */,
 				156814212D5C0F2D003C861E /* ExerciseLibraryView.swift */,
@@ -892,6 +895,7 @@
 				157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */,
 				1568143B2D5C0F2D003C861E /* LiveChallengesView.swift in Sources */,
 				1568143C2D5C0F2D003C861E /* LeaderboardsView.swift in Sources */,
+				1525B1472F6495DA00E85899 /* HealthCard.swift in Sources */,
 				1568143D2D5C0F2D003C861E /* TrainingCalendarView.swift in Sources */,
 				15E567812D88B1FD009A0AED /* readiness_prediction_model.mlpackage in Sources */,
 				157C20B22D6E6E5900D1FA9A /* MeditationView.swift in Sources */,

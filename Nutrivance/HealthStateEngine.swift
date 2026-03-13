@@ -13,6 +13,173 @@ import Combine
 /// All health calculations should live here, not in Views.
 final class HealthStateEngine: ObservableObject {
 
+    // MARK: - Vitals & Advanced Metrics
+    @Published var sleepStages: [Date: [String: Double]] = [:] // [date: [stage: hours]]
+    @Published var sleepEfficiency: [Date: Double] = [:] // [date: efficiency 0-1]
+    @Published var sleepConsistency: Double? // stddev of sleep start times (hours)
+    @Published var respiratoryRate: [Date: Double] = [:] // [date: breaths/min]
+    @Published var wristTemperature: [Date: Double] = [:] // [date: deg C]
+    @Published var spO2: [Date: Double] = [:] // [date: %]
+    @Published var postWorkoutHR: [Date: Double] = [:] // [date: bpm]
+    @Published var vo2Max: [Date: Double] = [:] // [date: ml/kg/min]
+    @Published var heartRateZones: [Date: [String: Double]] = [:] // [date: [zone: minutes]]
+    @Published var kcalBurned: [Date: Double] = [:] // [date: kcal]
+    @Published var effortRating: [Date: Double] = [:] // [date: 1-10]
+    @Published var favoriteSport: String? = nil
+    @Published var trainingFrequency: Double? = nil // sessions/week
+
+    // MARK: - Vitals Baseline/Trend Accessors
+    public var vitalsSummary: [String: (current: Double?, baseline: Double?, trend: Double?)] {
+        // Example for HRV, RHR, sleep, respiratoryRate, temp, spO2
+        let today = Calendar.current.startOfDay(for: Date())
+        func avg(_ dict: [Date: Double], days: Int) -> Double? {
+            let dates = (0..<days).compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: today) }
+            let vals = dates.compactMap { dict[$0] }
+            guard !vals.isEmpty else { return nil }
+            return vals.reduce(0, +) / Double(vals.count)
+        }
+        return [
+            "HRV": (latestHRV, hrvBaseline7Day, hrvTrendScore),
+            "RHR": (restingHeartRate, rhrBaseline7Day, nil),
+            "Sleep": (sleepHours, sleepBaseline7Day, nil),
+            "RespiratoryRate": (respiratoryRate[today], avg(respiratoryRate, days: 7), nil),
+            "WristTemp": (wristTemperature[today], avg(wristTemperature, days: 7), nil),
+            "SpO2": (spO2[today], avg(spO2, days: 7), nil)
+        ]
+    }
+
+    // MARK: - Sleep Quality Fetch (stages, efficiency, consistency)
+    private func fetchSleepQuality() {
+        // This is a stub. In production, fetch HKCategorySample for sleep stages, calculate efficiency, and consistency.
+        // For demo, simulate with random data for last 28 days.
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var stages: [Date: [String: Double]] = [:]
+        var efficiency: [Date: Double] = [:]
+        for i in 0..<28 {
+            let date = calendar.date(byAdding: .day, value: -i, to: today)!
+            stages[date] = [
+                "deep": Double.random(in: 1.0...2.0),
+                "rem": Double.random(in: 1.0...2.0),
+                "core": Double.random(in: 3.0...4.0),
+                "awake": Double.random(in: 0.2...0.8)
+            ]
+            efficiency[date] = Double.random(in: 0.8...0.98)
+        }
+        let startTimes = (0..<28).map { _ in Double.random(in: 22.0...24.0) }
+        let mean = startTimes.reduce(0, +) / Double(startTimes.count)
+        let variance = startTimes.map { pow($0 - mean, 2) }.reduce(0, +) / Double(startTimes.count)
+        let consistency = sqrt(variance)
+        DispatchQueue.main.async {
+            self.sleepStages = stages
+            self.sleepEfficiency = efficiency
+            self.sleepConsistency = consistency
+        }
+    }
+
+    // MARK: - Vitals Fetch (respiratory rate, temp, SpO2, post-workout HR, VO2 max)
+    private func fetchVitals() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var resp: [Date: Double] = [:]
+        var temp: [Date: Double] = [:]
+        var spo: [Date: Double] = [:]
+        var postHR: [Date: Double] = [:]
+        var vo2: [Date: Double] = [:]
+        for i in 0..<28 {
+            let date = calendar.date(byAdding: .day, value: -i, to: today)!
+            resp[date] = Double.random(in: 12.0...18.0)
+            temp[date] = Double.random(in: 36.0...37.5)
+            spo[date] = Double.random(in: 95.0...99.0)
+            postHR[date] = Double.random(in: 80.0...120.0)
+            vo2[date] = Double.random(in: 35.0...55.0)
+        }
+        print("[fetchVitals] resp count: \(resp.count), temp count: \(temp.count), spo count: \(spo.count)")
+        DispatchQueue.main.async {
+            self.respiratoryRate = resp
+            self.wristTemperature = temp
+            self.spO2 = spo
+            self.postWorkoutHR = postHR
+            self.vo2Max = vo2
+            print("[fetchVitals] assigned respiratoryRate: \(self.respiratoryRate.count), wristTemperature: \(self.wristTemperature.count), spO2: \(self.spO2.count)")
+        }
+    }
+
+    // MARK: - Intensity Metrics Fetch (effort, kcal, HR zones)
+    private func fetchIntensityMetrics() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var effort: [Date: Double] = [:]
+        var kcal: [Date: Double] = [:]
+        var hrZones: [Date: [String: Double]] = [:]
+        for i in 0..<28 {
+            let date = calendar.date(byAdding: .day, value: -i, to: today)!
+            effort[date] = Double.random(in: 3.0...8.0)
+            kcal[date] = Double.random(in: 300.0...900.0)
+            hrZones[date] = [
+                "Zone1": Double.random(in: 10...30),
+                "Zone2": Double.random(in: 10...30),
+                "Zone3": Double.random(in: 10...30),
+                "Zone4": Double.random(in: 5...20),
+                "Zone5": Double.random(in: 1...10)
+            ]
+        }
+        DispatchQueue.main.async {
+            self.effortRating = effort
+            self.kcalBurned = kcal
+            self.heartRateZones = hrZones
+        }
+    }
+
+    // MARK: - Favorite Sport & Training Frequency
+    private func inferFavoriteSportAndFrequency() {
+        // In production, analyze workout types over 28 days
+        // For demo, simulate
+        favoriteSport = ["Running", "Cycling", "Swimming", "Strength Training"].randomElement()
+        trainingFrequency = Double.random(in: 2.0...6.0)
+    }
+
+    // MARK: - Public Accessors for Graphs/Trends
+    public func timeSeries(for metric: String, days: Int = 28) -> [(Date, Double)] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let dict: [Date: Double]
+        switch metric.lowercased() {
+        case "hrv":
+            dict = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) })
+        case "rhr":
+            // Simulate 28 days of RHR if not present
+            var rhrDict: [Date: Double] = [:]
+            let base = restingHeartRate ?? 60
+            for i in 0..<28 {
+                let date = calendar.date(byAdding: .day, value: -i, to: today)!
+                rhrDict[date] = base + Double.random(in: -5...5)
+            }
+            dict = rhrDict
+        case "sleep":
+            // Simulate 28 days of sleep if not present
+            var sleepDict: [Date: Double] = [:]
+            let base = sleepHours ?? 7
+            for i in 0..<28 {
+                let date = calendar.date(byAdding: .day, value: -i, to: today)!
+                sleepDict[date] = base + Double.random(in: -1...1)
+            }
+            dict = sleepDict
+        case "respiratoryrate": dict = respiratoryRate
+        case "wristtemp": dict = wristTemperature
+        case "spo2": dict = spO2
+        case "postworkouthr": dict = postWorkoutHR
+        case "vo2max": dict = vo2Max
+        case "kcal": dict = kcalBurned
+        case "effort": dict = effortRating
+        default: dict = [:]
+        }
+        return (0..<days).compactMap { i in
+            let date = calendar.date(byAdding: .day, value: -i, to: today)!
+            if let v = dict[date] { return (date, v) } else { return nil }
+        }.reversed()
+    }
+
     // MARK: - HealthKit
 
     private let healthStore = HKHealthStore()
@@ -153,45 +320,32 @@ final class HealthStateEngine: ObservableObject {
 
     func refreshAllMetrics() {
         let group = DispatchGroup()
-        
-        // Start all fetch operations without calling updateScores individually
+
+        // HealthKit fetches (keep on background threads)
         group.enter()
-        DispatchQueue.global().async {
-            self.fetchLatestHRV()
-            group.leave()
-        }
-        
+        DispatchQueue.global().async { self.fetchLatestHRV(); group.leave() }
         group.enter()
-        DispatchQueue.global().async {
-            self.fetchHRVHistory(days: 30)
-            group.leave()
-        }
-        
+        DispatchQueue.global().async { self.fetchHRVHistory(days: 30); group.leave() }
         group.enter()
-        DispatchQueue.global().async {
-            self.fetchRestingHeartRate()
-            group.leave()
-        }
-        
+        DispatchQueue.global().async { self.fetchRestingHeartRate(); group.leave() }
         group.enter()
-        DispatchQueue.global().async {
-            self.fetchSleep()
-            group.leave()
-        }
-        
+        DispatchQueue.global().async { self.fetchSleep(); group.leave() }
         group.enter()
-        DispatchQueue.global().async {
-            self.fetchBaselines()
-            group.leave()
-        }
-        
+        DispatchQueue.global().async { self.fetchBaselines(); group.leave() }
         group.enter()
-        DispatchQueue.global().async {
-            self.fetchTrainingLoad()
-            group.leave()
-        }
-        
-        // After all fetches complete, update scores once on main thread
+        DispatchQueue.global().async { self.fetchTrainingLoad(); group.leave() }
+
+        // Mock/demo fetchers: always call on main thread
+        group.enter()
+        self.fetchSleepQuality(); group.leave()
+        print("[refreshAllMetrics] calling fetchVitals...")
+        group.enter()
+        self.fetchVitals(); group.leave()
+        group.enter()
+        self.fetchIntensityMetrics(); group.leave()
+        group.enter()
+        self.inferFavoriteSportAndFrequency(); group.leave()
+
         group.notify(queue: .main) {
             self.updateScores()
         }
