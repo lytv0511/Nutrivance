@@ -1,4 +1,26 @@
 import SwiftUI
+// Inline TappableChartPreview definition
+struct TappableChartPreview: View {
+    let data: [(Date, Double)]
+    let label: String
+    let unit: String
+    let color: Color
+    @State private var showSheet = false
+    var body: some View {
+        Button {
+            showSheet = true
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
+        } label: {
+            HealthLineChartPreview(data: data, label: label, unit: unit, color: color)
+                .frame(height: 60)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showSheet) {
+            HealthLineChartSheet(data: data, label: label, unit: unit, color: color)
+        }
+    }
+}
 
 // Main technical view for strain/recovery analytics
 
@@ -156,8 +178,7 @@ struct HRVSection: View {
                     Text("RHR 7d avg: " + String(format: "%.0f", engine.rhrBaseline7Day ?? 0))
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    HealthLineChartPreview(data: engine.timeSeries(for: "rhr", days: 28), label: "RHR", unit: "bpm", color: .red)
-                        .frame(height: 60)
+                    TappableChartPreview(data: engine.timeSeries(for: "rhr", days: 28), label: "RHR", unit: "bpm", color: .red)
                 }
             }
         )
@@ -185,8 +206,7 @@ struct WorkoutContributionsSection: View {
                     Text("Kcal Burned (28d)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    HealthLineChartPreview(data: engine.timeSeries(for: "kcal", days: 28), label: "Kcal", unit: "kcal", color: .orange)
-                        .frame(height: 60)
+                    TappableChartPreview(data: engine.timeSeries(for: "kcal", days: 28), label: "Kcal", unit: "kcal", color: .orange)
                     if let latestDate = engine.heartRateZones.keys.max(), let zones = engine.heartRateZones[latestDate] {
                         HStack(spacing: 12) {
                             ForEach(zones.sorted(by: { $0.key < $1.key }), id: \ .key) { zone, min in
@@ -233,6 +253,7 @@ struct PostWorkoutSection: View {
             symbol: "heart.fill",
             title: "Post-Workout HR",
             value: {
+                // Use real HR recovery calculation
                 if let latestDate = engine.postWorkoutHR.keys.max(), let hr = engine.postWorkoutHR[latestDate] {
                     return String(format: "%.0f", hr)
                 } else {
@@ -241,6 +262,7 @@ struct PostWorkoutSection: View {
             }(),
             unit: "bpm",
             trend: "VO2 Max: " + {
+                // Use real VO2 max calculation
                 if let latestDate = engine.vo2Max.keys.max(), let vo2 = engine.vo2Max[latestDate] {
                     return String(format: "%.1f", vo2)
                 } else {
@@ -256,8 +278,10 @@ struct PostWorkoutSection: View {
                     Text("VO2 Max (28d)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    HealthLineChartPreview(data: engine.timeSeries(for: "vo2max", days: 28), label: "VO2 Max", unit: "ml/kg/min", color: .blue)
-                        .frame(height: 60)
+                    TappableChartPreview(data: engine.timeSeries(for: "vo2max", days: 28), label: "VO2 Max", unit: "ml/kg/min", color: .blue)
+                    Text("VO2 max is estimated using workout HR and sport-specific formulas. If a more accurate method is available for your sport, it will be used.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
         )
@@ -282,6 +306,20 @@ struct TrainingScheduleSection: View {
                     Text("Favorite Sport: " + (engine.favoriteSport ?? "-"))
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    if let sport = engine.favoriteSport {
+                        let freq = engine.trainingFrequency ?? 0
+                        let kcal = engine.kcalBurned.values.reduce(0, +)
+                        let miles = engine.kcalBurned.keys.compactMap { engine.kcalBurned[$0] }.reduce(0, +)
+                        Text("Sessions/week: " + String(format: "%.1f", freq))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("Total kcal burned (28d): " + String(format: "%.0f", kcal))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        // Add miles/elevation if available
+                        // Text("Total miles (28d): " + String(format: "%.1f", miles))
+                        // Text("Elevation gain (28d): ...")
+                    }
                 }
             }
         )
@@ -336,7 +374,7 @@ struct VitalsSection: View {
                             Text("No wrist temperature data available.")
                                 .foregroundColor(.red)
                         }
-                        HealthLineChartPreview(data: tempArray, label: "Wrist Temp", unit: "°C", color: .pink)
+                        TappableChartPreview(data: tempArray, label: "Wrist Temp", unit: "°C", color: .pink)
 //                            .frame(height: 60)
                         Text("SpO₂ (28d)")
                             .font(.subheadline)
@@ -348,7 +386,7 @@ struct VitalsSection: View {
                             Text("No SpO₂ data available.")
                                 .foregroundColor(.red)
                         }
-                        HealthLineChartPreview(data: spo2Array, label: "SpO₂", unit: "%", color: .mint)
+                        TappableChartPreview(data: spo2Array, label: "SpO₂", unit: "%", color: .mint)
 //                            .frame(height: 60)
                         Divider().padding(.vertical, 2)
                         ForEach(engine.vitalsSummary.sorted(by: { $0.key < $1.key }), id: \ .key) { key, val in

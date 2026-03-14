@@ -11,7 +11,10 @@ import Combine
 
 /// Central physiology engine for Nutrivance.
 /// All health calculations should live here, not in Views.
+@MainActor
 final class HealthStateEngine: ObservableObject {
+    // Use a shared HealthKitManager instance
+    private let hkManager = HealthKitManager()
 
     // MARK: - Vitals & Advanced Metrics
     @Published var sleepStages: [Date: [String: Double]] = [:] // [date: [stage: hours]]
@@ -82,17 +85,31 @@ final class HealthStateEngine: ObservableObject {
         fetchRespiratoryRate(days: 28)
         fetchWristTemperature(days: 28)
         fetchSpO2(days: 28)
-        // Keep demo for postWorkoutHR and vo2Max for now
+
+        // Fetch real post-workout HR and VO2 Max for the last 28 days
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
+        let group = DispatchGroup()
         var postHR: [Date: Double] = [:]
         var vo2: [Date: Double] = [:]
         for i in 0..<28 {
             let date = calendar.date(byAdding: .day, value: -i, to: today)!
-            postHR[date] = Double.random(in: 80.0...120.0)
-            vo2[date] = Double.random(in: 35.0...55.0)
+            group.enter()
+            hkManager.fetchRecoveryHeartRate { hr in
+                DispatchQueue.main.async {
+                    postHR[date] = hr
+                    group.leave()
+                }
+            }
+            group.enter()
+            hkManager.fetchVO2Max { v in
+                DispatchQueue.main.async {
+                    vo2[date] = v
+                    group.leave()
+                }
+            }
         }
-        DispatchQueue.main.async {
+        group.notify(queue: .main) {
             self.postWorkoutHR = postHR
             self.vo2Max = vo2
         }
@@ -243,10 +260,23 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Favorite Sport & Training Frequency
     private func inferFavoriteSportAndFrequency() {
-        // In production, analyze workout types over 28 days
-        // For demo, simulate
-        favoriteSport = ["Running", "Cycling", "Swimming", "Strength Training"].randomElement()
-        trainingFrequency = Double.random(in: 2.0...6.0)
+        // Analyze workouts over the last 28 days to determine favorite sport and frequency
+        let calendar = Calendar.current
+        let endDate = Date()
+        guard let startDate = calendar.date(byAdding: .day, value: -28, to: endDate) else { return }
+        hkManager.fetchWorkouts(from: startDate, to: endDate) { workouts in
+            // Count workouts by activityType
+            let typeCounts = workouts.reduce(into: [HKWorkoutActivityType: Int]()) { dict, workout in
+                dict[workout.workoutActivityType, default: 0] += 1
+            }
+            // Find the most frequent activity type
+            let favorite = typeCounts.max { $0.value < $1.value }?.key
+            let freq = Double(workouts.count) / 4.0 // sessions per week
+            DispatchQueue.main.async {
+                self.favoriteSport = favorite.map { String(describing: $0) }
+                self.trainingFrequency = freq
+            }
+        }
     }
 
     // MARK: - Public Accessors for Graphs/Trends
@@ -432,36 +462,19 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Public Refresh
 
     func refreshAllMetrics() {
-        let group = DispatchGroup()
-
-        // HealthKit fetches (keep on background threads)
-        group.enter()
-        DispatchQueue.global().async { self.fetchLatestHRV(); group.leave() }
-        group.enter()
-        DispatchQueue.global().async { self.fetchHRVHistory(days: 30); group.leave() }
-        group.enter()
-        DispatchQueue.global().async { self.fetchRestingHeartRate(); group.leave() }
-        group.enter()
-        DispatchQueue.global().async { self.fetchSleep(); group.leave() }
-        group.enter()
-        DispatchQueue.global().async { self.fetchBaselines(); group.leave() }
-        group.enter()
-        DispatchQueue.global().async { self.fetchTrainingLoad(); group.leave() }
-
-        // Mock/demo fetchers: always call on main thread
-        group.enter()
-        self.fetchSleepQuality(); group.leave()
+        // All fetches are now on the main actor
+        self.fetchLatestHRV()
+        self.fetchHRVHistory(days: 30)
+        self.fetchRestingHeartRate()
+        self.fetchSleep()
+        self.fetchBaselines()
+        self.fetchTrainingLoad()
+        self.fetchSleepQuality()
         print("[refreshAllMetrics] calling fetchVitals...")
-        group.enter()
-        self.fetchVitals(); group.leave()
-        group.enter()
-        self.fetchIntensityMetrics(); group.leave()
-        group.enter()
-        self.inferFavoriteSportAndFrequency(); group.leave()
-
-        group.notify(queue: .main) {
-            self.updateScores()
-        }
+        self.fetchVitals()
+        self.fetchIntensityMetrics()
+        self.inferFavoriteSportAndFrequency()
+        self.updateScores()
     }
 
     // MARK: - Fetch HRV

@@ -54,7 +54,9 @@ struct HealthCard<ExpandedContent: View>: View {
                     }
                 }
                 Spacer()
-                Button(action: { withAnimation { expanded.toggle() } }) {
+                Button(action: { withAnimation { expanded.toggle() }
+                    let impact = UIImpactFeedbackGenerator(style: .medium)
+                    impact.impactOccurred()}) {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.title3)
                         .foregroundColor(.secondary)
@@ -66,6 +68,8 @@ struct HealthCard<ExpandedContent: View>: View {
 
             Button {
                 showChartSheet = true
+                let generator = UIImpactFeedbackGenerator(style: .medium)
+                generator.impactOccurred()
             } label: {
                 HealthLineChartPreview(data: chartData, label: chartLabel, unit: chartUnit, color: color)
                     .frame(height: 80)
@@ -186,7 +190,11 @@ struct HealthLineChartSheet: View {
                                 let x = value.location.x - geo[proxy.plotAreaFrame].origin.x
                                 if let date: Date = proxy.value(atX: x) {
                                     if let closest = data.min(by: { abs($0.0.timeIntervalSince1970 - date.timeIntervalSince1970) < abs($1.0.timeIntervalSince1970 - date.timeIntervalSince1970) }) {
-                                        self.selected = closest
+                                        if self.selected?.0 != closest.0 || self.selected?.1 != closest.1 {
+                                            self.selected = closest
+                                            let generator = UIImpactFeedbackGenerator(style: .light)
+                                            generator.impactOccurred()
+                                        }
                                     }
                                 }
                             }
