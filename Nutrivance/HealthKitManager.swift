@@ -100,6 +100,7 @@ extension HealthKitManager {
         }
 
         // Welltory-style forward-fill MET-minutes calculation
+        
         var totalMETMinutes: Double = 0
         var beneficialMETMinutes: Double = 0
         let threshold = 7.34
