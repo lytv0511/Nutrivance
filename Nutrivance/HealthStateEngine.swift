@@ -192,26 +192,53 @@ final class HealthStateEngine: ObservableObject {
     private func fetchIntensityMetrics() {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        var effort: [Date: Double] = [:]
-        var kcal: [Date: Double] = [:]
-        var hrZones: [Date: [String: Double]] = [:]
-        for i in 0..<28 {
-            let date = calendar.date(byAdding: .day, value: -i, to: today)!
-            effort[date] = Double.random(in: 3.0...8.0)
-            kcal[date] = Double.random(in: 300.0...900.0)
-            hrZones[date] = [
-                "Zone1": Double.random(in: 10...30),
-                "Zone2": Double.random(in: 10...30),
-                "Zone3": Double.random(in: 10...30),
-                "Zone4": Double.random(in: 5...20),
-                "Zone5": Double.random(in: 1...10)
-            ]
+        let endDate = Date()
+        guard let startDate = calendar.date(byAdding: .day, value: -28, to: endDate) else { return }
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        let query = HKSampleQuery(
+            sampleType: HKObjectType.workoutType(),
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: nil
+        ) { _, samples, _ in
+            let workouts = (samples as? [HKWorkout]) ?? []
+            var effort: [Date: Double] = [:]
+            var kcal: [Date: Double] = [:]
+            var hrZones: [Date: [String: Double]] = [:]
+            var activityLoad: Double = 0
+            for workout in workouts {
+                let day = calendar.startOfDay(for: workout.endDate)
+                let durationMinutes = workout.duration / 60.0
+                let energy = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0
+                // Effort rating: kcal per minute as intensity proxy
+                let intensity = durationMinutes > 0 ? energy / durationMinutes : 0
+                let effortRating = min(10, max(1, intensity / 8))
+                // Add to daily values
+                effort[day, default: 0] += effortRating
+                kcal[day, default: 0] += energy
+                activityLoad += durationMinutes * effortRating
+                // Heart rate zones (if available)
+                if let metadata = workout.metadata {
+                    var zones: [String: Double] = [:]
+                    for i in 1...5 {
+                        let key = "HKWorkoutZone\(i)"
+                        if let min = metadata[key] as? Double {
+                            zones["Zone\(i)"] = min
+                        }
+                    }
+                    if !zones.isEmpty {
+                        hrZones[day] = zones
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                self.effortRating = effort
+                self.kcalBurned = kcal
+                self.heartRateZones = hrZones
+                self.activityLoad = activityLoad
+            }
         }
-        DispatchQueue.main.async {
-            self.effortRating = effort
-            self.kcalBurned = kcal
-            self.heartRateZones = hrZones
-        }
+        healthStore.execute(query)
     }
 
     // MARK: - Favorite Sport & Training Frequency

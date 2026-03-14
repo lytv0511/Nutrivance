@@ -156,7 +156,7 @@ struct HRVSection: View {
                     Text("RHR 7d avg: " + String(format: "%.0f", engine.rhrBaseline7Day ?? 0))
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    HealthLineChart(data: engine.timeSeries(for: "rhr", days: 28), label: "RHR", unit: "bpm", color: .red)
+                    HealthLineChartPreview(data: engine.timeSeries(for: "rhr", days: 28), label: "RHR", unit: "bpm", color: .red)
                         .frame(height: 60)
                 }
             }
@@ -185,7 +185,7 @@ struct WorkoutContributionsSection: View {
                     Text("Kcal Burned (28d)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    HealthLineChart(data: engine.timeSeries(for: "kcal", days: 28), label: "Kcal", unit: "kcal", color: .orange)
+                    HealthLineChartPreview(data: engine.timeSeries(for: "kcal", days: 28), label: "Kcal", unit: "kcal", color: .orange)
                         .frame(height: 60)
                     if let latestDate = engine.heartRateZones.keys.max(), let zones = engine.heartRateZones[latestDate] {
                         HStack(spacing: 12) {
@@ -256,7 +256,7 @@ struct PostWorkoutSection: View {
                     Text("VO2 Max (28d)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    HealthLineChart(data: engine.timeSeries(for: "vo2max", days: 28), label: "VO2 Max", unit: "ml/kg/min", color: .blue)
+                    HealthLineChartPreview(data: engine.timeSeries(for: "vo2max", days: 28), label: "VO2 Max", unit: "ml/kg/min", color: .blue)
                         .frame(height: 60)
                 }
             }
@@ -336,7 +336,7 @@ struct VitalsSection: View {
                             Text("No wrist temperature data available.")
                                 .foregroundColor(.red)
                         }
-                        HealthLineChart(data: tempArray, label: "Wrist Temp", unit: "°C", color: .pink)
+                        HealthLineChartPreview(data: tempArray, label: "Wrist Temp", unit: "°C", color: .pink)
 //                            .frame(height: 60)
                         Text("SpO₂ (28d)")
                             .font(.subheadline)
@@ -348,7 +348,7 @@ struct VitalsSection: View {
                             Text("No SpO₂ data available.")
                                 .foregroundColor(.red)
                         }
-                        HealthLineChart(data: spo2Array, label: "SpO₂", unit: "%", color: .mint)
+                        HealthLineChartPreview(data: spo2Array, label: "SpO₂", unit: "%", color: .mint)
 //                            .frame(height: 60)
                         Divider().padding(.vertical, 2)
                         ForEach(engine.vitalsSummary.sorted(by: { $0.key < $1.key }), id: \ .key) { key, val in
@@ -404,4 +404,3 @@ struct MetricLineGraph: View {
         .padding(.vertical, 4)
     }
 }
-

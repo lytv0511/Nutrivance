@@ -21,6 +21,7 @@ struct HealthCard<ExpandedContent: View>: View {
     let expandedContent: () -> ExpandedContent
 
     @State private var expanded = false
+    @State private var showChartSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -63,10 +64,17 @@ struct HealthCard<ExpandedContent: View>: View {
             }
             .padding(.bottom, 2)
 
-            // Chart is always visible
-            HealthLineChart(data: chartData, label: chartLabel, unit: chartUnit, color: color)
-                .frame(height: 80)
-                .padding(.trailing, 8)
+            Button {
+                showChartSheet = true
+            } label: {
+                HealthLineChartPreview(data: chartData, label: chartLabel, unit: chartUnit, color: color)
+                    .frame(height: 80)
+                    .padding(.trailing, 8)
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showChartSheet) {
+                HealthLineChartSheet(data: chartData, label: chartLabel, unit: chartUnit, color: color)
+            }
 
             if expanded {
                 Divider().padding(.vertical, 2)
@@ -86,23 +94,58 @@ struct HealthCard<ExpandedContent: View>: View {
     }
 }
 
-struct HealthLineChart: View {
+struct HealthLineChartPreview: View {
+    let data: [(Date, Double)]
+    let label: String
+    let unit: String
+    let color: Color
+    var body: some View {
+        Chart {
+            ForEach(data, id: \ .0) { point in
+                LineMark(
+                    x: .value("Date", point.0),
+                    y: .value(label, point.1)
+                )
+                .foregroundStyle(color)
+                .interpolationMethod(.catmullRom)
+                .symbol(Circle())
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.month().day(), centered: true)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisGridLine()
+                AxisValueLabel()
+            }
+        }
+    }
+}
+
+struct HealthLineChartSheet: View {
     let data: [(Date, Double)]
     let label: String
     let unit: String
     let color: Color
     @State private var selected: (Date, Double)? = nil
 
-    private static let shortDateFormatter: DateFormatter = {
+    private static let fullDateFormatter: DateFormatter = {
         let df = DateFormatter()
-        df.setLocalizedDateFormatFromTemplate("MMM d")
+        df.setLocalizedDateFormatFromTemplate("MMM d, yyyy")
         return df
     }()
-    
+
     var body: some View {
-        ZStack {
+        VStack(spacing: 16) {
+            Text(label)
+                .font(.title.bold())
+                .foregroundColor(color)
             Chart {
-                ForEach(data, id: \.0) { point in
+                ForEach(data, id: \ .0) { point in
                     LineMark(
                         x: .value("Date", point.0),
                         y: .value(label, point.1)
@@ -110,28 +153,29 @@ struct HealthLineChart: View {
                     .foregroundStyle(color)
                     .interpolationMethod(.catmullRom)
                     .symbol(Circle())
-                    .accessibilityLabel("\(label)")
-                    .accessibilityValue("\(point.1, specifier: "%.1f") \(unit)")
                 }
                 if let selected = selected {
                     PointMark(
                         x: .value("Date", selected.0),
                         y: .value(label, selected.1)
                     )
-                    .symbolSize(80)
+                    .symbolSize(120)
                     .foregroundStyle(.orange)
                 }
             }
+            .frame(height: 260)
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                AxisMarks(values: .automatic(desiredCount: 6)) { value in
                     AxisGridLine()
                     AxisValueLabel(format: .dateTime.month().day(), centered: true)
+                        .font(.headline)
                 }
             }
             .chartYAxis {
                 AxisMarks(position: .leading) { value in
                     AxisGridLine()
                     AxisValueLabel()
+                        .font(.headline)
                 }
             }
             .chartOverlay { proxy in
@@ -146,27 +190,76 @@ struct HealthLineChart: View {
                                     }
                                 }
                             }
-                            .onEnded { _ in self.selected = nil }
+                            // Persistent indicator: do not clear selected on end
                         )
                 }
             }
-            // Value label overlay
-            if let selected = selected {
-                VStack(spacing: 2) {
-                    Text("\(selected.0, formatter: HealthLineChart.shortDateFormatter)")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text("\(selected.1, specifier: "%.1f") \(unit)")
-                        .font(.caption.bold())
+            .onAppear {
+                if selected == nil, let last = data.last {
+                    selected = last
                 }
-                .padding(6)
-                .background(.ultraThinMaterial)
-                .cornerRadius(8)
-                .shadow(radius: 2)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(.trailing, 12)
-                .padding(.top, 8)
+            }
+            if let selected = selected {
+                let minVal = data.map { $0.1 }.min() ?? selected.1
+                let maxVal = data.map { $0.1 }.max() ?? selected.1
+                let idx = data.firstIndex(where: { $0.0 == selected.0 && $0.1 == selected.1 }) ?? 0
+                let prev = idx > 0 ? data[idx-1].1 : selected.1
+                let note: String = {
+                    if selected.1 == minVal {
+                        return "Minimum"
+                    } else if selected.1 == maxVal {
+                        return "Maximum"
+                    } else if abs(selected.1 - prev) > 0.15 * (maxVal - minVal) {
+                        return "High Increase"
+                    } else {
+                        return ""
+                    }
+                }()
+                HStack {
+                    Spacer()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("\(selected.0, formatter: HealthLineChartSheet.fullDateFormatter)")
+                            .font(.title2.bold())
+                            .foregroundColor(.primary)
+                        HStack(spacing: 8) {
+                            Spacer()
+                            Text(String(format: "%.1f \(unit)", selected.1))
+                                .font(.system(size: 44, weight: .bold, design: .rounded))
+                                .foregroundColor(.orange)
+                            if !note.isEmpty &&  label == "Strain" || label == "Effort" {
+                                Spacer()
+                                if note == "Maximum" {
+                                    Image(systemName: "gauge.with.dots.needle.100percent")
+                                } else if note == "High Increase" {
+                                    Image(systemName: "gauge.with.dots.needle.bottom.50percent.badge.plus")
+                                } else if note == "Minimum" {
+                                    Image(systemName: "arrowtriangle.down.2.fill")
+                                }
+                                if note == "Maximum" {
+                                    Text("Maximum")
+                                        .font(.caption.bold())
+                                        .foregroundColor(.red)
+                                } else if note == "High Increase" {
+                                    Text("High Increase")
+                                        .font(.caption.bold())
+                                        .foregroundColor(.green)
+                                } else if note == "Minimum" {
+                                    Text("Recovering")
+                                        .font(.caption.bold())
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                            Spacer()
+                        }
+                    }
+                    .padding(12)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(12)
+                    .shadow(radius: 4)
+                    Spacer()
+                }
             }
         }
+        .padding()
     }
 }
