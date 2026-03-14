@@ -1,3 +1,190 @@
+// MARK: - Workout Analytics Struct
+
+struct WorkoutAnalytics {
+    let workout: HKWorkout
+    let heartRates: [(Date, Double)]
+    let vo2Max: Double?
+    let metTotal: Double?
+    let metAverage: Double?
+    let metSeries: [(Date, Double)]
+    let postWorkoutHRSeries: [(Date, Double)]
+    let peakHR: Double?
+    let hrr0: Double?
+    let hrr1: Double?
+    let hrr2: Double?
+    let hrr5: Double?
+}
+
+extension Array where Element == (Date, Double) {
+    // SDNN: Standard deviation of NN intervals (ms)
+    var sdnn: Double? {
+        guard self.count > 1 else { return nil }
+        var intervals: [Double] = []
+        let pairs = zip(self.dropFirst(), self)
+        for (next, prev) in pairs {
+            let interval = next.0.timeIntervalSince(prev.0) * 1000 // ms
+            intervals.append(interval)
+        }
+        guard !intervals.isEmpty else { return nil }
+        let mean = intervals.reduce(0, +) / Double(intervals.count)
+        let variance = intervals.map { pow($0 - mean, 2) }.reduce(0, +) / Double(intervals.count)
+        return sqrt(variance)
+    }
+}
+
+extension HealthKitManager {
+    /// Compute analytics for a given workout: VO2 max, METs, post-workout HR time series, HRR
+    func computeWorkoutAnalytics(for workout: HKWorkout) async -> WorkoutAnalytics {
+        // Fetch heart rate samples for the workout
+        let hrSamples = await fetchHeartRateSamples(for: workout)
+
+        // --- VO2 Max Calculation ---
+        var vo2Max: Double? = nil
+        let activityType = workout.workoutActivityType
+        if activityType == .cycling {
+            // Fetch cycling power as a time series and compute average
+            let powerType = HKQuantityType.quantityType(forIdentifier: .cyclingPower)
+            var powerSeries: [(Date, Double)] = []
+            var avgPower: Double? = nil
+            if let powerType {
+                let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+                let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+                let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                    let query = HKSampleQuery(sampleType: powerType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                        continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                    }
+                    self.healthStore.execute(query)
+                }
+                powerSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .watt())) }
+                if !powerSeries.isEmpty {
+                    avgPower = powerSeries.map { $0.1 }.reduce(0, +) / Double(powerSeries.count)
+                }
+            }
+            let mass = 56.79 // TODO: fetch real user mass if possible
+            let maxHR = 220.0 - 30.0 // TODO: fetch real age if possible
+            let hrRest = 60.0 // TODO: fetch real resting HR if possible
+            let avgHR = hrSamples.map { $0.1 }.reduce(0, +) / Double(hrSamples.count)
+            if let avgPower, mass > 0, avgHR > 0 {
+                let vo2Current = 10.8 * (avgPower / mass) + 7.0
+                vo2Max = vo2Current * ((maxHR - hrRest) / (avgHR - hrRest))
+            }
+            print("  Cycling Power time series: \(powerSeries)")
+            print("  Cycling Power average: \(avgPower.map { String(format: "%.1f", $0) } ?? "-") W")
+        } else if activityType == .running || activityType == .walking {
+            // Use HealthKit's VO2 max if available
+            let hkVO2 = await withCheckedContinuation { continuation in
+                self.fetchVO2Max { value in
+                    continuation.resume(returning: value)
+                }
+            }
+            vo2Max = hkVO2 > 0 ? hkVO2 : nil
+        }
+
+        // --- METs ---
+        var metSeries: [(Date, Double)] = []
+        // Fetch METs as a time series from HealthKit (physicalEffort)
+        if let metType = HKQuantityType.quantityType(forIdentifier: .physicalEffort) {
+            let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                let query = HKSampleQuery(sampleType: metType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                    continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                }
+                self.healthStore.execute(query)
+            }
+            metSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: HKUnit(from: "kcal/(kg*hr)"))) }
+        }
+        // Fallback: try to get average MET from workout metadata if no samples
+        if metSeries.isEmpty, let avgMET = workout.metadata?[HKMetadataKeyAverageMETs] as? Double {
+            metSeries.append((workout.startDate, avgMET))
+        }
+
+        // Welltory-style forward-fill MET-minutes calculation
+        var totalMETMinutes: Double = 0
+        var beneficialMETMinutes: Double = 0
+        let threshold = 7.34
+        if metSeries.count > 1 {
+            for i in 0..<(metSeries.count - 1) {
+                let (currentDate, currentValue) = metSeries[i]
+                let (nextDate, _) = metSeries[i+1]
+                let durationMinutes = nextDate.timeIntervalSince(currentDate) / 60.0
+                let volume = currentValue * durationMinutes
+                totalMETMinutes += volume
+                if currentValue >= threshold {
+                    beneficialMETMinutes += volume
+                }
+            }
+        }
+        // If only one sample, treat duration as workout duration
+        else if metSeries.count == 1 {
+            let (date, value) = metSeries[0]
+            let durationMinutes = workout.endDate.timeIntervalSince(date) / 60.0
+            let volume = value * durationMinutes
+            totalMETMinutes += volume
+            if value >= threshold {
+                beneficialMETMinutes += volume
+            }
+        }
+        let metTotal = totalMETMinutes
+        let metBeneficial = beneficialMETMinutes
+        let metAverage = metSeries.isEmpty ? nil : (metSeries.map { $0.1 }.reduce(0, +) / Double(metSeries.count))
+
+        // --- Post-Workout HR Time Series & HRR ---
+        var postWorkoutHRSeries: [(Date, Double)] = []
+        let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate)
+        let start = workout.endDate
+        let end = start.addingTimeInterval(5 * 60) // 5 min window
+        if let hrType {
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                let query = HKSampleQuery(sampleType: hrType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                    continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                }
+                self.healthStore.execute(query)
+            }
+            postWorkoutHRSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .init(from: "count/min"))) }
+        }
+        // Find peak HR during workout
+        let peakHR = hrSamples.map { $0.1 }.max()
+        // HR at workout end, 1, 2, 5 min after
+        func hrAt(_ minAfter: Double) -> Double? {
+            let target = workout.endDate.addingTimeInterval(minAfter * 60)
+            let closest = postWorkoutHRSeries.min(by: { abs($0.0.timeIntervalSince(target)) < abs($1.0.timeIntervalSince(target)) })
+            return closest?.1
+        }
+        let hrr0 = (peakHR != nil && hrAt(0) != nil) ? peakHR! - hrAt(0)! : nil
+        let hrr1 = (peakHR != nil && hrAt(1) != nil) ? peakHR! - hrAt(1)! : nil
+        let hrr2 = (peakHR != nil && hrAt(2) != nil) ? peakHR! - hrAt(2)! : nil
+        let hrr5 = (peakHR != nil && hrAt(5) != nil) ? peakHR! - hrAt(5)! : nil
+
+        // Print all calculated values for testing
+        print("--- Workout Analytics ---")
+        print("Workout: \(workout.startDate) - \(workout.endDate), type: \(workout.workoutActivityType.name)")
+        print("  VO2 Max: \(vo2Max.map { String(format: "%.2f", $0) } ?? "-")")
+        print("  Active MET-minutes: total=\(String(format: "%.2f", metTotal)), beneficial=\(String(format: "%.2f", metBeneficial)), avg=\(metAverage.map { String(format: "%.2f", $0) } ?? "-")")
+        print("  MET time series: \(metSeries)")
+        print("  Peak HR: \(peakHR.map { String(format: "%.1f", $0) } ?? "-")")
+        print("  Post-Workout HR time series: \(postWorkoutHRSeries)")
+        print("  HRR (0,1,2,5 min): \(hrr0.map { String(format: "%.1f", $0) } ?? "-"), \(hrr1.map { String(format: "%.1f", $0) } ?? "-"), \(hrr2.map { String(format: "%.1f", $0) } ?? "-"), \(hrr5.map { String(format: "%.1f", $0) } ?? "-")")
+        print("  HR samples: \(hrSamples.count)")
+
+        return WorkoutAnalytics(
+            workout: workout,
+            heartRates: hrSamples,
+            vo2Max: vo2Max,
+            metTotal: metTotal,
+            metAverage: metAverage,
+            metSeries: metSeries,
+            postWorkoutHRSeries: postWorkoutHRSeries,
+            peakHR: peakHR,
+            hrr0: hrr0,
+            hrr1: hrr1,
+            hrr2: hrr2,
+            hrr5: hrr5
+        )
+    }
+}
 
 // --- Place these in an extension at the end of the file ---
 
@@ -709,12 +896,15 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKQuantityType.quantityType(forIdentifier: .flightsClimbed)!,
             HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
             HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)!,
+            // Add cycling power and METs (physicalEffort)
+            HKQuantityType.quantityType(forIdentifier: .cyclingPower)!,
+            HKQuantityType.quantityType(forIdentifier: .physicalEffort)!,
             
             // Heart Rate and Health Metrics
             HKQuantityType.quantityType(forIdentifier: .heartRate)!,
             HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!,
             HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
-            HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!, // Added respiratory rate
+            HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!,
             
             // Sleep and Mindfulness
             HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!,
