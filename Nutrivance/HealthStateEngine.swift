@@ -1,3 +1,5 @@
+
+
 //
 //  File.swift
 //  Nutrivance
@@ -16,6 +18,9 @@ final class HealthStateEngine: ObservableObject {
     // Use a shared HealthKitManager instance
     private let hkManager = HealthKitManager()
 
+    // MARK: - Workout/HR Data Cache
+    private var allWorkoutHRCache: [(workout: HKWorkout, heartRates: [(Date, Double)])] = []
+
     // MARK: - Vitals & Advanced Metrics
     @Published var sleepStages: [Date: [String: Double]] = [:] // [date: [stage: hours]]
     @Published var sleepEfficiency: [Date: Double] = [:] // [date: efficiency 0-1]
@@ -30,6 +35,7 @@ final class HealthStateEngine: ObservableObject {
     @Published var effortRating: [Date: Double] = [:] // [date: 1-10]
     @Published var favoriteSport: String? = nil
     @Published var trainingFrequency: Double? = nil // sessions/week
+    @Published var trainingFrequencyBySport: [String: Double] = [:] // sport: sessions/week
 
     // MARK: - Vitals Baseline/Trend Accessors
     public var vitalsSummary: [String: (current: Double?, baseline: Double?, trend: Double?)] {
@@ -86,32 +92,17 @@ final class HealthStateEngine: ObservableObject {
         fetchWristTemperature(days: 28)
         fetchSpO2(days: 28)
 
-        // Fetch real post-workout HR and VO2 Max for the last 28 days
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let group = DispatchGroup()
-        var postHR: [Date: Double] = [:]
-        var vo2: [Date: Double] = [:]
-        for i in 0..<28 {
-            let date = calendar.date(byAdding: .day, value: -i, to: today)!
-            group.enter()
-            hkManager.fetchRecoveryHeartRate { hr in
-                DispatchQueue.main.async {
-                    postHR[date] = hr
-                    group.leave()
-                }
+        // Async/await for post-workout HR recovery and VO2 Max
+        Task { [weak self] in
+            guard let self = self else { return }
+            if let result = await self.hkManager.fetchPostWorkoutHRRecovery() {
+                let (recoveryBPM, _, _, _, workoutDate) = result
+                self.postWorkoutHR[Calendar.current.startOfDay(for: workoutDate)] = recoveryBPM
             }
-            group.enter()
-            hkManager.fetchVO2Max { v in
-                DispatchQueue.main.async {
-                    vo2[date] = v
-                    group.leave()
-                }
+            if let vo2 = await self.hkManager.fetchEstimatedVO2Max() {
+                let today = Calendar.current.startOfDay(for: Date())
+                self.vo2Max[today] = vo2
             }
-        }
-        group.notify(queue: .main) {
-            self.postWorkoutHR = postHR
-            self.vo2Max = vo2
         }
     }
 
@@ -269,12 +260,19 @@ final class HealthStateEngine: ObservableObject {
             let typeCounts = workouts.reduce(into: [HKWorkoutActivityType: Int]()) { dict, workout in
                 dict[workout.workoutActivityType, default: 0] += 1
             }
+            // Calculate per-sport frequency (sessions/week)
+            let freqBySport: [HKWorkoutActivityType: Double] = typeCounts.mapValues { Double($0) / 4.0 }
             // Find the most frequent activity type
             let favorite = typeCounts.max { $0.value < $1.value }?.key
-            let freq = Double(workouts.count) / 4.0 // sessions per week
+            let freq = Double(workouts.count) / 4.0 // overall sessions per week
+            // Convert HKWorkoutActivityType keys to String for Published property
+            let freqBySportString: [String: Double] = freqBySport.reduce(into: [String: Double]()) { dict, pair in
+                dict[String(describing: pair.key)] = pair.value
+            }
             DispatchQueue.main.async {
                 self.favoriteSport = favorite.map { String(describing: $0) }
                 self.trainingFrequency = freq
+                self.trainingFrequencyBySport = freqBySportString
             }
         }
     }
@@ -432,32 +430,40 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Initialization
 
     init() {
-        requestPermissions()
-        refreshAllMetrics()
-    }
-
-    // MARK: - Permissions
-
-    private func requestPermissions() {
-        guard HKHealthStore.isHealthDataAvailable() else { return }
-
-        let hrv = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!
-        let rhr = HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!
-        let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!
-        let respRate = HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!
-        let wristTemp = HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature)!
-        let spo2 = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!
-
-        let readTypes: Set<HKObjectType> = [hrv, rhr, sleep, respRate, wristTemp, spo2]
-
-        healthStore.requestAuthorization(toShare: [], read: readTypes) { success, error in
-            if success {
-                DispatchQueue.main.async {
-                    self.refreshAllMetrics()
+        hkManager.requestAuthorization { [weak self] success, error in
+            DispatchQueue.main.async {
+                if success {
+                    self?.refreshAllMetrics()
+                    // Fetch 30 days for initial display
+                    Task { [weak self] in
+                        guard let self = self else { return }
+                        let calendar = Calendar.current
+                        let endDate = Date()
+                        let startDate = calendar.date(byAdding: .day, value: -30, to: endDate) ?? Date.distantPast
+                        let initialData = await self.hkManager.fetchWorkoutsAndHeartRates(from: startDate, to: endDate)
+                        self.allWorkoutHRCache = initialData
+                        // Start background fetch for all-time data
+                        Task.detached { [weak self] in
+                            guard let self = self else { return }
+                            let allStart = Date.distantPast
+                            let allEnd = Date()
+                            let allData = await self.hkManager.fetchWorkoutsAndHeartRates(from: allStart, to: allEnd)
+                            DispatchQueue.main.async {
+                                self.allWorkoutHRCache = allData
+                            }
+                        }
+                    }
+                } else {
+                    print("HealthKit authorization failed: \(error?.localizedDescription ?? "Unknown error")")
+                    // Optionally, set a published error state for UI feedback
                 }
             }
         }
     }
+
+    // MARK: - Permissions
+
+    // Removed duplicate requestPermissions; now using hkManager.requestAuthorization
 
     // MARK: - Public Refresh
 

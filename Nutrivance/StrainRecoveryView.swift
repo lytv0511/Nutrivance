@@ -249,32 +249,54 @@ struct MoodSection: View {
 struct PostWorkoutSection: View {
     @ObservedObject var engine: HealthStateEngine
     var body: some View {
+        let latestDate = engine.postWorkoutHR.keys.max()
+        let latestHR = latestDate.flatMap { engine.postWorkoutHR[$0] }
+        let latestVO2Date = engine.vo2Max.keys.max()
+        let latestVO2 = latestVO2Date.flatMap { engine.vo2Max[$0] }
+
+        let hrWarning: String? = {
+            guard let hr = latestHR else { return "No recent post-workout HR data." }
+            if hr < 40 || hr > 120 {
+                return "Unusual post-workout HR detected. Please check your device or consult a physician."
+            }
+            return nil
+        }()
+
+        let vo2Warning: String? = {
+            guard let vo2 = latestVO2 else { return "No recent VO2 max data." }
+            if vo2 < 20 || vo2 > 70 {
+                return "VO2 max value is outside typical range."
+            }
+            return nil
+        }()
+
         HealthCard(
             symbol: "heart.fill",
             title: "Post-Workout HR",
-            value: {
-                // Use real HR recovery calculation
-                if let latestDate = engine.postWorkoutHR.keys.max(), let hr = engine.postWorkoutHR[latestDate] {
-                    return String(format: "%.0f", hr)
-                } else {
-                    return "-"
-                }
-            }(),
+            value: latestHR.map { String(format: "%.0f", $0) } ?? "-",
             unit: "bpm",
-            trend: "VO2 Max: " + {
-                // Use real VO2 max calculation
-                if let latestDate = engine.vo2Max.keys.max(), let vo2 = engine.vo2Max[latestDate] {
-                    return String(format: "%.1f", vo2)
-                } else {
-                    return "-"
-                }
-            }() + " ml/kg/min",
+            trend: "VO2 Max: " + (latestVO2.map { String(format: "%.1f", $0) } ?? "-") + " ml/kg/min",
             color: .red,
             chartData: engine.timeSeries(for: "postworkouthr", days: 28),
             chartLabel: "Post-Workout HR",
             chartUnit: "bpm",
             expandedContent: {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let hrWarning { Text(hrWarning).foregroundColor(.red).font(.caption) }
+                    if let vo2Warning { Text(vo2Warning).foregroundColor(.orange).font(.caption) }
+                    if let hr = latestHR, let vo2 = latestVO2 {
+                        if hr > 100 {
+                            Text("Elevated post-workout HR. Consider a longer cool-down or monitor for overtraining.")
+                                .foregroundColor(.orange)
+                                .font(.caption2)
+                        }
+                        if vo2 < 30 {
+                            Text("VO2 max is below average for most adults. Improving aerobic fitness may help.")
+                                .foregroundColor(.orange)
+                                .font(.caption2)
+                        }
+                    }
+                    Divider().padding(.vertical, 2)
                     Text("VO2 Max (28d)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)

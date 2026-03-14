@@ -1,3 +1,142 @@
+
+// --- Place these in an extension at the end of the file ---
+
+// --- Place these in an extension at the end of the file ---
+
+extension HealthKitManager {
+    /// Fetch all workouts in a given date range, and for each, fetch all heart rate samples during the workout.
+    /// Prints all data fetched (workout summary and HR samples) to the terminal.
+    @MainActor
+    func fetchWorkoutsAndHeartRates(from startDate: Date, to endDate: Date) async -> [(workout: HKWorkout, heartRates: [(Date, Double)])] {
+        // Refactored to be fully async/await, no blocking
+        let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
+            self.fetchWorkouts(from: startDate, to: endDate) { wos in
+                continuation.resume(returning: wos)
+            }
+        }
+        print("Fetched \(workouts.count) workouts from \(startDate) to \(endDate)")
+        var result: [(HKWorkout, [(Date, Double)])] = []
+        for workout in workouts {
+            let hrSamples = await self.fetchHeartRateSamples(for: workout)
+            print("Workout: \(workout.startDate) - \(workout.endDate), type: \(workout.workoutActivityType.name), duration: \(workout.duration/60) min, totalDistance: \(workout.totalDistance?.doubleValue(for: .meter()) ?? 0) m, energy: \(workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0) kcal, HR samples: \(hrSamples.count)")
+            for (date, bpm) in hrSamples {
+                print("  HR: \(date) - \(String(format: "%.1f", bpm)) bpm")
+            }
+            result.append((workout, hrSamples))
+        }
+        return result
+    }
+
+    /// Fetch all heart rate samples for a given workout.
+    @MainActor
+    func fetchHeartRateSamples(for workout: HKWorkout) async -> [(Date, Double)] {
+        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return [] }
+        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: hrType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                let values = (samples as? [HKQuantitySample])?.map { ($0.startDate, $0.quantity.doubleValue(for: .init(from: "count/min"))) } ?? []
+                continuation.resume(returning: values)
+            }
+            self.healthStore.execute(query)
+        }
+    }
+}
+
+extension HealthKitManager {
+    /// Async: Fetch post-workout heart rate recovery for the most recent workout.
+    /// Returns: (recoveryBPM: Double, recoveryDelta: Double, recoveryTime: Double, workoutType: String, workoutDate: Date)?
+    @MainActor
+    func fetchPostWorkoutHRRecovery() async -> (Double, Double, Double, String, Date)? {
+        let workout = await withCheckedContinuation { continuation in
+            self.fetchMostRecentWorkout { workout in
+                continuation.resume(returning: workout)
+            }
+        }
+        guard let workout else { return nil }
+        let end = workout.endDate
+        let start = end
+        let recoveryWindow: TimeInterval = 120 // 2 min window after workout
+        let recoveryEnd = end.addingTimeInterval(recoveryWindow)
+        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return nil }
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: recoveryEnd)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        let bpmValues: [Double] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: hrType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                let values = (samples as? [HKQuantitySample])?.map { $0.quantity.doubleValue(for: .init(from: "count/min")) } ?? []
+                continuation.resume(returning: values)
+            }
+            self.healthStore.execute(query)
+        }
+        guard let first = bpmValues.first, let last = bpmValues.last else { return nil }
+        let delta = first - last
+        let duration = recoveryWindow
+        let workoutType = workout.workoutActivityType.name
+        return (last, delta, duration, workoutType, workout.endDate)
+    }
+
+    /// Async: Estimate VO2 max using best available method for the most recent workout.
+    /// Uses HealthKit VO2 max if available, else estimates from HR and workout type.
+    @MainActor
+    func fetchEstimatedVO2Max() async -> Double? {
+        let workout = await withCheckedContinuation { continuation in
+            self.fetchMostRecentWorkout { workout in
+                continuation.resume(returning: workout)
+            }
+        }
+        guard let workout else { return nil }
+        // Try HealthKit's VO2 max first
+        let hkVO2 = await withCheckedContinuation { continuation in
+            self.fetchVO2Max { value in
+                continuation.resume(returning: value)
+            }
+        }
+        if hkVO2 > 0 { return hkVO2 }
+        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return nil }
+        let hrValues: [Double] = await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+            let query = HKSampleQuery(sampleType: hrType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                let values = (samples as? [HKQuantitySample])?.map { $0.quantity.doubleValue(for: .init(from: "count/min")) } ?? []
+                continuation.resume(returning: values)
+            }
+            self.healthStore.execute(query)
+        }
+        guard !hrValues.isEmpty else { return nil }
+        let avgHR = hrValues.reduce(0, +) / Double(hrValues.count)
+        let durationMin = workout.duration / 60.0
+        let distance = workout.totalDistance?.doubleValue(for: .meter()) ?? 0
+        let type = workout.workoutActivityType
+        var vo2: Double? = nil
+        switch type {
+        case .running:
+            if distance > 0, durationMin > 0 {
+                let speed = distance / durationMin // m/min
+                let grade = 0.0
+                vo2 = (0.2 * speed) + (0.9 * speed * grade) + 3.5
+            }
+        case .cycling:
+            let age = 30.0 // TODO: fetch real age if possible
+            let maxHR = 220.0 - age
+            let hrRest = 60.0 // TODO: fetch real resting HR if possible
+            if avgHR > 0 {
+                vo2 = 15.3 * (maxHR / hrRest)
+            }
+        case .walking:
+            if distance > 0, durationMin > 0 {
+                let speed = distance / durationMin // m/min
+                let grade = 0.0
+                vo2 = (0.1 * speed) + (1.8 * speed * grade) + 3.5
+            }
+        default:
+            if avgHR > 0, durationMin > 0 {
+                let mets = (avgHR / 220.0) * 10.0
+                vo2 = mets * 3.5
+            }
+        }
+        return vo2
+    }
+}
 import HealthKit
 import SwiftUI
 
