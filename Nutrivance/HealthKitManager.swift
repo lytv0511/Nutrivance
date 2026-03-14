@@ -1,3 +1,23 @@
+
+// --- Place these in an extension at the end of the file ---
+
+extension HealthKitManager {
+    /// Fetch all workouts in a date range with analytics (VO2 max, HRV trend, post-workout HR, recovery)
+    @MainActor
+    func fetchWorkoutsWithAnalytics(from startDate: Date, to endDate: Date) async -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
+            self.fetchWorkouts(from: startDate, to: endDate) { wos in
+                continuation.resume(returning: wos)
+            }
+        }
+        var result: [(HKWorkout, WorkoutAnalytics)] = []
+        for workout in workouts {
+            let analytics = await self.computeWorkoutAnalytics(for: workout)
+            result.append((workout, analytics))
+        }
+        return result
+    }
+}
 // MARK: - Workout Analytics Struct
 
 struct WorkoutAnalytics {
@@ -12,7 +32,6 @@ struct WorkoutAnalytics {
     let hrr0: Double?
     let hrr1: Double?
     let hrr2: Double?
-    let hrr5: Double?
 }
 
 extension Array where Element == (Date, Double) {
@@ -148,7 +167,7 @@ extension HealthKitManager {
         }
         // Find peak HR during workout
         let peakHR = hrSamples.map { $0.1 }.max()
-        // HR at workout end, 1, 2, 5 min after
+        // HR at workout end, 1, 2 min after
         func hrAt(_ minAfter: Double) -> Double? {
             let target = workout.endDate.addingTimeInterval(minAfter * 60)
             let closest = postWorkoutHRSeries.min(by: { abs($0.0.timeIntervalSince(target)) < abs($1.0.timeIntervalSince(target)) })
@@ -157,7 +176,6 @@ extension HealthKitManager {
         let hrr0 = (peakHR != nil && hrAt(0) != nil) ? peakHR! - hrAt(0)! : nil
         let hrr1 = (peakHR != nil && hrAt(1) != nil) ? peakHR! - hrAt(1)! : nil
         let hrr2 = (peakHR != nil && hrAt(2) != nil) ? peakHR! - hrAt(2)! : nil
-        let hrr5 = (peakHR != nil && hrAt(5) != nil) ? peakHR! - hrAt(5)! : nil
 
         // Print all calculated values for testing
         print("--- Workout Analytics ---")
@@ -167,7 +185,7 @@ extension HealthKitManager {
         print("  MET time series: \(metSeries)")
         print("  Peak HR: \(peakHR.map { String(format: "%.1f", $0) } ?? "-")")
         print("  Post-Workout HR time series: \(postWorkoutHRSeries)")
-        print("  HRR (0,1,2,5 min): \(hrr0.map { String(format: "%.1f", $0) } ?? "-"), \(hrr1.map { String(format: "%.1f", $0) } ?? "-"), \(hrr2.map { String(format: "%.1f", $0) } ?? "-"), \(hrr5.map { String(format: "%.1f", $0) } ?? "-")")
+        print("  HRR (0,1,2 min): \(hrr0.map { String(format: "%.1f", $0) } ?? "-")", "\(hrr1.map { String(format: "%.1f", $0) } ?? "-")", "\(hrr2.map { String(format: "%.1f", $0) } ?? "-")")
         print("  HR samples: \(hrSamples.count)")
 
         return WorkoutAnalytics(
@@ -181,8 +199,7 @@ extension HealthKitManager {
             peakHR: peakHR,
             hrr0: hrr0,
             hrr1: hrr1,
-            hrr2: hrr2,
-            hrr5: hrr5
+            hrr2: hrr2
         )
     }
 }
@@ -485,7 +502,7 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             
         // Specialized Metrics
         case .vo2Max:
-            return HKUnit(from: "ml/kg·min")
+            return HKUnit(from: "ml/kg*min")
             
         // Default case
         default:
@@ -2037,7 +2054,6 @@ extension HealthKitManager {
         // Discrete measurements that need averaging
         case .walkingSpeed,
              .walkingAsymmetryPercentage,
-             .walkingStepLength,
              .walkingDoubleSupportPercentage,
              .heartRate,
              .restingHeartRate,

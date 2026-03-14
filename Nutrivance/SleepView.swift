@@ -1003,7 +1003,7 @@ struct SleepStageRow: View {
         case .core:
             return (50, 70, 10, 18)
         case .deep:
-            return (nil, 55, 10, 16)
+            return (nil, 60, 10, 16)
         case .rem:
             return (60, 80, 12, 22)
         case .unspecifiedAsleep:
@@ -1929,7 +1929,7 @@ struct SleepStagesDropdownCard: View {
         case .core:
             return (50, 70, 10, 18)
         case .deep:
-            return (nil, 55, 10, 16)
+            return (nil, 60, 10, 16)
         case .rem:
             return (60, 80, 12, 22)
         case .unspecifiedAsleep:
@@ -2044,23 +2044,34 @@ struct SleepStagesDropdownCard: View {
                                         .font(.caption)
                                         .foregroundColor(.gray)
 
-                                    // Long + short sessions - rewritten logic
+                                    // Long + short sessions - use 7‑day baseline like statsPerStage
                                     let stageSessions = stages.filter { $0.stage == stageType }
-                                    let avgDuration: Double = stageSessions.isEmpty ? 0 : stageSessions.map { $0.duration / 60 }.reduce(0, +) / Double(stageSessions.count)
-                                    
+                                    let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast
+                                    let recentSessions = stageSessions.filter { $0.startTime >= oneWeekAgo }
+
+                                    // Average duration from recent sessions only (minutes)
+                                    let avgDuration: Double = recentSessions.isEmpty
+                                        ? 0
+                                        : recentSessions.map { $0.duration / 60.0 }.reduce(0, +) / Double(recentSessions.count)
+
                                     HStack(spacing: 2) {
                                         Text("\(stageSessions.count)")
                                             .font(.title2)
                                             .fontWeight(.bold)
                                             .foregroundColor(.white)
-                                        if avgDuration > 0 {
-                                            let qualityCount = stageSessions.filter { isQualitySession($0, avgDuration: avgDuration) }.count
-                                            if qualityCount > 0 {
-                                                Text("(\(qualityCount) quality)")
-                                                    .font(.caption2)
-                                                    .foregroundColor(.yellow)
-                                            }
-                                        }
+
+//                                        if avgDuration > 0 {
+//                                            // Count quality sessions using the same logic used by glowOpacity
+//                                            let qualityCount = stageSessions.filter {
+//                                                isQualitySession($0, avgDuration: avgDuration)
+//                                            }.count
+//
+//                                            if qualityCount > 0 {
+//                                                Text("(\(qualityCount) quality)")
+//                                                    .font(.caption2)
+//                                                    .foregroundColor(.yellow)
+//                                            }
+//                                        }
                                     }
 
                                     // Total and average duration (now split into two lines)
@@ -2206,3 +2217,4 @@ func periodDateRange(period: SleepPeriod, earliest: Date?) -> (Date, Date) {
         return (minDate, currentJan1)
     }
 }
+

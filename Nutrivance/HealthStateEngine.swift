@@ -1,3 +1,44 @@
+    // MARK: - Per-Workout Analytics
+    @Published var workoutAnalytics: [(workout: HKWorkout, analytics: HealthKitManager.WorkoutAnalytics)] = []
+
+    /// Fetch all workouts with analytics for a date range and update published property
+    func refreshWorkoutAnalytics(days: Int = 30) async {
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
+        let manager = hkManager
+        let analytics = await manager.fetchWorkoutsWithAnalytics(from: start, to: end)
+        await MainActor.run {
+            self.workoutAnalytics = analytics
+        }
+    }
+
+    /// Aggregate daily stats (VO2 max, HRV trend, post-workout HR, recovery)
+    var dailyAggregates: [Date: (vo2Max: Double?, hrv: Double?, postWorkoutHR: Double?, hrr0: Double?, hrr1: Double?, hrr2: Double?)] {
+        let calendar = Calendar.current
+        var dict: [Date: [(HealthKitManager.WorkoutAnalytics)]] = [:]
+        for (_, analytics) in workoutAnalytics {
+            let day = calendar.startOfDay(for: analytics.workout.startDate)
+            dict[day, default: []].append(analytics)
+        }
+        var result: [Date: (Double?, Double?, Double?, Double?, Double?, Double?)] = [:]
+        for (day, analyticsList) in dict {
+            let vo2s = analyticsList.compactMap { $0.vo2Max }
+            let hrvs = analyticsList.compactMap { $0.heartRates.sdnn }
+            let postHRs = analyticsList.compactMap { $0.postWorkoutHRSeries.first?.1 }
+            let hrr0s = analyticsList.compactMap { $0.hrr0 }
+            let hrr1s = analyticsList.compactMap { $0.hrr1 }
+            let hrr2s = analyticsList.compactMap { $0.hrr2 }
+            result[day] = (
+                vo2s.isEmpty ? nil : vo2s.reduce(0, +) / Double(vo2s.count),
+                hrvs.isEmpty ? nil : hrvs.reduce(0, +) / Double(hrvs.count),
+                postHRs.isEmpty ? nil : postHRs.reduce(0, +) / Double(postHRs.count),
+                hrr0s.isEmpty ? nil : hrr0s.reduce(0, +) / Double(hrr0s.count),
+                hrr1s.isEmpty ? nil : hrr1s.reduce(0, +) / Double(hrr1s.count),
+                hrr2s.isEmpty ? nil : hrr2s.reduce(0, +) / Double(hrr2s.count)
+            )
+        }
+        return result
+    }
 
 
 //

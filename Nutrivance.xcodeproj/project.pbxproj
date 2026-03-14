@@ -59,7 +59,6 @@
 		156814562D5C0F2D003C861E /* StepCountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814342D5C0F2D003C861E /* StepCountView.swift */; };
 		156814572D5C0F2D003C861E /* SleepAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814332D5C0F2D003C861E /* SleepAnalysisView.swift */; };
 		156814632D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 156814622D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage */; };
-		156896A52F2FB6CB0048B5B0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156896A42F2FB6CB0048B5B0 /* Assets.xcassets */; };
 		156AA8EB2D76A80200DA0845 /* RingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AA8EA2D76A80200DA0845 /* RingDetailView.swift */; };
 		156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */; };
 		1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1570E2662D67B75300F42CB5 /* FuelCheckView.swift */; };
@@ -199,7 +198,6 @@
 		156814382D5C0F2D003C861E /* WorkoutGeneratorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutGeneratorView.swift; sourceTree = "<group>"; };
 		156814392D5C0F2D003C861E /* WorkoutHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutHistoryView.swift; sourceTree = "<group>"; };
 		156814622D5D8D16003C861E /* movement_prediction_sequential_model.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = movement_prediction_sequential_model.mlpackage; sourceTree = "<group>"; };
-		156896A42F2FB6CB0048B5B0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		156AA8EA2D76A80200DA0845 /* RingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingDetailView.swift; sourceTree = "<group>"; };
 		156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionUnit.swift; sourceTree = "<group>"; };
 		1570E2662D67B75300F42CB5 /* FuelCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuelCheckView.swift; sourceTree = "<group>"; };
@@ -537,7 +535,6 @@
 		15D7FF942CD142690048E050 = {
 			isa = PBXGroup;
 			children = (
-				156896A42F2FB6CB0048B5B0 /* Assets.xcassets */,
 				15C033F32D0DD504000EBCD2 /* .git */,
 				15C033F62D0DD504000EBCD2 /* .github */,
 				15A70DA32CF10814007FBC5D /* WaterWidgetExtension.entitlements */,
@@ -761,7 +758,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1610;
-				LastUpgradeCheck = 1600;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					15D7FF9C2CD142690048E050 = {
 						CreatedOnToolsVersion = 16.0;
@@ -809,7 +806,6 @@
 				15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */,
 				15D7FFAA2CD1426A0048E050 /* Preview Assets.xcassets in Resources */,
 				15D7FFA72CD1426A0048E050 /* Assets.xcassets in Resources */,
-				156896A52F2FB6CB0048B5B0 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1032,6 +1028,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -1096,6 +1093,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_PRECOMPILE_BRIDGING_HEADER = NO;
@@ -1115,7 +1113,11 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Nutrivance/Preview Content\"";
 				DEVELOPMENT_TEAM = 586BPLW3X9;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = YES;
+				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Nutrivance/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
@@ -1165,7 +1167,11 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Nutrivance/Preview Content\"";
 				DEVELOPMENT_TEAM = 586BPLW3X9;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = YES;
+				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Nutrivance/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
