@@ -59,6 +59,11 @@ struct ContentView_iPad_alt: View {
                 }
                 .customizationID("iPad.tab.strainVsRecovery")
                 .defaultVisibility(.hidden, for: .tabBar)
+                Tab("Workout History", systemImage: "clock.arrow.circlepath") {
+                    WorkoutHistoryView()
+                }
+                .customizationID( "iPad.tab.workoutHistory")
+                .defaultVisibility(.hidden, for: .tabBar)
             }
             TabSection("Mental Health") {
                 Tab("Mindfulness Realm", systemImage: "eye.fill") {

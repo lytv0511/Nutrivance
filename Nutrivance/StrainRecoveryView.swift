@@ -28,10 +28,43 @@ struct StrainRecoveryView: View {
     @StateObject private var engine = HealthStateEngine()
     @State private var animationPhase: Double = 0
 
+    enum TimeFilter: String, CaseIterable {
+        case week = "1W"
+        case month = "1M"
+        case year = "1Y"
+    }
+
+    @State private var timeFilter: TimeFilter = .week
+    @State private var sportFilter: String? = nil // nil means all sports
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
+                    // Time and Sport Filters
+                    HStack {
+                        Picker("Time", selection: $timeFilter) {
+                            ForEach(TimeFilter.allCases, id: \.self) { filter in
+                                Text(filter.rawValue).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Spacer()
+                        Menu {
+                            Button("All Sports") { sportFilter = nil }
+                            ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique, id: \.self) { sport in
+                                Button(sport.capitalized) { sportFilter = sport }
+                            }
+                        } label: {
+                            HStack {
+                                Text(sportFilter?.capitalized ?? "All Sports")
+                                Image(systemName: "chevron.down")
+                            }
+                            .foregroundColor(.blue)
+                        }
+                    }
+                    .padding(.horizontal)
+
                     // ML-powered summary (placeholder)
                     Section {
                         Text("\u{1F916} ML-powered summary goes here.\nExplain how your sleep, HRV, RHR, mood, and workouts contributed to your current strain and recovery.")
@@ -52,6 +85,15 @@ struct StrainRecoveryView: View {
 
                     // Workout Contributions
                     WorkoutContributionsSection(engine: engine)
+
+                    // MET Aggregates
+                    METAggregatesSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
+
+                    // VO2 Aggregates
+                    VO2AggregatesSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
+
+                    // HRR Aggregates
+                    HRRAggregatesSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
 
                     // Mood & Recovery
                     MoodSection(engine: engine)
@@ -76,6 +118,9 @@ struct StrainRecoveryView: View {
                     }
             )
             .navigationTitle("Strain vs Recovery")
+            .task {
+                await engine.refreshWorkoutAnalytics(days: 365) // Load more for year view
+            }
         }
     }
 }
@@ -462,5 +507,146 @@ struct MetricLineGraph: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct METAggregatesSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let sportFilter: String?
+
+    var filteredData: [(Date, Double)] {
+        let base = engine.dailyMETAggregates
+        let filtered = base.filter { date, _ in
+            // Apply time filter
+            let days: Int
+            switch timeFilter {
+            case .week: days = 7
+            case .month: days = 30
+            case .year: days = 365
+            }
+            let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+            return date >= cutoff
+        }
+        return filtered.sorted { $0.0 < $1.0 }
+    }
+
+    var body: some View {
+        HealthCard(
+            symbol: "flame.fill",
+            title: "Daily MET-minutes",
+            value: filteredData.last.map { String(format: "%.1f", $0.1) } ?? "-",
+            unit: "MET-min",
+            trend: "Total: \(String(format: "%.1f", filteredData.map { $0.1 }.reduce(0, +)))",
+            color: .orange,
+            chartData: filteredData,
+            chartLabel: "MET-min",
+            chartUnit: "min",
+            expandedContent: { EmptyView() }
+        )
+    }
+}
+
+struct VO2AggregatesSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let sportFilter: String?
+
+    var filteredData: [(Date, Double)] {
+        var base = engine.dailyVO2Aggregates
+        if let sport = sportFilter {
+            // Filter workouts by sport and recompute aggregates
+            let filteredWorkouts = engine.workoutAnalytics.filter { $0.workout.workoutActivityType.name == sport }
+            var aggregates: [Date: [Double]] = [:]
+            let calendar = Calendar.current
+            for (workout, analytics) in filteredWorkouts {
+                let day = calendar.startOfDay(for: workout.startDate)
+                if let vo2 = analytics.vo2Max {
+                    aggregates[day, default: []].append(vo2)
+                }
+            }
+            base = aggregates.mapValues { $0.reduce(0, +) / Double($0.count) }
+        }
+        let filtered = base.filter { date, _ in
+            let days: Int
+            switch timeFilter {
+            case .week: days = 7
+            case .month: days = 30
+            case .year: days = 365
+            }
+            let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+            return date >= cutoff
+        }
+        return filtered.sorted { $0.0 < $1.0 }
+    }
+
+    var body: some View {
+        HealthCard(
+            symbol: "lungs.fill",
+            title: "Daily VO2 Max",
+            value: filteredData.last.map { String(format: "%.1f", $0.1) } ?? "-",
+            unit: "ml/kg/min",
+            trend: "Avg: \(filteredData.map { $0.1 }.average?.formatted() ?? "-")",
+            color: .blue,
+            chartData: filteredData,
+            chartLabel: "VO2 Max",
+            chartUnit: "ml/kg/min",
+            expandedContent: { EmptyView() }
+        )
+    }
+}
+
+struct HRRAggregatesSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let sportFilter: String?
+
+    var filteredData: [(Date, Double)] {
+        var base = engine.dailyHRRAggregates
+        if let sport = sportFilter {
+            // Filter workouts by sport and recompute aggregates
+            let filteredWorkouts = engine.workoutAnalytics.filter { $0.workout.workoutActivityType.name == sport }
+            var aggregates: [Date: Double] = [:]
+            let calendar = Calendar.current
+            for (workout, analytics) in filteredWorkouts {
+                let day = calendar.startOfDay(for: workout.startDate)
+                if let hrr2 = analytics.hrr2 {
+                    aggregates[day] = max(aggregates[day] ?? 0, hrr2)
+                }
+            }
+            base = aggregates
+        }
+        let filtered = base.filter { date, _ in
+            let days: Int
+            switch timeFilter {
+            case .week: days = 7
+            case .month: days = 30
+            case .year: days = 365
+            }
+            let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+            return date >= cutoff
+        }
+        return filtered.sorted { $0.0 < $1.0 }
+    }
+
+    var body: some View {
+        HealthCard(
+            symbol: "heart.fill",
+            title: "Daily HRR (2min)",
+            value: filteredData.last.map { String(format: "%.0f", $0.1) } ?? "-",
+            unit: "bpm",
+            trend: "Max: \(filteredData.map { $0.1 }.max()?.formatted() ?? "-")",
+            color: .red,
+            chartData: filteredData,
+            chartLabel: "HRR",
+            chartUnit: "bpm",
+            expandedContent: { EmptyView() }
+        )
+    }
+}
+
+extension Array where Element: Hashable {
+    var unique: [Element] {
+        Array(Set(self))
     }
 }

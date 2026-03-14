@@ -1,44 +1,3 @@
-    // MARK: - Per-Workout Analytics
-    @Published var workoutAnalytics: [(workout: HKWorkout, analytics: HealthKitManager.WorkoutAnalytics)] = []
-
-    /// Fetch all workouts with analytics for a date range and update published property
-    func refreshWorkoutAnalytics(days: Int = 30) async {
-        let end = Date()
-        let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
-        let manager = hkManager
-        let analytics = await manager.fetchWorkoutsWithAnalytics(from: start, to: end)
-        await MainActor.run {
-            self.workoutAnalytics = analytics
-        }
-    }
-
-    /// Aggregate daily stats (VO2 max, HRV trend, post-workout HR, recovery)
-    var dailyAggregates: [Date: (vo2Max: Double?, hrv: Double?, postWorkoutHR: Double?, hrr0: Double?, hrr1: Double?, hrr2: Double?)] {
-        let calendar = Calendar.current
-        var dict: [Date: [(HealthKitManager.WorkoutAnalytics)]] = [:]
-        for (_, analytics) in workoutAnalytics {
-            let day = calendar.startOfDay(for: analytics.workout.startDate)
-            dict[day, default: []].append(analytics)
-        }
-        var result: [Date: (Double?, Double?, Double?, Double?, Double?, Double?)] = [:]
-        for (day, analyticsList) in dict {
-            let vo2s = analyticsList.compactMap { $0.vo2Max }
-            let hrvs = analyticsList.compactMap { $0.heartRates.sdnn }
-            let postHRs = analyticsList.compactMap { $0.postWorkoutHRSeries.first?.1 }
-            let hrr0s = analyticsList.compactMap { $0.hrr0 }
-            let hrr1s = analyticsList.compactMap { $0.hrr1 }
-            let hrr2s = analyticsList.compactMap { $0.hrr2 }
-            result[day] = (
-                vo2s.isEmpty ? nil : vo2s.reduce(0, +) / Double(vo2s.count),
-                hrvs.isEmpty ? nil : hrvs.reduce(0, +) / Double(hrvs.count),
-                postHRs.isEmpty ? nil : postHRs.reduce(0, +) / Double(postHRs.count),
-                hrr0s.isEmpty ? nil : hrr0s.reduce(0, +) / Double(hrr0s.count),
-                hrr1s.isEmpty ? nil : hrr1s.reduce(0, +) / Double(hrr1s.count),
-                hrr2s.isEmpty ? nil : hrr2s.reduce(0, +) / Double(hrr2s.count)
-            )
-        }
-        return result
-    }
 
 
 //
@@ -78,6 +37,9 @@ final class HealthStateEngine: ObservableObject {
     @Published var trainingFrequency: Double? = nil // sessions/week
     @Published var trainingFrequencyBySport: [String: Double] = [:] // sport: sessions/week
 
+    // MARK: - Workout Analytics
+    @Published var workoutAnalytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
+
     // MARK: - Vitals Baseline/Trend Accessors
     public var vitalsSummary: [String: (current: Double?, baseline: Double?, trend: Double?)] {
         // Example for HRV, RHR, sleep, respiratoryRate, temp, spO2
@@ -96,6 +58,42 @@ final class HealthStateEngine: ObservableObject {
             "WristTemp": (wristTemperature[today], avg(wristTemperature, days: 7), nil),
             "SpO2": (spO2[today], avg(spO2, days: 7), nil)
         ]
+    }
+
+    // MARK: - Daily Workout Aggregates
+    public var dailyMETAggregates: [Date: Double] {
+        var aggregates: [Date: Double] = [:]
+        let calendar = Calendar.current
+        for (workout, analytics) in workoutAnalytics {
+            let day = calendar.startOfDay(for: workout.startDate)
+            let met = analytics.metTotal ?? 0
+            aggregates[day, default: 0] += met
+        }
+        return aggregates
+    }
+
+    public var dailyVO2Aggregates: [Date: Double] {
+        var aggregates: [Date: [Double]] = [:]
+        let calendar = Calendar.current
+        for (workout, analytics) in workoutAnalytics {
+            let day = calendar.startOfDay(for: workout.startDate)
+            if let vo2 = analytics.vo2Max {
+                aggregates[day, default: []].append(vo2)
+            }
+        }
+        return aggregates.mapValues { $0.reduce(0, +) / Double($0.count) }
+    }
+
+    public var dailyHRRAggregates: [Date: Double] {
+        var aggregates: [Date: Double] = [:]
+        let calendar = Calendar.current
+        for (workout, analytics) in workoutAnalytics {
+            let day = calendar.startOfDay(for: workout.startDate)
+            if let hrr2 = analytics.hrr2 {
+                aggregates[day] = max(aggregates[day] ?? 0, hrr2)
+            }
+        }
+        return aggregates
     }
 
     // MARK: - Sleep Quality Fetch (stages, efficiency, consistency)
@@ -522,6 +520,13 @@ final class HealthStateEngine: ObservableObject {
         self.fetchIntensityMetrics()
         self.inferFavoriteSportAndFrequency()
         self.updateScores()
+    }
+
+    func refreshWorkoutAnalytics(days: Int = 30) async {
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
+        let analytics = await hkManager.fetchWorkoutsWithAnalytics(from: start, to: end)
+        self.workoutAnalytics = analytics
     }
 
     // MARK: - Fetch HRV

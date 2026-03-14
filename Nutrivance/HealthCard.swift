@@ -1,8 +1,8 @@
 // MARK: - Array average helper
 extension Array where Element == Double {
-    func average() -> Double {
-        guard !self.isEmpty else { return 0 }
-        return self.reduce(0, +) / Double(self.count)
+    var average: Double? {
+        guard !isEmpty else { return nil }
+        return reduce(0, +) / Double(count)
     }
 }
 import SwiftUI

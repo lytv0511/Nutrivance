@@ -1,23 +1,3 @@
-
-// --- Place these in an extension at the end of the file ---
-
-extension HealthKitManager {
-    /// Fetch all workouts in a date range with analytics (VO2 max, HRV trend, post-workout HR, recovery)
-    @MainActor
-    func fetchWorkoutsWithAnalytics(from startDate: Date, to endDate: Date) async -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
-        let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
-            self.fetchWorkouts(from: startDate, to: endDate) { wos in
-                continuation.resume(returning: wos)
-            }
-        }
-        var result: [(HKWorkout, WorkoutAnalytics)] = []
-        for workout in workouts {
-            let analytics = await self.computeWorkoutAnalytics(for: workout)
-            result.append((workout, analytics))
-        }
-        return result
-    }
-}
 // MARK: - Workout Analytics Struct
 
 struct WorkoutAnalytics {
@@ -32,6 +12,7 @@ struct WorkoutAnalytics {
     let hrr0: Double?
     let hrr1: Double?
     let hrr2: Double?
+    let powerSeries: [(Date, Double)] // For cycling
 }
 
 extension Array where Element == (Date, Double) {
@@ -56,6 +37,8 @@ extension HealthKitManager {
     func computeWorkoutAnalytics(for workout: HKWorkout) async -> WorkoutAnalytics {
         // Fetch heart rate samples for the workout
         let hrSamples = await fetchHeartRateSamples(for: workout)
+
+        var powerSeries: [(Date, Double)] = []
 
         // --- VO2 Max Calculation ---
         var vo2Max: Double? = nil
@@ -199,7 +182,8 @@ extension HealthKitManager {
             peakHR: peakHR,
             hrr0: hrr0,
             hrr1: hrr1,
-            hrr2: hrr2
+            hrr2: hrr2,
+            powerSeries: powerSeries
         )
     }
 }
@@ -2329,5 +2313,23 @@ extension HealthKitManager {
         }
 
         healthStore.execute(query)
+    }
+}
+
+extension HealthKitManager {
+    /// Fetch all workouts in a date range with analytics (VO2 max, HRV trend, post-workout HR, recovery)
+    @MainActor
+    func fetchWorkoutsWithAnalytics(from startDate: Date, to endDate: Date) async -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
+            fetchWorkouts(from: startDate, to: endDate) { result in
+                continuation.resume(returning: result)
+            }
+        }
+        var result: [(HKWorkout, WorkoutAnalytics)] = []
+        for workout in workouts {
+            let analytics = await computeWorkoutAnalytics(for: workout)
+            result.append((workout, analytics))
+        }
+        return result
     }
 }
