@@ -13,6 +13,13 @@ struct WorkoutAnalytics {
     let hrr1: Double?
     let hrr2: Double?
     let powerSeries: [(Date, Double)] // For cycling
+    let speedSeries: [(Date, Double)] // Speed in m/s
+    let cadenceSeries: [(Date, Double)] // Cadence in rpm
+    let elevationSeries: [(Date, Double)] // Elevation in meters
+    let elevationGain: Double? // Total elevation gain in meters
+    let verticalOscillation: Double? // For running, in cm
+    let groundContactTime: Double? // For running, in ms
+    let strideLength: Double? // For running, in meters
 }
 
 extension Array where Element == (Date, Double) {
@@ -80,6 +87,84 @@ extension HealthKitManager {
                 }
             }
             vo2Max = hkVO2 > 0 ? hkVO2 : nil
+        }
+
+        // --- Speed Series ---
+        var speedSeries: [(Date, Double)] = []
+        if let speedType = HKQuantityType.quantityType(forIdentifier: .runningSpeed) {
+            let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                let query = HKSampleQuery(sampleType: speedType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                    continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                }
+                self.healthStore.execute(query)
+            }
+            speedSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .meter().unitDivided(by: .second()))) }
+        }
+
+        // --- Cadence Series ---
+        var cadenceSeries: [(Date, Double)] = []
+        if let cadenceType = HKQuantityType.quantityType(forIdentifier: .cyclingCadence) ?? HKQuantityType.quantityType(forIdentifier: .runningStrideLength) {
+            let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                let query = HKSampleQuery(sampleType: cadenceType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                    continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                }
+                self.healthStore.execute(query)
+            }
+            if cadenceType.identifier == HKQuantityTypeIdentifier.cyclingCadence.rawValue {
+                cadenceSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: HKUnit.minute()))) }
+            } else {
+                // For running stride length, maybe not cadence, but we'll use it as is
+                cadenceSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .meter())) }
+            }
+        }
+
+        // --- Elevation Series and Gain ---
+        var elevationSeries: [(Date, Double)] = []
+        var elevationGain: Double? = nil
+        // Elevation gain from metadata
+        if let elevationQuantity = workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity {
+            elevationGain = elevationQuantity.doubleValue(for: .meter())
+        }
+
+        // --- Running Metrics ---
+        var verticalOscillation: Double? = nil
+        var groundContactTime: Double? = nil
+        var strideLength: Double? = nil
+        if activityType == .running {
+            if let voType = HKQuantityType.quantityType(forIdentifier: .runningVerticalOscillation) {
+                let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+                let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                    let query = HKSampleQuery(sampleType: voType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                        continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                    }
+                    self.healthStore.execute(query)
+                }
+                verticalOscillation = samples.map { $0.quantity.doubleValue(for: .meter()) * 100 }.average // Convert to cm
+            }
+            if let gctType = HKQuantityType.quantityType(forIdentifier: .runningGroundContactTime) {
+                let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+                let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                    let query = HKSampleQuery(sampleType: gctType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                        continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                    }
+                    self.healthStore.execute(query)
+                }
+                groundContactTime = samples.map { $0.quantity.doubleValue(for: .secondUnit(with: .milli)) }.average
+            }
+            if let slType = HKQuantityType.quantityType(forIdentifier: .runningStrideLength) {
+                let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+                let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                    let query = HKSampleQuery(sampleType: slType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                        continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
+                    }
+                    self.healthStore.execute(query)
+                }
+                strideLength = samples.map { $0.quantity.doubleValue(for: .meter()) }.average
+            }
         }
 
         // --- METs ---
@@ -183,7 +268,14 @@ extension HealthKitManager {
             hrr0: hrr0,
             hrr1: hrr1,
             hrr2: hrr2,
-            powerSeries: powerSeries
+            powerSeries: powerSeries,
+            speedSeries: speedSeries,
+            cadenceSeries: cadenceSeries,
+            elevationSeries: elevationSeries,
+            elevationGain: elevationGain,
+            verticalOscillation: verticalOscillation,
+            groundContactTime: groundContactTime,
+            strideLength: strideLength
         )
     }
 }

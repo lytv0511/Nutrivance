@@ -207,6 +207,13 @@ struct RoutePoint: Identifiable {
     let coordinate: CLLocationCoordinate2D
 }
 
+struct Split {
+    let distance: Double // in km
+    let time: TimeInterval
+    let pace: Double? // min/km
+    let avgHR: Double?
+}
+
 private struct HRZone {
     let name: String
     let color: Color
@@ -225,8 +232,76 @@ struct WorkoutDetailView: View {
     @State private var showHRZones = false
     @State private var routePoints: [RoutePoint] = []
     @State private var isLoadingRoute = false
-    @State private var avgCadence: Double? = nil
-    @State private var isLoadingCadence = false
+
+    private var activeDuration: TimeInterval {
+        analytics.workout.duration
+    }
+
+    private var elapsedDuration: TimeInterval {
+        analytics.workout.endDate.timeIntervalSince(analytics.workout.startDate)
+    }
+
+    private var pausedDuration: TimeInterval? {
+        let pause = elapsedDuration - activeDuration
+        return pause > 0 ? pause : nil
+    }
+
+    private var distanceMeters: Double? {
+        analytics.workout.totalDistance?.doubleValue(for: HKUnit.meter())
+    }
+
+    private var avgSpeedKPH: Double? {
+        guard let dist = distanceMeters, activeDuration > 0 else { return nil }
+        return (dist / 1000) / (activeDuration / 3600)
+    }
+
+    private var avgPower: Double? {
+        let p = analytics.powerSeries.map { $0.1 }
+        guard !p.isEmpty else { return nil }
+        return p.reduce(0, +) / Double(p.count)
+    }
+
+    private var avgCadence: Double? {
+        analytics.cadenceSeries.map { $0.1 }.average
+    }
+
+    private var avgHeartRate: Double? {
+        let hr = analytics.heartRates.map { $0.1 }
+        guard !hr.isEmpty else { return nil }
+        return hr.reduce(0, +) / Double(hr.count)
+    }
+
+    private var maxHeartRate: Double? {
+        analytics.heartRates.map { $0.1 }.max()
+    }
+
+    private var heartRateZoneThresholds: [Double] {
+        // Using approximate % of avg recorded max HR (or 190 if unknown)
+        let maxHR = maxHeartRate ?? 190
+        return [0.6, 0.7, 0.8, 0.9, 1.0].map { $0 * maxHR }
+    }
+
+    private var heartRateZoneBreakdown: [HRZone] {
+        let thresholds = heartRateZoneThresholds
+        var zones = [
+            HRZone(name: "Zone 1", color: .blue, time: 0.0, range: 0.0...thresholds[0]),
+            HRZone(name: "Zone 2", color: .cyan, time: 0.0, range: thresholds[0]...thresholds[1]),
+            HRZone(name: "Zone 3", color: .green, time: 0.0, range: thresholds[1]...thresholds[2]),
+            HRZone(name: "Zone 4", color: .orange, time: 0.0, range: thresholds[2]...thresholds[3]),
+            HRZone(name: "Zone 5", color: .red, time: 0.0, range: thresholds[3]...thresholds[4])
+        ]
+
+        let samples = analytics.heartRates.sorted { $0.0 < $1.0 }
+        for i in 0..<(samples.count - 1) {
+            let hr = samples[i].1
+            let next = samples[i + 1].0
+            let duration = next.timeIntervalSince(samples[i].0)
+            if let idx = zones.firstIndex(where: { $0.range.contains(hr) }) {
+                zones[idx].time += duration
+            }
+        }
+        return zones
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -245,11 +320,26 @@ struct WorkoutDetailView: View {
                 if let cadence = avgCadence {
                     WorkoutMetricCard(title: "Avg Cadence", value: String(format: "%.0f", cadence), unit: "rpm", icon: "waveform.path.ecg", color: .mint)
                 }
+                if let kcal = analytics.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                    WorkoutMetricCard(title: "Active KCAL", value: String(format: "%.0f", kcal), unit: "kcal", icon: "flame.fill", color: .orange)
+                }
+                if let elevation = analytics.elevationGain {
+                    WorkoutMetricCard(title: "Elevation Gain", value: String(format: "%.0f", elevation), unit: "m", icon: "mountain.2.fill", color: .green)
+                }
                 if let hr = avgHeartRate {
                     WorkoutMetricCard(title: "Avg HR", value: String(format: "%.0f", hr), unit: "bpm", icon: "heart.fill", color: .red)
                 }
                 if let pause = pausedDuration {
                     WorkoutMetricCard(title: "Paused", value: formattedTime(pause), unit: "", icon: "pause.fill", color: .gray)
+                }
+                if let vo = analytics.verticalOscillation {
+                    WorkoutMetricCard(title: "Vert Osc", value: String(format: "%.1f", vo), unit: "cm", icon: "waveform", color: .cyan)
+                }
+                if let gct = analytics.groundContactTime {
+                    WorkoutMetricCard(title: "GCT", value: String(format: "%.0f", gct), unit: "ms", icon: "figure.run", color: .indigo)
+                }
+                if let sl = analytics.strideLength {
+                    WorkoutMetricCard(title: "Stride", value: String(format: "%.2f", sl), unit: "m", icon: "ruler.fill", color: .pink)
                 }
             }
 
@@ -495,99 +585,134 @@ struct WorkoutDetailView: View {
                 }
             }
 
-            // Route map (if available)
-            if !routePoints.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Route")
+            // Cycling Speed if applicable
+            if analytics.workout.workoutActivityType == .cycling && !analytics.speedSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Cycling Speed")
                         .font(.subheadline)
                         .bold()
-                    Map(
-                        coordinateRegion: .constant(MKCoordinateRegion(
-                            center: routePoints.first?.coordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0),
-                            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
-                        )),
-                        interactionModes: [.pan, .zoom],
-                        showsUserLocation: false,
-                        annotationItems: routePoints
-                    ) { point in
-                        MapMarker(coordinate: point.coordinate, tint: .orange)
+                    Chart(analytics.speedSeries, id: \.0) { point in
+                        LineMark(
+                            x: .value("Time", point.0),
+                            y: .value("Speed", point.1 * 3.6) // m/s to km/h
+                        )
+                        .foregroundStyle(.blue)
                     }
-                    .frame(height: 200)
-                    .cornerRadius(12)
+                    .frame(height: 150)
+                    HStack {
+                        let avgSpeed = analytics.speedSeries.map { $0.1 * 3.6 }.average
+                        Text("Avg Speed: \(avgSpeed.map { String(format: "%.1f", $0) } ?? "-") km/h")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            // Cycling Cadence if applicable
+            if analytics.workout.workoutActivityType == .cycling && !analytics.cadenceSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Cycling Cadence")
+                        .font(.subheadline)
+                        .bold()
+                    Chart(analytics.cadenceSeries, id: \.0) { point in
+                        LineMark(
+                            x: .value("Time", point.0),
+                            y: .value("Cadence", point.1)
+                        )
+                        .foregroundStyle(.mint)
+                    }
+                    .frame(height: 150)
+                    HStack {
+                        let avgCadence = analytics.cadenceSeries.map { $0.1 }.average
+                        Text("Avg Cadence: \(avgCadence.map { String(format: "%.0f", $0) } ?? "-") rpm")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            // Elevation for eligible workouts
+            if !analytics.elevationSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Elevation")
+                        .font(.subheadline)
+                        .bold()
+                    Chart(analytics.elevationSeries, id: \.0) { point in
+                        LineMark(
+                            x: .value("Time", point.0),
+                            y: .value("Elevation", point.1)
+                        )
+                        .foregroundStyle(.green)
+                    }
+                    .frame(height: 150)
+                    HStack {
+                        if let gain = analytics.elevationGain {
+                            Text("Total Gain: \(String(format: "%.0f", gain)) m")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            // Pace for running/hiking
+            if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking) && !analytics.speedSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Pace")
+                        .font(.subheadline)
+                        .bold()
+                    Chart(analytics.speedSeries, id: \.0) { point in
+                        let paceMinKm = 60 / (point.1 * 3.6) // min/km
+                        BarMark(
+                            x: .value("Time", point.0),
+                            y: .value("Pace", paceMinKm)
+                        )
+                        .foregroundStyle(.teal)
+                    }
+                    .frame(height: 150)
+                    HStack {
+                        let avgPace = analytics.speedSeries.map { 60 / ($0.1 * 3.6) }.average
+                        Text("Avg Pace: \(avgPace.map { String(format: "%.1f", $0) } ?? "-") min/km")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            // Splits for eligible workouts
+            if analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .cycling || analytics.workout.workoutActivityType == .hiking {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Splits")
+                        .font(.subheadline)
+                        .bold()
+                    let splits = generateSplits()
+                    ForEach(splits, id: \.distance) { split in
+                        HStack {
+                            Text(String(format: "%.1f km", split.distance))
+                                .font(.caption)
+                                .frame(width: 60, alignment: .leading)
+                            Text(formattedTime(split.time))
+                                .font(.caption)
+                            if let pace = split.pace {
+                                Text(String(format: "%.1f min/km", pace))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            if let hr = split.avgHR {
+                                Text(String(format: "%.0f bpm", hr))
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
+                            Spacer()
+                        }
+                    }
                 }
             }
         }
         .padding(.top, 8)
         .onAppear {
             loadRoute()
-            loadCadence()
         }
-    }
-
-    private var activeDuration: TimeInterval {
-        analytics.workout.duration
-    }
-
-    private var elapsedDuration: TimeInterval {
-        analytics.workout.endDate.timeIntervalSince(analytics.workout.startDate)
-    }
-
-    private var pausedDuration: TimeInterval? {
-        let pause = elapsedDuration - activeDuration
-        return pause > 0 ? pause : nil
-    }
-
-    private var distanceMeters: Double? {
-        analytics.workout.totalDistance?.doubleValue(for: HKUnit.meter())
-    }
-
-    private var avgSpeedKPH: Double? {
-        guard let dist = distanceMeters, activeDuration > 0 else { return nil }
-        return (dist / 1000) / (activeDuration / 3600)
-    }
-
-    private var avgPower: Double? {
-        let p = analytics.powerSeries.map { $0.1 }
-        guard !p.isEmpty else { return nil }
-        return p.reduce(0, +) / Double(p.count)
-    }
-
-    private var avgHeartRate: Double? {
-        let hr = analytics.heartRates.map { $0.1 }
-        guard !hr.isEmpty else { return nil }
-        return hr.reduce(0, +) / Double(hr.count)
-    }
-
-    private var maxHeartRate: Double? {
-        analytics.heartRates.map { $0.1 }.max()
-    }
-
-    private var heartRateZoneThresholds: [Double] {
-        // Using approximate % of avg recorded max HR (or 190 if unknown)
-        let maxHR = maxHeartRate ?? 190
-        return [0.6, 0.7, 0.8, 0.9, 1.0].map { $0 * maxHR }
-    }
-
-    private var heartRateZoneBreakdown: [HRZone] {
-        let thresholds = heartRateZoneThresholds
-        var zones = [
-            HRZone(name: "Zone 1", color: .blue, time: 0.0, range: 0.0...thresholds[0]),
-            HRZone(name: "Zone 2", color: .cyan, time: 0.0, range: thresholds[0]...thresholds[1]),
-            HRZone(name: "Zone 3", color: .green, time: 0.0, range: thresholds[1]...thresholds[2]),
-            HRZone(name: "Zone 4", color: .orange, time: 0.0, range: thresholds[2]...thresholds[3]),
-            HRZone(name: "Zone 5", color: .red, time: 0.0, range: thresholds[3]...thresholds[4])
-        ]
-
-        let samples = analytics.heartRates.sorted { $0.0 < $1.0 }
-        for i in 0..<(samples.count - 1) {
-            let hr = samples[i].1
-            let next = samples[i + 1].0
-            let duration = next.timeIntervalSince(samples[i].0)
-            if let idx = zones.firstIndex(where: { $0.range.contains(hr) }) {
-                zones[idx].time += duration
-            }
-        }
-        return zones
     }
 
     private func formattedTime(_ seconds: TimeInterval) -> String {
@@ -635,25 +760,20 @@ struct WorkoutDetailView: View {
         healthStore.execute(sampleQuery)
     }
 
-    private func loadCadence() {
-        guard avgCadence == nil else { return }
-        isLoadingCadence = true
-        let healthStore = HKHealthStore()
-        guard let cadenceType = HKQuantityType.quantityType(forIdentifier: .cyclingCadence) else {
-            isLoadingCadence = false
-            return
+    private func generateSplits() -> [Split] {
+        guard let totalDistance = analytics.workout.totalDistance?.doubleValue(for: .meter()) else { return [] }
+        let totalKm = totalDistance / 1000
+        let splitDistance = 1.0 // km
+        var splits: [Split] = []
+        for km in stride(from: splitDistance, through: totalKm, by: splitDistance) {
+            let timeAtKm = analytics.workout.startDate.addingTimeInterval((km / totalKm) * analytics.workout.duration)
+            let time = timeAtKm.timeIntervalSince(analytics.workout.startDate)
+            let pace = analytics.speedSeries.isEmpty ? nil : 60 / (analytics.speedSeries.map { $0.1 * 3.6 }.average ?? 0)
+            let hrSamplesInSplit = analytics.heartRates.filter { $0.0 <= timeAtKm }
+            let avgHR = hrSamplesInSplit.isEmpty ? nil : hrSamplesInSplit.map { $0.1 }.average
+            splits.append(Split(distance: km, time: time, pace: pace, avgHR: avgHR))
         }
-        let predicate = HKQuery.predicateForSamples(withStart: analytics.workout.startDate, end: analytics.workout.endDate)
-        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
-        let query = HKSampleQuery(sampleType: cadenceType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
-            let values = (samples as? [HKQuantitySample])?.map { $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: HKUnit.minute())) } ?? []
-            let avg = values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
-            DispatchQueue.main.async {
-                self.avgCadence = avg
-                self.isLoadingCadence = false
-            }
-        }
-        healthStore.execute(query)
+        return splits
     }
 }
 
