@@ -1,3 +1,50 @@
+// MARK: - Heart Rate Zone Types
+
+enum HRZoneSchema: String, Codable {
+    case mhrPercentage = "mhr_percentage"
+    case karvonen = "karvonen_hrr"
+    case lactatThreshold = "lactate_threshold"
+    case polarized = "polarized_3zone"
+}
+
+struct HeartRateZone: Identifiable, Codable {
+    let id = UUID()
+    let name: String
+    let range: ClosedRange<Double>
+    let color: String // Stored as hex for Codable
+    let zoneNumber: Int
+    var timeInZone: TimeInterval = 0
+}
+
+struct HRZoneProfile: Codable {
+    var sport: HKWorkoutActivityType.RawValue
+    var schema: HRZoneSchema
+    var maxHR: Double?
+    var restingHR: Double?
+    var lactateThresholdHR: Double?
+    var zones: [HeartRateZone]
+    var lastUpdated: Date
+    var adaptive: Bool = true
+    var adjustmentFactor: Double = 1.0 // For dynamic adaptation
+    
+    func zone(for hr: Double) -> HeartRateZone? {
+        zones.first { $0.range.contains(hr) }
+    }
+}
+
+struct HRZoneAnchorMetrics: Codable {
+    var age: Double?
+    var restingHR: Double?
+    var maxHR: Double? // Tested or measured
+    var peakHRLast90Days: Double?
+    var lactateThresholdHR: Double?
+    var vo2Max: Double?
+    var hrvTrendDays7: Double? // 7-day HRV trend
+    var sleepQualityWeekly: Double? // 1-5 scale
+    var recoveryScore: Double? // 0-100
+    var lastUpdated: Date = Date()
+}
+
 // MARK: - Workout Analytics Struct
 
 struct WorkoutAnalytics {
@@ -20,6 +67,8 @@ struct WorkoutAnalytics {
     let verticalOscillation: Double? // For running, in cm
     let groundContactTime: Double? // For running, in ms
     let strideLength: Double? // For running, in meters
+    var hrZoneProfile: HRZoneProfile?
+    var hrZoneBreakdown: [(zone: HeartRateZone, timeInZone: TimeInterval)] = []
 }
 
 extension Array where Element == (Date, Double) {
@@ -106,7 +155,6 @@ extension HealthKitManager {
                 self.healthStore.execute(query)
             }
             speedSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .meter().unitDivided(by: .second()))) }
-            
         }
 
         // --- Cadence Series ---
@@ -251,6 +299,10 @@ extension HealthKitManager {
         let hrr1 = (peakHR != nil && hrAt(1) != nil) ? peakHR! - hrAt(1)! : nil
         let hrr2 = (peakHR != nil && hrAt(2) != nil) ? peakHR! - hrAt(2)! : nil
 
+        // --- HR Zone Profile & Breakdown ---
+        let zoneProfile = await getOrCreateZoneProfile(for: workout.workoutActivityType)
+        let zoneBreakdown = calculateZoneBreakdown(heartRates: hrSamples, zoneProfile: zoneProfile)
+        
         // Print all calculated values for testing
         print("--- Workout Analytics ---")
         print("Workout: \(workout.startDate) - \(workout.endDate), type: \(workout.workoutActivityType.name)")
@@ -261,6 +313,8 @@ extension HealthKitManager {
         print("  Post-Workout HR time series: \(postWorkoutHRSeries)")
         print("  HRR (0,1,2 min): \(hrr0.map { String(format: "%.1f", $0) } ?? "-")", "\(hrr1.map { String(format: "%.1f", $0) } ?? "-")", "\(hrr2.map { String(format: "%.1f", $0) } ?? "-")")
         print("  HR samples: \(hrSamples.count)")
+        print("  HR Zone Profile: \(zoneProfile.schema.rawValue) - max HR: \(zoneProfile.maxHR ?? 0), resting HR: \(zoneProfile.restingHR ?? 0)")
+        print("  Zone breakdown: \(zoneBreakdown.map { "\($0.zone.name): \(Int($0.timeInZone))s" }.joined(separator: ", "))")
 
         return WorkoutAnalytics(
             workout: workout,
@@ -281,7 +335,9 @@ extension HealthKitManager {
             elevationGain: elevationGain,
             verticalOscillation: verticalOscillation,
             groundContactTime: groundContactTime,
-            strideLength: strideLength
+            strideLength: strideLength,
+            hrZoneProfile: zoneProfile,
+            hrZoneBreakdown: zoneBreakdown
         )
     }
 }
@@ -2518,5 +2574,319 @@ extension HealthKitManager {
             result.append((workout, analytics))
         }
         return result
+    }
+}
+
+// MARK: - Heart Rate Zone Calculations
+
+extension HealthKitManager {
+    
+    /// Calculate maximum heart rate using Tanaka formula: 208 - 0.7 * age
+    func estimateMaxHRTanaka(age: Double) -> Double {
+        return 208.0 - (0.7 * age)
+    }
+    
+    /// Fetch anchor metrics needed for zone calculation
+    func fetchAnchorMetrics() async -> HRZoneAnchorMetrics {
+        var metrics = HRZoneAnchorMetrics()
+        
+        metrics.age = await fetchAgeAsync()
+        metrics.restingHR = await fetchRestingHeartRateLatest()
+        
+        // Fetch peak HR from last 90 days of workouts
+        let ninetyDaysAgo = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date()
+        let recentPeak = await fetchPeakHRLast90Days(from: ninetyDaysAgo)
+        metrics.peakHRLast90Days = recentPeak
+        
+        // Fetch VO2 max
+        metrics.vo2Max = await withCheckedContinuation { continuation in
+            fetchVO2Max { value in
+                continuation.resume(returning: value > 0 ? value : nil)
+            }
+        }
+        
+        metrics.lastUpdated = Date()
+        return metrics
+    }
+    
+    /// Fetch peak HR from workouts in a date range
+    @MainActor
+    func fetchPeakHRLast90Days(from startDate: Date) async -> Double? {
+        let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
+            fetchWorkouts(from: startDate, to: Date()) { result in
+                continuation.resume(returning: result)
+            }
+        }
+        
+        var peakHR: Double? = nil
+        for workout in workouts {
+            let hrSamples = await fetchHeartRateSamples(for: workout)
+            if let maxHRInWorkout = hrSamples.map({ $0.1 }).max() {
+                if peakHR == nil || maxHRInWorkout > peakHR! {
+                    peakHR = maxHRInWorkout
+                }
+            }
+        }
+        return peakHR
+    }
+    
+    /// Calculate heart rate reserve: MHR - RHR
+    func calculateHeartRateReserve(maxHR: Double, restingHR: Double) -> Double {
+        return max(0, maxHR - restingHR)
+    }
+    
+    /// Infer lactate threshold HR from recent workouts
+    /// Uses 95th percentile of max HRs in high-intensity efforts (>80% estimated maxHR)
+    @MainActor
+    func inferLactateThresholdHR(from startDate: Date = Date(timeIntervalSinceNow: -30 * 86400)) async -> Double? {
+        let anchor = await fetchAnchorMetrics()
+        guard let age = anchor.age else { return nil }
+        
+        let estimatedMaxHR = estimateMaxHRTanaka(age: age)
+        let threshold = estimatedMaxHR * 0.80
+        
+        let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
+            fetchWorkouts(from: startDate, to: Date()) { result in
+                continuation.resume(returning: result)
+            }
+        }
+        
+        var highIntensityHRValues: [Double] = []
+        for workout in workouts {
+            let hrSamples = await fetchHeartRateSamples(for: workout)
+            let highIntensity = hrSamples.filter { $0.1 >= threshold }.map { $0.1 }
+            highIntensityHRValues.append(contentsOf: highIntensity)
+        }
+        
+        guard !highIntensityHRValues.isEmpty else { return nil }
+        let sorted = highIntensityHRValues.sorted()
+        let p95Index = Int(Double(sorted.count) * 0.95)
+        return sorted[min(p95Index, sorted.count - 1)]
+    }
+    
+    /// Determines the best zone schema for a sport
+    func recommendedSchema(for sport: HKWorkoutActivityType) -> HRZoneSchema {
+        switch sport {
+        case .running, .hiking, .walking:
+            return .karvonen
+        case .cycling, .rowing:
+            return .lactatThreshold
+        case .swimming:
+            return .mhrPercentage
+        default:
+            return .mhrPercentage
+        }
+    }
+    
+    /// Generate HR zones using Maximum Heart Rate % schema
+    func generateMHRPercentageZones(maxHR: Double) -> [HeartRateZone] {
+        let zoneRanges: [(String, Double, Double, String, Int)] = [
+            ("Zone 1: Easy", 0.50, 0.60, "0099FF", 1),
+            ("Zone 2: Base", 0.60, 0.70, "00CC00", 2),
+            ("Zone 3: Tempo", 0.70, 0.80, "FFCC00", 3),
+            ("Zone 4: Threshold", 0.80, 0.90, "FF6600", 4),
+            ("Zone 5: Max", 0.90, 1.00, "FF0000", 5)
+        ]
+        
+        return zoneRanges.map { name, lowPct, highPct, color, num in
+            let lower = maxHR * lowPct
+            let upper = maxHR * highPct
+            return HeartRateZone(name: name, range: lower...upper, color: color, zoneNumber: num)
+        }
+    }
+    
+    /// Generate HR zones using Karvonen (HRR) formula
+    func generateKarvonenZones(maxHR: Double, restingHR: Double) -> [HeartRateZone] {
+        let hrr = calculateHeartRateReserve(maxHR: maxHR, restingHR: restingHR)
+        
+        let zoneRanges: [(String, Double, Double, String, Int)] = [
+            ("Zone 1: Easy", 0.50, 0.60, "0099FF", 1),
+            ("Zone 2: Base", 0.60, 0.70, "00CC00", 2),
+            ("Zone 3: Tempo", 0.70, 0.80, "FFCC00", 3),
+            ("Zone 4: Threshold", 0.80, 0.90, "FF6600", 4),
+            ("Zone 5: Max", 0.90, 1.00, "FF0000", 5)
+        ]
+        
+        return zoneRanges.map { name, lowPct, highPct, color, num in
+            let lower = (hrr * lowPct) + restingHR
+            let upper = (hrr * highPct) + restingHR
+            return HeartRateZone(name: name, range: lower...upper, color: color, zoneNumber: num)
+        }
+    }
+    
+    /// Generate HR zones based on Lactate Threshold
+    func generateLTHRZones(lthr: Double) -> [HeartRateZone] {
+        let zoneRanges: [(String, Double, Double, String, Int)] = [
+            ("Zone 1: Endurance Z1", 0.00, 0.85, "0099FF", 1),
+            ("Zone 2: Endurance Z2", 0.85, 0.89, "00CC00", 2),
+            ("Zone 3: Tempo", 0.90, 0.94, "FFCC00", 3),
+            ("Zone 4: Threshold", 0.95, 0.99, "FF6600", 4),
+            ("Zone 5: VO₂ Max", 1.00, 1.20, "FF0000", 5)
+        ]
+        
+        return zoneRanges.map { name, lowPct, highPct, color, num in
+            let lower = lthr * lowPct
+            let upper = lthr * highPct
+            return HeartRateZone(name: name, range: lower...upper, color: color, zoneNumber: num)
+        }
+    }
+    
+    /// Generate polarized 3-zone model
+    func generatePolarizedZones(lthr: Double) -> [HeartRateZone] {
+        let lt1 = lthr * 0.75 // Approximation
+        let lt2 = lthr
+        
+        return [
+            HeartRateZone(name: "Zone 1: Easy", range: 0...(lt1 * 1.10), color: "0099FF", zoneNumber: 1),
+            HeartRateZone(name: "Zone 2: Moderate", range: (lt1 * 1.10)...(lt2 * 0.95), color: "FFCC00", zoneNumber: 2),
+            HeartRateZone(name: "Zone 3: Hard", range: (lt2 * 0.95)...250, color: "FF0000", zoneNumber: 3)
+        ]
+    }
+    
+    /// Create an HR zone profile for a sport
+    func createHRZoneProfile(
+        for sport: HKWorkoutActivityType,
+        schema: HRZoneSchema? = nil,
+        customMaxHR: Double? = nil,
+        customRestingHR: Double? = nil,
+        customLTHR: Double? = nil
+    ) async -> HRZoneProfile {
+        let metricsSchema = schema ?? recommendedSchema(for: sport)
+        
+        // Fetch or use custom metrics
+        let maxHR: Double
+        let restingHR: Double
+        
+        if let customMax = customMaxHR {
+            maxHR = customMax
+        } else {
+            let anchor = await fetchAnchorMetrics()
+            if let custom = customMaxHR {
+                maxHR = custom
+            } else if let peak = anchor.peakHRLast90Days, peak > 0 {
+                maxHR = peak * 1.05 // Override Tanaka with measured + buffer
+            } else if let age = anchor.age {
+                maxHR = estimateMaxHRTanaka(age: age)
+            } else {
+                maxHR = 190 // Fallback
+            }
+        }
+        
+        if let customResting = customRestingHR {
+            restingHR = customResting
+        } else {
+            restingHR = await fetchRestingHeartRateLatest()
+        }
+        
+        // Infer lactate threshold before switch to avoid async in autoclosure
+        let inferredLTHR = await inferLactateThresholdHR()
+        
+        // Generate zones based on schema
+        let zones: [HeartRateZone]
+        switch metricsSchema {
+        case .mhrPercentage:
+            zones = generateMHRPercentageZones(maxHR: maxHR)
+        case .karvonen:
+            zones = generateKarvonenZones(maxHR: maxHR, restingHR: restingHR)
+        case .lactatThreshold:
+            let lthr = customLTHR ?? (inferredLTHR ?? maxHR * 0.88)
+            zones = generateLTHRZones(lthr: lthr)
+        case .polarized:
+            let lthr = customLTHR ?? (inferredLTHR ?? maxHR * 0.88)
+            zones = generatePolarizedZones(lthr: lthr)
+        }
+        
+        let lactateThresholdHR = customLTHR ?? (inferredLTHR ?? maxHR * 0.88)
+        
+        return HRZoneProfile(
+            sport: sport.rawValue,
+            schema: metricsSchema,
+            maxHR: maxHR,
+            restingHR: restingHR,
+            lactateThresholdHR: lactateThresholdHR,
+            zones: zones,
+            lastUpdated: Date(),
+            adaptive: true
+        )
+    }
+    
+    /// Calculate time in each zone for a workout
+    func calculateZoneBreakdown(
+        heartRates: [(Date, Double)],
+        zoneProfile: HRZoneProfile
+    ) -> [(zone: HeartRateZone, timeInZone: TimeInterval)] {
+        var zoneTimeMap: [Int: TimeInterval] = [:]
+        for zone in zoneProfile.zones {
+            zoneTimeMap[zone.zoneNumber] = 0
+        }
+        
+        let sorted = heartRates.sorted { $0.0 < $1.0 }
+        for i in 0..<(sorted.count - 1) {
+            let hr = sorted[i].1
+            let timeToNext = sorted[i + 1].0.timeIntervalSince(sorted[i].0)
+            
+            if let zone = zoneProfile.zone(for: hr) {
+                zoneTimeMap[zone.zoneNumber, default: 0] += timeToNext
+            }
+        }
+        
+        return zoneProfile.zones.map { zone in
+            (zone, zoneTimeMap[zone.zoneNumber] ?? 0)
+        }.filter { $0.1 > 0 }
+    }
+    
+    /// Apply adaptive adjustments based on HRV, sleep, recovery
+    func adaptZoneProfile(
+        _ profile: inout HRZoneProfile,
+        adjustmentFactor: Double = 1.0
+    ) {
+        profile.adjustmentFactor = adjustmentFactor
+        
+        // Multiply zone boundaries by adjustment factor
+        profile.zones = profile.zones.map { zone in
+            let adjustedLower = zone.range.lowerBound * adjustmentFactor
+            let adjustedUpper = zone.range.upperBound * adjustmentFactor
+            let adjustedRange = adjustedLower...adjustedUpper
+            
+            return HeartRateZone(
+                name: zone.name,
+                range: adjustedRange,
+                color: zone.color,
+                zoneNumber: zone.zoneNumber,
+                timeInZone: zone.timeInZone
+            )
+        }
+    }
+    
+    /// Save zone profile to UserDefaults for persistence
+    func saveZoneProfile(_ profile: HRZoneProfile) {
+        if let encoded = try? JSONEncoder().encode(profile) {
+            UserDefaults.standard.set(encoded, forKey: "hr_zone_profile_\(profile.sport)")
+        }
+    }
+    
+    /// Load zone profile from UserDefaults
+    func loadZoneProfile(for sport: HKWorkoutActivityType) -> HRZoneProfile? {
+        guard let data = UserDefaults.standard.data(forKey: "hr_zone_profile_\(sport.rawValue)") else {
+            return nil
+        }
+        return try? JSONDecoder().decode(HRZoneProfile.self, from: data)
+    }
+    
+    /// Get cached zone profile or create new one
+    func getOrCreateZoneProfile(
+        for sport: HKWorkoutActivityType,
+        forceRefresh: Bool = false
+    ) async -> HRZoneProfile {
+        if !forceRefresh, let cached = loadZoneProfile(for: sport) {
+            // Check if cache is fresh (within 7 days)
+            if Date().timeIntervalSince(cached.lastUpdated) < 7 * 86400 {
+                return cached
+            }
+        }
+        
+        let profile = await createHRZoneProfile(for: sport)
+        saveZoneProfile(profile)
+        return profile
     }
 }

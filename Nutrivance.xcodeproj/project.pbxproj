@@ -1122,6 +1122,7 @@
 				INFOPLIST_FILE = Nutrivance/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to scan nutrition labels";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID enables security authentication to prevent others using your device from access certain health metrics";
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "This app requires access to Health data to provide useful data in fitness, mental health, and nutrition";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "This app writes data to HealthKit to supplment the logging of health data and allows syncing between this app and Apple Health or other HealthKit enabled apps";
@@ -1176,6 +1177,7 @@
 				INFOPLIST_FILE = Nutrivance/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to scan nutrition labels";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID enables security authentication to prevent others using your device from access certain health metrics";
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "This app requires access to Health data to provide useful data in fitness, mental health, and nutrition";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "This app writes data to HealthKit to supplment the logging of health data and allows syncing between this app and Apple Health or other HealthKit enabled apps";

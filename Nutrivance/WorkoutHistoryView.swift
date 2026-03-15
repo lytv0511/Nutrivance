@@ -12,6 +12,10 @@ struct WorkoutHistoryView: View {
     @State private var showDatePicker = false
     @State private var selectedDate = Date()
     @State private var scrollProxy: ScrollViewProxy?
+    @State private var showHRZoneSettings = false
+    @State private var selectedHRZoneSchema: HRZoneSchema = .karvonen
+    @State private var customRestingHR: Double? = nil
+    @State private var customLTHR: Double? = nil
 
     var filteredWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         engine.workoutAnalytics.filter { sportFilter == nil || $0.workout.workoutActivityType.name == sportFilter }
@@ -71,7 +75,7 @@ struct WorkoutHistoryView: View {
             .navigationTitle("Workout History")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack {
+                    HStack(spacing: 12) {
                         Button(action: { showDatePicker = true }) {
                             Image(systemName: "calendar")
                                 .foregroundColor(.orange)
@@ -83,6 +87,10 @@ struct WorkoutHistoryView: View {
                             }
                         } label: {
                             Image(systemName: "line.horizontal.3.decrease.circle")
+                                .foregroundColor(.orange)
+                        }
+                        Button(action: { showHRZoneSettings = true }) {
+                            Image(systemName: "gear")
                                 .foregroundColor(.orange)
                         }
                     }
@@ -117,6 +125,14 @@ struct WorkoutHistoryView: View {
                     .padding()
                     .foregroundColor(.orange)
                 }
+            }
+            .sheet(isPresented: $showHRZoneSettings) {
+                HRZoneSettingsSheet(
+                    isPresented: $showHRZoneSettings,
+                    selectedSchema: $selectedHRZoneSchema,
+                    customRestingHR: $customRestingHR,
+                    customLTHR: $customLTHR
+                )
             }
             .task {
                 isLoading = true
@@ -275,6 +291,50 @@ struct WorkoutDetailView: View {
         analytics.heartRates.map { $0.1 }.max()
     }
 
+    /// Convert hex color string to SwiftUI Color
+    private func hexToColor(_ hex: String) -> Color {
+        let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let scanner = Scanner(string: hex)
+        var rgb: UInt64 = 0
+        scanner.scanHexInt64(&rgb)
+        
+        let r = Double((rgb >> 16) & 0xFF) / 255.0
+        let g = Double((rgb >> 8) & 0xFF) / 255.0
+        let b = Double(rgb & 0xFF) / 255.0
+        
+        return Color(red: r, green: g, blue: b)
+    }
+
+    /// Dynamic heart rate zones from analytics profile
+    private var dynamicHeartRateZones: [HRZone] {
+        guard let profile = analytics.hrZoneProfile else {
+            // Fallback if no profile available
+            return generateFallbackZones()
+        }
+        
+        // Convert HeartRateZone to HRZone for display
+        return profile.zones.map { zone in
+            HRZone(
+                name: zone.name,
+                color: hexToColor(zone.color),
+                time: 0,
+                range: zone.range
+            )
+        }
+    }
+
+    /// Fallback zone generation if profile unavailable
+    private func generateFallbackZones() -> [HRZone] {
+        let maxHR = maxHeartRate ?? 190
+        return [
+            HRZone(name: "Zone 1: Easy", color: .blue, time: 0.0, range: 0.0...(maxHR * 0.60)),
+            HRZone(name: "Zone 2: Base", color: .cyan, time: 0.0, range: (maxHR * 0.60)...(maxHR * 0.70)),
+            HRZone(name: "Zone 3: Tempo", color: .green, time: 0.0, range: (maxHR * 0.70)...(maxHR * 0.80)),
+            HRZone(name: "Zone 4: Threshold", color: .orange, time: 0.0, range: (maxHR * 0.80)...(maxHR * 0.90)),
+            HRZone(name: "Zone 5: Max", color: .red, time: 0.0, range: (maxHR * 0.90)...(maxHR * 1.00))
+        ]
+    }
+
     private var heartRateZoneThresholds: [Double] {
         // Using approximate % of avg recorded max HR (or 190 if unknown)
         let maxHR = maxHeartRate ?? 190
@@ -282,25 +342,32 @@ struct WorkoutDetailView: View {
     }
 
     private var heartRateZoneBreakdown: [HRZone] {
-        let thresholds = heartRateZoneThresholds
-        var zones = [
-            HRZone(name: "Zone 1", color: .blue, time: 0.0, range: 0.0...thresholds[0]),
-            HRZone(name: "Zone 2", color: .cyan, time: 0.0, range: thresholds[0]...thresholds[1]),
-            HRZone(name: "Zone 3", color: .green, time: 0.0, range: thresholds[1]...thresholds[2]),
-            HRZone(name: "Zone 4", color: .orange, time: 0.0, range: thresholds[2]...thresholds[3]),
-            HRZone(name: "Zone 5", color: .red, time: 0.0, range: thresholds[3]...thresholds[4])
-        ]
-
+        // Use breakdown from analytics if available
+        if !analytics.hrZoneBreakdown.isEmpty {
+            return analytics.hrZoneBreakdown.map { breakdown in
+                HRZone(
+                    name: breakdown.zone.name,
+                    color: hexToColor(breakdown.zone.color),
+                    time: breakdown.timeInZone,
+                    range: breakdown.zone.range
+                )
+            }
+        }
+        
+        // Fallback to manual calculation
+        let zones = dynamicHeartRateZones
+        var updatedZones = zones
+        
         let samples = analytics.heartRates.sorted { $0.0 < $1.0 }
         for i in 0..<(samples.count - 1) {
             let hr = samples[i].1
             let next = samples[i + 1].0
             let duration = next.timeIntervalSince(samples[i].0)
-            if let idx = zones.firstIndex(where: { $0.range.contains(hr) }) {
-                zones[idx].time += duration
+            if let idx = updatedZones.firstIndex(where: { $0.range.contains(hr) }) {
+                updatedZones[idx].time += duration
             }
         }
-        return zones
+        return updatedZones
     }
 
     var body: some View {
@@ -344,6 +411,58 @@ struct WorkoutDetailView: View {
                 }
                 if let sl = analytics.strideLength {
                     WorkoutMetricCard(title: "Stride", value: String(format: "%.2f", sl), unit: "m", icon: "ruler.fill", color: .pink)
+                }
+            }
+
+            // HR Zone Profile Information
+            if let profile = analytics.hrZoneProfile {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Heart Rate Zones")
+                        .font(.subheadline)
+                        .bold()
+                    
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Schema")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        if let maxHR = profile.maxHR {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Max HR")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("\(Int(maxHR)) bpm")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        
+                        if let restingHR = profile.restingHR {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Resting HR")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("\(Int(restingHR)) bpm")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding(10)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(12)
+                    
+                    Text("Zones are calculated using the \(profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").lowercased()) method and may update as new training data becomes available.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
 
@@ -778,6 +897,118 @@ struct WorkoutDetailView: View {
             splits.append(Split(distance: km, time: time, pace: pace, avgHR: avgHR))
         }
         return splits
+    }
+}
+
+struct HRZoneSettingsSheet: View {
+    @Binding var isPresented: Bool
+    @Binding var selectedSchema: HRZoneSchema
+    @Binding var customRestingHR: Double?
+    @Binding var customLTHR: Double?
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Heart Rate Zone Formula") {
+                    Picker("Schema", selection: $selectedSchema) {
+                        Text("Max HR %").tag(HRZoneSchema.mhrPercentage)
+                        Text("Karvonen (HRR)").tag(HRZoneSchema.karvonen)
+                        Text("Lactate Threshold").tag(HRZoneSchema.lactatThreshold)
+                        Text("Polarized 3-Zone").tag(HRZoneSchema.polarized)
+                    }
+                    
+                    Text("Current: \(selectedSchema.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Section("Custom Metrics (Optional)") {
+                    HStack {
+                        Text("Resting HR (bpm)")
+                        Spacer()
+                        TextField("Auto-detect", value: $customRestingHR, format: .number)
+                            .keyboardType(.decimalPad)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 100)
+                    }
+                    
+                    HStack {
+                        Text("Lactate Threshold (bpm)")
+                        Spacer()
+                        TextField("Auto-infer", value: $customLTHR, format: .number)
+                            .keyboardType(.decimalPad)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 100)
+                    }
+                    
+                    Text("Leave empty to auto-detect from your HealthKit data")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                Section("Formula Details") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        switch selectedSchema {
+                        case .mhrPercentage:
+                            Text("🎯 **Max HR %**: Zones based on 50-100% of maximum heart rate")
+                                .font(.caption)
+                            Text("Best for: Quick estimation, all fitness levels")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        
+                        case .karvonen:
+                            Text("🏃 **Karvonen HRR**: Zones based on heart rate reserve")
+                                .font(.caption)
+                            Text("Formula: (HRR × intensity) + RHR")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text("Best for: Personalized training, considers resting HR")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        
+                        case .lactatThreshold:
+                            Text("⚡ **Lactate Threshold**: Zones based on lactate threshold")
+                                .font(.caption)
+                            Text("Best for: Threshold training, tempo work")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        
+                        case .polarized:
+                            Text("🔄 **Polarized 3-Zone**: Easy, Moderate, Hard endurance model")
+                                .font(.caption)
+                            Text("Best for: Endurance athletes, high-low training")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(8)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
+                }
+                
+                Section("Auto-Detection") {
+                    Button(action: {
+                        customRestingHR = nil
+                        customLTHR = nil
+                    }) {
+                        HStack {
+                            Image(systemName: "goforward")
+                            Text("Reset to Auto-Detect")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("HR Zone Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        isPresented = false
+                    }
+                    .foregroundColor(.orange)
+                }
+            }
+        }
     }
 }
 
