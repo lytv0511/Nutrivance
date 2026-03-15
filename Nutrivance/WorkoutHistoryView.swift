@@ -6,35 +6,137 @@ struct WorkoutHistoryView: View {
     @StateObject private var engine = HealthStateEngine()
     @State private var expandedWorkout: HKWorkout? = nil
     @State private var isLoading = false
+    @State private var animationPhase: Double = 0
+    @State private var sportFilter: String? = nil
+    @State private var showDatePicker = false
+    @State private var selectedDate = Date()
+    @State private var scrollProxy: ScrollViewProxy?
+
+    var filteredWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        engine.workoutAnalytics.filter { sportFilter == nil || $0.workout.workoutActivityType.name == sportFilter }
+    }
+
+    var uniqueSports: [String] {
+        engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique
+    }
+
+    var workoutDates: Set<Date> {
+        Set(filteredWorkouts.map { Calendar.current.startOfDay(for: $0.workout.startDate) })
+    }
+
+    var groupedWorkouts: [DateComponents: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] {
+        Dictionary(grouping: filteredWorkouts) { pair in
+            Calendar.current.dateComponents([.year, .month], from: pair.workout.startDate)
+        }
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
-                    if isLoading {
-                        ProgressView("Loading workouts...")
-                            .padding()
-                    } else if engine.workoutAnalytics.isEmpty {
-                        Text("No workouts found.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(engine.workoutAnalytics, id: \.workout.startDate) { pair in
-                            WorkoutCard(workout: pair.workout, analytics: pair.analytics, isExpanded: expandedWorkout == pair.workout)
-                                .onTapGesture {
-                                    withAnimation {
-                                        expandedWorkout = expandedWorkout == pair.workout ? nil : pair.workout
+                ScrollViewReader { proxy in
+                    LazyVStack(spacing: 16, pinnedViews: .sectionHeaders) {
+                        if isLoading {
+                            HStack {
+                                Spacer()
+                                ProgressView("Loading workouts...")
+                                    .padding()
+                                Spacer()
+                            }
+                        } else if filteredWorkouts.isEmpty {
+                            Text("No workouts found.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(groupedWorkouts.sorted(by: { ($0.key.year! * 12 + $0.key.month!) > ($1.key.year! * 12 + $1.key.month!) }), id: \.key) { (key, workouts) in
+                                Section(header: Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(key.year!)").font(.headline).foregroundColor(.orange)) {
+                                    ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.workout.startDate) { pair in
+                                        WorkoutCard(workout: pair.workout, analytics: pair.analytics, isExpanded: expandedWorkout == pair.workout)
+                                            .id(pair.workout.startDate)
+                                            .onTapGesture {
+                                                withAnimation {
+                                                    expandedWorkout = expandedWorkout == pair.workout ? nil : pair.workout
+                                                }
+                                                let impact = UIImpactFeedbackGenerator(style: .medium)
+                                                impact.impactOccurred()
+                                            }
                                     }
                                 }
+                            }
+                        }
+                    }
+                    .padding()
+                    .onAppear { scrollProxy = proxy }
+                }
+            }
+            .navigationTitle("Workout History")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack {
+                        Button(action: { showDatePicker = true }) {
+                            Image(systemName: "calendar")
+                                .foregroundColor(.orange)
+                        }
+                        Menu {
+                            Button("All Sports") { sportFilter = nil }
+                            ForEach(uniqueSports, id: \.self) { sport in
+                                Button(sport.capitalized) { sportFilter = sport }
+                            }
+                        } label: {
+                            Image(systemName: "line.horizontal.3.decrease.circle")
+                                .foregroundColor(.orange)
                         }
                     }
                 }
-                .padding()
             }
-            .navigationTitle("Workout History")
+            .sheet(isPresented: $showDatePicker) {
+                VStack {
+                    DatePicker("Select Date", selection: $selectedDate, displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                        .padding()
+                    if workoutDates.contains(Calendar.current.startOfDay(for: selectedDate)) {
+                        HStack {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 8, height: 8)
+                            Text("Has workouts")
+                                .foregroundColor(.orange)
+                        }
+                    } else {
+                        HStack {
+                            Circle()
+                                .fill(Color.gray.opacity(0.5))
+                                .frame(width: 8, height: 8)
+                            Text("No workouts")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Button("Jump to Workout") {
+                        scrollToClosestWorkout(to: selectedDate)
+                        showDatePicker = false
+                    }
+                    .padding()
+                    .foregroundColor(.orange)
+                }
+            }
             .task {
                 isLoading = true
-                await engine.refreshWorkoutAnalytics(days: 30)
+                await engine.refreshWorkoutAnalytics(days: 3650) // Load all workouts (10 years)
                 isLoading = false
+            }
+            .background(
+               GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+                   .onAppear {
+                       withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                           animationPhase = 20
+                       }
+                   }
+           )
+        }
+    }
+    func scrollToClosestWorkout(to date: Date) {
+        let closest = filteredWorkouts.min(by: { abs($0.workout.startDate.timeIntervalSince(date)) < abs($1.workout.startDate.timeIntervalSince(date)) })
+        if let closest = closest {
+            withAnimation {
+                scrollProxy?.scrollTo(closest.workout.startDate, anchor: .top)
             }
         }
     }
@@ -45,15 +147,27 @@ struct WorkoutCard: View {
     let analytics: WorkoutAnalytics
     let isExpanded: Bool
 
+    private static let dateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.setLocalizedDateFormatFromTemplate("MMM d yyyy")
+        return df
+    }()
+
+    private static let timeFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.timeStyle = .short
+        return df
+    }()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: workout.workoutActivityType.activityTypeSymbol)
-                    .foregroundColor(.blue)
+                    .foregroundColor(.orange)
                 VStack(alignment: .leading) {
                     Text(workout.workoutActivityType.name.capitalized)
                         .font(.headline)
-                    Text(workout.startDate, style: .date) + Text(" • ") + Text(workout.startDate, style: .time) + Text(" • \(Int(workout.duration/60)) min")
+                    Text(Self.dateFormatter.string(from: workout.startDate)) + Text(" • ") + Text(Self.timeFormatter.string(from: workout.startDate)) + Text(" • \(Int(workout.duration/60)) min")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -78,7 +192,10 @@ struct WorkoutCard: View {
             }
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.ultraThinMaterial)
+        )
         .cornerRadius(12)
         .shadow(radius: 2)
     }
