@@ -494,7 +494,16 @@ let additionalTypes: [(HKSampleType, String)] = [
     (HKObjectType.quantityType(forIdentifier: .stepCount)!, "steps"),
     (HKObjectType.quantityType(forIdentifier: .appleExerciseTime)!, "exercise"),
     (HKObjectType.quantityType(forIdentifier: .appleStandTime)!, "stand"),
-    (HKObjectType.quantityType(forIdentifier: .flightsClimbed)!, "flights")
+    (HKObjectType.quantityType(forIdentifier: .flightsClimbed)!, "flights"),
+    
+    // Additional workout metrics
+    (HKObjectType.quantityType(forIdentifier: .cyclingPower)!, "cycling_power"),
+    (HKObjectType.quantityType(forIdentifier: .runningSpeed)!, "running_speed"),
+    (HKObjectType.quantityType(forIdentifier: .runningVerticalOscillation)!, "running_vertical_oscillation"),
+    (HKObjectType.quantityType(forIdentifier: .runningGroundContactTime)!, "running_ground_contact_time"),
+    (HKObjectType.quantityType(forIdentifier: .runningStrideLength)!, "running_stride_length"),
+    (HKObjectType.quantityType(forIdentifier: .cyclingCadence)!, "cycling_cadence"),
+    (HKObjectType.quantityType(forIdentifier: .physicalEffort)!, "physical_effort")
 ]
 
 @MainActor
@@ -990,8 +999,18 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKQuantityType.quantityType(forIdentifier: .flightsClimbed)!,
             HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
             HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)!,
-            // Add cycling power and METs (physicalEffort)
+            
+            // Cycling Metrics
             HKQuantityType.quantityType(forIdentifier: .cyclingPower)!,
+            HKQuantityType.quantityType(forIdentifier: .cyclingCadence)!,
+            
+            // Running Metrics
+            HKQuantityType.quantityType(forIdentifier: .runningSpeed)!,
+            HKQuantityType.quantityType(forIdentifier: .runningVerticalOscillation)!,
+            HKQuantityType.quantityType(forIdentifier: .runningGroundContactTime)!,
+            HKQuantityType.quantityType(forIdentifier: .runningStrideLength)!,
+            
+            // METs and Effort
             HKQuantityType.quantityType(forIdentifier: .physicalEffort)!,
             
             // Heart Rate and Health Metrics

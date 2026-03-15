@@ -18,7 +18,7 @@ struct WorkoutHistoryView: View {
     }
 
     var uniqueSports: [String] {
-        engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique
+        engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique.sorted()
     }
 
     var workoutDates: Set<Date> {
@@ -313,6 +313,10 @@ struct WorkoutDetailView: View {
                 }
                 if let spd = avgSpeedKPH {
                     WorkoutMetricCard(title: "Avg Speed", value: String(format: "%.1f", spd), unit: "km/h", icon: "speedometer", color: .teal)
+                }
+                if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking), let spd = avgSpeedKPH, spd > 0 {
+                    let pace = 60 / spd
+                    WorkoutMetricCard(title: "Avg Pace", value: String(format: "%.1f", pace), unit: "min/km", icon: "stopwatch", color: .blue)
                 }
                 if let power = avgPower {
                     WorkoutMetricCard(title: "Avg Power", value: String(format: "%.0f", power), unit: "W", icon: "bolt.fill", color: .purple)
