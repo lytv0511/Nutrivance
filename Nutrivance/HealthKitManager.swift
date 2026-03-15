@@ -44,6 +44,11 @@ extension HealthKitManager {
     func computeWorkoutAnalytics(for workout: HKWorkout) async -> WorkoutAnalytics {
         // Fetch heart rate samples for the workout
         let hrSamples = await fetchHeartRateSamples(for: workout)
+        
+        // Fetch user data for VO2 calculations
+        let userMass = await fetchBodyMass()
+        let userAge = await fetchAgeAsync()
+        let userRestingHR = await fetchRestingHeartRateLatest()
 
         var powerSeries: [(Date, Double)] = []
 
@@ -69,9 +74,9 @@ extension HealthKitManager {
                     avgPower = powerSeries.map { $0.1 }.reduce(0, +) / Double(powerSeries.count)
                 }
             }
-            let mass = 56.79 // TODO: fetch real user mass if possible
-            let maxHR = 220.0 - 30.0 // TODO: fetch real age if possible
-            let hrRest = 60.0 // TODO: fetch real resting HR if possible
+            let mass = userMass
+            let maxHR = 220.0 - userAge
+            let hrRest = userRestingHR
             let avgHR = hrSamples.map { $0.1 }.reduce(0, +) / Double(hrSamples.count)
             if let avgPower, mass > 0, avgHR > 0 {
                 let vo2Current = 10.8 * (avgPower / mass) + 7.0
@@ -101,6 +106,7 @@ extension HealthKitManager {
                 self.healthStore.execute(query)
             }
             speedSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .meter().unitDivided(by: .second()))) }
+            
         }
 
         // --- Cadence Series ---
@@ -373,6 +379,11 @@ extension HealthKitManager {
             }
         }
         if hkVO2 > 0 { return hkVO2 }
+        
+        // Fetch user data for VO2 calculations
+        let userAge = await fetchAgeAsync()
+        let userRestingHR = await fetchRestingHeartRateLatest()
+        
         guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return nil }
         let hrValues: [Double] = await withCheckedContinuation { continuation in
             let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
@@ -397,9 +408,9 @@ extension HealthKitManager {
                 vo2 = (0.2 * speed) + (0.9 * speed * grade) + 3.5
             }
         case .cycling:
-            let age = 30.0 // TODO: fetch real age if possible
+            let age = userAge
             let maxHR = 220.0 - age
-            let hrRest = 60.0 // TODO: fetch real resting HR if possible
+            let hrRest = userRestingHR
             if avgHR > 0 {
                 vo2 = 15.3 * (maxHR / hrRest)
             }
@@ -712,8 +723,70 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
     }
     
     func fetchAge(completion: @escaping (Double) -> Void) {
-        let birthdayComponents = Calendar.current.dateComponents([.year], from: Date())
-        completion(Double(birthdayComponents.year ?? 30))
+        // Request biological sex for better age handling
+        let sexType = HKObjectType.characteristicType(forIdentifier: .biologicalSex)!
+        let dobType = HKObjectType.characteristicType(forIdentifier: .dateOfBirth)!
+        
+        // Request authorization specifically for characteristics
+        healthStore.requestAuthorization(toShare: [], read: [sexType, dobType]) { success, error in
+            DispatchQueue.main.async {
+                do {
+                    let dateOfBirth = try self.healthStore.dateOfBirthComponents().date
+                    if let dob = dateOfBirth {
+                        let age = Calendar.current.dateComponents([.year], from: dob, to: Date()).year ?? 30
+                        completion(Double(age))
+                    } else {
+                        print("Date of birth not set in HealthKit")
+                        completion(30.0) // Default fallback
+                    }
+                } catch {
+                    print("Error fetching date of birth: \(error)")
+                    completion(30.0)
+                }
+            }
+        }
+    }
+    
+    func fetchAgeAsync() async -> Double {
+        return await withCheckedContinuation { continuation in
+            self.fetchAge { age in
+                continuation.resume(returning: age)
+            }
+        }
+    }
+    
+    func fetchBodyMass() async -> Double {
+        guard let bodyMassType = HKQuantityType.quantityType(forIdentifier: .bodyMass) else { return 70.0 }
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: bodyMassType, predicate: nil, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
+                if let sample = samples?.first as? HKQuantitySample {
+                    let mass = sample.quantity.doubleValue(for: HKUnit(from: "kg"))
+                    continuation.resume(returning: mass)
+                } else {
+                    continuation.resume(returning: 70.0) // Default fallback
+                }
+            }
+            self.healthStore.execute(query)
+        }
+    }
+    
+    func fetchRestingHeartRateLatest() async -> Double {
+        guard let restingHRType = HKQuantityType.quantityType(forIdentifier: .restingHeartRate) else { return 60.0 }
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: restingHRType, predicate: nil, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
+                if let sample = samples?.first as? HKQuantitySample {
+                    let hr = sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                    continuation.resume(returning: hr)
+                } else {
+                    continuation.resume(returning: 60.0) // Default fallback
+                }
+            }
+            self.healthStore.execute(query)
+        }
     }
 
     func fetchTDEE(completion: @escaping (Double) -> Void) {
@@ -1018,6 +1091,9 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!,
             HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
             HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!,
+            
+            // Body Measurements
+            HKQuantityType.quantityType(forIdentifier: .bodyMass)!,
             
             // Sleep and Mindfulness
             HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!,
