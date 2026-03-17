@@ -4,7 +4,7 @@ import Charts
 import MapKit
 
 struct WorkoutHistoryView: View {
-    @StateObject private var engine = HealthStateEngine()
+    @ObservedObject var engine = HealthStateEngine.shared
     @State private var expandedWorkout: HKWorkout? = nil
     @State private var isLoading = false
     @State private var animationPhase: Double = 0
@@ -76,6 +76,16 @@ struct WorkoutHistoryView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 12) {
+                        Button(action: { 
+                            Task {
+                                isLoading = true
+                                await engine.forceRefreshWorkoutAnalytics(days: 3650)
+                                isLoading = false
+                            }
+                        }) {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundColor(.orange)
+                        }
                         Button(action: { showDatePicker = true }) {
                             Image(systemName: "calendar")
                                 .foregroundColor(.orange)
@@ -134,10 +144,15 @@ struct WorkoutHistoryView: View {
                     customLTHR: $customLTHR
                 )
             }
-            .task {
-                isLoading = true
-                await engine.refreshWorkoutAnalytics(days: 3650) // Load all workouts (10 years)
-                isLoading = false
+            .onAppear {
+                // Only load data once per app session, rely on cache for subsequent views
+                if !engine.hasInitializedWorkoutAnalytics {
+                    Task {
+                        isLoading = true
+                        await engine.refreshWorkoutAnalytics(days: 3650) // Load all workouts (10 years)
+                        isLoading = false
+                    }
+                }
             }
             .background(
                GradientBackgrounds().burningGradient(animationPhase: $animationPhase)

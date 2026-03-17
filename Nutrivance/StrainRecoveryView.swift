@@ -56,7 +56,7 @@ struct StrainRecoveryView: View {
                             Button("All Sports") { sportFilter = nil
                                 let impact = UIImpactFeedbackGenerator(style: .medium)
                                 impact.impactOccurred()}
-                            ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique.sorted(), id: \.self) { sport in
+                            ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique, id: \.self) { sport in
                                 Button(sport.capitalized) { sportFilter = sport
                                     let impact = UIImpactFeedbackGenerator(style: .medium)
                                     impact.impactOccurred()}
@@ -108,7 +108,7 @@ struct StrainRecoveryView: View {
                     PostWorkoutSection(engine: engine)
 
                     // Training Schedule & Favorite Sport
-                    TrainingScheduleSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
+                    TrainingScheduleSection(engine: engine, sportFilter: sportFilter)
 
                     // Vitals Table/Graph
                     VitalsSection(engine: engine)
@@ -363,19 +363,12 @@ struct PostWorkoutSection: View {
 
 struct TrainingScheduleSection: View {
     @ObservedObject var engine: HealthStateEngine
-    let timeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
 
     var filteredWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         let calendar = Calendar.current
         let endDate = Date()
-        let days: Int
-        switch timeFilter {
-        case .week: days = 7
-        case .month: days = 30
-        case .year: days = 365
-        }
-        let startDate = calendar.date(byAdding: .day, value: -days, to: endDate) ?? endDate
+        let startDate = calendar.date(byAdding: .day, value: -7, to: endDate) ?? endDate
         
         return engine.workoutAnalytics.filter { workout, _ in
             let isInRange = workout.startDate >= startDate && workout.startDate <= endDate
@@ -415,15 +408,14 @@ struct TrainingScheduleSection: View {
             chartLabel: "Minutes",
             chartUnit: "min",
             expandedContent: {
-                let timeLabel = timeFilter.rawValue
-                return VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Filter: " + (sportFilter?.capitalized ?? "All Sports"))
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text(timeLabel + " frequency: " + String(format: "%.0f", frequency) + " sessions")
+                    Text("7-day frequency: " + String(format: "%.0f", frequency) + " sessions")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("Total minutes (" + timeLabel + "): " + String(format: "%.0f", totalMinutes))
+                    Text("Total minutes (7d): " + String(format: "%.0f", totalMinutes))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Text("Overall favorite sport: " + (engine.favoriteSport ?? "-"))

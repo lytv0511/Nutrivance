@@ -6,6 +6,9 @@ import Combine
 /// All health calculations should live here, not in Views.
 @MainActor
 final class HealthStateEngine: ObservableObject {
+    // Shared singleton instance - persists for entire app session
+    static let shared = HealthStateEngine()
+    
     // Use a shared HealthKitManager instance
     private let hkManager = HealthKitManager()
 
@@ -34,6 +37,12 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Workout Analytics
     @Published var workoutAnalytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
+    @Published var hasInitializedWorkoutAnalytics: Bool = false // Track if initial load completed
+    
+    // MARK: - Analytics Cache Management
+    private var workoutAnalyticsCacheTimestamp: Date? = nil
+    private var lastCacheDaysRequested: Int = 0
+    private let cacheValidityDuration: TimeInterval = 60 * 60 // 1 hour cache validity
 
     // MARK: - Vitals Baseline/Trend Accessors
     public var vitalsSummary: [String: (current: Double?, baseline: Double?, trend: Double?)] {
@@ -563,11 +572,37 @@ final class HealthStateEngine: ObservableObject {
         self.updateScores()
     }
 
-    func refreshWorkoutAnalytics(days: Int = 30) async {
+    /// Refresh workout analytics with smart caching
+    /// Only fetches from HealthKit if cache is stale or days range changed
+    func refreshWorkoutAnalytics(days: Int = 30, forceRefresh: Bool = false) async {
+        // Check if cache is still valid
+        if !forceRefresh && isCacheValid(for: days) {
+            return // Use cached data
+        }
+        
         let end = Date()
         let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
         let analytics = await hkManager.fetchWorkoutsWithAnalytics(from: start, to: end)
         self.workoutAnalytics = analytics
+        self.workoutAnalyticsCacheTimestamp = Date()
+        self.lastCacheDaysRequested = days
+        self.hasInitializedWorkoutAnalytics = true // Mark initial load complete
+    }
+    
+    /// Check if the current cache is valid
+    private func isCacheValid(for requestedDays: Int) -> Bool {
+        // Cache is invalid if:
+        // 1. Never been fetched
+        // 2. Requested days range changed
+        // 3. Cache has expired (older than cacheValidityDuration)
+        guard let timestamp = workoutAnalyticsCacheTimestamp else { return false }
+        guard requestedDays == lastCacheDaysRequested else { return false }
+        return Date().timeIntervalSince(timestamp) < cacheValidityDuration
+    }
+    
+    /// Force refresh from HealthKit (bypasses cache)
+    func forceRefreshWorkoutAnalytics(days: Int = 30) async {
+        await refreshWorkoutAnalytics(days: days, forceRefresh: true)
     }
 
     // MARK: - Fetch HRV

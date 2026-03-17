@@ -64,11 +64,12 @@ struct SearchView: View {
         "fuel": ["fuel check", "energy levels", "energy", "stamina", "food"],
         "strain": ["strain vs recovery", "strain", "hrv"],
         "readiness": ["readiness check", "readiness", "assessment", "hrv"],
-        "mindfulness": ["mindfulness realm", "mindfulness", "meditation", "breathing exercises", "stress reduction", "mental health"]
+        "mindfulness": ["mindfulness realm", "mindfulness", "meditation", "breathing exercises", "stress reduction", "mental health"],
+        "workout history": ["workout history", "history", "workouts", "log", "record"]
     ]
     
     var filteredItems: [String] {
-        let allItems = ["Dashboard", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
+        let allItems = ["Dashboard", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Workout History", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
 
         let query = searchState.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
