@@ -277,6 +277,8 @@ struct SearchView: View {
                                             StrainRecoveryView()
                                         case "Fuel Check":
                                             FuelCheckView()
+                                        case "Workout History":
+                                            WorkoutHistoryView()
                                         case "Mindfulness Realm":
                                             MindfulnessRealmView()
                                         case "Mood Tracker":

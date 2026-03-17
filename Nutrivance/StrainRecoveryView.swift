@@ -1,4 +1,6 @@
 import SwiftUI
+import HealthKit
+
 // Inline TappableChartPreview definition
 struct TappableChartPreview: View {
     let data: [(Date, Double)]
@@ -51,9 +53,13 @@ struct StrainRecoveryView: View {
                         .pickerStyle(.segmented)
                         Spacer()
                         Menu {
-                            Button("All Sports") { sportFilter = nil }
-                            ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique, id: \.self) { sport in
-                                Button(sport.capitalized) { sportFilter = sport }
+                            Button("All Sports") { sportFilter = nil
+                                let impact = UIImpactFeedbackGenerator(style: .medium)
+                                impact.impactOccurred()}
+                            ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique.sorted(), id: \.self) { sport in
+                                Button(sport.capitalized) { sportFilter = sport
+                                    let impact = UIImpactFeedbackGenerator(style: .medium)
+                                    impact.impactOccurred()}
                             }
                         } label: {
                             HStack {
@@ -102,7 +108,7 @@ struct StrainRecoveryView: View {
                     PostWorkoutSection(engine: engine)
 
                     // Training Schedule & Favorite Sport
-                    TrainingScheduleSection(engine: engine)
+                    TrainingScheduleSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
 
                     // Vitals Table/Graph
                     VitalsSection(engine: engine)
@@ -315,78 +321,114 @@ struct PostWorkoutSection: View {
             return nil
         }()
 
-        HealthCard(
-            symbol: "heart.fill",
-            title: "Post-Workout HR",
-            value: latestHR.map { String(format: "%.0f", $0) } ?? "-",
-            unit: "bpm",
-            trend: "VO2 Max: " + (latestVO2.map { String(format: "%.1f", $0) } ?? "-") + " ml/kg/min",
-            color: .red,
-            chartData: engine.timeSeries(for: "postworkouthr", days: 28),
-            chartLabel: "Post-Workout HR",
-            chartUnit: "bpm",
-            expandedContent: {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let hrWarning { Text(hrWarning).foregroundColor(.red).font(.caption) }
-                    if let vo2Warning { Text(vo2Warning).foregroundColor(.orange).font(.caption) }
-                    if let hr = latestHR, let vo2 = latestVO2 {
-                        if hr > 100 {
-                            Text("Elevated post-workout HR. Consider a longer cool-down or monitor for overtraining.")
-                                .foregroundColor(.orange)
-                                .font(.caption2)
-                        }
-                        if vo2 < 30 {
-                            Text("VO2 max is below average for most adults. Improving aerobic fitness may help.")
-                                .foregroundColor(.orange)
-                                .font(.caption2)
-                        }
-                    }
-                    Divider().padding(.vertical, 2)
-                    Text("VO2 Max (28d)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    TappableChartPreview(data: engine.timeSeries(for: "vo2max", days: 28), label: "VO2 Max", unit: "ml/kg/min", color: .blue)
-                    Text("VO2 max is estimated using workout HR and sport-specific formulas. If a more accurate method is available for your sport, it will be used.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-        )
+//        HealthCard(
+//            symbol: "heart.fill",
+//            title: "Post-Workout HR",
+//            value: latestHR.map { String(format: "%.0f", $0) } ?? "-",
+//            unit: "bpm",
+//            trend: "VO2 Max: " + (latestVO2.map { String(format: "%.1f", $0) } ?? "-") + " ml/kg/min",
+//            color: .red,
+//            chartData: engine.timeSeries(for: "postworkouthr", days: 28),
+//            chartLabel: "Post-Workout HR",
+//            chartUnit: "bpm",
+//            expandedContent: {
+//                VStack(alignment: .leading, spacing: 8) {
+//                    if let hrWarning { Text(hrWarning).foregroundColor(.red).font(.caption) }
+//                    if let vo2Warning { Text(vo2Warning).foregroundColor(.orange).font(.caption) }
+//                    if let hr = latestHR, let vo2 = latestVO2 {
+//                        if hr > 100 {
+//                            Text("Elevated post-workout HR. Consider a longer cool-down or monitor for overtraining.")
+//                                .foregroundColor(.orange)
+//                                .font(.caption2)
+//                        }
+//                        if vo2 < 30 {
+//                            Text("VO2 max is below average for most adults. Improving aerobic fitness may help.")
+//                                .foregroundColor(.orange)
+//                                .font(.caption2)
+//                        }
+//                    }
+//                    Divider().padding(.vertical, 2)
+//                    Text("VO2 Max (28d)")
+//                        .font(.subheadline)
+//                        .foregroundColor(.secondary)
+//                    TappableChartPreview(data: engine.timeSeries(for: "vo2max", days: 28), label: "VO2 Max", unit: "ml/kg/min", color: .blue)
+//                    Text("VO2 max is estimated using workout HR and sport-specific formulas. If a more accurate method is available for your sport, it will be used.")
+//                        .font(.caption2)
+//                        .foregroundColor(.secondary)
+//                }
+//            }
+//        )
     }
 }
 
 struct TrainingScheduleSection: View {
     @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let sportFilter: String?
+
+    var filteredWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        let calendar = Calendar.current
+        let endDate = Date()
+        let days: Int
+        switch timeFilter {
+        case .week: days = 7
+        case .month: days = 30
+        case .year: days = 365
+        }
+        let startDate = calendar.date(byAdding: .day, value: -days, to: endDate) ?? endDate
+        
+        return engine.workoutAnalytics.filter { workout, _ in
+            let isInRange = workout.startDate >= startDate && workout.startDate <= endDate
+            let matchesSport = sportFilter == nil || workout.workoutActivityType.name == sportFilter
+            return isInRange && matchesSport
+        }
+    }
+
+    var minutesPerDay: [(Date, Double)] {
+        let calendar = Calendar.current
+        var minutes: [Date: Double] = [:]
+        
+        for (workout, _) in filteredWorkouts {
+            let day = calendar.startOfDay(for: workout.startDate)
+            let duration = workout.duration / 60.0 // convert to minutes
+            minutes[day, default: 0] += duration
+        }
+        
+        return minutes.sorted { $0.0 < $1.0 }
+    }
+
+    var frequency: Double {
+        return Double(filteredWorkouts.count)
+    }
+
     var body: some View {
+        let totalMinutes = minutesPerDay.map { $0.1 }.reduce(0, +)
+        
         HealthCard(
             symbol: "calendar",
             title: "Training Schedule",
-            value: String(format: "%.1f", engine.trainingFrequency ?? 0),
-            unit: "/week",
+            value: String(format: "%.1f", frequency),
+            unit: "sessions/week",
             trend: "Favorite: " + (engine.favoriteSport ?? "-"),
             color: .teal,
-            chartData: engine.timeSeries(for: "trainingfreq", days: 28),
-            chartLabel: "Frequency",
-            chartUnit: "/week",
+            chartData: minutesPerDay,
+            chartLabel: "Minutes",
+            chartUnit: "min",
             expandedContent: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Favorite Sport: " + (engine.favoriteSport ?? "-"))
+                let timeLabel = timeFilter.rawValue
+                return VStack(alignment: .leading, spacing: 6) {
+                    Text("Filter: " + (sportFilter?.capitalized ?? "All Sports"))
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    if let sport = engine.favoriteSport {
-                        let freq = engine.trainingFrequency ?? 0
-                        let kcal = engine.kcalBurned.values.reduce(0, +)
-                        let miles = engine.kcalBurned.keys.compactMap { engine.kcalBurned[$0] }.reduce(0, +)
-                        Text("Sessions/week: " + String(format: "%.1f", freq))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text("Total kcal burned (28d): " + String(format: "%.0f", kcal))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        // Add miles/elevation if available
-                        // Text("Total miles (28d): " + String(format: "%.1f", miles))
-                        // Text("Elevation gain (28d): ...")
-                    }
+                    Text(timeLabel + " frequency: " + String(format: "%.0f", frequency) + " sessions")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text("Total minutes (" + timeLabel + "): " + String(format: "%.0f", totalMinutes))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text("Overall favorite sport: " + (engine.favoriteSport ?? "-"))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
         )

@@ -1,12 +1,3 @@
-
-
-//
-//  File.swift
-//  Nutrivance
-//
-//  Created by Vincent Leong on 3/11/26.
-//
-
 import Foundation
 import HealthKit
 import Combine
@@ -20,6 +11,10 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Workout/HR Data Cache
     private var allWorkoutHRCache: [(workout: HKWorkout, heartRates: [(Date, Double)])] = []
+    // Persistent cache for analytics
+    private var analyticsCache: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
+    // Published staged analytics
+    @Published var stagedWorkoutAnalytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
 
     // MARK: - Vitals & Advanced Metrics
     @Published var sleepStages: [Date: [String: Double]] = [:] // [date: [stage: hours]]
@@ -98,31 +93,77 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Sleep Quality Fetch (stages, efficiency, consistency)
     private func fetchSleepQuality() {
-        // This is a stub. In production, fetch HKCategorySample for sleep stages, calculate efficiency, and consistency.
-        // For demo, simulate with random data for last 28 days.
+        guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return }
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        var stages: [Date: [String: Double]] = [:]
-        var efficiency: [Date: Double] = [:]
-        for i in 0..<28 {
-            let date = calendar.date(byAdding: .day, value: -i, to: today)!
-            stages[date] = [
-                "deep": Double.random(in: 1.0...2.0),
-                "rem": Double.random(in: 1.0...2.0),
-                "core": Double.random(in: 3.0...4.0),
-                "awake": Double.random(in: 0.2...0.8)
-            ]
-            efficiency[date] = Double.random(in: 0.8...0.98)
+        let endDate = Date()
+        let startDate = calendar.date(byAdding: .day, value: -28, to: endDate) ?? endDate
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, error in
+            guard let samples = samples as? [HKCategorySample], error == nil else { return }
+            var stages: [Date: [String: Double]] = [:]
+            var efficiency: [Date: Double] = [:]
+            var startTimes: [Double] = []
+            for sample in samples {
+                let day = calendar.startOfDay(for: sample.startDate)
+                let duration = sample.endDate.timeIntervalSince(sample.startDate) / 3600 // hours
+                let value = sample.value
+                var stage: String? = nil
+                var isInBed = false
+                switch HKCategoryValueSleepAnalysis(rawValue: value) {
+                case .inBed:
+                    isInBed = true
+                case .asleepCore:
+                    stage = "core"
+                case .asleepDeep:
+                    stage = "deep"
+                case .asleepREM:
+                    stage = "rem"
+                case .awake:
+                    stage = "awake"
+                case .asleepUnspecified:
+                    stage = "core" // Add to core
+                default:
+                    continue
+                }
+                var dayData = stages[day] ?? ["deep": 0.0, "rem": 0.0, "core": 0.0, "awake": 0.0, "inBed": 0.0]
+                if isInBed {
+                    dayData["inBed"] = (dayData["inBed"] ?? 0.0) + duration
+                    // Collect start time for consistency
+                    let hour = Double(calendar.component(.hour, from: sample.startDate)) + Double(calendar.component(.minute, from: sample.startDate)) / 60.0
+                    startTimes.append(hour)
+                } else if let stage = stage {
+                    dayData[stage] = (dayData[stage] ?? 0.0) + duration
+                }
+                stages[day] = dayData
+            }
+            // Calculate efficiency
+            for (date, data) in stages {
+                let totalAsleep = (data["deep"] ?? 0) + (data["rem"] ?? 0) + (data["core"] ?? 0)
+                let totalInBed = data["inBed"] ?? 0
+                if totalInBed > 0 {
+                    efficiency[date] = totalAsleep / totalInBed
+                }
+            }
+            // Calculate consistency
+            var consistency: Double? = nil
+            if !startTimes.isEmpty {
+                let mean = startTimes.reduce(0, +) / Double(startTimes.count)
+                let variance = startTimes.map { pow($0 - mean, 2) }.reduce(0, +) / Double(startTimes.count)
+                consistency = sqrt(variance)
+            }
+            DispatchQueue.main.async {
+                // Remove inBed from stages
+                self.sleepStages = stages.mapValues { dict in
+                    var d = dict
+                    d.removeValue(forKey: "inBed")
+                    return d
+                }
+                self.sleepEfficiency = efficiency
+                self.sleepConsistency = consistency
+            }
         }
-        let startTimes = (0..<28).map { _ in Double.random(in: 22.0...24.0) }
-        let mean = startTimes.reduce(0, +) / Double(startTimes.count)
-        let variance = startTimes.map { pow($0 - mean, 2) }.reduce(0, +) / Double(startTimes.count)
-        let consistency = sqrt(variance)
-        DispatchQueue.main.async {
-            self.sleepStages = stages
-            self.sleepEfficiency = efficiency
-            self.sleepConsistency = consistency
-        }
+        healthStore.execute(query)
     }
 
     // MARK: - Vitals Fetch (respiratory rate, temp, SpO2, post-workout HR, VO2 max)
@@ -306,10 +347,10 @@ final class HealthStateEngine: ObservableObject {
             let freq = Double(workouts.count) / 4.0 // overall sessions per week
             // Convert HKWorkoutActivityType keys to String for Published property
             let freqBySportString: [String: Double] = freqBySport.reduce(into: [String: Double]()) { dict, pair in
-                dict[String(describing: pair.key)] = pair.value
+                dict[pair.key.name] = pair.value
             }
             DispatchQueue.main.async {
-                self.favoriteSport = favorite.map { String(describing: $0) }
+                self.favoriteSport = favorite.map { $0.name }
                 self.trainingFrequency = freq
                 self.trainingFrequencyBySport = freqBySportString
             }
@@ -325,23 +366,9 @@ final class HealthStateEngine: ObservableObject {
         case "hrv":
             dict = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) })
         case "rhr":
-            // Simulate 28 days of RHR if not present
-            var rhrDict: [Date: Double] = [:]
-            let base = restingHeartRate ?? 60
-            for i in 0..<28 {
-                let date = calendar.date(byAdding: .day, value: -i, to: today)!
-                rhrDict[date] = base + Double.random(in: -5...5)
-            }
-            dict = rhrDict
+            dict = [:]  // Only real HealthKit data
         case "sleep":
-            // Simulate 28 days of sleep if not present
-            var sleepDict: [Date: Double] = [:]
-            let base = sleepHours ?? 7
-            for i in 0..<28 {
-                let date = calendar.date(byAdding: .day, value: -i, to: today)!
-                sleepDict[date] = base + Double.random(in: -1...1)
-            }
-            dict = sleepDict
+            dict = [:]  // Only real HealthKit data
         case "respiratoryrate": dict = respiratoryRate
         case "wristtemp": dict = wristTemperature
         case "spo2": dict = spO2
@@ -473,31 +500,45 @@ final class HealthStateEngine: ObservableObject {
             DispatchQueue.main.async {
                 if success {
                     self?.refreshAllMetrics()
-                    // Fetch 30 days for initial display
+                    // Load recent analytics first
                     Task { [weak self] in
                         guard let self = self else { return }
                         let calendar = Calendar.current
                         let endDate = Date()
                         let startDate = calendar.date(byAdding: .day, value: -30, to: endDate) ?? Date.distantPast
-                        let initialData = await self.hkManager.fetchWorkoutsAndHeartRates(from: startDate, to: endDate)
-                        self.allWorkoutHRCache = initialData
-                        // Start background fetch for all-time data
+                        let recentAnalytics = await self.hkManager.fetchWorkoutsWithAnalytics(from: startDate, to: endDate)
+                        self.stagedWorkoutAnalytics = recentAnalytics
+                        self.workoutAnalytics = recentAnalytics
+                        // Save to cache
+                        self.saveAnalyticsCache(recentAnalytics)
+                        // Start background fetch for older analytics
                         Task.detached { [weak self] in
                             guard let self = self else { return }
                             let allStart = Date.distantPast
                             let allEnd = Date()
-                            let allData = await self.hkManager.fetchWorkoutsAndHeartRates(from: allStart, to: allEnd)
+                            let allAnalytics = await self.hkManager.fetchWorkoutsWithAnalytics(from: allStart, to: allEnd)
                             DispatchQueue.main.async {
-                                self.allWorkoutHRCache = allData
+                                self.stagedWorkoutAnalytics = allAnalytics
+                                self.workoutAnalytics = allAnalytics
+                                self.saveAnalyticsCache(allAnalytics)
                             }
                         }
                     }
                 } else {
                     print("HealthKit authorization failed: \(error?.localizedDescription ?? "Unknown error")")
-                    // Optionally, set a published error state for UI feedback
                 }
             }
         }
+    }
+
+    // MARK: - Analytics Cache Helpers
+    private func saveAnalyticsCache(_ analytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) {
+        // TODO: Implement persistent cache (e.g., UserDefaults, CoreData, file)
+        self.analyticsCache = analytics
+    }
+    private func loadAnalyticsCache() -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        // TODO: Load from persistent cache
+        return analyticsCache
     }
 
     // MARK: - Permissions
