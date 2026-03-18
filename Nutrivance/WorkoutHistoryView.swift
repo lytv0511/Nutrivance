@@ -79,12 +79,26 @@ struct WorkoutHistoryView: View {
                         Button(action: { 
                             Task {
                                 isLoading = true
-                                await engine.forceRefreshWorkoutAnalytics(days: 3650)
+                                if engine.hasNewDataAvailable {
+                                    // New data detected: replace cache with fresh fetch
+                                    await engine.replaceWorkoutCacheWithNewData(days: 3650)
+                                } else {
+                                    // Standard reload: force refresh
+                                    await engine.forceRefreshWorkoutAnalytics(days: 3650)
+                                }
                                 isLoading = false
                             }
                         }) {
-                            Image(systemName: "arrow.clockwise")
-                                .foregroundColor(.orange)
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise")
+                                    .foregroundColor(.orange)
+                                if engine.hasNewDataAvailable {
+                                    Text("NEW")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.orange)
+                                }
+                            }
                         }
                         Button(action: { showDatePicker = true }) {
                             Image(systemName: "calendar")
@@ -143,16 +157,6 @@ struct WorkoutHistoryView: View {
                     customRestingHR: $customRestingHR,
                     customLTHR: $customLTHR
                 )
-            }
-            .onAppear {
-                // Only load data once per app session, rely on cache for subsequent views
-                if !engine.hasInitializedWorkoutAnalytics {
-                    Task {
-                        isLoading = true
-                        await engine.refreshWorkoutAnalytics(days: 3650) // Load all workouts (10 years)
-                        isLoading = false
-                    }
-                }
             }
             .background(
                GradientBackgrounds().burningGradient(animationPhase: $animationPhase)

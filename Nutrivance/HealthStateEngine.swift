@@ -38,12 +38,156 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Workout Analytics
     @Published var workoutAnalytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
     @Published var hasInitializedWorkoutAnalytics: Bool = false // Track if initial load completed
+    @Published var hasNewDataAvailable: Bool = false // Track if new data differs from cache
     
     // MARK: - Analytics Cache Management
     private var workoutAnalyticsCacheTimestamp: Date? = nil
     private var lastCacheDaysRequested: Int = 0
     private let cacheValidityDuration: TimeInterval = 60 * 60 // 1 hour cache validity
+    private let cacheFileName = "workoutAnalyticsCache.json"
+    private var lastCachedWorkoutDate: Date? = nil // Tracks latest workout in persistent cache
+    private var diskCacheLoaded: Bool = false
 
+    // MARK: - Persistent Cache Management
+    private func cacheDirectoryURL() -> URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    }
+    
+    private func persistentCacheURL() -> URL? {
+        guard let dir = cacheDirectoryURL() else { return nil }
+        return dir.appendingPathComponent(cacheFileName)
+    }
+    
+    /// Save complete cache metadata for fast load on app restart
+    private func savePersistentCacheMetadata(_ analytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) {
+        guard let url = persistentCacheURL() else { return }
+        let cacheData = analytics.map { pair -> [String: Any] in
+            // Store essential metrics that define a workout display
+            var dict: [String: Any] = [
+                "workoutStartDate": pair.workout.startDate.timeIntervalSince1970,
+                "workoutEndDate": pair.workout.endDate.timeIntervalSince1970,
+                "workoutDuration": pair.workout.duration,
+                "workoutType": pair.workout.workoutActivityType.rawValue,
+                "metTotal": pair.analytics.metTotal ?? 0,
+                "vo2Max": pair.analytics.vo2Max ?? 0,
+                "avgHR": pair.analytics.heartRates.map { $0.1 }.average ?? 0,
+                "peakHR": pair.analytics.peakHR ?? 0,
+                "totalKcal": pair.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0,
+                "distance": pair.workout.totalDistance?.doubleValue(for: .meter()) ?? 0,
+                "elevationGain": pair.analytics.elevationGain ?? 0
+            ]
+            return dict
+        }
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: cacheData, options: .prettyPrinted)
+            try jsonData.write(to: url, options: .atomicWrite)
+            print("[Cache] Saved \(cacheData.count) workouts to disk")
+        } catch {
+            print("Failed to save persistent cache: \(error)")
+        }
+    }
+    
+    /// Check if persistent cache exists and extract metadata for differential refresh
+    /// This runs synchronously and reads cache metadata only, not full objects
+    private func loadCachedAnalyticsFromDisk() -> [CachedWorkoutSummary] {
+        guard let url = persistentCacheURL(), FileManager.default.fileExists(atPath: url.path) else {
+            print("[Cache] No persistent cache file found")
+            return []
+        }
+        
+        do {
+            let data = try Data(contentsOf: url)
+            if let cacheArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                print("[Cache] Cache file exists with \(cacheArray.count) workouts")
+                let summaries = cacheArray.compactMap { dict -> CachedWorkoutSummary? in
+                    guard let startTime = dict["workoutStartDate"] as? TimeInterval else { return nil }
+                    return CachedWorkoutSummary(
+                        startDate: Date(timeIntervalSince1970: startTime),
+                        endDate: Date(timeIntervalSince1970: (dict["workoutEndDate"] as? TimeInterval) ?? startTime),
+                        duration: (dict["workoutDuration"] as? Double) ?? 0,
+                        workoutType: dict["workoutType"] as? String ?? "other",
+                        metTotal: (dict["metTotal"] as? Double) ?? 0,
+                        vo2Max: dict["vo2Max"] as? Double,
+                        avgHR: (dict["avgHR"] as? Double) ?? 0,
+                        peakHR: dict["peakHR"] as? Double,
+                        totalKcal: (dict["totalKcal"] as? Double) ?? 0,
+                        distance: (dict["distance"] as? Double) ?? 0
+                    )
+                }
+                return summaries
+            }
+        } catch {
+            print("[Cache] Failed to load persistent cache: \(error)")
+        }
+        return []
+    }
+    
+    /// Load cache synchronously from disk - returns immediately without blocking
+    private func loadCachedWorkoutsFromDisk() -> [CachedWorkoutSummary] {
+        guard let url = persistentCacheURL(), FileManager.default.fileExists(atPath: url.path) else {
+            return []
+        }
+        
+        do {
+            let data = try Data(contentsOf: url)
+            if let cacheArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                return cacheArray.compactMap { dict in
+                    guard let startTime = dict["workoutStartDate"] as? TimeInterval else { return nil }
+                    return CachedWorkoutSummary(
+                        startDate: Date(timeIntervalSince1970: startTime),
+                        endDate: Date(timeIntervalSince1970: (dict["workoutEndDate"] as? TimeInterval) ?? startTime),
+                        duration: (dict["workoutDuration"] as? Double) ?? 0,
+                        workoutType: dict["workoutType"] as? String ?? "other",
+                        metTotal: (dict["metTotal"] as? Double) ?? 0,
+                        vo2Max: dict["vo2Max"] as? Double,
+                        avgHR: (dict["avgHR"] as? Double) ?? 0,
+                        peakHR: dict["peakHR"] as? Double,
+                        totalKcal: (dict["totalKcal"] as? Double) ?? 0,
+                        distance: (dict["distance"] as? Double) ?? 0
+                    )
+                }
+            }
+        } catch {
+            print("Failed to load persistent cache: \(error)")
+        }
+        return []
+    }
+    
+    private func loadPersistentCache() {
+        guard let url = persistentCacheURL(), FileManager.default.fileExists(atPath: url.path) else {
+            diskCacheLoaded = true
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: url)
+            if let cacheArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                let maxDate = cacheArray.compactMap { $0["workoutStartDate"] as? TimeInterval }
+                    .map { Date(timeIntervalSince1970: $0) }
+                    .max()
+                lastCachedWorkoutDate = maxDate
+            }
+            diskCacheLoaded = true
+        } catch {
+            print("Failed to load persistent cache: \(error)")
+            diskCacheLoaded = true
+        }
+    }
+    
+    // MARK: - Cached Workout Summary for Display
+    struct CachedWorkoutSummary {
+        let startDate: Date
+        let endDate: Date
+        let duration: Double
+        let workoutType: String
+        let metTotal: Double
+        let vo2Max: Double?
+        let avgHR: Double
+        let peakHR: Double?
+        let totalKcal: Double
+        let distance: Double
+    }
+    
     // MARK: - Vitals Baseline/Trend Accessors
     public var vitalsSummary: [String: (current: Double?, baseline: Double?, trend: Double?)] {
         // Example for HRV, RHR, sleep, respiratoryRate, temp, spO2
@@ -505,34 +649,18 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Initialization
 
     init() {
+        // Load persistent cache on startup (synchronously)
+        loadPersistentCache()
+        
+        // Initialize with cached data IMMEDIATELY - starts loading before any view appears
+        // This ensures data loads as soon as app launches, for fastest possible display
+        initializeWithCachedData()
+        
+        // Request HealthKit authorization and refresh metrics (in parallel)
         hkManager.requestAuthorization { [weak self] success, error in
             DispatchQueue.main.async {
                 if success {
                     self?.refreshAllMetrics()
-                    // Load recent analytics first
-                    Task { [weak self] in
-                        guard let self = self else { return }
-                        let calendar = Calendar.current
-                        let endDate = Date()
-                        let startDate = calendar.date(byAdding: .day, value: -30, to: endDate) ?? Date.distantPast
-                        let recentAnalytics = await self.hkManager.fetchWorkoutsWithAnalytics(from: startDate, to: endDate)
-                        self.stagedWorkoutAnalytics = recentAnalytics
-                        self.workoutAnalytics = recentAnalytics
-                        // Save to cache
-                        self.saveAnalyticsCache(recentAnalytics)
-                        // Start background fetch for older analytics
-                        Task.detached { [weak self] in
-                            guard let self = self else { return }
-                            let allStart = Date.distantPast
-                            let allEnd = Date()
-                            let allAnalytics = await self.hkManager.fetchWorkoutsWithAnalytics(from: allStart, to: allEnd)
-                            DispatchQueue.main.async {
-                                self.stagedWorkoutAnalytics = allAnalytics
-                                self.workoutAnalytics = allAnalytics
-                                self.saveAnalyticsCache(allAnalytics)
-                            }
-                        }
-                    }
                 } else {
                     print("HealthKit authorization failed: \(error?.localizedDescription ?? "Unknown error")")
                 }
@@ -603,6 +731,224 @@ final class HealthStateEngine: ObservableObject {
     /// Force refresh from HealthKit (bypasses cache)
     func forceRefreshWorkoutAnalytics(days: Int = 30) async {
         await refreshWorkoutAnalytics(days: days, forceRefresh: true)
+    }
+    
+    // MARK: - Persistent Cache & Smart Differential Refresh
+    
+    /// Load cached workouts from disk synchronously - no blocking, immediate HealthKit fetch
+    func initializeWithCachedData() {
+        // CRITICAL: Check for persistent cache synchronously
+        // Mark initialized immediately - view won't show stale data
+        let cachedSummaries = loadCachedAnalyticsFromDisk()
+        
+        if !cachedSummaries.isEmpty {
+            // Cache exists - extract latest date for differential refresh
+            self.lastCachedWorkoutDate = cachedSummaries.map { $0.startDate }.max()
+            print("[Cache] ✅ Found cached data for \(cachedSummaries.count) workouts (latest: \(self.lastCachedWorkoutDate?.formatted() ?? "unknown"))")
+        } else {
+            print("[Cache] No cached workouts found, will fetch all from HealthKit")
+        }
+        
+        // Mark as initialized to prevent view reload loops
+        self.hasInitializedWorkoutAnalytics = true
+        
+        // Launch background differential refresh to fetch real data
+        // - If cache exists: fetch only NEW workouts + validate 30-day window
+        // - If cache empty: fetch ALL workouts (first run)
+        // Either way, smartDifferentialRefresh is optimized for speed
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            print("[Cache] Starting differential refresh...")
+            await self.smartDifferentialRefresh(totalDays: 3650)
+        }
+    }
+    
+    /// Load cached data from disk on app startup
+    func loadCachedWorkoutAnalytics(days: Int = 3650) async {
+        // Try to deserialize from disk (simplified - store workout dates + key metrics)
+        guard diskCacheLoaded else { return }
+        guard let url = persistentCacheURL(), FileManager.default.fileExists(atPath: url.path) else {
+            // No persistent cache, start fresh
+            await refreshWorkoutAnalytics(days: days)
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: url)
+            if let cacheArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                // Reconstruct display from cache summary (limited, but shows something immediately)
+                // This is a placeholder - in production, you'd store more complete data
+                print("[Cache] Loaded \(cacheArray.count) cached workouts from disk")
+                hasInitializedWorkoutAnalytics = true
+                workoutAnalyticsCacheTimestamp = Date()
+            }
+        } catch {
+            print("Failed to deserialize cache: \\(error)")
+        }
+        
+        // Start smart differential background refresh
+        await smartDifferentialRefresh(totalDays: days)
+    }
+    
+    /// Smart differential refresh: fetch new data first, then batch-load historical data
+    func smartDifferentialRefresh(totalDays: Int = 3650) async {
+        let endDate = Date()
+        let totalStartDate = Calendar.current.date(byAdding: .day, value: -totalDays, to: endDate) ?? endDate
+        
+        // PRIORITY: If we have cached data (lastCachedWorkoutDate is set), fetch with overlap
+        // Re-fetch from 7 days BEFORE cached date to validate data and get real HKWorkout objects
+        // This ensures we display fresh data without doing a full 10-year fetch
+        if let cachedDate = lastCachedWorkoutDate {
+            print("[Cache] Loading workouts with 7-day overlap from cache date...")
+            
+            // Fetch from 7 days before cached date to today (small overlap ensures fresh data)
+            let overlapStart = Calendar.current.date(byAdding: .day, value: -7, to: cachedDate) ?? cachedDate
+            let refreshedWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: overlapStart, to: endDate)
+            
+            // Set workoutAnalytics immediately with refreshed data (includes real HKWorkout objects)
+            self.workoutAnalytics = refreshedWorkouts
+            self.workoutAnalyticsCacheTimestamp = Date()
+            self.lastCachedWorkoutDate = refreshedWorkouts.map { $0.workout.startDate }.max()
+            self.hasNewDataAvailable = false // Reset since we just fetched fresh data
+            savePersistentCacheMetadata(refreshedWorkouts)
+            
+            print("[Cache] ✅ Loaded \(refreshedWorkouts.count) workouts with fresh data")
+            
+            // NOW: Launch background batch loading for historical data (non-blocking)
+            // This populates the view progressively without blocking UI
+            if totalStartDate < overlapStart {
+                Task.detached { [weak self] in
+                    await self?.batchLoadHistoricalWorkouts(from: totalStartDate, to: overlapStart, batchSize: 30)
+                }
+            }
+            return
+        }
+        
+        // FALLBACK: If no cached date (first run), load all data from HealthKit
+        // This only happens on very first app launch
+        print("[Cache] First run: fetching ALL workouts from HealthKit in batches")
+        if workoutAnalytics.isEmpty {
+            // Fetch first batch (most recent 60 days) instantly
+            let recentStart = Calendar.current.date(byAdding: .day, value: -60, to: endDate) ?? totalStartDate
+            let recentWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: recentStart, to: endDate)
+            
+            self.workoutAnalytics = recentWorkouts
+            self.workoutAnalyticsCacheTimestamp = Date()
+            self.lastCacheDaysRequested = totalDays
+            self.lastCachedWorkoutDate = recentWorkouts.map { $0.workout.startDate }.max()
+            savePersistentCacheMetadata(recentWorkouts)
+            
+            print("[Cache] ✅ Initial load: \(recentWorkouts.count) recent workouts displayed")
+            
+            // Then batch-load remaining historical data in background (non-blocking)
+            if totalStartDate < recentStart {
+                Task.detached { [weak self] in
+                    await self?.batchLoadHistoricalWorkouts(from: totalStartDate, to: recentStart, batchSize: 30)
+                }
+            }
+            return
+        }
+        
+        // Step 1: Fetch new workouts (after lastCachedWorkoutDate)
+        let newStartDate = totalStartDate
+        let newWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: newStartDate, to: endDate)
+        
+        var hasDataChanges = false
+        var updatedAnalytics = self.workoutAnalytics
+        
+        // Step 2: Append new workouts to cache
+        if !newWorkouts.isEmpty {
+            let newLatest = newWorkouts.map { $0.workout.startDate }.max()
+            lastCachedWorkoutDate = newLatest
+            updatedAnalytics.append(contentsOf: newWorkouts)
+            hasDataChanges = true
+            
+            // Update UI with new workouts immediately
+            self.workoutAnalytics = updatedAnalytics
+            savePersistentCacheMetadata(updatedAnalytics)
+        }
+        
+        // Step 3: Background check for changes in old data (last 30 days of cached data)
+        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: newStartDate) ?? newStartDate
+        if newStartDate > thirtyDaysAgo {
+            // Fetch old data to check for modifications
+            let oldDataRange = thirtyDaysAgo ..< newStartDate
+            let historicalRefresh = await hkManager.fetchWorkoutsWithAnalytics(from: thirtyDaysAgo, to: newStartDate)
+            
+            // Compare: if counts differ or metrics changed, flag as hasNewDataAvailable
+            let historicalCount = historicalRefresh.count
+            let cachedHistoricalCount = updatedAnalytics.filter { 
+                $0.workout.startDate >= thirtyDaysAgo && $0.workout.startDate < newStartDate
+            }.count
+            
+            if historicalCount != cachedHistoricalCount {
+                hasDataChanges = true
+                self.hasNewDataAvailable = true
+            }
+            // TODO: Deep comparison of workout metrics for more granular change detection
+        }
+        
+        // If no data changes in old range, refresh button stays as "Reload"
+        // If changes detected, refresh button shows "Load New Metrics"
+        if !hasDataChanges {
+            self.hasNewDataAvailable = false
+        }
+    }
+    
+    /// Batch-load historical workouts in chunks (non-blocking, progressive population)
+    /// Loads data backwards in time: from newest unfetched to oldest
+    /// This ensures batches append naturally to the view in chronological order
+    private func batchLoadHistoricalWorkouts(from earliestDate: Date, to latestDate: Date, batchSize: Int = 30) async {
+        print("[Cache] Starting batch historical load: \(earliestDate.formatted()) to \(latestDate.formatted())")
+        
+        // Start from latest (most recent unfetched) and work backwards
+        var currentEnd = latestDate
+        var batchCount = 0
+        
+        while currentEnd > earliestDate {
+            let currentStart = Calendar.current.date(byAdding: .day, value: -batchSize, to: currentEnd) ?? earliestDate
+            let batchStart = max(currentStart, earliestDate)
+            
+            print("[Cache] Loading batch \(batchCount + 1): \(batchStart.formatted()) to \(currentEnd.formatted())")
+            
+            let batchWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: batchStart, to: currentEnd)
+            
+            if !batchWorkouts.isEmpty {
+                // Append batch to workoutAnalytics on main thread for UI update
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.workoutAnalytics.append(contentsOf: batchWorkouts)
+                    self.savePersistentCacheMetadata(self.workoutAnalytics)
+                    print("[Cache] ✅ Batch \(batchCount + 1) complete: +\(batchWorkouts.count) workouts (total: \(self.workoutAnalytics.count))")
+                }
+            } else {
+                print("[Cache] Batch \(batchCount + 1): No workouts found")
+            }
+            
+            currentEnd = batchStart
+            batchCount += 1
+            
+            // Small delay between batches to avoid blocking HealthKit queries
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+        }
+        
+        print("[Cache] 🎉 Historical batch load complete!")
+    }
+    
+    /// Replace cache with new fetched data (called when user taps "Load New Metrics" button)
+    func replaceWorkoutCacheWithNewData(days: Int = 3650) async {
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
+        let analytics = await hkManager.fetchWorkoutsWithAnalytics(from: start, to: end)
+        
+        self.workoutAnalytics = analytics
+        self.workoutAnalyticsCacheTimestamp = Date()
+        self.lastCacheDaysRequested = days
+        self.lastCachedWorkoutDate = analytics.map { $0.workout.startDate }.max()
+        self.hasNewDataAvailable = false
+        
+        // Save fresh copy
+        savePersistentCacheMetadata(analytics)
     }
 
     // MARK: - Fetch HRV
