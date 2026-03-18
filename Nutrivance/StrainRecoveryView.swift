@@ -15,7 +15,7 @@ struct TappableChartPreview: View {
             generator.impactOccurred()
         } label: {
             HealthLineChartPreview(data: data, label: label, unit: unit, color: color)
-                .frame(height: 60)
+//                .frame(height: 60)
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showSheet) {
@@ -537,7 +537,7 @@ struct MetricLineGraph: View {
                     }
                     .stroke(Color.accentColor, lineWidth: 2)
                 }
-                .frame(height: 60)
+//                .frame(height: 60)
             }
         }
         .padding(.vertical, 4)
