@@ -39,6 +39,30 @@ struct StrainRecoveryView: View {
     @State private var timeFilter: TimeFilter = .week
     @State private var sportFilter: String? = nil // nil means all sports
     @State private var selectedDate = Date()
+    
+    private func stepSelectedDate(by value: Int) {
+        let calendar = Calendar.current
+        let currentDay = calendar.startOfDay(for: selectedDate)
+        let today = calendar.startOfDay(for: Date())
+        
+        guard let steppedDate = calendar.date(byAdding: timeFilter.navigationComponent, value: value, to: currentDay) else {
+            return
+        }
+        
+        selectedDate = min(steppedDate, today)
+    }
+    
+    private var canStepForward: Bool {
+        let calendar = Calendar.current
+        let currentDay = calendar.startOfDay(for: selectedDate)
+        let today = calendar.startOfDay(for: Date())
+        
+        guard let steppedDate = calendar.date(byAdding: timeFilter.navigationComponent, value: 1, to: currentDay) else {
+            return false
+        }
+        
+        return steppedDate <= today
+    }
 
     var body: some View {
         NavigationStack {
@@ -167,7 +191,15 @@ struct StrainRecoveryView: View {
             )
             .navigationTitle("Strain vs Recovery")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        stepSelectedDate(by: -1)
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    
                     DatePicker(
                         "Reference Date",
                         selection: $selectedDate,
@@ -175,6 +207,15 @@ struct StrainRecoveryView: View {
                         displayedComponents: .date
                     )
                     .labelsHidden()
+                    
+                    Button {
+                        stepSelectedDate(by: 1)
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled(!canStepForward)
                 }
             }
             .task {
@@ -194,6 +235,17 @@ private extension StrainRecoveryView.TimeFilter {
         case .week: return 7
         case .month: return 30
         case .year: return 365
+        }
+    }
+    
+    var navigationComponent: Calendar.Component {
+        switch self {
+        case .week:
+            return .day
+        case .month:
+            return .weekOfYear
+        case .year:
+            return .month
         }
     }
 }
@@ -399,13 +451,109 @@ struct HRVSection: View {
     }
 }
 
+private struct WorkoutLoadStatus {
+    let title: String
+    let color: Color
+    let detail: String
+    let hidesRatio: Bool
+}
+
+private struct WorkoutLoadChart: View {
+    let snapshots: [WorkoutContributionsSection.DailyLoadSnapshot]
+    let acuteColor: Color
+    let selectedDate: Date?
+    let isExpanded: Bool
+    
+    private func xStart(for date: Date) -> Date {
+        date.addingTimeInterval(-12 * 60 * 60)
+    }
+    
+    private func xEnd(for date: Date) -> Date {
+        date.addingTimeInterval(12 * 60 * 60)
+    }
+    
+    var body: some View {
+        Chart {
+            ForEach(snapshots) { snapshot in
+                RectangleMark(
+                    xStart: .value("Band Start", xStart(for: snapshot.date)),
+                    xEnd: .value("Band End", xEnd(for: snapshot.date)),
+                    yStart: .value("Sweet Spot Low", snapshot.sweetSpotLower),
+                    yEnd: .value("Sweet Spot High", snapshot.sweetSpotUpper)
+                )
+                .foregroundStyle(
+                    snapshot.baselineIsReliable
+                    ? Color.green.opacity(isExpanded ? 0.16 : 0.12)
+                    : Color.gray.opacity(isExpanded ? 0.12 : 0.08)
+                )
+            }
+            
+            ForEach(snapshots) { snapshot in
+                AreaMark(
+                    x: .value("Date", snapshot.date),
+                    y: .value("Chronic Load", snapshot.chronicLoad)
+                )
+                .foregroundStyle(
+                    .linearGradient(
+                        colors: [Color.gray.opacity(isExpanded ? 0.22 : 0.16), Color.clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .interpolationMethod(.catmullRom)
+                
+                LineMark(
+                    x: .value("Date", snapshot.date),
+                    y: .value("Chronic Load", snapshot.chronicLoad)
+                )
+                .foregroundStyle(Color.gray.opacity(0.8))
+                .interpolationMethod(.catmullRom)
+                .lineStyle(.init(lineWidth: isExpanded ? 2.0 : 1.6, lineCap: .round, lineJoin: .round))
+                
+                LineMark(
+                    x: .value("Date", snapshot.date),
+                    y: .value("Acute Load", snapshot.acuteLoad)
+                )
+                .foregroundStyle(snapshot.baselineIsReliable ? acuteColor : Color.gray)
+                .interpolationMethod(.catmullRom)
+                .lineStyle(.init(lineWidth: isExpanded ? 2.8 : 2.3, lineCap: .round, lineJoin: .round))
+            }
+            
+            if let selectedDate,
+               let selected = snapshots.first(where: { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) }) {
+                RuleMark(x: .value("Selected Day", selected.date))
+                    .foregroundStyle(Color.primary.opacity(0.18))
+                    .lineStyle(.init(lineWidth: 1, dash: [4, 4]))
+                PointMark(
+                    x: .value("Date", selected.date),
+                    y: .value("Acute Load", selected.acuteLoad)
+                )
+                .foregroundStyle(acuteColor)
+                .symbolSize(isExpanded ? 90 : 45)
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: isExpanded ? 6 : 4)) { value in
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.month().day(), centered: true)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading) { _ in
+                AxisGridLine()
+                AxisValueLabel()
+            }
+        }
+    }
+}
+
 struct WorkoutContributionsSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
     let sportFilter: String?
     
-    private struct DailyLoadSnapshot: Identifiable {
+    struct DailyLoadSnapshot: Identifiable {
         let date: Date
         let sessionLoad: Double
         let acuteLoad: Double
@@ -414,8 +562,15 @@ struct WorkoutContributionsSection: View {
         let chronicTotal: Double
         let acwr: Double
         let workoutCount: Int
+        let activeDaysLast28: Int
+        let daysSinceLastWorkout: Int?
         
         var id: Date { date }
+        
+        var sweetSpotLower: Double { chronicLoad * 0.8 }
+        var sweetSpotUpper: Double { chronicLoad * 1.3 }
+        var baselineIsReliable: Bool { activeDaysLast28 >= 14 && (daysSinceLastWorkout ?? 0) < 8 && chronicLoad > 0 }
+        var isRestDay: Bool { sessionLoad == 0 && workoutCount == 0 }
     }
     
     private var displayWindow: (start: Date, end: Date, endExclusive: Date) {
@@ -495,7 +650,7 @@ struct WorkoutContributionsSection: View {
         }
         
         return dateSequence(from: displayWindow.start, to: displayWindow.end).map { day in
-            let acuteLoad = (0..<7).reduce(0.0) { partial, offset in
+            let acuteTotal = (0..<7).reduce(0.0) { partial, offset in
                 let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
                 return partial + (sessionLoadByDay[sourceDay] ?? 0)
             }
@@ -505,18 +660,28 @@ struct WorkoutContributionsSection: View {
                 return partial + (sessionLoadByDay[sourceDay] ?? 0)
             }
             
-            let acuteAverage = acuteLoad / 7.0
+            let acuteAverage = acuteTotal / 7.0
             let chronicLoad = chronicTotal / 28.0
+            let activeDaysLast28 = (0..<28).reduce(0) { partial, offset in
+                let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+                return partial + ((sessionLoadByDay[sourceDay] ?? 0) > 0 ? 1 : 0)
+            }
+            let daysSinceLastWorkout = (0..<28).first(where: { offset in
+                let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+                return (sessionLoadByDay[sourceDay] ?? 0) > 0
+            })
             
             return DailyLoadSnapshot(
                 date: day,
                 sessionLoad: sessionLoadByDay[day] ?? 0,
                 acuteLoad: acuteAverage,
-                acuteTotal: acuteLoad,
+                acuteTotal: acuteTotal,
                 chronicLoad: chronicLoad,
                 chronicTotal: chronicTotal,
                 acwr: chronicLoad > 0 ? acuteAverage / chronicLoad : 0,
-                workoutCount: workoutCountByDay[day] ?? 0
+                workoutCount: workoutCountByDay[day] ?? 0,
+                activeDaysLast28: activeDaysLast28,
+                daysSinceLastWorkout: daysSinceLastWorkout
             )
         }
     }
@@ -530,7 +695,9 @@ struct WorkoutContributionsSection: View {
             chronicLoad: 0,
             chronicTotal: 0,
             acwr: 0,
-            workoutCount: 0
+            workoutCount: 0,
+            activeDaysLast28: 0,
+            daysSinceLastWorkout: nil
         )
     }
     
@@ -542,41 +709,196 @@ struct WorkoutContributionsSection: View {
         Array(dailyLoadSnapshots.suffix(7))
     }
     
+    private var status: WorkoutLoadStatus {
+        if selectedSnapshot.activeDaysLast28 < 14 {
+            return WorkoutLoadStatus(
+                title: "Baseline Outdated",
+                color: .orange,
+                detail: "Baseline out of date. 14 active days in the last 28 are recommended to recalculate your fitness floor.",
+                hidesRatio: true
+            )
+        }
+        
+        if let daysSinceLastWorkout = selectedSnapshot.daysSinceLastWorkout {
+            if daysSinceLastWorkout > 21 {
+                return WorkoutLoadStatus(
+                    title: "Reset",
+                    color: .gray,
+                    detail: "More than 21 inactive days. Treat this as a new build and re-establish 28 days of baseline.",
+                    hidesRatio: true
+                )
+            }
+            if daysSinceLastWorkout >= 8 {
+                return WorkoutLoadStatus(
+                    title: "Re-establishing",
+                    color: .orange,
+                    detail: "Restarting training. ACWR may be sensitive for the next 7 days as you rebuild your acute baseline.",
+                    hidesRatio: true
+                )
+            }
+        } else {
+            return WorkoutLoadStatus(
+                title: "No Baseline",
+                color: .gray,
+                detail: "No recent training load found. The model needs fresh workouts to establish readiness.",
+                hidesRatio: true
+            )
+        }
+        
+        switch selectedSnapshot.acwr {
+        case ..<0.8:
+            return WorkoutLoadStatus(
+                title: "Detraining",
+                color: .blue,
+                detail: "Fitness baseline is dropping. Intensity may be too low to maintain gains.",
+                hidesRatio: false
+            )
+        case 0.8...1.2:
+            return WorkoutLoadStatus(
+                title: "Optimal",
+                color: .green,
+                detail: "Acute load is tracking inside the sweet spot relative to your chronic load.",
+                hidesRatio: false
+            )
+        case 1.3...1.5:
+            return WorkoutLoadStatus(
+                title: "Aggressive",
+                color: .yellow,
+                detail: "Pushing limits. Monitor fatigue, recovery quality, and the next session closely.",
+                hidesRatio: false
+            )
+        default:
+            return WorkoutLoadStatus(
+                title: "Spike",
+                color: .red,
+                detail: "High workload spike. Risk of injury is increased. Consider a lower-intensity session.",
+                hidesRatio: false
+            )
+        }
+    }
+    
+    private var trendText: String {
+        if status.hidesRatio {
+            return status.detail
+        }
+        return "ACWR " + String(format: "%.2f", selectedSnapshot.acwr) + " • Chronic " + String(format: "%.1f", selectedSnapshot.chronicLoad)
+    }
+    
+    private var baselineProgress: Double {
+        min(Double(selectedSnapshot.activeDaysLast28) / 14.0, 1.0)
+    }
+    
     var body: some View {
         HealthCard(
             symbol: "figure.strengthtraining.traditional",
             title: "Workouts",
             value: String(format: "%.0f", selectedSnapshot.acuteLoad),
             unit: "load",
-            trend: "ACWR " + String(format: "%.2f", selectedSnapshot.acwr) + " • Chronic " + String(format: "%.1f", selectedSnapshot.chronicLoad),
-            color: .green,
+            trend: trendText,
+            color: status.color,
             chartData: acuteLoadChartData,
             chartLabel: "Acute Load",
             chartUnit: "pts",
+            badgeText: status.title,
+            badgeColor: status.color,
+            customChartPreview: AnyView(
+                WorkoutLoadChart(
+                    snapshots: dailyLoadSnapshots,
+                    acuteColor: status.color,
+                    selectedDate: selectedSnapshot.date,
+                    isExpanded: false
+                )
+            ),
+            customChartSheet: AnyView(
+                VStack(spacing: 16) {
+                    Text("Load vs Baseline")
+                        .font(.title.bold())
+                        .foregroundColor(status.color)
+                    WorkoutLoadChart(
+                        snapshots: dailyLoadSnapshots,
+                        acuteColor: status.color,
+                        selectedDate: selectedSnapshot.date,
+                        isExpanded: true
+                    )
+                    .frame(height: 280)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(status.title)
+                            .font(.headline)
+                            .foregroundColor(status.color)
+                        Text(status.detail)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text("Sweet spot: acute load should stay between 0.8x and 1.3x of chronic load.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding()
+            ),
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Selected day: \(selectedSnapshot.date.formatted(date: .abbreviated, time: .omitted))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("Session load on selected day: " + String(format: "%.0f", selectedSnapshot.sessionLoad) + " pts across \(selectedSnapshot.workoutCount) workout\(selectedSnapshot.workoutCount == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if selectedSnapshot.isRestDay {
+                        Text("Recovery Day: 0 pts across 0 workouts")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("Session load on selected day: " + String(format: "%.0f", selectedSnapshot.sessionLoad) + " pts across \(selectedSnapshot.workoutCount) workout\(selectedSnapshot.workoutCount == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     Text("Acute Load (7-day daily average): " + String(format: "%.1f", selectedSnapshot.acuteLoad) + " pts/day = " + String(format: "%.0f", selectedSnapshot.acuteTotal) + " / 7")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     Text("Chronic Load (28-day average): " + String(format: "%.1f", selectedSnapshot.chronicLoad) + " pts/day = " + String(format: "%.0f", selectedSnapshot.chronicTotal) + " / 28")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text("ACWR = " + String(format: "%.1f", selectedSnapshot.acuteLoad) + " / " + String(format: "%.1f", selectedSnapshot.chronicLoad) + " = " + String(format: "%.2f", selectedSnapshot.acwr))
+                    if status.hidesRatio {
+                        Text("ACWR is hidden while the baseline is being rebuilt.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("ACWR = " + String(format: "%.1f", selectedSnapshot.acuteLoad) + " / " + String(format: "%.1f", selectedSnapshot.chronicLoad) + " = " + String(format: "%.2f", selectedSnapshot.acwr))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Text(status.detail)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(status.color)
+                    if status.hidesRatio {
+                        ProgressView(value: baselineProgress)
+                            .tint(status.color)
+                        Text("Baseline progress: \(selectedSnapshot.activeDaysLast28)/14 active days in the last 28")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                     Text("Session load formula: sum of minutes spent in HR zones, weighted Zone 1-5. If HR data is missing, duration x effort metadata is used.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("Acute Load History (\(timeFilter.rawValue))")
+                    Text("Acute vs Chronic (\(timeFilter.rawValue))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    TappableChartPreview(data: acuteLoadChartData, label: "Acute Load", unit: "pts", color: .green)
+                    HStack(spacing: 12) {
+                        Text("Acute")
+                            .font(.caption2.bold())
+                            .foregroundColor(status.color)
+                        Text("Chronic")
+                            .font(.caption2.bold())
+                            .foregroundColor(.gray)
+                        Text("Sweet Spot 0.8x-1.3x")
+                            .font(.caption2.bold())
+                            .foregroundColor(.green)
+                    }
+                    WorkoutLoadChart(
+                        snapshots: dailyLoadSnapshots,
+                        acuteColor: status.color,
+                        selectedDate: selectedSnapshot.date,
+                        isExpanded: true
+                    )
+                    .frame(height: 190)
                     if !selectedWeekBreakdown.isEmpty {
                         Divider().padding(.vertical, 2)
                         Text("Past 7 days used for acute load")

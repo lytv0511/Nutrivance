@@ -18,6 +18,10 @@ struct HealthCard<ExpandedContent: View>: View {
     let chartData: [(Date, Double)]
     let chartLabel: String
     let chartUnit: String
+    let badgeText: String?
+    let badgeColor: Color?
+    let customChartPreview: AnyView?
+    let customChartSheet: AnyView?
     let expandedContent: () -> ExpandedContent
 
     @State private var expanded = false
@@ -28,6 +32,38 @@ struct HealthCard<ExpandedContent: View>: View {
         let lastDate = chartData.last?.0.timeIntervalSince1970 ?? -1
         let lastValue = chartData.last?.1 ?? -1
         return "\(title)|\(chartLabel)|\(chartUnit)|\(chartData.count)|\(firstDate)|\(lastDate)|\(lastValue)"
+    }
+    
+    init(
+        symbol: String,
+        title: String,
+        value: String,
+        unit: String,
+        trend: String? = nil,
+        color: Color,
+        chartData: [(Date, Double)],
+        chartLabel: String,
+        chartUnit: String,
+        badgeText: String? = nil,
+        badgeColor: Color? = nil,
+        customChartPreview: AnyView? = nil,
+        customChartSheet: AnyView? = nil,
+        @ViewBuilder expandedContent: @escaping () -> ExpandedContent
+    ) {
+        self.symbol = symbol
+        self.title = title
+        self.value = value
+        self.unit = unit
+        self.trend = trend
+        self.color = color
+        self.chartData = chartData
+        self.chartLabel = chartLabel
+        self.chartUnit = chartUnit
+        self.badgeText = badgeText
+        self.badgeColor = badgeColor
+        self.customChartPreview = customChartPreview
+        self.customChartSheet = customChartSheet
+        self.expandedContent = expandedContent
     }
 
     var body: some View {
@@ -42,9 +78,19 @@ struct HealthCard<ExpandedContent: View>: View {
                         .foregroundColor(color)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                    HStack(spacing: 8) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        if let badgeText, let badgeColor {
+                            Text(badgeText)
+                                .font(.caption.bold())
+                                .foregroundColor(badgeColor)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(badgeColor.opacity(0.14), in: Capsule())
+                        }
+                    }
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(value)
                             .font(.system(size: 32, weight: .bold, design: .rounded))
@@ -78,15 +124,27 @@ struct HealthCard<ExpandedContent: View>: View {
                 let generator = UIImpactFeedbackGenerator(style: .medium)
                 generator.impactOccurred()
             } label: {
-                HealthLineChartPreview(data: chartData, label: chartLabel, unit: chartUnit, color: color)
-                    .id(chartIdentity)
-                    .frame(height: 80)
-                    .padding(.trailing, 8)
+                Group {
+                    if let customChartPreview {
+                        customChartPreview
+                    } else {
+                        HealthLineChartPreview(data: chartData, label: chartLabel, unit: chartUnit, color: color)
+                            .id(chartIdentity)
+                    }
+                }
+                .frame(height: 80)
+                .padding(.trailing, 8)
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $showChartSheet) {
-                HealthLineChartSheet(data: chartData, label: chartLabel, unit: chartUnit, color: color)
-                    .id(chartIdentity)
+                Group {
+                    if let customChartSheet {
+                        customChartSheet
+                    } else {
+                        HealthLineChartSheet(data: chartData, label: chartLabel, unit: chartUnit, color: color)
+                            .id(chartIdentity)
+                    }
+                }
             }
 
             if expanded {
