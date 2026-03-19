@@ -23,6 +23,8 @@ final class HealthStateEngine: ObservableObject {
     @Published var sleepStages: [Date: [String: Double]] = [:] // [date: [stage: hours]]
     @Published var sleepEfficiency: [Date: Double] = [:] // [date: efficiency 0-1]
     @Published var sleepConsistency: Double? // stddev of sleep start times (hours)
+    @Published var sleepStartHours: [Date: Double] = [:] // [date: bedtime hour]
+    @Published var dailySleepHeartRate: [Date: Double] = [:] // [date: avg sleep HR bpm]
     @Published var respiratoryRate: [Date: Double] = [:] // [date: breaths/min]
     @Published var wristTemperature: [Date: Double] = [:] // [date: deg C]
     @Published var spO2: [Date: Double] = [:] // [date: %]
@@ -257,6 +259,8 @@ final class HealthStateEngine: ObservableObject {
             var stages: [Date: [String: Double]] = [:]
             var efficiency: [Date: Double] = [:]
             var startTimes: [Double] = []
+            var bedtimeHours: [Date: Double] = [:]
+            var sleepWindows: [Date: (start: Date, end: Date)] = [:]
             for sample in samples {
                 let day = calendar.startOfDay(for: sample.startDate)
                 let duration = sample.endDate.timeIntervalSince(sample.startDate) / 3600 // hours
@@ -285,8 +289,17 @@ final class HealthStateEngine: ObservableObject {
                     // Collect start time for consistency
                     let hour = Double(calendar.component(.hour, from: sample.startDate)) + Double(calendar.component(.minute, from: sample.startDate)) / 60.0
                     startTimes.append(hour)
+                    bedtimeHours[day] = min(bedtimeHours[day] ?? hour, hour)
+                    let currentWindow = sleepWindows[day]
+                    let earliestStart = min(currentWindow?.start ?? sample.startDate, sample.startDate)
+                    let latestEnd = max(currentWindow?.end ?? sample.endDate, sample.endDate)
+                    sleepWindows[day] = (earliestStart, latestEnd)
                 } else if let stage = stage {
                     dayData[stage] = (dayData[stage] ?? 0.0) + duration
+                    let currentWindow = sleepWindows[day]
+                    let earliestStart = min(currentWindow?.start ?? sample.startDate, sample.startDate)
+                    let latestEnd = max(currentWindow?.end ?? sample.endDate, sample.endDate)
+                    sleepWindows[day] = (earliestStart, latestEnd)
                 }
                 stages[day] = dayData
             }
@@ -314,8 +327,49 @@ final class HealthStateEngine: ObservableObject {
                 }
                 self.sleepEfficiency = efficiency
                 self.sleepConsistency = consistency
+                self.sleepStartHours = bedtimeHours
+            }
+            
+            Task { @MainActor in
+                self.fetchSleepHeartRateHistory(
+                    sleepWindows: sleepWindows,
+                    queryStart: startDate,
+                    queryEnd: endDate
+                )
             }
         }
+        healthStore.execute(query)
+    }
+    
+    private func fetchSleepHeartRateHistory(
+        sleepWindows: [Date: (start: Date, end: Date)],
+        queryStart: Date,
+        queryEnd: Date
+    ) {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+        let predicate = HKQuery.predicateForSamples(withStart: queryStart, end: queryEnd)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        
+        let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+            guard let samples = samples as? [HKQuantitySample] else { return }
+            
+            var sleepHeartRates: [Date: Double] = [:]
+            
+            for (day, window) in sleepWindows {
+                let values = samples.compactMap { sample -> Double? in
+                    guard sample.startDate >= window.start && sample.endDate <= window.end else { return nil }
+                    return sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                }
+                
+                guard !values.isEmpty else { continue }
+                sleepHeartRates[day] = values.reduce(0, +) / Double(values.count)
+            }
+            
+            DispatchQueue.main.async {
+                self.dailySleepHeartRate = sleepHeartRates
+            }
+        }
+        
         healthStore.execute(query)
     }
 

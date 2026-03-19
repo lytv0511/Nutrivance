@@ -105,79 +105,89 @@ struct StrainRecoveryView: View {
                         Text("AI Coach Summary").font(.title2.bold())
                     }
 
-                    // Strain & Recovery Math
-                    StrainRecoveryMathSection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        anchorDate: selectedDate
-                    )
+                    MetricSectionGroup(title: "Training Load") {
+                        StrainRecoveryMathSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        WorkoutContributionsSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate,
+                            sportFilter: nil
+                        )
+                        METAggregatesSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            sportFilter: sportFilter,
+                            anchorDate: selectedDate
+                        )
+                        TrainingScheduleSection(
+                            engine: engine,
+                            sportFilter: sportFilter,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        VO2AggregatesSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            sportFilter: sportFilter,
+                            anchorDate: selectedDate
+                        )
+                    }
 
-                    // Sleep & Recovery
-                    SleepRecoverySection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        anchorDate: selectedDate
-                    )
+                    MetricSectionGroup(title: "Recovery") {
+                        HRVSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        RestingHeartRateSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        HRRAggregatesSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            sportFilter: sportFilter,
+                            anchorDate: selectedDate
+                        )
+                        RespiratoryRateSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        WristTemperatureSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        SpO2Section(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                    }
 
-                    // HRV & RHR
-                    HRVSection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        anchorDate: selectedDate
-                    )
-
-                    // Workout Contributions
-                    WorkoutContributionsSection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        anchorDate: selectedDate,
-                        sportFilter: sportFilter
-                    )
-
-                    // MET Aggregates
-                    METAggregatesSection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        sportFilter: sportFilter,
-                        anchorDate: selectedDate
-                    )
-
-                    // VO2 Aggregates
-                    VO2AggregatesSection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        sportFilter: sportFilter,
-                        anchorDate: selectedDate
-                    )
-
-                    // HRR Aggregates
-                    HRRAggregatesSection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        sportFilter: sportFilter,
-                        anchorDate: selectedDate
-                    )
-
-                    // Mood & Recovery
-                    MoodSection(engine: engine)
-
-                    // Post-Workout HR & VO2 Max
-                    PostWorkoutSection(engine: engine)
-
-                    // Training Schedule & Favorite Sport
-                    TrainingScheduleSection(
-                        engine: engine,
-                        sportFilter: sportFilter,
-                        timeFilter: timeFilter,
-                        anchorDate: selectedDate
-                    )
-
-                    // Vitals Table/Graph
-                    VitalsSection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        anchorDate: selectedDate
-                    )
+                    MetricSectionGroup(title: "Sleep") {
+                        SleepRecoverySection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        SleepConsistencySection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                        SleepHeartRateSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
+                    }
                 }
                 .padding()
             }
@@ -292,6 +302,33 @@ private func average(_ values: [Double]) -> Double? {
     return values.reduce(0, +) / Double(values.count)
 }
 
+private func standardDeviation(_ values: [Double]) -> Double? {
+    guard !values.isEmpty else { return nil }
+    let mean = values.reduce(0, +) / Double(values.count)
+    let variance = values.map { pow($0 - mean, 2) }.reduce(0, +) / Double(values.count)
+    return sqrt(variance)
+}
+
+struct MetricSectionGroup<Content: View>: View {
+    let title: String
+    let content: () -> Content
+    
+    init(title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.title2.bold())
+                .foregroundColor(.primary)
+                .padding(.horizontal, 4)
+            content()
+        }
+    }
+}
+
 struct StrainRecoveryMathSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
@@ -369,7 +406,7 @@ struct SleepRecoverySection: View {
         let efficiency = (engine.sleepEfficiency[activeDay] ?? 0) * 100
         HealthCard(
             symbol: "bed.double.fill",
-            title: "Sleep",
+            title: "Sleep Hours",
             value: String(format: "%.1f", latestSleep),
             unit: "hrs",
             trend: "\(timeFilter.rawValue) avg: " + String(format: "%.1f", averageSleep),
@@ -379,9 +416,6 @@ struct SleepRecoverySection: View {
             chartUnit: "hrs",
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Consistency: " + String(format: "%.2f", engine.sleepConsistency ?? 0) + "h stddev")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
                     Text("Efficiency: " + String(format: "%.0f%%", efficiency))
                         .font(.subheadline)
                         .foregroundColor(.secondary)
@@ -404,6 +438,82 @@ struct SleepRecoverySection: View {
     }
 }
 
+struct SleepConsistencySection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var bedtimeData: [(Date, Double)] {
+        filteredDailyValues(engine.sleepStartHours, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var consistencyValue: Double {
+        standardDeviation(bedtimeData.map(\.1)) ?? engine.sleepConsistency ?? 0
+    }
+    
+    private var averageBedtime: Double {
+        average(bedtimeData.map(\.1)) ?? 0
+    }
+    
+    var body: some View {
+        HealthCard(
+            symbol: "moon.zzz.fill",
+            title: "Sleep Consistency",
+            value: String(format: "%.2f", consistencyValue),
+            unit: "h",
+            trend: "Avg bedtime: " + String(format: "%.2f", averageBedtime),
+            color: .indigo,
+            chartData: bedtimeData,
+            chartLabel: "Bedtime",
+            chartUnit: "h",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Lower is better. This tracks how tightly your sleep start times cluster in the selected window.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text("Selected window stddev: " + String(format: "%.2f", consistencyValue) + "h")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
+struct SleepHeartRateSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var sleepHeartRateData: [(Date, Double)] {
+        filteredDailyValues(engine.dailySleepHeartRate, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    var body: some View {
+        let latestSleepHR = sleepHeartRateData.last?.1 ?? 0
+        let averageSleepHR = average(sleepHeartRateData.map(\.1)) ?? 0
+        
+        HealthCard(
+            symbol: "heart.text.square.fill",
+            title: "Sleep HR",
+            value: String(format: "%.0f", latestSleepHR),
+            unit: "bpm",
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.0f", averageSleepHR),
+            color: .mint,
+            chartData: sleepHeartRateData,
+            chartLabel: "Sleep HR",
+            chartUnit: "bpm",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Average heart rate recorded during each detected sleep window.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
 struct HRVSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
@@ -414,15 +524,9 @@ struct HRVSection: View {
         return filteredDailyValues(values, timeFilter: timeFilter, anchorDate: anchorDate)
     }
     
-    private var rhrData: [(Date, Double)] {
-        filteredDailyValues(engine.dailyRestingHeartRate, timeFilter: timeFilter, anchorDate: anchorDate)
-    }
-    
     var body: some View {
         let latestHRV = hrvData.last?.1 ?? 0
         let averageHRV = average(hrvData.map(\.1)) ?? 0
-        let latestRHR = rhrData.last?.1 ?? engine.restingHeartRate ?? 0
-        let averageRHR = average(rhrData.map(\.1)) ?? engine.rhrBaseline7Day ?? 0
         HealthCard(
             symbol: "waveform.path.ecg",
             title: "HRV",
@@ -438,13 +542,43 @@ struct HRVSection: View {
                     Text("HRV reflects the latest value within the selected window ending on \(anchorDate.formatted(date: .abbreviated, time: .omitted)).")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("RHR: " + String(format: "%.0f", latestRHR) + " bpm")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Text("RHR \(timeFilter.rawValue) avg: " + String(format: "%.0f", averageRHR))
+                    Text("Higher HRV generally suggests better recovery capacity and autonomic readiness.")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    TappableChartPreview(data: rhrData, label: "RHR", unit: "bpm", color: .red)
+                }
+            }
+        )
+    }
+}
+
+struct RestingHeartRateSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var rhrData: [(Date, Double)] {
+        filteredDailyValues(engine.dailyRestingHeartRate, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    var body: some View {
+        let latestRHR = rhrData.last?.1 ?? engine.restingHeartRate ?? 0
+        let averageRHR = average(rhrData.map(\.1)) ?? engine.rhrBaseline7Day ?? 0
+        
+        HealthCard(
+            symbol: "heart.fill",
+            title: "RHR",
+            value: String(format: "%.0f", latestRHR),
+            unit: "bpm",
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.0f", averageRHR),
+            color: .red,
+            chartData: rhrData,
+            chartLabel: "RHR",
+            chartUnit: "bpm",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Lower resting heart rate usually reflects stronger aerobic recovery and lower fatigue.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
         )
@@ -1077,6 +1211,108 @@ struct TrainingScheduleSection: View {
     }
 }
 
+struct RespiratoryRateSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var respArray: [(Date, Double)] {
+        filteredDailyValues(engine.respiratoryRate, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    var body: some View {
+        let current = respArray.last?.1 ?? 0
+        let averageValue = average(respArray.map(\.1)) ?? 0
+        
+        HealthCard(
+            symbol: "lungs.fill",
+            title: "Respiratory Rate",
+            value: String(format: "%.1f", current),
+            unit: "bpm",
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.1f", averageValue),
+            color: .indigo,
+            chartData: respArray,
+            chartLabel: "Respiratory Rate",
+            chartUnit: "bpm",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Nighttime respiratory rate can rise under illness, stress, heat load, or incomplete recovery.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
+struct WristTemperatureSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var tempArray: [(Date, Double)] {
+        filteredDailyValues(engine.wristTemperature, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    var body: some View {
+        let current = tempArray.last?.1 ?? 0
+        let averageValue = average(tempArray.map(\.1)) ?? 0
+        
+        HealthCard(
+            symbol: "thermometer.medium",
+            title: "Wrist Temperature",
+            value: String(format: "%.2f", current),
+            unit: "°C",
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.2f", averageValue),
+            color: .pink,
+            chartData: tempArray,
+            chartLabel: "Wrist Temp",
+            chartUnit: "°C",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Wrist temperature trends help flag heat strain, illness, travel disruption, or menstrual-cycle related shifts.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
+struct SpO2Section: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var spo2Array: [(Date, Double)] {
+        filteredDailyValues(engine.spO2, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    var body: some View {
+        let current = spo2Array.last?.1 ?? 0
+        let averageValue = average(spo2Array.map(\.1)) ?? 0
+        
+        HealthCard(
+            symbol: "drop.fill",
+            title: "SpO₂",
+            value: String(format: "%.1f", current),
+            unit: "%",
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.1f", averageValue),
+            color: .mint,
+            chartData: spo2Array,
+            chartLabel: "SpO₂",
+            chartUnit: "%",
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("A stable oxygen saturation baseline supports better altitude, sleep, and respiratory readiness tracking.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
+    }
+}
+
 struct VitalsSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
@@ -1239,7 +1475,18 @@ struct METAggregatesSection: View {
     let anchorDate: Date
 
     var filteredData: [(Date, Double)] {
-        filteredDailyValues(engine.dailyMETAggregates, timeFilter: timeFilter, anchorDate: anchorDate)
+        var base = engine.dailyMETAggregates
+        if let sport = sportFilter {
+            let filteredWorkouts = engine.workoutAnalytics.filter { $0.workout.workoutActivityType.name == sport }
+            var aggregates: [Date: Double] = [:]
+            let calendar = Calendar.current
+            for (workout, analytics) in filteredWorkouts {
+                let day = calendar.startOfDay(for: workout.startDate)
+                aggregates[day, default: 0] += analytics.metTotal ?? 0
+            }
+            base = aggregates
+        }
+        return filteredDailyValues(base, timeFilter: timeFilter, anchorDate: anchorDate)
     }
 
     var body: some View {
