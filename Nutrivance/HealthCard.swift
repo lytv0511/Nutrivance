@@ -22,6 +22,13 @@ struct HealthCard<ExpandedContent: View>: View {
 
     @State private var expanded = false
     @State private var showChartSheet = false
+    
+    private var chartIdentity: String {
+        let firstDate = chartData.first?.0.timeIntervalSince1970 ?? -1
+        let lastDate = chartData.last?.0.timeIntervalSince1970 ?? -1
+        let lastValue = chartData.last?.1 ?? -1
+        return "\(title)|\(chartLabel)|\(chartUnit)|\(chartData.count)|\(firstDate)|\(lastDate)|\(lastValue)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -72,12 +79,14 @@ struct HealthCard<ExpandedContent: View>: View {
                 generator.impactOccurred()
             } label: {
                 HealthLineChartPreview(data: chartData, label: chartLabel, unit: chartUnit, color: color)
+                    .id(chartIdentity)
                     .frame(height: 80)
                     .padding(.trailing, 8)
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $showChartSheet) {
                 HealthLineChartSheet(data: chartData, label: chartLabel, unit: chartUnit, color: color)
+                    .id(chartIdentity)
             }
 
             if expanded {
@@ -103,16 +112,41 @@ struct HealthLineChartPreview: View {
     let label: String
     let unit: String
     let color: Color
+    
+    private var lastPoint: (Date, Double)? {
+        data.last
+    }
+    
     var body: some View {
         Chart {
             ForEach(data, id: \ .0) { point in
+                AreaMark(
+                    x: .value("Date", point.0),
+                    y: .value(label, point.1)
+                )
+                .foregroundStyle(
+                    .linearGradient(
+                        colors: [color.opacity(0.28), color.opacity(0.02)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .interpolationMethod(.catmullRom)
                 LineMark(
                     x: .value("Date", point.0),
                     y: .value(label, point.1)
                 )
                 .foregroundStyle(color)
                 .interpolationMethod(.catmullRom)
-                .symbol(Circle())
+                .lineStyle(.init(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+            }
+            if let lastPoint {
+                PointMark(
+                    x: .value("Date", lastPoint.0),
+                    y: .value(label, lastPoint.1)
+                )
+                .foregroundStyle(color)
+                .symbolSize(45)
             }
         }
         .chartXAxis {
@@ -142,6 +176,10 @@ struct HealthLineChartSheet: View {
         df.setLocalizedDateFormatFromTemplate("MMM d, yyyy")
         return df
     }()
+    
+    private var showsPerformanceNote: Bool {
+        ["Strain", "Effort", "Acute Load", "Session Load"].contains(label)
+    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -150,13 +188,25 @@ struct HealthLineChartSheet: View {
                 .foregroundColor(color)
             Chart {
                 ForEach(data, id: \ .0) { point in
+                    AreaMark(
+                        x: .value("Date", point.0),
+                        y: .value(label, point.1)
+                    )
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [color.opacity(0.22), color.opacity(0.03)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .interpolationMethod(.catmullRom)
                     LineMark(
                         x: .value("Date", point.0),
                         y: .value(label, point.1)
                     )
                     .foregroundStyle(color)
                     .interpolationMethod(.catmullRom)
-                    .symbol(Circle())
+                    .lineStyle(.init(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
                 }
                 if let selected = selected {
                     PointMark(
@@ -234,7 +284,7 @@ struct HealthLineChartSheet: View {
                             Text(String(format: "%.1f \(unit)", selected.1))
                                 .font(.system(size: 44, weight: .bold, design: .rounded))
                                 .foregroundColor(.orange)
-                            if !note.isEmpty &&  label == "Strain" || label == "Effort" {
+                            if !note.isEmpty && showsPerformanceNote {
                                 Spacer()
                                 if note == "Maximum" {
                                     Image(systemName: "gauge.with.dots.needle.100percent")

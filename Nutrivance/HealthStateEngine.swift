@@ -245,11 +245,11 @@ final class HealthStateEngine: ObservableObject {
     }
 
     // MARK: - Sleep Quality Fetch (stages, efficiency, consistency)
-    private func fetchSleepQuality() {
+    private func fetchSleepQuality(days: Int = 28) {
         guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return }
         let calendar = Calendar.current
         let endDate = Date()
-        let startDate = calendar.date(byAdding: .day, value: -28, to: endDate) ?? endDate
+        let startDate = calendar.date(byAdding: .day, value: -days, to: endDate) ?? endDate
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
         let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, error in
@@ -320,10 +320,10 @@ final class HealthStateEngine: ObservableObject {
     }
 
     // MARK: - Vitals Fetch (respiratory rate, temp, SpO2, post-workout HR, VO2 max)
-    private func fetchVitals() {
-        fetchRespiratoryRate(days: 28)
-        fetchWristTemperature(days: 28)
-        fetchSpO2(days: 28)
+    private func fetchVitals(days: Int = 28) {
+        fetchRespiratoryRate(days: days)
+        fetchWristTemperature(days: days)
+        fetchSpO2(days: days)
 
         // Async/await for post-workout HR recovery and VO2 Max
         Task { [weak self] in
@@ -430,11 +430,10 @@ final class HealthStateEngine: ObservableObject {
     }
 
     // MARK: - Intensity Metrics Fetch (effort, kcal, HR zones)
-    private func fetchIntensityMetrics() {
+    private func fetchIntensityMetrics(days: Int = 28) {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
         let endDate = Date()
-        guard let startDate = calendar.date(byAdding: .day, value: -28, to: endDate) else { return }
+        guard let startDate = calendar.date(byAdding: .day, value: -days, to: endDate) else { return }
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
         let query = HKSampleQuery(
             sampleType: HKObjectType.workoutType(),
@@ -519,7 +518,7 @@ final class HealthStateEngine: ObservableObject {
         case "hrv":
             dict = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) })
         case "rhr":
-            dict = [:]  // Only real HealthKit data
+            dict = dailyRestingHeartRate
         case "sleep":
             dict = [:]  // Only real HealthKit data
         case "respiratoryrate": dict = respiratoryRate
@@ -545,6 +544,7 @@ final class HealthStateEngine: ObservableObject {
 
     @Published var latestHRV: Double?          // ms
     @Published var restingHeartRate: Double?   // bpm
+    @Published var dailyRestingHeartRate: [Date: Double] = [:]
     @Published var sleepHours: Double?         // hours
     @Published var activityLoad: Double = 0    // arbitrary training load
     @Published var hrvHistory: [Double] = []   // last 30 HRV values
@@ -687,15 +687,16 @@ final class HealthStateEngine: ObservableObject {
     func refreshAllMetrics() {
         // All fetches are now on the main actor
         self.fetchLatestHRV()
-        self.fetchHRVHistory(days: 30)
+        self.fetchHRVHistory(days: 365)
         self.fetchRestingHeartRate()
+        self.fetchRestingHeartRateHistory(days: 365)
         self.fetchSleep()
         self.fetchBaselines()
         self.fetchTrainingLoad()
-        self.fetchSleepQuality()
+        self.fetchSleepQuality(days: 365)
         print("[refreshAllMetrics] calling fetchVitals...")
-        self.fetchVitals()
-        self.fetchIntensityMetrics()
+        self.fetchVitals(days: 365)
+        self.fetchIntensityMetrics(days: 365)
         self.inferFavoriteSportAndFrequency()
         self.updateScores()
     }
@@ -1059,6 +1060,49 @@ final class HealthStateEngine: ObservableObject {
             }
         }
 
+        healthStore.execute(query)
+    }
+    
+    private func fetchRestingHeartRateHistory(days: Int) {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .restingHeartRate) else { return }
+        
+        let calendar = Calendar.current
+        let endDate = Date()
+        guard let startDate = calendar.date(byAdding: .day, value: -days, to: endDate) else { return }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+        
+        let query = HKSampleQuery(
+            sampleType: type,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: [sort]
+        ) { _, samples, _ in
+            guard let quantitySamples = samples as? [HKQuantitySample] else { return }
+            
+            let samplesWithDates = quantitySamples.map {
+                (
+                    date: calendar.startOfDay(for: $0.endDate),
+                    value: $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                )
+            }
+            
+            let grouped = Dictionary(grouping: samplesWithDates, by: \.date)
+            let dailyAverages = grouped.reduce(into: [Date: Double]()) { result, entry in
+                let values = entry.value.map { $0.value }
+                guard !values.isEmpty else { return }
+                result[entry.key] = values.reduce(0, +) / Double(values.count)
+            }
+            
+            Task { @MainActor in
+                self.dailyRestingHeartRate = dailyAverages
+                if let latest = quantitySamples.last {
+                    self.restingHeartRate = latest.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                }
+            }
+        }
+        
         healthStore.execute(query)
     }
 

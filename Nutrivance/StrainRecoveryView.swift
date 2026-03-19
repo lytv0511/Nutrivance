@@ -38,6 +38,7 @@ struct StrainRecoveryView: View {
 
     @State private var timeFilter: TimeFilter = .week
     @State private var sportFilter: String? = nil // nil means all sports
+    @State private var selectedDate = Date()
 
     var body: some View {
         NavigationStack {
@@ -81,25 +82,57 @@ struct StrainRecoveryView: View {
                     }
 
                     // Strain & Recovery Math
-                    StrainRecoveryMathSection(engine: engine)
+                    StrainRecoveryMathSection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        anchorDate: selectedDate
+                    )
 
                     // Sleep & Recovery
-                    SleepRecoverySection(engine: engine)
+                    SleepRecoverySection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        anchorDate: selectedDate
+                    )
 
                     // HRV & RHR
-                    HRVSection(engine: engine)
+                    HRVSection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        anchorDate: selectedDate
+                    )
 
                     // Workout Contributions
-                    WorkoutContributionsSection(engine: engine)
+                    WorkoutContributionsSection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        anchorDate: selectedDate,
+                        sportFilter: sportFilter
+                    )
 
                     // MET Aggregates
-                    METAggregatesSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
+                    METAggregatesSection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        sportFilter: sportFilter,
+                        anchorDate: selectedDate
+                    )
 
                     // VO2 Aggregates
-                    VO2AggregatesSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
+                    VO2AggregatesSection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        sportFilter: sportFilter,
+                        anchorDate: selectedDate
+                    )
 
                     // HRR Aggregates
-                    HRRAggregatesSection(engine: engine, timeFilter: timeFilter, sportFilter: sportFilter)
+                    HRRAggregatesSection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        sportFilter: sportFilter,
+                        anchorDate: selectedDate
+                    )
 
                     // Mood & Recovery
                     MoodSection(engine: engine)
@@ -108,10 +141,19 @@ struct StrainRecoveryView: View {
                     PostWorkoutSection(engine: engine)
 
                     // Training Schedule & Favorite Sport
-                    TrainingScheduleSection(engine: engine, sportFilter: sportFilter)
+                    TrainingScheduleSection(
+                        engine: engine,
+                        sportFilter: sportFilter,
+                        timeFilter: timeFilter,
+                        anchorDate: selectedDate
+                    )
 
                     // Vitals Table/Graph
-                    VitalsSection(engine: engine)
+                    VitalsSection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        anchorDate: selectedDate
+                    )
                 }
                 .padding()
             }
@@ -124,6 +166,17 @@ struct StrainRecoveryView: View {
                     }
             )
             .navigationTitle("Strain vs Recovery")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    DatePicker(
+                        "Reference Date",
+                        selection: $selectedDate,
+                        in: ...Date(),
+                        displayedComponents: .date
+                    )
+                    .labelsHidden()
+                }
+            }
             .task {
                 await engine.refreshWorkoutAnalytics(days: 365) // Load more for year view
             }
@@ -135,21 +188,95 @@ struct StrainRecoveryView: View {
 
 import Charts
 
+private extension StrainRecoveryView.TimeFilter {
+    var dayCount: Int {
+        switch self {
+        case .week: return 7
+        case .month: return 30
+        case .year: return 365
+        }
+    }
+}
+
+private func chartWindow(
+    for timeFilter: StrainRecoveryView.TimeFilter,
+    anchorDate: Date
+) -> (start: Date, end: Date, endExclusive: Date) {
+    let calendar = Calendar.current
+    let end = calendar.startOfDay(for: anchorDate)
+    let start = calendar.date(byAdding: .day, value: -(timeFilter.dayCount - 1), to: end) ?? end
+    let endExclusive = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+    return (start, end, endExclusive)
+}
+
+private func filteredDailyValues(
+    _ values: [Date: Double],
+    timeFilter: StrainRecoveryView.TimeFilter,
+    anchorDate: Date
+) -> [(Date, Double)] {
+    let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
+    
+    return values
+        .filter { date, _ in
+            date >= window.start && date <= window.end
+        }
+        .sorted { $0.0 < $1.0 }
+}
+
+private func dateSequence(from start: Date, to end: Date) -> [Date] {
+    let calendar = Calendar.current
+    let safeStart = calendar.startOfDay(for: start)
+    let safeEnd = calendar.startOfDay(for: end)
+    guard safeStart <= safeEnd else { return [] }
+    
+    let dayCount = (calendar.dateComponents([.day], from: safeStart, to: safeEnd).day ?? 0) + 1
+    return (0..<dayCount).compactMap {
+        calendar.date(byAdding: .day, value: $0, to: safeStart)
+    }
+}
+
+private func average(_ values: [Double]) -> Double? {
+    guard !values.isEmpty else { return nil }
+    return values.reduce(0, +) / Double(values.count)
+}
+
 struct StrainRecoveryMathSection: View {
     @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var effortData: [(Date, Double)] {
+        filteredDailyValues(engine.effortRating, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var totalLoad: Double {
+        effortData.map(\.1).reduce(0, +)
+    }
+    
+    private var averageLoad: Double {
+        average(effortData.map(\.1)) ?? 0
+    }
+    
+    private var strainValue: Double {
+        min(100, averageLoad * 10)
+    }
+    
     var body: some View {
         HealthCard(
             symbol: "flame.fill",
             title: "Strain",
-            value: String(Int(engine.strainScore)),
+            value: String(Int(strainValue)),
             unit: "/100",
-            trend: "ACWR: " + String(format: "%.2f", engine.activityLoad / max(engine.activityLoad / 4, 1)),
+            trend: "\(timeFilter.rawValue) load: " + String(format: "%.1f", totalLoad),
             color: Color.orange,
-            chartData: engine.timeSeries(for: "effort", days: 28),
+            chartData: effortData,
             chartLabel: "Effort",
             chartUnit: "pts",
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
+                    Text("\(timeFilter.rawValue) average effort: " + String(format: "%.1f", averageLoad))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                     Text("Recovery Score: \(Int(engine.recoveryScore))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
@@ -164,18 +291,38 @@ struct StrainRecoveryMathSection: View {
 
 struct SleepRecoverySection: View {
     @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var sleepData: [(Date, Double)] {
+        let totals = engine.sleepStages.mapValues { stages in
+            ["core", "deep", "rem"].compactMap { stages[$0] }.reduce(0, +)
+        }
+        return filteredDailyValues(totals, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var selectedDay: Date {
+        Calendar.current.startOfDay(for: anchorDate)
+    }
+    
+    private var activeDay: Date {
+        sleepData.last?.0 ?? selectedDay
+    }
+    
     var body: some View {
-        let today = Calendar.current.startOfDay(for: Date())
-        let stages = engine.sleepStages[today] ?? [:]
+        let stages = engine.sleepStages[activeDay] ?? [:]
         let totalStages = ["core", "deep", "rem", "awake"].compactMap { stages[$0] }.reduce(0, +)
+        let latestSleep = sleepData.last?.1 ?? 0
+        let averageSleep = average(sleepData.map(\.1)) ?? 0
+        let efficiency = (engine.sleepEfficiency[activeDay] ?? 0) * 100
         HealthCard(
             symbol: "bed.double.fill",
             title: "Sleep",
-            value: String(format: "%.1f", engine.sleepHours ?? 0),
+            value: String(format: "%.1f", latestSleep),
             unit: "hrs",
-            trend: "7d avg: " + String(format: "%.1f", engine.sleepBaseline7Day ?? 0),
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.1f", averageSleep),
             color: .blue,
-            chartData: engine.timeSeries(for: "sleep", days: 28),
+            chartData: sleepData,
             chartLabel: "Sleep",
             chartUnit: "hrs",
             expandedContent: {
@@ -183,7 +330,7 @@ struct SleepRecoverySection: View {
                     Text("Consistency: " + String(format: "%.2f", engine.sleepConsistency ?? 0) + "h stddev")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("Efficiency: " + String(format: "%.0f%%", (engine.sleepEfficiency[engine.sleepEfficiency.keys.max() ?? Date()] ?? 0) * 100))
+                    Text("Efficiency: " + String(format: "%.0f%%", efficiency))
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     if !stages.isEmpty {
@@ -207,29 +354,45 @@ struct SleepRecoverySection: View {
 
 struct HRVSection: View {
     @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    
+    private var hrvData: [(Date, Double)] {
+        let values = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
+        return filteredDailyValues(values, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var rhrData: [(Date, Double)] {
+        filteredDailyValues(engine.dailyRestingHeartRate, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
     var body: some View {
+        let latestHRV = hrvData.last?.1 ?? 0
+        let averageHRV = average(hrvData.map(\.1)) ?? 0
+        let latestRHR = rhrData.last?.1 ?? engine.restingHeartRate ?? 0
+        let averageRHR = average(rhrData.map(\.1)) ?? engine.rhrBaseline7Day ?? 0
         HealthCard(
             symbol: "waveform.path.ecg",
             title: "HRV",
-            value: String(format: "%.0f", engine.latestHRV ?? 0),
+            value: String(format: "%.0f", latestHRV),
             unit: "ms",
-            trend: "7d avg: " + String(format: "%.0f", engine.hrvBaseline7Day ?? 0),
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.0f", averageHRV),
             color: .purple,
-            chartData: engine.timeSeries(for: "hrv", days: 28),
+            chartData: hrvData,
             chartLabel: "HRV",
             chartUnit: "ms",
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Current HRV is your most recent SDNN measurement. 7d avg is the rolling average.")
+                    Text("HRV reflects the latest value within the selected window ending on \(anchorDate.formatted(date: .abbreviated, time: .omitted)).")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("RHR: " + String(format: "%.0f", engine.restingHeartRate ?? 0) + " bpm")
+                    Text("RHR: " + String(format: "%.0f", latestRHR) + " bpm")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("RHR 7d avg: " + String(format: "%.0f", engine.rhrBaseline7Day ?? 0))
+                    Text("RHR \(timeFilter.rawValue) avg: " + String(format: "%.0f", averageRHR))
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    TappableChartPreview(data: engine.timeSeries(for: "rhr", days: 28), label: "RHR", unit: "bpm", color: .red)
+                    TappableChartPreview(data: rhrData, label: "RHR", unit: "bpm", color: .red)
                 }
             }
         )
@@ -238,31 +401,195 @@ struct HRVSection: View {
 
 struct WorkoutContributionsSection: View {
     @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    let sportFilter: String?
+    
+    private struct DailyLoadSnapshot: Identifiable {
+        let date: Date
+        let sessionLoad: Double
+        let acuteLoad: Double
+        let acuteTotal: Double
+        let chronicLoad: Double
+        let chronicTotal: Double
+        let acwr: Double
+        let workoutCount: Int
+        
+        var id: Date { date }
+    }
+    
+    private var displayWindow: (start: Date, end: Date, endExclusive: Date) {
+        chartWindow(for: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var historicalWindowStart: Date {
+        Calendar.current.date(byAdding: .day, value: -27, to: displayWindow.start) ?? displayWindow.start
+    }
+    
+    private var workoutsForComputation: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        return engine.workoutAnalytics.filter { workout, _ in
+            let matchesDate = workout.startDate >= historicalWindowStart && workout.startDate < displayWindow.endExclusive
+            let matchesSport = sportFilter == nil || workout.workoutActivityType.name == sportFilter
+            return matchesDate && matchesSport
+        }
+    }
+    
+    private func workoutEffortScore(from workout: HKWorkout) -> Double? {
+        guard let metadata = workout.metadata else { return nil }
+        
+        let preferredKeys = [
+            "HKMetadataKeyWorkloadEffortScore",
+            "HKMetadataKeyWorkoutEffortScore"
+        ]
+        
+        for key in preferredKeys {
+            if let value = metadata[key] as? NSNumber {
+                return value.doubleValue
+            }
+            if let value = metadata[key] as? Double {
+                return value
+            }
+        }
+        
+        for (key, value) in metadata where key.localizedCaseInsensitiveContains("effort") {
+            if let number = value as? NSNumber {
+                return number.doubleValue
+            }
+            if let doubleValue = value as? Double {
+                return doubleValue
+            }
+        }
+        
+        return nil
+    }
+    
+    private func sessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
+        let zoneWeightedLoad = analytics.hrZoneBreakdown.reduce(0.0) { partial, entry in
+            let zoneWeight = Double(min(max(entry.zone.zoneNumber, 1), 5))
+            let zoneMinutes = entry.timeInZone / 60.0
+            return partial + (zoneMinutes * zoneWeight)
+        }
+        
+        if zoneWeightedLoad > 0 {
+            return zoneWeightedLoad.rounded()
+        }
+        
+        let durationMinutes = workout.duration / 60.0
+        if let effortScore = workoutEffortScore(from: workout) {
+            return (durationMinutes * max(1, effortScore)).rounded()
+        }
+        
+        return 0
+    }
+    
+    private var dailyLoadSnapshots: [DailyLoadSnapshot] {
+        let calendar = Calendar.current
+        var sessionLoadByDay: [Date: Double] = [:]
+        var workoutCountByDay: [Date: Int] = [:]
+        
+        for (workout, analytics) in workoutsForComputation {
+            let day = calendar.startOfDay(for: workout.startDate)
+            let load = sessionLoad(for: workout, analytics: analytics)
+            sessionLoadByDay[day, default: 0] += load
+            workoutCountByDay[day, default: 0] += 1
+        }
+        
+        return dateSequence(from: displayWindow.start, to: displayWindow.end).map { day in
+            let acuteLoad = (0..<7).reduce(0.0) { partial, offset in
+                let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+                return partial + (sessionLoadByDay[sourceDay] ?? 0)
+            }
+            
+            let chronicTotal = (0..<28).reduce(0.0) { partial, offset in
+                let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+                return partial + (sessionLoadByDay[sourceDay] ?? 0)
+            }
+            
+            let acuteAverage = acuteLoad / 7.0
+            let chronicLoad = chronicTotal / 28.0
+            
+            return DailyLoadSnapshot(
+                date: day,
+                sessionLoad: sessionLoadByDay[day] ?? 0,
+                acuteLoad: acuteAverage,
+                acuteTotal: acuteLoad,
+                chronicLoad: chronicLoad,
+                chronicTotal: chronicTotal,
+                acwr: chronicLoad > 0 ? acuteAverage / chronicLoad : 0,
+                workoutCount: workoutCountByDay[day] ?? 0
+            )
+        }
+    }
+    
+    private var selectedSnapshot: DailyLoadSnapshot {
+        dailyLoadSnapshots.last ?? DailyLoadSnapshot(
+            date: displayWindow.end,
+            sessionLoad: 0,
+            acuteLoad: 0,
+            acuteTotal: 0,
+            chronicLoad: 0,
+            chronicTotal: 0,
+            acwr: 0,
+            workoutCount: 0
+        )
+    }
+    
+    private var acuteLoadChartData: [(Date, Double)] {
+        dailyLoadSnapshots.map { ($0.date, $0.acuteLoad) }
+    }
+    
+    private var selectedWeekBreakdown: [DailyLoadSnapshot] {
+        Array(dailyLoadSnapshots.suffix(7))
+    }
+    
     var body: some View {
         HealthCard(
             symbol: "figure.strengthtraining.traditional",
             title: "Workouts",
-            value: String(format: "%.0f", engine.activityLoad),
+            value: String(format: "%.0f", selectedSnapshot.acuteLoad),
             unit: "load",
-            trend: "Effort 7d avg",
+            trend: "ACWR " + String(format: "%.2f", selectedSnapshot.acwr) + " • Chronic " + String(format: "%.1f", selectedSnapshot.chronicLoad),
             color: .green,
-            chartData: engine.timeSeries(for: "effort", days: 28),
-            chartLabel: "Effort",
+            chartData: acuteLoadChartData,
+            chartLabel: "Acute Load",
             chartUnit: "pts",
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Training Load is a composite score based on effort, duration, and intensity. Higher is more strenuous.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text("Kcal Burned (28d)")
+                    Text("Selected day: \(selectedSnapshot.date.formatted(date: .abbreviated, time: .omitted))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    TappableChartPreview(data: engine.timeSeries(for: "kcal", days: 28), label: "Kcal", unit: "kcal", color: .orange)
-                    if let latestDate = engine.heartRateZones.keys.max(), let zones = engine.heartRateZones[latestDate] {
-                        HStack(spacing: 12) {
-                            ForEach(zones.sorted(by: { $0.key < $1.key }), id: \ .key) { zone, min in
-                                Text("\(zone): " + String(format: "%.0f", min) + " min")
-                                    .font(.caption)
+                    Text("Session load on selected day: " + String(format: "%.0f", selectedSnapshot.sessionLoad) + " pts across \(selectedSnapshot.workoutCount) workout\(selectedSnapshot.workoutCount == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Acute Load (7-day daily average): " + String(format: "%.1f", selectedSnapshot.acuteLoad) + " pts/day = " + String(format: "%.0f", selectedSnapshot.acuteTotal) + " / 7")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("Chronic Load (28-day average): " + String(format: "%.1f", selectedSnapshot.chronicLoad) + " pts/day = " + String(format: "%.0f", selectedSnapshot.chronicTotal) + " / 28")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("ACWR = " + String(format: "%.1f", selectedSnapshot.acuteLoad) + " / " + String(format: "%.1f", selectedSnapshot.chronicLoad) + " = " + String(format: "%.2f", selectedSnapshot.acwr))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Session load formula: sum of minutes spent in HR zones, weighted Zone 1-5. If HR data is missing, duration x effort metadata is used.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text("Acute Load History (\(timeFilter.rawValue))")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    TappableChartPreview(data: acuteLoadChartData, label: "Acute Load", unit: "pts", color: .green)
+                    if !selectedWeekBreakdown.isEmpty {
+                        Divider().padding(.vertical, 2)
+                        Text("Past 7 days used for acute load")
+                            .font(.caption.bold())
+                            .foregroundColor(.secondary)
+                        ForEach(Array(selectedWeekBreakdown.reversed())) { snapshot in
+                            HStack {
+                                Text(snapshot.date.formatted(date: .abbreviated, time: .omitted))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text(String(format: "%.0f pts", snapshot.sessionLoad))
+                                    .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
                         }
@@ -364,14 +691,14 @@ struct PostWorkoutSection: View {
 struct TrainingScheduleSection: View {
     @ObservedObject var engine: HealthStateEngine
     let sportFilter: String?
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
 
     var filteredWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
-        let calendar = Calendar.current
-        let endDate = Date()
-        let startDate = calendar.date(byAdding: .day, value: -7, to: endDate) ?? endDate
+        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
         
         return engine.workoutAnalytics.filter { workout, _ in
-            let isInRange = workout.startDate >= startDate && workout.startDate <= endDate
+            let isInRange = workout.startDate >= window.start && workout.startDate < window.endExclusive
             let matchesSport = sportFilter == nil || workout.workoutActivityType.name == sportFilter
             return isInRange && matchesSport
         }
@@ -391,7 +718,8 @@ struct TrainingScheduleSection: View {
     }
 
     var frequency: Double {
-        return Double(filteredWorkouts.count)
+        guard timeFilter.dayCount > 0 else { return 0 }
+        return (Double(filteredWorkouts.count) / Double(timeFilter.dayCount)) * 7
     }
 
     var body: some View {
@@ -412,10 +740,10 @@ struct TrainingScheduleSection: View {
                     Text("Filter: " + (sportFilter?.capitalized ?? "All Sports"))
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("7-day frequency: " + String(format: "%.0f", frequency) + " sessions")
+                    Text("\(timeFilter.rawValue) frequency: " + String(format: "%.1f", frequency) + " sessions/week")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("Total minutes (7d): " + String(format: "%.0f", totalMinutes))
+                    Text("Total minutes (\(timeFilter.rawValue)): " + String(format: "%.0f", totalMinutes))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Text("Overall favorite sport: " + (engine.favoriteSport ?? "-"))
@@ -429,16 +757,47 @@ struct TrainingScheduleSection: View {
 
 struct VitalsSection: View {
     @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
     @State private var isLoading = true
+    
+    private var respArray: [(Date, Double)] {
+        filteredDailyValues(engine.respiratoryRate, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var tempArray: [(Date, Double)] {
+        filteredDailyValues(engine.wristTemperature, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var spo2Array: [(Date, Double)] {
+        filteredDailyValues(engine.spO2, timeFilter: timeFilter, anchorDate: anchorDate)
+    }
+    
+    private var respCurrent: Double {
+        respArray.last?.1 ?? 0
+    }
+    
+    private var respAverage: Double {
+        average(respArray.map(\.1)) ?? 0
+    }
+    
+    private var tempCurrent: Double {
+        tempArray.last?.1 ?? 0
+    }
+    
+    private var tempAverage: Double {
+        average(tempArray.map(\.1)) ?? 0
+    }
+    
+    private var spo2Current: Double {
+        spo2Array.last?.1 ?? 0
+    }
+    
+    private var spo2Average: Double {
+        average(spo2Array.map(\.1)) ?? 0
+    }
+    
     var body: some View {
-        let today = Calendar.current.startOfDay(for: Date())
-        let respCurrent = engine.respiratoryRate[today] ?? 0
-        let resp7dAvg = engine.vitalsSummary["RespiratoryRate"]?.baseline ?? 0
-        let spo2Current = engine.spO2[today] ?? 0
-        let spo27dAvg = engine.vitalsSummary["SpO2"]?.baseline ?? 0
-        let respArray = engine.timeSeries(for: "respiratoryrate", days: 28)
-        let tempArray = engine.timeSeries(for: "wristtemp", days: 28)
-        let spo2Array = engine.timeSeries(for: "spo2", days: 28)
         let hasData = !respArray.isEmpty || !tempArray.isEmpty || !spo2Array.isEmpty
         VStack {
             if isLoading && !hasData {
@@ -457,7 +816,7 @@ struct VitalsSection: View {
                     title: "Respiratory Rate",
                     value: String(format: "%.1f", respCurrent),
                     unit: "bpm",
-                    trend: "7d avg: " + String(format: "%.1f", resp7dAvg),
+                    trend: "\(timeFilter.rawValue) avg: " + String(format: "%.1f", respAverage),
                     color: .indigo,
                     chartData: respArray,
                     chartLabel: "Respiratory Rate",
@@ -468,8 +827,11 @@ struct VitalsSection: View {
                             Text("No respiratory rate data available.")
                                 .foregroundColor(.red)
                         }
-                        Text("Wrist Temp (28d)")
+                        Text("Wrist Temp (\(timeFilter.rawValue))")
                             .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text("Current: " + String(format: "%.2f", tempCurrent) + "°C | Avg: " + String(format: "%.2f", tempAverage) + "°C")
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                         if tempArray.isEmpty {
                             Text("No wrist temperature data available.")
@@ -477,10 +839,10 @@ struct VitalsSection: View {
                         }
                         TappableChartPreview(data: tempArray, label: "Wrist Temp", unit: "°C", color: .pink)
 //                            .frame(height: 60)
-                        Text("SpO₂ (28d)")
+                        Text("SpO₂ (\(timeFilter.rawValue))")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        Text("Current: " + String(format: "%.1f", spo2Current) + "% | 7d avg: " + String(format: "%.1f", spo27dAvg) + "%")
+                        Text("Current: " + String(format: "%.1f", spo2Current) + "% | Avg: " + String(format: "%.1f", spo2Average) + "%")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                         if spo2Array.isEmpty {
@@ -490,15 +852,19 @@ struct VitalsSection: View {
                         TappableChartPreview(data: spo2Array, label: "SpO₂", unit: "%", color: .mint)
 //                            .frame(height: 60)
                         Divider().padding(.vertical, 2)
-                        ForEach(engine.vitalsSummary.sorted(by: { $0.key < $1.key }), id: \ .key) { key, val in
+                        ForEach([
+                            ("RespiratoryRate", respCurrent, respAverage),
+                            ("WristTemp", tempCurrent, tempAverage),
+                            ("SpO2", spo2Current, spo2Average)
+                        ], id: \.0) { key, current, average in
                             HStack {
                                 Text("\(key):")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                Text("Current: \(val.current.map { String(format: "%.1f", $0) } ?? "-")")
+                                Text("Current: \(String(format: "%.1f", current))")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
-                                Text("7d Avg: \(val.baseline.map { String(format: "%.1f", $0) } ?? "-")")
+                                Text("\(timeFilter.rawValue) Avg: \(String(format: "%.1f", average))")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
@@ -548,21 +914,10 @@ struct METAggregatesSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
+    let anchorDate: Date
 
     var filteredData: [(Date, Double)] {
-        let base = engine.dailyMETAggregates
-        let filtered = base.filter { date, _ in
-            // Apply time filter
-            let days: Int
-            switch timeFilter {
-            case .week: days = 7
-            case .month: days = 30
-            case .year: days = 365
-            }
-            let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-            return date >= cutoff
-        }
-        return filtered.sorted { $0.0 < $1.0 }
+        filteredDailyValues(engine.dailyMETAggregates, timeFilter: timeFilter, anchorDate: anchorDate)
     }
 
     var body: some View {
@@ -585,6 +940,7 @@ struct VO2AggregatesSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
+    let anchorDate: Date
 
     var filteredData: [(Date, Double)] {
         var base = engine.dailyVO2Aggregates
@@ -601,17 +957,7 @@ struct VO2AggregatesSection: View {
             }
             base = aggregates.mapValues { $0.reduce(0, +) / Double($0.count) }
         }
-        let filtered = base.filter { date, _ in
-            let days: Int
-            switch timeFilter {
-            case .week: days = 7
-            case .month: days = 30
-            case .year: days = 365
-            }
-            let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-            return date >= cutoff
-        }
-        return filtered.sorted { $0.0 < $1.0 }
+        return filteredDailyValues(base, timeFilter: timeFilter, anchorDate: anchorDate)
     }
 
     var body: some View {
@@ -634,6 +980,7 @@ struct HRRAggregatesSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
+    let anchorDate: Date
 
     var filteredData: [(Date, Double)] {
         var base = engine.dailyHRRAggregates
@@ -650,17 +997,7 @@ struct HRRAggregatesSection: View {
             }
             base = aggregates
         }
-        let filtered = base.filter { date, _ in
-            let days: Int
-            switch timeFilter {
-            case .week: days = 7
-            case .month: days = 30
-            case .year: days = 365
-            }
-            let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-            return date >= cutoff
-        }
-        return filtered.sorted { $0.0 < $1.0 }
+        return filteredDailyValues(base, timeFilter: timeFilter, anchorDate: anchorDate)
     }
 
     var body: some View {
