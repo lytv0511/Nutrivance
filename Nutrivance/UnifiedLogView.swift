@@ -1,7 +1,10 @@
 import Foundation
 import SwiftUI
+#if !os(visionOS)
 import AVFoundation
+#endif
 
+#if !os(visionOS)
 struct UnifiedLogView: View {
     @StateObject private var viewModel = UnifiedLoggingViewModel()
     @State private var description = ""
@@ -260,3 +263,37 @@ class UnifiedLoggingViewModel: NSObject, ObservableObject, AVCapturePhotoCapture
         return NutrientAnalysis(nutrients: [:], confidence: 0.0, source: .combined)
     }
 }
+#else
+struct UnifiedLogView: View {
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Unavailable On Vision Pro",
+                systemImage: "camera.slash",
+                description: Text("Unified nutrient logging is currently disabled on visionOS.")
+            )
+            .navigationTitle("Log Nutrients")
+        }
+    }
+}
+
+struct NutrientResultsView: View {
+    let results: NutrientAnalysis?
+
+    var body: some View {
+        EmptyView()
+    }
+}
+
+struct NutrientAnalysis {
+    var nutrients: [String: Double]
+    var confidence: Double
+    var source: AnalysisSource
+
+    enum AnalysisSource {
+        case text
+        case image
+        case combined
+    }
+}
+#endif

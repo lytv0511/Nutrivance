@@ -165,6 +165,73 @@ struct HealthCard<ExpandedContent: View>: View {
     }
 }
 
+struct HeartRateZoneProfileSummaryView: View {
+    let profile: HRZoneProfile
+    var displayedMaxHR: Double? = nil
+    var displayedRestingHR: Double? = nil
+    var maxHRLabel: String = "Max HR"
+    var restingHRLabel: String = "Resting HR"
+
+    private var schemaTitle: String {
+        profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private var schemaDescription: String {
+        profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").lowercased()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Heart Rate Zones")
+                .font(.subheadline)
+                .bold()
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Schema")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(schemaTitle)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let maxHR = displayedMaxHR ?? profile.maxHR {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(maxHRLabel)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("\(Int(maxHR)) bpm")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let restingHR = displayedRestingHR ?? profile.restingHR {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(restingHRLabel)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("\(Int(restingHR)) bpm")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(10)
+            .background(.ultraThinMaterial)
+            .cornerRadius(12)
+
+            Text("Zones are calculated using the \(schemaDescription) method and may update as new training data becomes available.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
 struct HealthLineChartPreview: View {
     let data: [(Date, Double)]
     let label: String

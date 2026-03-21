@@ -76,7 +76,7 @@ struct WorkoutHistoryView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 12) {
-                        Button(action: { 
+                        Button(action: {
                             Task {
                                 isLoading = true
                                 if engine.hasNewDataAvailable {
@@ -259,6 +259,7 @@ private struct HRZone {
 struct WorkoutDetailView: View {
     let analytics: WorkoutAnalytics
 
+    @StateObject private var healthKitManager = HealthKitManager()
     @State private var selectedMETPoint: (Date, Double)? = nil
     @State private var selectedHRPoint: (Date, Double)? = nil
     @State private var selectedPostHRPoint: (Date, Double)? = nil
@@ -267,6 +268,9 @@ struct WorkoutDetailView: View {
     @State private var showHRZones = false
     @State private var routePoints: [RoutePoint] = []
     @State private var isLoadingRoute = false
+    @State private var historicalZoneProfile: HRZoneProfile? = nil
+    @State private var historicalMaxHR: Double? = nil
+    @State private var historicalRestingHR: Double? = nil
 
     private var activeDuration: TimeInterval {
         analytics.workout.duration
@@ -324,9 +328,13 @@ struct WorkoutDetailView: View {
         return Color(red: r, green: g, blue: b)
     }
 
+    private var activeZoneProfile: HRZoneProfile? {
+        historicalZoneProfile ?? analytics.hrZoneProfile
+    }
+
     /// Dynamic heart rate zones from analytics profile
     private var dynamicHeartRateZones: [HRZone] {
-        guard let profile = analytics.hrZoneProfile else {
+        guard let profile = activeZoneProfile else {
             // Fallback if no profile available
             return generateFallbackZones()
         }
@@ -361,9 +369,8 @@ struct WorkoutDetailView: View {
     }
 
     private var heartRateZoneBreakdown: [HRZone] {
-        // Use breakdown from analytics if available
-        if !analytics.hrZoneBreakdown.isEmpty {
-            return analytics.hrZoneBreakdown.map { breakdown in
+        if let profile = activeZoneProfile {
+            return healthKitManager.calculateZoneBreakdown(heartRates: analytics.heartRates, zoneProfile: profile).map { breakdown in
                 HRZone(
                     name: breakdown.zone.name,
                     color: hexToColor(breakdown.zone.color),
@@ -372,7 +379,7 @@ struct WorkoutDetailView: View {
                 )
             }
         }
-        
+
         // Fallback to manual calculation
         let zones = dynamicHeartRateZones
         var updatedZones = zones
@@ -434,55 +441,14 @@ struct WorkoutDetailView: View {
             }
 
             // HR Zone Profile Information
-            if let profile = analytics.hrZoneProfile {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Heart Rate Zones")
-                        .font(.subheadline)
-                        .bold()
-                    
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Schema")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
-                                .font(.caption2)
-                                .fontWeight(.semibold)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        
-                        if let maxHR = profile.maxHR {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Max HR")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("\(Int(maxHR)) bpm")
-                                    .font(.caption2)
-                                    .fontWeight(.semibold)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        
-                        if let restingHR = profile.restingHR {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Resting HR")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("\(Int(restingHR)) bpm")
-                                    .font(.caption2)
-                                    .fontWeight(.semibold)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    .padding(10)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(12)
-                    
-                    Text("Zones are calculated using the \(profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").lowercased()) method and may update as new training data becomes available.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
+            if let profile = activeZoneProfile {
+                HeartRateZoneProfileSummaryView(
+                    profile: profile,
+                    displayedMaxHR: historicalMaxHR,
+                    displayedRestingHR: historicalRestingHR,
+                    maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
+                    restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR"
+                )
             }
 
             // MET Time Series
@@ -855,6 +821,28 @@ struct WorkoutDetailView: View {
         .onAppear {
             loadRoute()
         }
+        .task(id: analytics.workout.startDate) {
+            await loadHistoricalZoneProfile()
+        }
+    }
+
+    private func loadHistoricalZoneProfile() async {
+        let workoutDate = analytics.workout.startDate
+        let maxHR = await healthKitManager.fetchMaxHR(workoutDate: workoutDate)
+        let restingHR = await healthKitManager.fetchRHR(workoutDate: workoutDate)
+        let schema = analytics.hrZoneProfile?.schema
+        let lactateThresholdHR = await healthKitManager.fetchLTHR(workoutDate: workoutDate, maxHR: maxHR)
+        let rebuiltProfile = await healthKitManager.createHRZoneProfile(
+            for: analytics.workout.workoutActivityType,
+            schema: schema,
+            customMaxHR: maxHR,
+            customRestingHR: restingHR,
+            customLTHR: lactateThresholdHR
+        )
+
+        historicalMaxHR = maxHR
+        historicalRestingHR = restingHR
+        historicalZoneProfile = rebuiltProfile
     }
 
     private func formattedTime(_ seconds: TimeInterval) -> String {

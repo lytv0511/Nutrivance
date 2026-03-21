@@ -1,7 +1,9 @@
 import SwiftUI
+#if !os(visionOS)
 import Vision
 import HealthKit
 import UIKit
+#endif
 
 // ViewModel for managing nutrition scanning
 class NutritionScannerViewModel: ObservableObject {
@@ -16,6 +18,7 @@ class NutritionScannerViewModel: ObservableObject {
     }
 }
 
+#if !os(visionOS)
 // Main View for the Nutrition Scanner
 public struct NutritionScannerView: View {
     @StateObject private var nutritionScanner = NutritionScannerViewModel()
@@ -399,3 +402,19 @@ public struct NutritionScannerView: View {
         }
     }
 }
+#else
+public struct NutritionScannerView: View {
+    public init() {}
+
+    public var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Unavailable On Vision Pro",
+                systemImage: "camera.slash",
+                description: Text("Nutrition label scanning is currently disabled on visionOS.")
+            )
+            .navigationTitle("Nutrition Scanner")
+        }
+    }
+}
+#endif

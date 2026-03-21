@@ -599,6 +599,9 @@ let additionalTypes: [(HKSampleType, String)] = [
 @MainActor
 final class HealthKitManager: ObservableObject, @unchecked Sendable {
     let healthStore: HKHealthStore
+    private var maxHR7DayCache: [Date: Double?] = [:]
+    private var restingHR7DayCache: [Date: Double?] = [:]
+    private var lthrDateCache: [Date: Double?] = [:]
     
     init() {
         self.healthStore = HKHealthStore()
@@ -1169,7 +1172,9 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKQuantityType.quantityType(forIdentifier: .heartRate)!,
             HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!,
             HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
+            HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!,
             HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!,
+            HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature)!,
             
             // Body Measurements
             HKQuantityType.quantityType(forIdentifier: .bodyMass)!,
@@ -2690,12 +2695,12 @@ extension HealthKitManager {
     /// Determines the best zone schema for a sport
     func recommendedSchema(for sport: HKWorkoutActivityType) -> HRZoneSchema {
         switch sport {
-        case .running, .hiking, .walking:
-            return .karvonen
-        case .cycling, .rowing:
+        case .running, .cycling, .rowing:
             return .lactatThreshold
         case .swimming:
             return .mhrPercentage
+        case .walking, .preparationAndRecovery, .yoga, .pilates, .flexibility:
+            return .karvonen
         default:
             return .mhrPercentage
         }
@@ -2756,13 +2761,10 @@ extension HealthKitManager {
     
     /// Generate polarized 3-zone model
     func generatePolarizedZones(lthr: Double) -> [HeartRateZone] {
-        let lt1 = lthr * 0.75 // Approximation
-        let lt2 = lthr
-        
         return [
-            HeartRateZone(name: "Zone 1: Easy", range: 0...(lt1 * 1.10), color: "0099FF", zoneNumber: 1),
-            HeartRateZone(name: "Zone 2: Moderate", range: (lt1 * 1.10)...(lt2 * 0.95), color: "FFCC00", zoneNumber: 2),
-            HeartRateZone(name: "Zone 3: Hard", range: (lt2 * 0.95)...250, color: "FF0000", zoneNumber: 3)
+            HeartRateZone(name: "Zone 1: Low", range: 0...(lthr * 0.80), color: "0099FF", zoneNumber: 1),
+            HeartRateZone(name: "Zone 2: Threshold", range: (lthr * 0.80)...lthr, color: "FFCC00", zoneNumber: 2),
+            HeartRateZone(name: "Zone 3: High", range: lthr...250, color: "FF0000", zoneNumber: 3)
         ]
     }
     
@@ -2798,11 +2800,16 @@ extension HealthKitManager {
         if let customResting = customRestingHR {
             restingHR = customResting
         } else {
-            restingHR = await fetchRestingHeartRateLatest()
+        restingHR = await fetchRestingHeartRateLatest()
         }
         
         // Infer lactate threshold before switch to avoid async in autoclosure
-        let inferredLTHR = await inferLactateThresholdHR()
+        let inferredLTHR: Double?
+        if let customLTHR {
+            inferredLTHR = customLTHR
+        } else {
+            inferredLTHR = await inferLactateThresholdHR()
+        }
         
         // Generate zones based on schema
         let zones: [HeartRateZone]
@@ -2911,5 +2918,163 @@ extension HealthKitManager {
         let profile = await createHRZoneProfile(for: sport)
         saveZoneProfile(profile)
         return profile
+    }
+
+    func fetchMaxHR(workoutDate: Date) async -> Double? {
+        let calendar = Calendar.current
+        let anchorDate = calendar.startOfDay(for: workoutDate)
+        if let cached = maxHR7DayCache[anchorDate] {
+            return cached
+        }
+
+        guard let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
+            maxHR7DayCache[anchorDate] = nil
+            return nil
+        }
+
+        let startDate = calendar.date(byAdding: .day, value: -6, to: anchorDate) ?? anchorDate
+        let endDate = calendar.date(byAdding: .day, value: 1, to: anchorDate) ?? anchorDate
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        let result: Double? = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: heartRateType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                guard let quantitySamples = samples as? [HKQuantitySample], !quantitySamples.isEmpty else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let unit = HKUnit.count().unitDivided(by: .minute())
+                let maxHeartRate = quantitySamples
+                    .map { $0.quantity.doubleValue(for: unit) }
+                    .max()
+
+                guard let maxHeartRate else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                continuation.resume(returning: maxHeartRate)
+            }
+
+            self.healthStore.execute(query)
+        }
+
+        maxHR7DayCache[anchorDate] = result
+        return result
+    }
+
+    func fetchRHR(workoutDate: Date) async -> Double? {
+        let calendar = Calendar.current
+        let anchorDate = calendar.startOfDay(for: workoutDate)
+        if let cached = restingHR7DayCache[anchorDate] {
+            return cached
+        }
+
+        guard let restingHeartRateType = HKQuantityType.quantityType(forIdentifier: .restingHeartRate) else {
+            restingHR7DayCache[anchorDate] = nil
+            return nil
+        }
+
+        let startDate = calendar.date(byAdding: .day, value: -6, to: anchorDate) ?? anchorDate
+        let endDate = calendar.date(byAdding: .day, value: 1, to: anchorDate) ?? anchorDate
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+
+        let result: Double? = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: restingHeartRateType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                guard let quantitySamples = samples as? [HKQuantitySample], !quantitySamples.isEmpty else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let unit = HKUnit.count().unitDivided(by: .minute())
+                let dailyAverages = Dictionary(grouping: quantitySamples) {
+                    calendar.startOfDay(for: $0.endDate)
+                }
+                .compactMap { _, daySamples -> Double? in
+                    let values = daySamples.map { $0.quantity.doubleValue(for: unit) }
+                    guard !values.isEmpty else { return nil }
+                    return values.reduce(0, +) / Double(values.count)
+                }
+
+                guard !dailyAverages.isEmpty else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                continuation.resume(returning: dailyAverages.reduce(0, +) / Double(dailyAverages.count))
+            }
+
+            self.healthStore.execute(query)
+        }
+
+        restingHR7DayCache[anchorDate] = result
+        return result
+    }
+
+    func fetchLTHR(workoutDate: Date, maxHR: Double? = nil) async -> Double? {
+        let calendar = Calendar.current
+        let anchorDate = calendar.startOfDay(for: workoutDate)
+        if let cached = lthrDateCache[anchorDate] {
+            return cached
+        }
+
+        let defaults = UserDefaults.standard
+        let manualLTHR = defaults.object(forKey: "manual_lthr_value") as? Double
+        let manualEffectiveDate = defaults.object(forKey: "manual_lthr_effective_date") as? Date
+        if let manualLTHR, let manualEffectiveDate, manualEffectiveDate <= anchorDate {
+            lthrDateCache[anchorDate] = manualLTHR
+            return manualLTHR
+        }
+
+        let endDate = calendar.date(byAdding: .day, value: 1, to: anchorDate) ?? anchorDate
+        let startDate = calendar.date(byAdding: .day, value: -30, to: anchorDate) ?? anchorDate
+        let referenceMaxHR: Double
+        if let maxHR {
+            referenceMaxHR = maxHR
+        } else if let fetchedMaxHR = await fetchMaxHR(workoutDate: workoutDate) {
+            referenceMaxHR = fetchedMaxHR
+        } else {
+            referenceMaxHR = 190
+        }
+        let intensityThreshold = referenceMaxHR * 0.80
+
+        let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
+            fetchWorkouts(from: startDate, to: endDate) { result in
+                continuation.resume(returning: result)
+            }
+        }
+
+        var highIntensityHRValues: [Double] = []
+        for workout in workouts {
+            let hrSamples = await fetchHeartRateSamples(for: workout)
+            let highIntensity = hrSamples
+                .map { $0.1 }
+                .filter { $0 >= intensityThreshold }
+            highIntensityHRValues.append(contentsOf: highIntensity)
+        }
+
+        if !highIntensityHRValues.isEmpty {
+            let sorted = highIntensityHRValues.sorted()
+            let p95Index = Int(Double(sorted.count - 1) * 0.95)
+            let inferred = sorted[max(0, min(p95Index, sorted.count - 1))]
+            lthrDateCache[anchorDate] = inferred
+            return inferred
+        }
+
+        let fallback = referenceMaxHR * 0.88
+        lthrDateCache[anchorDate] = fallback
+        return fallback
     }
 }

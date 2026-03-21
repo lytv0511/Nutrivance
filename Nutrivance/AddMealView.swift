@@ -6,9 +6,12 @@
 //
 
 import SwiftUI
+#if !os(visionOS)
 import Vision
 import VisionKit
+#endif
 
+#if !os(visionOS)
 struct AddMealView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var mealsManager: SavedMealsManager
@@ -247,6 +250,34 @@ struct AddMealView: View {
 
 
 }
+#else
+struct AddMealView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var mealsManager: SavedMealsManager
+    let editingMeal: SavedMeal?
+
+    init(mealsManager: SavedMealsManager, editingMeal: SavedMeal? = nil) {
+        self.mealsManager = mealsManager
+        self.editingMeal = editingMeal
+    }
+
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Unavailable On Vision Pro",
+                systemImage: "camera.slash",
+                description: Text("Meal capture and nutrition label scanning are currently disabled on visionOS.")
+            )
+            .navigationTitle(editingMeal == nil ? "Add New Meal" : "Edit Meal")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+}
+#endif
 
 struct ZoomableImage: View {
     let image: UIImage
@@ -303,4 +334,3 @@ struct ZoomableImage: View {
         .clipped()
     }
 }
-

@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(JournalingSuggestions)
 import JournalingSuggestions
+#endif
 import HealthKit
 import CoreLocation
 
@@ -374,7 +376,9 @@ struct JournalEditorView: View {
     
     var onSave: (JournalEntry) -> Void
     
+    #if canImport(JournalingSuggestions)
     @State private var showingSuggestions = false
+    #endif
     
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -408,6 +412,7 @@ struct JournalEditorView: View {
         """
     }
     
+    #if canImport(JournalingSuggestions)
     private func downloadImagesFromSuggestion(_ suggestion: JournalingSuggestion) async -> [Data] {
         let imageURLs = await imageURLs(from: suggestion)
         var downloadedImages: [Data] = []
@@ -794,6 +799,7 @@ struct JournalEditorView: View {
     private func boolLabel(_ value: Bool) -> String {
         value ? "Yes" : "No"
     }
+    #endif
     
     var body: some View {
         
@@ -869,12 +875,13 @@ struct JournalEditorView: View {
                 }
                 
                 ToolbarItemGroup(placement: .bottomBar) {
-
+                    #if canImport(JournalingSuggestions)
                     Button {
                         showingSuggestions = true
                     } label: {
                         Label("Suggestions", systemImage: "sparkles")
                     }
+                    #endif
 
                     Spacer()
 
@@ -887,6 +894,7 @@ struct JournalEditorView: View {
                 }
             }
             
+            #if canImport(JournalingSuggestions)
             .sheet(isPresented: $showingSuggestions) {
                 JournalingSuggestionsPicker("What's on your mind?") { suggestion in
                     Task {
@@ -911,6 +919,7 @@ struct JournalEditorView: View {
                     }
                 }
             }
+            #endif
         }
     }
 }

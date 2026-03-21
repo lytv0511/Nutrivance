@@ -474,9 +474,6 @@ struct MeshGradientView: View {
 }
 
 struct GradientFadeOverlay: View {
-    @Environment(\.colorScheme) var colorScheme
-    @State private var orientation = UIDevice.current.orientation
-    
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
@@ -506,8 +503,5 @@ struct GradientFadeOverlay: View {
             }
         }
         .ignoresSafeArea()
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            orientation = UIDevice.current.orientation
-        }
     }
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 import HealthKit
 
+#if !os(visionOS)
 // Inline TappableChartPreview definition
 struct TappableChartPreview: View {
     let data: [(Date, Double)]
@@ -879,6 +880,46 @@ struct WorkoutContributionsSection: View {
         
         return 0
     }
+
+    private var selectedDayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        let calendar = Calendar.current
+        return workoutsForComputation
+            .filter { calendar.isDate($0.workout.startDate, inSameDayAs: selectedSnapshot.date) }
+            .sorted { $0.workout.startDate > $1.workout.startDate }
+    }
+
+    private var selectedZoneProfile: HRZoneProfile? {
+        selectedDayWorkouts
+            .compactMap { $0.analytics.hrZoneProfile }
+            .first
+    }
+
+    private var selectedWeekStartDate: Date {
+        Calendar.current.date(byAdding: .day, value: -6, to: selectedSnapshot.date) ?? selectedSnapshot.date
+    }
+
+    private var selectedWeekAveragePeakHR: Double? {
+        let calendar = Calendar.current
+        let values = workoutsForComputation.compactMap { pair -> Double? in
+            let workoutDate = calendar.startOfDay(for: pair.workout.startDate)
+            guard workoutDate >= selectedWeekStartDate && workoutDate <= selectedSnapshot.date else {
+                return nil
+            }
+            return pair.analytics.peakHR
+        }
+        return average(values)
+    }
+
+    private var selectedWeekAverageRestingHR: Double? {
+        let calendar = Calendar.current
+        let values = (0..<7).compactMap { offset -> Double? in
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: selectedSnapshot.date) else {
+                return nil
+            }
+            return engine.dailyRestingHeartRate[calendar.startOfDay(for: date)]
+        }
+        return average(values)
+    }
     
     private var dailyLoadSnapshots: [DailyLoadSnapshot] {
         let calendar = Calendar.current
@@ -1121,6 +1162,16 @@ struct WorkoutContributionsSection: View {
                     Text("Session load formula: sum of minutes spent in HR zones, weighted Zone 1-5. If HR data is missing, duration x effort metadata is used.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    if let profile = selectedZoneProfile {
+                        Divider().padding(.vertical, 2)
+                        HeartRateZoneProfileSummaryView(
+                            profile: profile,
+                            displayedMaxHR: selectedWeekAveragePeakHR,
+                            displayedRestingHR: selectedWeekAverageRestingHR,
+                            maxHRLabel: "7d Peak HR",
+                            restingHRLabel: "7d Resting HR"
+                        )
+                    }
                     Text("Acute vs Chronic (\(timeFilter.rawValue))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
@@ -1798,4 +1849,17 @@ extension Array where Element: Hashable {
         Array(Set(self))
     }
 }
-
+#else
+struct StrainRecoveryView: View {
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Unavailable On Vision Pro",
+                systemImage: "waveform.path.ecg.rectangle",
+                description: Text("Strain and recovery analytics are currently disabled on visionOS.")
+            )
+            .navigationTitle("Strain vs Recovery")
+        }
+    }
+}
+#endif

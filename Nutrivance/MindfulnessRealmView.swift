@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+#if !os(visionOS)
 enum HapticEngine {
     static func play(_ type: UIImpactFeedbackGenerator.FeedbackStyle) {
         let generator = UIImpactFeedbackGenerator(style: type)
@@ -403,3 +404,17 @@ struct MoodButton: View {
             }
     }
 }
+#else
+struct MindfulnessRealmView: View {
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Unavailable On Vision Pro",
+                systemImage: "sparkles.slash",
+                description: Text("Mindfulness Realm is currently disabled on visionOS.")
+            )
+            .navigationTitle("Mindfulness Realm")
+        }
+    }
+}
+#endif
