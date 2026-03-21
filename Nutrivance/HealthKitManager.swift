@@ -107,7 +107,6 @@ extension HealthKitManager {
         if activityType == .cycling {
             // Fetch cycling power as a time series and compute average
             let powerType = HKQuantityType.quantityType(forIdentifier: .cyclingPower)
-            var powerSeries: [(Date, Double)] = []
             var avgPower: Double? = nil
             if let powerType {
                 let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
@@ -123,13 +122,37 @@ extension HealthKitManager {
                     avgPower = powerSeries.map { $0.1 }.reduce(0, +) / Double(powerSeries.count)
                 }
             }
+            // --- Improved VO2 Calculation Logic ---
             let mass = userMass
             let maxHR = 220.0 - userAge
             let hrRest = userRestingHR
-            let avgHR = hrSamples.map { $0.1 }.reduce(0, +) / Double(hrSamples.count)
-            if let avgPower, mass > 0, avgHR > 0 {
+            let avgHR = hrSamples.isEmpty ? 0 : hrSamples.map { $0.1 }.reduce(0, +) / Double(hrSamples.count)
+
+            if let avgPower, mass > 0, avgPower > 0 {
+                // --- PRO POWER-BASED VO2 MODEL ---
+                // Step 1: Estimate VO2 from power (ml/kg/min)
                 let vo2Current = 10.8 * (avgPower / mass) + 7.0
-                vo2Max = vo2Current * ((maxHR - hrRest) / (avgHR - hrRest))
+                
+                // Step 2: HR reserve scaling with clamp for stability
+                let hrReserve = maxHR - hrRest
+                let hrUsed = max(avgHR - hrRest, 10) // prevent explosion
+                let intensityFactor = min(hrUsed / hrReserve, 1.0)
+                
+                // Step 3: Estimate VO2 max
+                vo2Max = vo2Current / max(intensityFactor, 0.5) // avoid over-scaling low intensity
+            } else if avgHR > 0 {
+                // --- FALLBACK HR-BASED MODEL (NO POWER) ---
+                let hrReserve = maxHR - hrRest
+                let intensity = (avgHR - hrRest) / hrReserve
+                
+                // Estimate METs from HR intensity (rough but stable)
+                let estimatedMET = 6.0 + (intensity * 6.0) // range ~6–12 METs
+                
+                // Convert MET → VO2
+                let vo2Current = estimatedMET * 3.5
+                
+                // Scale to VO2 max
+                vo2Max = vo2Current / max(intensity, 0.5)
             }
             print("  Cycling Power time series: \(powerSeries)")
             print("  Cycling Power average: \(avgPower.map { String(format: "%.1f", $0) } ?? "-") W")

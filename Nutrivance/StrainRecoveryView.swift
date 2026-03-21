@@ -203,6 +203,13 @@ struct StrainRecoveryView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
+                        selectedDate = Date()
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
+                    } label: {
+                        Text("Today")
+                    }
+                    Button {
                         stepSelectedDate(by: -1)
                         let impact = UIImpactFeedbackGenerator(style: .medium)
                         impact.impactOccurred()
@@ -229,7 +236,7 @@ struct StrainRecoveryView: View {
                 }
             }
             .task {
-                await engine.refreshWorkoutAnalytics(days: 365) // Load more for year view
+                await engine.refreshWorkoutAnalytics(days: 3650) // Load long-term history for aggregation cards
             }
         }
     }
@@ -385,7 +392,7 @@ struct SleepRecoverySection: View {
     
     private var sleepData: [(Date, Double)] {
         let totals = engine.sleepStages.mapValues { stages in
-            ["core", "deep", "rem"].compactMap { stages[$0] }.reduce(0, +)
+            ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
         }
         return filteredDailyValues(totals, timeFilter: timeFilter, anchorDate: anchorDate)
     }
@@ -400,7 +407,8 @@ struct SleepRecoverySection: View {
     
     var body: some View {
         let stages = engine.sleepStages[activeDay] ?? [:]
-        let totalStages = ["core", "deep", "rem", "awake"].compactMap { stages[$0] }.reduce(0, +)
+        // "Sleep Hours" is based on asleep time (core/deep/rem), not awake time.
+        let totalStages = ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
         let latestSleep = sleepData.last?.1 ?? 0
         let averageSleep = average(sleepData.map(\.1)) ?? 0
         let efficiency = (engine.sleepEfficiency[activeDay] ?? 0) * 100
@@ -421,14 +429,14 @@ struct SleepRecoverySection: View {
                         .foregroundColor(.secondary)
                     if !stages.isEmpty {
                         HStack(spacing: 12) {
-                            ForEach(["core", "deep", "rem", "awake"], id: \ .self) { stage in
+                            ForEach(["core", "deep", "rem", "unspecified"], id: \.self) { stage in
                                 let hours = stages[stage] ?? 0
                                 Text("\(stage.capitalized): " + String(format: "%.1f", hours) + "h")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
                         }
-                        Text("Total: " + String(format: "%.1f", totalStages) + "h (should match main value)")
+                        Text("Total: " + String(format: "%.1f", totalStages) + "h (matches main value)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -443,35 +451,129 @@ struct SleepConsistencySection: View {
     let timeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
     
-    private var bedtimeData: [(Date, Double)] {
-        filteredDailyValues(engine.sleepStartHours, timeFilter: timeFilter, anchorDate: anchorDate)
+    private var midpointData: [(Date, Double)] {
+        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
+        let dates = dateSequence(from: window.start, to: window.end)
+        let raw = engine.sleepMidpointHours
+        return dates.compactMap { day in
+            guard let value = raw[day], value > 0 else { return nil }
+            return (day, value)
+        }
     }
     
-    private var consistencyValue: Double {
-        standardDeviation(bedtimeData.map(\.1)) ?? engine.sleepConsistency ?? 0
+    private var midpointDeviationHours: Double {
+        standardDeviation(midpointData.map(\.1)) ?? engine.sleepConsistency ?? 0
     }
     
-    private var averageBedtime: Double {
-        average(bedtimeData.map(\.1)) ?? 0
+    private var midpointDeviationMinutes: Double {
+        midpointDeviationHours * 60
+    }
+    
+    private var consistencyScore: Double {
+        let best = 0.25
+        let worst = 3.0
+        let clamped = min(max(midpointDeviationHours, best), worst)
+        return ((worst - clamped) / (worst - best)) * 100
+    }
+    
+    private var midpointDeviationData: [(Date, Double)] {
+        let valid = midpointData.map(\.1)
+        guard let center = average(valid) else { return [] }
+
+        return midpointData.map { date, midpoint in
+            (date, abs(midpoint - center) * 60)
+        }
+    }
+    
+    private var averageEfficiency: Double {
+        // Align with SleepView semantics: actual sleep is asleep stages (including unspecified)
+        // and denominator includes awake periods for the same sleep day.
+        let efficiencyValues = midpointData.compactMap { day, _ -> Double? in
+            guard let stages = engine.sleepStages[day] else { return nil }
+            let asleep = ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
+            let awake = stages["awake"] ?? 0
+            let denominator = asleep + awake
+            guard denominator > 0 else { return nil }
+            return asleep / denominator
+        }
+        return (average(efficiencyValues) ?? 0) * 100
+    }
+    
+    private var sleepDebtHours: Double {
+        // Debt model: compare recent 7-day average actual sleep against prior 28-day baseline.
+        let sleepByDay = filteredDailyValues(
+            engine.sleepStages.mapValues { stages in
+            ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
+            },
+            timeFilter: timeFilter,
+            anchorDate: anchorDate
+        ).filter { $0.1 > 0 }
+        
+        let series = sleepByDay.sorted { $0.0 < $1.0 }
+        
+        guard !series.isEmpty else { return 0 }
+        let last7 = Array(series.suffix(7)).map(\.1)
+        guard !last7.isEmpty else { return 0 }
+        
+        let previousSeries = Array(series.dropLast(last7.count))
+        let baseline28 = Array(previousSeries.suffix(28)).map(\.1)
+        guard !baseline28.isEmpty else { return 0 }
+        
+        let recentAverage = average(last7) ?? 0
+        let baselineAverage = average(baseline28) ?? 0
+        return max(0, (baselineAverage - recentAverage) * 7.0)
+    }
+    
+    private var activityRecoverySleepGapHours: Double {
+        let calendar = Calendar.current
+        let sleepHoursByDay = midpointData.compactMap { day, _ -> (Date, Double)? in
+            guard let stages = engine.sleepStages[day] else { return nil }
+            let sleepHours = ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
+            guard sleepHours > 0 else { return nil }
+            return (day, sleepHours)
+        }
+        
+        let activityDaySleep = sleepHoursByDay.filter { day, _ in
+            engine.workoutAnalytics.contains { calendar.isDate($0.workout.startDate, inSameDayAs: day) }
+        }.map(\.1)
+        
+        let recoveryDaySleep = sleepHoursByDay.filter { day, _ in
+            !engine.workoutAnalytics.contains { calendar.isDate($0.workout.startDate, inSameDayAs: day) }
+        }.map(\.1)
+        
+        guard let activityAverage = average(activityDaySleep),
+              let recoveryAverage = average(recoveryDaySleep) else { return 0 }
+        
+        // Positive means recovery days get more sleep than activity days.
+        return recoveryAverage - activityAverage
     }
     
     var body: some View {
         HealthCard(
             symbol: "moon.zzz.fill",
             title: "Sleep Consistency",
-            value: String(format: "%.2f", consistencyValue),
-            unit: "h",
-            trend: "Avg bedtime: " + String(format: "%.2f", averageBedtime),
+            value: String(format: "%.0f", consistencyScore),
+            unit: "%",
+            trend: "Midpoint dev: " + String(format: "%.0f", midpointDeviationMinutes) + " min",
             color: .indigo,
-            chartData: bedtimeData,
-            chartLabel: "Bedtime",
-            chartUnit: "h",
+            chartData: midpointDeviationData,
+            chartLabel: "Midpoint Deviation",
+            chartUnit: "min",
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Lower is better. This tracks how tightly your sleep start times cluster in the selected window.")
+                    Text("Consistency is based on the standard deviation of sleep midpoints in the selected window.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("Selected window stddev: " + String(format: "%.2f", consistencyValue) + "h")
+                    Text("Midpoint deviation: " + String(format: "%.0f", midpointDeviationMinutes) + " min")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Efficiency: " + String(format: "%.0f%%", averageEfficiency))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Activity vs recovery sleep gap: " + String(format: "%+.1f", activityRecoverySleepGapHours) + "h")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Sleep debt (7d vs prior 28d baseline): " + String(format: "%.1f", sleepDebtHours) + "h")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -486,12 +588,19 @@ struct SleepHeartRateSection: View {
     let anchorDate: Date
     
     private var sleepHeartRateData: [(Date, Double)] {
-        filteredDailyValues(engine.dailySleepHeartRate, timeFilter: timeFilter, anchorDate: anchorDate)
+        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
+        let dates = dateSequence(from: window.start, to: window.end)
+        let raw = engine.dailySleepHeartRate
+        return dates.compactMap { day in
+            guard let value = raw[day], value > 0 else { return nil }
+            return (day, value)
+        }
     }
     
     var body: some View {
-        let latestSleepHR = sleepHeartRateData.last?.1 ?? 0
-        let averageSleepHR = average(sleepHeartRateData.map(\.1)) ?? 0
+        let valid = sleepHeartRateData.map(\.1)
+        let latestSleepHR = valid.last ?? 0
+        let averageSleepHR = average(valid) ?? 0
         
         HealthCard(
             symbol: "heart.text.square.fill",
@@ -1152,7 +1261,6 @@ struct TrainingScheduleSection: View {
 
     var filteredWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
-        
         return engine.workoutAnalytics.filter { workout, _ in
             let isInRange = workout.startDate >= window.start && workout.startDate < window.endExclusive
             let matchesSport = sportFilter == nil || workout.workoutActivityType.name == sportFilter
@@ -1163,13 +1271,11 @@ struct TrainingScheduleSection: View {
     var minutesPerDay: [(Date, Double)] {
         let calendar = Calendar.current
         var minutes: [Date: Double] = [:]
-        
         for (workout, _) in filteredWorkouts {
             let day = calendar.startOfDay(for: workout.startDate)
             let duration = workout.duration / 60.0 // convert to minutes
             minutes[day, default: 0] += duration
         }
-        
         return minutes.sorted { $0.0 < $1.0 }
     }
 
@@ -1178,15 +1284,24 @@ struct TrainingScheduleSection: View {
         return (Double(filteredWorkouts.count) / Double(timeFilter.dayCount)) * 7
     }
 
+    // 1) Computed property for time-filtered favorite sport
+    var favoriteSportInWindow: String? {
+        let grouped = Dictionary(grouping: filteredWorkouts, by: { $0.workout.workoutActivityType.name })
+        let totals = grouped.mapValues { workouts in
+            workouts.reduce(0.0) { $0 + ($1.workout.duration / 60.0) }
+        }
+        return totals.max(by: { $0.value < $1.value })?.key
+    }
+
     var body: some View {
         let totalMinutes = minutesPerDay.map { $0.1 }.reduce(0, +)
-        
         HealthCard(
             symbol: "calendar",
             title: "Training Schedule",
-            value: String(format: "%.1f", frequency),
-            unit: "sessions/week",
-            trend: "Favorite: " + (engine.favoriteSport ?? "-"),
+            value: String(format: "%.0f", totalMinutes),
+            unit: "min",
+            // 2) Update trend text to use time-filtered favorite sport
+            trend: "Focus: " + (favoriteSportInWindow ?? "-"),
             color: .teal,
             chartData: minutesPerDay,
             chartLabel: "Minutes",
@@ -1202,9 +1317,12 @@ struct TrainingScheduleSection: View {
                     Text("Total minutes (\(timeFilter.rawValue)): " + String(format: "%.0f", totalMinutes))
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("Overall favorite sport: " + (engine.favoriteSport ?? "-"))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    if sportFilter == nil {
+                        // 3) Update expanded content “Focus” to use the new property
+                        Text("Focus: " + (favoriteSportInWindow ?? "-"))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
         )
@@ -1500,7 +1618,37 @@ struct METAggregatesSection: View {
             chartData: filteredData,
             chartLabel: "MET-min",
             chartUnit: "min",
-            expandedContent: { EmptyView() }
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    if filteredData.isEmpty {
+                        Text("No MET-minutes recorded in this window.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } else {
+                        let latest = filteredData.last?.1 ?? 0
+                        let averageValue = average(filteredData.map(\.1)) ?? 0
+                        let windowTotal = filteredData.map(\.1).reduce(0, +)
+
+                        Text("Latest day: " + String(format: "%.1f", latest) + " MET-min")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("\(timeFilter.rawValue) avg: " + String(format: "%.1f", averageValue) + " MET-min/day")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("Window total: " + String(format: "%.1f", windowTotal) + " MET-min")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("MET-minutes are estimated by integrating MET intensity over workout time.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        if let sportFilter {
+                            Text("Filtered to: " + sportFilter.capitalized)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
         )
     }
 }
@@ -1540,7 +1688,37 @@ struct VO2AggregatesSection: View {
             chartData: filteredData,
             chartLabel: "VO2 Max",
             chartUnit: "ml/kg/min",
-            expandedContent: { EmptyView() }
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    if filteredData.isEmpty {
+                        Text("No VO2 max estimates available in this window.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } else {
+                        let latest = filteredData.last?.1 ?? 0
+                        let averageValue = average(filteredData.map(\.1)) ?? 0
+                        let maxValue = filteredData.map(\.1).max() ?? latest
+
+                        Text("Latest day: " + String(format: "%.1f", latest) + " ml/kg/min")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("\(timeFilter.rawValue) avg: " + String(format: "%.1f", averageValue) + " ml/kg/min")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("Best day in window: " + String(format: "%.1f", maxValue) + " ml/kg/min")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("Daily VO2 max is averaged across workouts that include a VO2 estimate.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        if let sportFilter {
+                            Text("Filtered to: " + sportFilter.capitalized)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
         )
     }
 }
@@ -1580,7 +1758,37 @@ struct HRRAggregatesSection: View {
             chartData: filteredData,
             chartLabel: "HRR",
             chartUnit: "bpm",
-            expandedContent: { EmptyView() }
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    if filteredData.isEmpty {
+                        Text("No HRR (2 min) values available in this window.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } else {
+                        let latest = filteredData.last?.1 ?? 0
+                        let averageValue = average(filteredData.map(\.1)) ?? 0
+                        let maxValue = filteredData.map(\.1).max() ?? latest
+
+                        Text("Latest day: " + String(format: "%.0f", latest) + " bpm")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("\(timeFilter.rawValue) avg: " + String(format: "%.0f", averageValue) + " bpm")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("Max day in window: " + String(format: "%.0f", maxValue) + " bpm")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("HRR (2 min) is Peak HR minus HR measured ~2 minutes after workout end.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        if let sportFilter {
+                            Text("Filtered to: " + sportFilter.capitalized)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
         )
     }
 }
@@ -1590,3 +1798,4 @@ extension Array where Element: Hashable {
         Array(Set(self))
     }
 }
+

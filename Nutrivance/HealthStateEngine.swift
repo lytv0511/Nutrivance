@@ -6,6 +6,7 @@ import Combine
 /// All health calculations should live here, not in Views.
 @MainActor
 final class HealthStateEngine: ObservableObject {
+    private let longTermLookbackDays = 3650
     // Shared singleton instance - persists for entire app session
     static let shared = HealthStateEngine()
     
@@ -24,6 +25,7 @@ final class HealthStateEngine: ObservableObject {
     @Published var sleepEfficiency: [Date: Double] = [:] // [date: efficiency 0-1]
     @Published var sleepConsistency: Double? // stddev of sleep start times (hours)
     @Published var sleepStartHours: [Date: Double] = [:] // [date: bedtime hour]
+    @Published var sleepMidpointHours: [Date: Double] = [:] // [date: midpoint hour, wrapped across midnight]
     @Published var dailySleepHeartRate: [Date: Double] = [:] // [date: avg sleep HR bpm]
     @Published var respiratoryRate: [Date: Double] = [:] // [date: breaths/min]
     @Published var wristTemperature: [Date: Double] = [:] // [date: deg C]
@@ -258,9 +260,12 @@ final class HealthStateEngine: ObservableObject {
             guard let samples = samples as? [HKCategorySample], error == nil else { return }
             var stages: [Date: [String: Double]] = [:]
             var efficiency: [Date: Double] = [:]
-            var startTimes: [Double] = []
             var bedtimeHours: [Date: Double] = [:]
-            var sleepWindows: [Date: (start: Date, end: Date)] = [:]
+            var midpointHours: [Date: Double] = [:]
+            // Keep separate interval collections so Sleep HR / consistency can use stage-based windows
+            // even when `.inBed` samples are sparse in historical data.
+            var stageSleepWindows: [Date: [(start: Date, end: Date)]] = [:]
+            var inBedSleepWindows: [Date: [(start: Date, end: Date)]] = [:]
             for sample in samples {
                 let day = calendar.startOfDay(for: sample.startDate)
                 let duration = sample.endDate.timeIntervalSince(sample.startDate) / 3600 // hours
@@ -279,29 +284,62 @@ final class HealthStateEngine: ObservableObject {
                 case .awake:
                     stage = "awake"
                 case .asleepUnspecified:
-                    stage = "core" // Add to core
+                    stage = "unspecified"
                 default:
                     continue
                 }
-                var dayData = stages[day] ?? ["deep": 0.0, "rem": 0.0, "core": 0.0, "awake": 0.0, "inBed": 0.0]
+                var dayData = stages[day] ?? ["deep": 0.0, "rem": 0.0, "core": 0.0, "unspecified": 0.0, "awake": 0.0, "inBed": 0.0]
                 if isInBed {
                     dayData["inBed"] = (dayData["inBed"] ?? 0.0) + duration
                     // Collect start time for consistency
                     let hour = Double(calendar.component(.hour, from: sample.startDate)) + Double(calendar.component(.minute, from: sample.startDate)) / 60.0
-                    startTimes.append(hour)
                     bedtimeHours[day] = min(bedtimeHours[day] ?? hour, hour)
-                    let currentWindow = sleepWindows[day]
-                    let earliestStart = min(currentWindow?.start ?? sample.startDate, sample.startDate)
-                    let latestEnd = max(currentWindow?.end ?? sample.endDate, sample.endDate)
-                    sleepWindows[day] = (earliestStart, latestEnd)
+                    inBedSleepWindows[day, default: []].append((start: sample.startDate, end: sample.endDate))
                 } else if let stage = stage {
                     dayData[stage] = (dayData[stage] ?? 0.0) + duration
-                    let currentWindow = sleepWindows[day]
-                    let earliestStart = min(currentWindow?.start ?? sample.startDate, sample.startDate)
-                    let latestEnd = max(currentWindow?.end ?? sample.endDate, sample.endDate)
-                    sleepWindows[day] = (earliestStart, latestEnd)
+                    stageSleepWindows[day, default: []].append((start: sample.startDate, end: sample.endDate))
                 }
                 stages[day] = dayData
+            }
+
+            // Merge overlapping/adjacent intervals per day so we don't end up with fragmented windows.
+            let tolerance: TimeInterval = 5 * 60 // 5 minutes
+            func mergedWindows(
+                from windowsByDay: [Date: [(start: Date, end: Date)]]
+            ) -> [Date: [(start: Date, end: Date)]] {
+                var mergedByDay: [Date: [(start: Date, end: Date)]] = [:]
+                for (day, intervals) in windowsByDay {
+                    let sorted = intervals.sorted { $0.start < $1.start }
+                    var merged: [(start: Date, end: Date)] = []
+                    for interval in sorted {
+                        guard var last = merged.last else {
+                            merged.append(interval)
+                            continue
+                        }
+                        if interval.start <= last.end.addingTimeInterval(tolerance) {
+                            last.end = max(last.end, interval.end)
+                            merged[merged.count - 1] = last
+                        } else {
+                            merged.append(interval)
+                        }
+                    }
+                    mergedByDay[day] = merged
+                }
+                return mergedByDay
+            }
+
+            let mergedStageWindows = mergedWindows(from: stageSleepWindows)
+            let mergedInBedWindows = mergedWindows(from: inBedSleepWindows)
+
+            // Use stage-derived windows first (better historical coverage), fallback to inBed windows.
+            let windowDays = Set(mergedStageWindows.keys).union(mergedInBedWindows.keys)
+            var sleepWindows: [Date: [(start: Date, end: Date)]] = [:]
+            for day in windowDays {
+                if let stage = mergedStageWindows[day], !stage.isEmpty {
+                    sleepWindows[day] = stage
+                } else if let inBed = mergedInBedWindows[day], !inBed.isEmpty {
+                    sleepWindows[day] = inBed
+                }
             }
             // Calculate efficiency
             for (date, data) in stages {
@@ -311,11 +349,19 @@ final class HealthStateEngine: ObservableObject {
                     efficiency[date] = totalAsleep / totalInBed
                 }
             }
+            // For consistency use the longest sleep window for each day (usually the nighttime block, not naps).
+            for (date, windows) in sleepWindows {
+                guard let longestWindow = windows.max(by: { $0.end.timeIntervalSince($0.start) < $1.end.timeIntervalSince($1.start) }) else { continue }
+                let midpointDate = longestWindow.start.addingTimeInterval(longestWindow.end.timeIntervalSince(longestWindow.start) / 2)
+                let rawHour = Double(calendar.component(.hour, from: midpointDate)) + Double(calendar.component(.minute, from: midpointDate)) / 60.0
+                midpointHours[date] = rawHour < 12 ? rawHour + 24 : rawHour
+            }
             // Calculate consistency
             var consistency: Double? = nil
-            if !startTimes.isEmpty {
-                let mean = startTimes.reduce(0, +) / Double(startTimes.count)
-                let variance = startTimes.map { pow($0 - mean, 2) }.reduce(0, +) / Double(startTimes.count)
+            let midpointValues = midpointHours.values.map { $0 }
+            if !midpointValues.isEmpty {
+                let mean = midpointValues.reduce(0, +) / Double(midpointValues.count)
+                let variance = midpointValues.map { pow($0 - mean, 2) }.reduce(0, +) / Double(midpointValues.count)
                 consistency = sqrt(variance)
             }
             DispatchQueue.main.async {
@@ -328,6 +374,7 @@ final class HealthStateEngine: ObservableObject {
                 self.sleepEfficiency = efficiency
                 self.sleepConsistency = consistency
                 self.sleepStartHours = bedtimeHours
+                self.sleepMidpointHours = midpointHours
             }
             
             Task { @MainActor in
@@ -342,35 +389,100 @@ final class HealthStateEngine: ObservableObject {
     }
     
     private func fetchSleepHeartRateHistory(
-        sleepWindows: [Date: (start: Date, end: Date)],
+        sleepWindows: [Date: [(start: Date, end: Date)]],
         queryStart: Date,
         queryEnd: Date
     ) {
         guard let type = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
-        let predicate = HKQuery.predicateForSamples(withStart: queryStart, end: queryEnd)
-        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
         
-        let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
-            guard let samples = samples as? [HKQuantitySample] else { return }
+        let sortedDays = sleepWindows.keys.sorted(by: >)
+        guard !sortedDays.isEmpty else {
+            DispatchQueue.main.async {
+                self.dailySleepHeartRate = [:]
+            }
+            return
+        }
+        
+        // Fast-first UX: publish recent data immediately, backfill older history in larger chunks.
+        let firstBatchDays = 21
+        let subsequentBatchDays = 120
+        
+        Task {
+            var aggregated: [Date: Double] = [:]
+            var cursor = 0
             
-            var sleepHeartRates: [Date: Double] = [:]
-            
-            for (day, window) in sleepWindows {
-                let values = samples.compactMap { sample -> Double? in
-                    guard sample.startDate >= window.start && sample.endDate <= window.end else { return nil }
-                    return sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+            while cursor < sortedDays.count {
+                let batchSize = (cursor == 0) ? firstBatchDays : subsequentBatchDays
+                let end = min(cursor + batchSize, sortedDays.count)
+                let daysBatch = Array(sortedDays[cursor..<end])
+                
+                let batchResult = await self.computeSleepHeartRateBatch(
+                    days: daysBatch,
+                    sleepWindows: sleepWindows,
+                    fallbackStart: queryStart,
+                    fallbackEnd: queryEnd,
+                    heartRateType: type
+                )
+                
+                if !batchResult.isEmpty {
+                    aggregated.merge(batchResult) { _, new in new }
+                    self.dailySleepHeartRate = aggregated
                 }
                 
-                guard !values.isEmpty else { continue }
-                sleepHeartRates[day] = values.reduce(0, +) / Double(values.count)
+                cursor = end
+            }
+        }
+    }
+    
+    private func computeSleepHeartRateBatch(
+        days: [Date],
+        sleepWindows: [Date: [(start: Date, end: Date)]],
+        fallbackStart: Date,
+        fallbackEnd: Date,
+        heartRateType: HKQuantityType
+    ) async -> [Date: Double] {
+        guard !days.isEmpty else { return [:] }
+        
+        let windows = days.flatMap { sleepWindows[$0] ?? [] }
+        let batchStart = windows.map(\.start).min() ?? fallbackStart
+        let batchEnd = windows.map(\.end).max() ?? fallbackEnd
+        let predicate = HKQuery.predicateForSamples(withStart: batchStart, end: batchEnd)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        
+        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: heartRateType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+        
+        var result: [Date: Double] = [:]
+        for day in days {
+            guard let windows = sleepWindows[day], !windows.isEmpty else { continue }
+            var sum = 0.0
+            var count = 0
+            
+            for window in windows {
+                for sample in samples {
+                    // Include overlapping HR samples (not only fully-contained samples).
+                    guard sample.endDate > window.start && sample.startDate < window.end else { continue }
+                    let bpm = sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                    sum += bpm
+                    count += 1
+                }
             }
             
-            DispatchQueue.main.async {
-                self.dailySleepHeartRate = sleepHeartRates
+            if count > 0 {
+                result[day] = sum / Double(count)
             }
         }
         
-        healthStore.execute(query)
+        return result
     }
 
     // MARK: - Vitals Fetch (respiratory rate, temp, SpO2, post-workout HR, VO2 max)
@@ -741,16 +853,16 @@ final class HealthStateEngine: ObservableObject {
     func refreshAllMetrics() {
         // All fetches are now on the main actor
         self.fetchLatestHRV()
-        self.fetchHRVHistory(days: 365)
+        self.fetchHRVHistory(days: longTermLookbackDays)
         self.fetchRestingHeartRate()
-        self.fetchRestingHeartRateHistory(days: 365)
+        self.fetchRestingHeartRateHistory(days: longTermLookbackDays)
         self.fetchSleep()
         self.fetchBaselines()
         self.fetchTrainingLoad()
-        self.fetchSleepQuality(days: 365)
+        self.fetchSleepQuality(days: longTermLookbackDays)
         print("[refreshAllMetrics] calling fetchVitals...")
-        self.fetchVitals(days: 365)
-        self.fetchIntensityMetrics(days: 365)
+        self.fetchVitals(days: longTermLookbackDays)
+        self.fetchIntensityMetrics(days: longTermLookbackDays)
         self.inferFavoriteSportAndFrequency()
         self.updateScores()
     }
