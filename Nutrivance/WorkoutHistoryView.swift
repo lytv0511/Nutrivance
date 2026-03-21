@@ -1118,16 +1118,26 @@ struct HRZoneSettingsSheet: View {
 
                 if configurationMode != .customZones {
                     Section("Schema") {
-                        Picker("Formula", selection: $selectedSchema) {
-                            Text("Lactate Threshold").tag(HRZoneSchema.lactatThreshold)
-                            Text("Karvonen").tag(HRZoneSchema.karvonen)
-                            Text("Max HR Percentage").tag(HRZoneSchema.mhrPercentage)
-                            Text("Polarized 3-Zone").tag(HRZoneSchema.polarized)
-                        }
+                        if configurationMode == .intelligent {
+                            Text("Best schema is intelligently selected for each workout.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
 
-                        Text("Selected formula: \(selectedSchemaTitle)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            Text("The app analyzes the workout type (e.g. running, cycling), along with your recent max HR, resting HR, and threshold estimates, then chooses the most appropriate formula (e.g. Lactate Threshold, Karvonen, or Max HR %) to generate zones.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Picker("Formula", selection: $selectedSchema) {
+                                Text("Lactate Threshold").tag(HRZoneSchema.lactatThreshold)
+                                Text("Karvonen").tag(HRZoneSchema.karvonen)
+                                Text("Max HR Percentage").tag(HRZoneSchema.mhrPercentage)
+                                Text("Polarized 3-Zone").tag(HRZoneSchema.polarized)
+                            }
+
+                            Text("Selected formula: \(selectedSchemaTitle)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
 
@@ -1236,7 +1246,68 @@ struct HRZoneSettingsSheet: View {
                             .font(.caption.weight(.semibold))
 
                         if configurationMode == .intelligent {
-                            Text("The app picks the formula that best fits the workout type, then rebuilds zones from recent resting HR, max HR, threshold estimates, and the workout’s sport context.")
+                            Text("Understanding HR Zone Schemas")
+                                .font(.caption)
+                                .foregroundColor(.primary)
+
+                            VStack(alignment: .leading, spacing: 10) {
+
+                                // Lactate Threshold
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Lactate Threshold (Running / Cycling)")
+                                        .font(.caption.weight(.semibold))
+
+                                    Text("• Best for performance and endurance training")
+                                    Text("• Anchored to your sustainable hard effort (threshold)")
+                                    Text("• Most accurate when LTHR is available")
+
+                                    Text("Uses: Lactate Threshold HR")
+                                        .foregroundColor(.secondary)
+                                }
+
+                                // Karvonen
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Karvonen (Recovery / Low Intensity)")
+                                        .font(.caption.weight(.semibold))
+
+                                    Text("• Adjusts intensity based on resting HR")
+                                    Text("• Good for recovery, walking, and base workouts")
+                                    Text("• Reflects day-to-day readiness")
+
+                                    Text("Uses: Max HR + Resting HR")
+                                        .foregroundColor(.secondary)
+                                }
+
+                                // Max HR Percentage
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Max HR % (General Use)")
+                                        .font(.caption.weight(.semibold))
+
+                                    Text("• Simple and widely applicable")
+                                    Text("• Works when limited personal data is available")
+                                    Text("• Less individualized but very robust")
+
+                                    Text("Uses: Max HR")
+                                        .foregroundColor(.secondary)
+                                }
+
+                                // Polarized
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Polarized (Structured Training)")
+                                        .font(.caption.weight(.semibold))
+
+                                    Text("• Splits effort into low, threshold, and high zones")
+                                    Text("• Encourages proper training distribution (80/20)")
+                                    Text("• Great for structured programs")
+
+                                    Text("Uses: Lactate Threshold HR")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+
+                            Text("The app selects the schema that best matches the workout type and your available physiological data to produce the most meaningful zones.")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         } else {
