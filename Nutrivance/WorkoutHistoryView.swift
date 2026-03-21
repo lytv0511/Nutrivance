@@ -3,6 +3,56 @@ import HealthKit
 import Charts
 import MapKit
 
+enum HRZoneConfigurationMode: String, CaseIterable, Identifiable {
+    case intelligent
+    case customSchema
+    case customZones
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .intelligent:
+            return "Intelligent"
+        case .customSchema:
+            return "Custom Schema"
+        case .customZones:
+            return "Custom Zones"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .intelligent:
+            return "sparkles"
+        case .customSchema:
+            return "slider.horizontal.3"
+        case .customZones:
+            return "dial.high"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .intelligent:
+            return "Adjust HR zones automatically using recent resting HR, max HR, threshold data, and sport type."
+        case .customSchema:
+            return "Use one formula for every workout and optionally set the variables yourself."
+        case .customZones:
+            return "Enter your own zone ceilings and use the same zone map across workouts."
+        }
+    }
+}
+
+struct HRZoneUserSettings {
+    var mode: HRZoneConfigurationMode
+    var customSchema: HRZoneSchema
+    var fixedMaxHR: Double?
+    var fixedRestingHR: Double?
+    var fixedLTHR: Double?
+    var customZoneUpperBounds: [Double]
+}
+
 struct WorkoutHistoryView: View {
     @ObservedObject var engine = HealthStateEngine.shared
     @State private var expandedWorkout: HKWorkout? = nil
@@ -13,9 +63,33 @@ struct WorkoutHistoryView: View {
     @State private var selectedDate = Date()
     @State private var scrollProxy: ScrollViewProxy?
     @State private var showHRZoneSettings = false
-    @State private var selectedHRZoneSchema: HRZoneSchema = .karvonen
-    @State private var customRestingHR: Double? = nil
-    @State private var customLTHR: Double? = nil
+    @State private var hrZoneConfigurationMode: HRZoneConfigurationMode = .intelligent
+    @State private var selectedHRZoneSchema: HRZoneSchema = .lactatThreshold
+    @State private var fixedMaxHR: Double? = nil
+    @State private var fixedRestingHR: Double? = nil
+    @State private var fixedLTHR: Double? = nil
+    @State private var customZone1Upper: Double = 120
+    @State private var customZone2Upper: Double = 140
+    @State private var customZone3Upper: Double = 160
+    @State private var customZone4Upper: Double = 180
+    @State private var customZone5Upper: Double = 200
+
+    private var hrZoneSettings: HRZoneUserSettings {
+        HRZoneUserSettings(
+            mode: hrZoneConfigurationMode,
+            customSchema: selectedHRZoneSchema,
+            fixedMaxHR: fixedMaxHR,
+            fixedRestingHR: fixedRestingHR,
+            fixedLTHR: fixedLTHR,
+            customZoneUpperBounds: [
+                customZone1Upper,
+                customZone2Upper,
+                customZone3Upper,
+                customZone4Upper,
+                customZone5Upper
+            ]
+        )
+    }
 
     var filteredWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         engine.workoutAnalytics.filter { sportFilter == nil || $0.workout.workoutActivityType.name == sportFilter }
@@ -54,7 +128,12 @@ struct WorkoutHistoryView: View {
                             ForEach(groupedWorkouts.sorted(by: { ($0.key.year! * 12 + $0.key.month!) > ($1.key.year! * 12 + $1.key.month!) }), id: \.key) { (key, workouts) in
                                 Section(header: Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))").font(.headline).foregroundColor(.orange)) {
                                     ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.workout.startDate) { pair in
-                                        WorkoutCard(workout: pair.workout, analytics: pair.analytics, isExpanded: expandedWorkout == pair.workout)
+                                        WorkoutCard(
+                                            workout: pair.workout,
+                                            analytics: pair.analytics,
+                                            isExpanded: expandedWorkout == pair.workout,
+                                            hrZoneSettings: hrZoneSettings
+                                        )
                                             .id(pair.workout.startDate)
                                             .onTapGesture {
                                                 withAnimation {
@@ -153,9 +232,16 @@ struct WorkoutHistoryView: View {
             .sheet(isPresented: $showHRZoneSettings) {
                 HRZoneSettingsSheet(
                     isPresented: $showHRZoneSettings,
+                    configurationMode: $hrZoneConfigurationMode,
                     selectedSchema: $selectedHRZoneSchema,
-                    customRestingHR: $customRestingHR,
-                    customLTHR: $customLTHR
+                    fixedMaxHR: $fixedMaxHR,
+                    fixedRestingHR: $fixedRestingHR,
+                    fixedLTHR: $fixedLTHR,
+                    customZone1Upper: $customZone1Upper,
+                    customZone2Upper: $customZone2Upper,
+                    customZone3Upper: $customZone3Upper,
+                    customZone4Upper: $customZone4Upper,
+                    customZone5Upper: $customZone5Upper
                 )
             }
             .background(
@@ -182,6 +268,7 @@ struct WorkoutCard: View {
     let workout: HKWorkout
     let analytics: WorkoutAnalytics
     let isExpanded: Bool
+    let hrZoneSettings: HRZoneUserSettings
 
     private static let dateFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -224,7 +311,7 @@ struct WorkoutCard: View {
                 }
             }
             if isExpanded {
-                WorkoutDetailView(analytics: analytics)
+                WorkoutDetailView(analytics: analytics, hrZoneSettings: hrZoneSettings)
             }
         }
         .padding()
@@ -258,6 +345,7 @@ private struct HRZone {
 
 struct WorkoutDetailView: View {
     let analytics: WorkoutAnalytics
+    let hrZoneSettings: HRZoneUserSettings
 
     @StateObject private var healthKitManager = HealthKitManager()
     @State private var selectedMETPoint: (Date, Double)? = nil
@@ -330,6 +418,34 @@ struct WorkoutDetailView: View {
 
     private var activeZoneProfile: HRZoneProfile? {
         historicalZoneProfile ?? analytics.hrZoneProfile
+    }
+
+    private var customZoneProfile: HRZoneProfile? {
+        let bounds = hrZoneSettings.customZoneUpperBounds
+        guard bounds.count == 5 else { return nil }
+        guard zip(bounds, bounds.dropFirst()).allSatisfy({ pair in pair.0 < pair.1 }) else { return nil }
+
+        let lowerBounds = [0.0] + Array(bounds.dropLast())
+        let colors = ["0099FF", "00CC00", "FFCC00", "FF6600", "FF0000"]
+        let zones = zip(Array(1...5), zip(lowerBounds, bounds)).map { zoneNumber, pair in
+            HeartRateZone(
+                name: "Zone \(zoneNumber)",
+                range: pair.0...pair.1,
+                color: colors[zoneNumber - 1],
+                zoneNumber: zoneNumber
+            )
+        }
+
+        return HRZoneProfile(
+            sport: analytics.workout.workoutActivityType.rawValue,
+            schema: hrZoneSettings.customSchema,
+            maxHR: bounds.last,
+            restingHR: nil,
+            lactateThresholdHR: nil,
+            zones: zones,
+            lastUpdated: Date(),
+            adaptive: false
+        )
     }
 
     /// Dynamic heart rate zones from analytics profile
@@ -827,22 +943,43 @@ struct WorkoutDetailView: View {
     }
 
     private func loadHistoricalZoneProfile() async {
-        let workoutDate = analytics.workout.startDate
-        let maxHR = await healthKitManager.fetchMaxHR(workoutDate: workoutDate)
-        let restingHR = await healthKitManager.fetchRHR(workoutDate: workoutDate)
-        let schema = analytics.hrZoneProfile?.schema
-        let lactateThresholdHR = await healthKitManager.fetchLTHR(workoutDate: workoutDate, maxHR: maxHR)
-        let rebuiltProfile = await healthKitManager.createHRZoneProfile(
-            for: analytics.workout.workoutActivityType,
-            schema: schema,
-            customMaxHR: maxHR,
-            customRestingHR: restingHR,
-            customLTHR: lactateThresholdHR
-        )
+        switch hrZoneSettings.mode {
+        case .customZones:
+            historicalMaxHR = nil
+            historicalRestingHR = nil
+            historicalZoneProfile = customZoneProfile
 
-        historicalMaxHR = maxHR
-        historicalRestingHR = restingHR
-        historicalZoneProfile = rebuiltProfile
+        case .customSchema:
+            let rebuiltProfile = await healthKitManager.createHRZoneProfile(
+                for: analytics.workout.workoutActivityType,
+                schema: hrZoneSettings.customSchema,
+                customMaxHR: hrZoneSettings.fixedMaxHR,
+                customRestingHR: hrZoneSettings.fixedRestingHR,
+                customLTHR: hrZoneSettings.fixedLTHR
+            )
+
+            historicalMaxHR = rebuiltProfile.maxHR
+            historicalRestingHR = rebuiltProfile.restingHR
+            historicalZoneProfile = rebuiltProfile
+
+        case .intelligent:
+            let workoutDate = analytics.workout.startDate
+            let maxHR = await healthKitManager.fetchMaxHR(workoutDate: workoutDate)
+            let restingHR = await healthKitManager.fetchRHR(workoutDate: workoutDate)
+            let schema = analytics.hrZoneProfile?.schema ?? healthKitManager.recommendedSchema(for: analytics.workout.workoutActivityType)
+            let lactateThresholdHR = await healthKitManager.fetchLTHR(workoutDate: workoutDate, maxHR: maxHR)
+            let rebuiltProfile = await healthKitManager.createHRZoneProfile(
+                for: analytics.workout.workoutActivityType,
+                schema: schema,
+                customMaxHR: maxHR,
+                customRestingHR: restingHR,
+                customLTHR: lactateThresholdHR
+            )
+
+            historicalMaxHR = maxHR
+            historicalRestingHR = restingHR
+            historicalZoneProfile = rebuiltProfile
+        }
     }
 
     private func formattedTime(_ seconds: TimeInterval) -> String {
@@ -909,98 +1046,253 @@ struct WorkoutDetailView: View {
 
 struct HRZoneSettingsSheet: View {
     @Binding var isPresented: Bool
+    @Binding var configurationMode: HRZoneConfigurationMode
     @Binding var selectedSchema: HRZoneSchema
-    @Binding var customRestingHR: Double?
-    @Binding var customLTHR: Double?
+    @Binding var fixedMaxHR: Double?
+    @Binding var fixedRestingHR: Double?
+    @Binding var fixedLTHR: Double?
+    @Binding var customZone1Upper: Double
+    @Binding var customZone2Upper: Double
+    @Binding var customZone3Upper: Double
+    @Binding var customZone4Upper: Double
+    @Binding var customZone5Upper: Double
+
+    private var customZoneBoundsAreAscending: Bool {
+        let bounds = [
+            customZone1Upper,
+            customZone2Upper,
+            customZone3Upper,
+            customZone4Upper,
+            customZone5Upper
+        ]
+        return zip(bounds, bounds.dropFirst()).allSatisfy { pair in
+            pair.0 < pair.1
+        }
+    }
+
+    private var selectedSchemaTitle: String {
+        switch selectedSchema {
+        case .mhrPercentage:
+            return "Max HR Percentage"
+        case .karvonen:
+            return "Karvonen"
+        case .lactatThreshold:
+            return "Lactate Threshold"
+        case .polarized:
+            return "Polarized 3-Zone"
+        }
+    }
+
+    private var formulaDetailsSymbol: String {
+        if configurationMode == .intelligent {
+            return configurationMode.symbol
+        }
+
+        switch selectedSchema {
+        case .mhrPercentage:
+            return "heart.circle"
+        case .karvonen:
+            return "waveform.path.ecg"
+        case .lactatThreshold:
+            return "figure.run"
+        case .polarized:
+            return "line.3.horizontal.decrease.circle"
+        }
+    }
     
     var body: some View {
         NavigationStack {
             Form {
-                Section("Heart Rate Zone Formula") {
-                    Picker("Schema", selection: $selectedSchema) {
-                        Text("Max HR %").tag(HRZoneSchema.mhrPercentage)
-                        Text("Karvonen (HRR)").tag(HRZoneSchema.karvonen)
-                        Text("Lactate Threshold").tag(HRZoneSchema.lactatThreshold)
-                        Text("Polarized 3-Zone").tag(HRZoneSchema.polarized)
+                Section("Zone Strategy") {
+                    Picker("Mode", selection: $configurationMode) {
+                        ForEach(HRZoneConfigurationMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.symbol).tag(mode)
+                        }
                     }
-                    
-                    Text("Current: \(selectedSchema.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)")
+                    .pickerStyle(.inline)
+
+                    Text(configurationMode.description)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                
-                Section("Custom Metrics (Optional)") {
-                    HStack {
-                        Text("Resting HR (bpm)")
-                        Spacer()
-                        TextField("Auto-detect", value: $customRestingHR, format: .number)
-                            .keyboardType(.decimalPad)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 100)
+
+                if configurationMode != .customZones {
+                    Section("Schema") {
+                        Picker("Formula", selection: $selectedSchema) {
+                            Text("Lactate Threshold").tag(HRZoneSchema.lactatThreshold)
+                            Text("Karvonen").tag(HRZoneSchema.karvonen)
+                            Text("Max HR Percentage").tag(HRZoneSchema.mhrPercentage)
+                            Text("Polarized 3-Zone").tag(HRZoneSchema.polarized)
+                        }
+
+                        Text("Selected formula: \(selectedSchemaTitle)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
-                    
-                    HStack {
-                        Text("Lactate Threshold (bpm)")
-                        Spacer()
-                        TextField("Auto-infer", value: $customLTHR, format: .number)
-                            .keyboardType(.decimalPad)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 100)
-                    }
-                    
-                    Text("Leave empty to auto-detect from your HealthKit data")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
                 }
-                
-                Section("Formula Details") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        switch selectedSchema {
-                        case .mhrPercentage:
-                            Text("🎯 **Max HR %**: Zones based on 50-100% of maximum heart rate")
-                                .font(.caption)
-                            Text("Best for: Quick estimation, all fitness levels")
+
+                Section("Set HR Zones") {
+                    switch configurationMode {
+                    case .intelligent:
+                        Text("Each workout uses the schema that best fits the sport and rebuilds zones from recent metrics such as resting HR, max HR, threshold estimates, and workout context.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                    case .customSchema:
+                        if selectedSchema == .mhrPercentage || selectedSchema == .karvonen {
+                            HStack {
+                                Text("Max HR")
+                                Spacer()
+                                TextField("Optional", value: $fixedMaxHR, format: .number)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 110)
+                            }
+                        }
+
+                        if selectedSchema == .karvonen {
+                            HStack {
+                                Text("Resting HR")
+                                Spacer()
+                                TextField("Optional", value: $fixedRestingHR, format: .number)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 110)
+                            }
+                        }
+
+                        if selectedSchema == .lactatThreshold || selectedSchema == .polarized {
+                            HStack {
+                                Text("LTHR")
+                                Spacer()
+                                TextField("Optional", value: $fixedLTHR, format: .number)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 110)
+                            }
+                        }
+
+                        Text("Leave any field empty to keep the formula fixed while allowing the app to fall back to its baseline estimate for that variable.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+
+                    case .customZones:
+                        HStack {
+                            Text("Zone 1 ceiling")
+                            Spacer()
+                            TextField("bpm", value: $customZone1Upper, format: .number)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 90)
+                        }
+                        HStack {
+                            Text("Zone 2 ceiling")
+                            Spacer()
+                            TextField("bpm", value: $customZone2Upper, format: .number)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 90)
+                        }
+                        HStack {
+                            Text("Zone 3 ceiling")
+                            Spacer()
+                            TextField("bpm", value: $customZone3Upper, format: .number)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 90)
+                        }
+                        HStack {
+                            Text("Zone 4 ceiling")
+                            Spacer()
+                            TextField("bpm", value: $customZone4Upper, format: .number)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 90)
+                        }
+                        HStack {
+                            Text("Zone 5 ceiling")
+                            Spacer()
+                            TextField("bpm", value: $customZone5Upper, format: .number)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 90)
+                        }
+
+                        if customZoneBoundsAreAscending {
+                            Text("Zone ceilings are valid. Each higher zone begins where the previous one ends.")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
-                        
-                        case .karvonen:
-                            Text("🏃 **Karvonen HRR**: Zones based on heart rate reserve")
-                                .font(.caption)
-                            Text("Formula: (HRR × intensity) + RHR")
+                        } else {
+                            Text("Each higher zone must have a larger heart-rate ceiling than the previous zone.")
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
-                            Text("Best for: Personalized training, considers resting HR")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        
-                        case .lactatThreshold:
-                            Text("⚡ **Lactate Threshold**: Zones based on lactate threshold")
-                                .font(.caption)
-                            Text("Best for: Threshold training, tempo work")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        
-                        case .polarized:
-                            Text("🔄 **Polarized 3-Zone**: Easy, Moderate, Hard endurance model")
-                                .font(.caption)
-                            Text("Best for: Endurance athletes, high-low training")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.red)
                         }
                     }
-                    .padding(8)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
                 }
-                
-                Section("Auto-Detection") {
-                    Button(action: {
-                        customRestingHR = nil
-                        customLTHR = nil
-                    }) {
+
+                Section("Formula Details") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(configurationMode == .intelligent ? "Intelligent" : selectedSchemaTitle, systemImage: formulaDetailsSymbol)
+                            .font(.caption.weight(.semibold))
+
+                        if configurationMode == .intelligent {
+                            Text("The app picks the formula that best fits the workout type, then rebuilds zones from recent resting HR, max HR, threshold estimates, and the workout’s sport context.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        } else {
+                            switch selectedSchema {
+                            case .mhrPercentage:
+                                Text("Formula: zone boundary = maxHR × intensity")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("This is the simplest model. It uses max HR only and ignores resting HR.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+
+                            case .karvonen:
+                                Text("Formula: HRR = maxHR - restingHR, then boundary = (HRR × intensity) + restingHR")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("This works well for recovery and lower-intensity sessions because it reacts to changes in resting HR.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+
+                            case .lactatThreshold:
+                                Text("Formula: zone boundary = LTHR × percentage band")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("This is the performance-focused option for running, cycling, and rowing when threshold data is available.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+
+                            case .polarized:
+                                Text("Formula: Zone 1 < 0.80 × LTHR, Zone 2 = 0.80-1.00 × LTHR, Zone 3 > 1.00 × LTHR")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("This keeps training distribution simple and is useful when you want a clear low / threshold / high split.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                Section("Reset") {
+                    Button {
+                        configurationMode = .intelligent
+                        selectedSchema = .lactatThreshold
+                        fixedMaxHR = nil
+                        fixedRestingHR = nil
+                        fixedLTHR = nil
+                        customZone1Upper = 120
+                        customZone2Upper = 140
+                        customZone3Upper = 160
+                        customZone4Upper = 180
+                        customZone5Upper = 200
+                    } label: {
                         HStack {
                             Image(systemName: "goforward")
-                            Text("Reset to Auto-Detect")
+                            Text("Reset HR Zone Settings")
                         }
                     }
                 }
