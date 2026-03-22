@@ -193,6 +193,20 @@ enum RootTabSelection: Hashable {
 }
 
 enum AppDestination: String, CaseIterable, Hashable, Identifiable {
+    case insights
+    case labels
+    case log
+    case calories
+    case carbs
+    case protein
+    case fats
+    case water
+    case fiber
+    case vitamins
+    case minerals
+    case phytochemicals
+    case antioxidants
+    case electrolytes
     case todaysPlan
     case trainingCalendar
     case coach
@@ -345,6 +359,65 @@ class NavigationState: ObservableObject {
             }
         }
     }
+
+    static func destination(for tab: RootTabSelection) -> AppDestination? {
+        switch tab {
+        case .insights: return .insights
+        case .labels: return .labels
+        case .log: return .log
+        case .calories: return .calories
+        case .carbs: return .carbs
+        case .protein: return .protein
+        case .fats: return .fats
+        case .water: return .water
+        case .fiber: return .fiber
+        case .vitamins: return .vitamins
+        case .minerals: return .minerals
+        case .phytochemicals: return .phytochemicals
+        case .antioxidants: return .antioxidants
+        case .electrolytes: return .electrolytes
+        case .todaysPlan: return .todaysPlan
+        case .trainingCalendar: return .trainingCalendar
+        case .coach: return .coach
+        case .recoveryScore: return .recoveryScore
+        case .readiness: return .readiness
+        case .strainRecovery: return .strainRecovery
+        case .workoutHistory: return .workoutHistory
+        case .activityRings: return .activityRings
+        case .heartZones: return .heartZones
+        case .personalRecords: return .personalRecords
+        case .mindfulnessRealm: return .mindfulnessRealm
+        case .moodTracker: return .moodTracker
+        case .journal: return .journal
+        case .sleep: return .sleep
+        case .stress: return .stress
+        case .dashboard, .search, .home, .playground: return nil
+        }
+    }
+
+    func navigate(
+        focus: AppFocus,
+        view: String,
+        tab: RootTabSelection
+    ) {
+        appFocus = focus
+        selectedView = view
+
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            switch tab {
+            case .dashboard, .search, .playground:
+                selectedRootTab = tab
+                presentedDestination = nil
+            default:
+                selectedRootTab = NavigationState.defaultRootTab(for: focus)
+                presentedDestination = NavigationState.destination(for: tab)
+            }
+            return
+        }
+
+        selectedRootTab = tab
+        presentedDestination = nil
+    }
 }
 
 class SearchState: ObservableObject {
@@ -371,48 +444,9 @@ struct NutrivanceApp: App {
         view: String,
         tab: RootTabSelection
     ) {
-        navigationState.appFocus = focus
-        navigationState.selectedView = view
-
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            switch tab {
-            case .dashboard, .search, .playground:
-                navigationState.selectedRootTab = tab
-                navigationState.presentedDestination = nil
-            default:
-                navigationState.selectedRootTab = NavigationState.defaultRootTab(for: focus)
-                navigationState.presentedDestination = destination(for: tab)
-            }
-            return
-        }
-
-        navigationState.selectedRootTab = tab
-        navigationState.presentedDestination = nil
+        navigationState.navigate(focus: focus, view: view, tab: tab)
     }
 
-    private func destination(for tab: RootTabSelection) -> AppDestination? {
-        switch tab {
-        case .insights, .labels, .log, .calories, .carbs, .protein, .fats, .water, .fiber, .vitamins, .minerals, .phytochemicals, .antioxidants, .electrolytes:
-            return nil
-        case .todaysPlan: return .todaysPlan
-        case .trainingCalendar: return .trainingCalendar
-        case .coach: return .coach
-        case .recoveryScore: return .recoveryScore
-        case .readiness: return .readiness
-        case .strainRecovery: return .strainRecovery
-        case .workoutHistory: return .workoutHistory
-        case .activityRings: return .activityRings
-        case .heartZones: return .heartZones
-        case .personalRecords: return .personalRecords
-        case .mindfulnessRealm: return .mindfulnessRealm
-        case .moodTracker: return .moodTracker
-        case .journal: return .journal
-        case .sleep: return .sleep
-        case .stress: return .stress
-        case .dashboard, .search, .home, .playground: return nil
-        }
-    }
-    
     private func postViewControl(_ name: Notification.Name) {
         NotificationCenter.default.post(name: name, object: nil)
     }

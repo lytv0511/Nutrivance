@@ -125,6 +125,7 @@ struct SearchScopeBar: View {
 struct SearchView: View {
     @EnvironmentObject var navigationState: NavigationState
     @EnvironmentObject var searchState: SearchState
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showCamera = false
     @State private var showHome: Bool = true
     @State private var showConfirmation = false
@@ -136,7 +137,6 @@ struct SearchView: View {
     @State private var selectedItem: String?
     @State private var animationPhase: Double = 0
     private let gradients = GradientBackgrounds()
-//    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     // Update items when needed
     private let nutritionItems = ["Insights", "Labels", "Log",
@@ -147,6 +147,14 @@ struct SearchView: View {
     private let fitnessItems = ["Dashboard","Readiness Check", "Strain vs Recovery"]
     
     let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress"]
+
+    private var usesLegacyNavigation: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+    }
+
+    private func shouldUseLocalNavigation(for item: String) -> Bool {
+        usesLegacyNavigation || target(for: item) == nil
+    }
     
     private var navigationBinding: Binding<String?> {
         Binding(
@@ -267,9 +275,88 @@ struct SearchView: View {
     
     private func openFirstResult() {
         guard searchBarFocused, let firstResult = filteredItems.first else { return }
+        openResult(firstResult)
+    }
+
+    private func target(for item: String) -> (focus: AppFocus, view: String, tab: RootTabSelection)? {
+        switch item {
+        case "Insights":
+            return (.nutrition, "Insights", .insights)
+        case "Labels":
+            return (.nutrition, "Labels", .labels)
+        case "Log":
+            return (.nutrition, "Log", .log)
+        case "Calories":
+            return (.nutrition, "Calories", .calories)
+        case "Carbs":
+            return (.nutrition, "Carbs", .carbs)
+        case "Protein":
+            return (.nutrition, "Protein", .protein)
+        case "Fats":
+            return (.nutrition, "Fats", .fats)
+        case "Water":
+            return (.nutrition, "Water", .water)
+        case "Fiber":
+            return (.nutrition, "Fiber", .fiber)
+        case "Vitamins":
+            return (.nutrition, "Vitamins", .vitamins)
+        case "Minerals":
+            return (.nutrition, "Minerals", .minerals)
+        case "Phytochemicals":
+            return (.nutrition, "Phytochemicals", .phytochemicals)
+        case "Antioxidants":
+            return (.nutrition, "Antioxidants", .antioxidants)
+        case "Electrolytes":
+            return (.nutrition, "Electrolytes", .electrolytes)
+        case "Dashboard":
+            return (.fitness, "Dashboard", .dashboard)
+        case "Today's Plan":
+            return (.fitness, "Today's Plan", .todaysPlan)
+        case "Training Calendar":
+            return (.fitness, "Training Calendar", .trainingCalendar)
+        case "Coach":
+            return (.fitness, "Coach", .coach)
+        case "Recovery Score":
+            return (.fitness, "Recovery Score", .recoveryScore)
+        case "Readiness Check":
+            return (.fitness, "Readiness", .readiness)
+        case "Strain vs Recovery":
+            return (.fitness, "Strain vs Recovery", .strainRecovery)
+        case "Workout History":
+            return (.fitness, "Workout History", .workoutHistory)
+        case "Activity Rings":
+            return (.fitness, "Activity Rings", .activityRings)
+        case "Heart Zones":
+            return (.fitness, "Heart Zones", .heartZones)
+        case "Personal Records":
+            return (.fitness, "Personal Records", .personalRecords)
+        case "Mindfulness Realm":
+            return (.mentalHealth, "Mindfulness Realm", .mindfulnessRealm)
+        case "Mood Tracker":
+            return (.mentalHealth, "Mood Tracker", .moodTracker)
+        case "Journal":
+            return (.mentalHealth, "Journal", .journal)
+        case "Sleep":
+            return (.mentalHealth, "Sleep", .sleep)
+        case "Stress":
+            return (.mentalHealth, "Stress", .stress)
+        default:
+            return nil
+        }
+    }
+
+    private func openResult(_ item: String) {
         searchBarFocused = false
         searchState.isSearching = false
-        selectedItem = firstResult
+        recordUsage(for: item)
+
+        if shouldUseLocalNavigation(for: item) {
+            selectedItem = item
+            return
+        }
+
+        guard let target = target(for: item) else { return }
+        navigationState.navigate(focus: target.focus, view: target.view, tab: target.tab)
     }
 
     // MARK: - Typo Tolerance (Levenshtein Distance)
@@ -378,78 +465,21 @@ struct SearchView: View {
 
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
                                 ForEach(filteredItems, id: \.self) { item in
-                                    NavigationLink(tag: item, selection: $selectedItem) {
-                                        Group {
-                                            switch item {
-                                            case "Dashboard":
-                                                DashboardView()
-                                            case "Today's Plan":
-                                                TodaysPlanView(planType: .all)
-                                            case "Training Calendar":
-                                                TrainingCalendarView()
-                                            case "Coach":
-                                                CoachView()
-                                            case "Recovery Score":
-                                                RecoveryScoreView()
-                                            case "Readiness Check":
-                                                ReadinessCheckView()
-                                            case "Strain vs Recovery":
-                                                StrainRecoveryView()
-                                            case "Fuel Check":
-                                                FuelCheckView()
-                                            case "Workout History":
-                                                WorkoutHistoryView()
-                                            case "Activity Rings":
-                                                ActivityRingsView()
-                                            case "Heart Zones":
-                                                HeartZonesView()
-                                            case "Personal Records":
-                                                PersonalRecordsView()
-                                            case "Mindfulness Realm":
-                                                MindfulnessRealmView()
-                                            case "Mood Tracker":
-                                                MoodTrackerView()
-                                            case "Journal":
-                                                JournalView()
-                                            case "Sleep":
-                                                SleepView()
-                                            case "Stress":
-                                                StressView()
-                                            case "Home":
-                                                HomeView()
-                                            case "Insights":
-                                                HealthInsightsView()
-                                            case "Labels":
-                                                NutritionScannerView()
-                                            case "Log":
-                                                LogView()
-                                            case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                                NutrientDetailView(nutrientName: item)
-                                            default:
-                                                HomeView()
+                                    Group {
+                                        if shouldUseLocalNavigation(for: item) {
+                                            NavigationLink(tag: item, selection: $selectedItem) {
+                                                destinationView(for: item)
+                                            } label: {
+                                                resultCard(for: item)
                                             }
+                                        } else {
+                                            Button {
+                                                openResult(item)
+                                            } label: {
+                                                resultCard(for: item)
+                                            }
+                                            .buttonStyle(.plain)
                                         }
-                                        .onAppear {
-                                            recordUsage(for: item)
-                                        }
-                                    } label: {
-                                        VStack {
-                                            Image(systemName: getIconName(for: item))
-                                                .font(.system(size: 40))
-                                                .foregroundColor(.primary)
-                                                .frame(width: 80, height: 80)
-                                                .background(.ultraThinMaterial)
-                                                .clipShape(Circle())
-
-                                            Text(item)
-                                                .font(.caption)
-                                                .multilineTextAlignment(.center)
-                                                .frame(width: 80, height: 40)
-                                        }
-                                        .frame(width: 120, height: 120)
-                                        .padding()
-                                        .background(.ultraThinMaterial)
-                                        .cornerRadius(12)
                                     }
                                 }
                             }
@@ -605,6 +635,27 @@ struct SearchView: View {
         default:
             return AnyView(HomeView())
         }
+    }
+
+    @ViewBuilder
+    private func resultCard(for item: String) -> some View {
+        VStack {
+            Image(systemName: getIconName(for: item))
+                .font(.system(size: 40))
+                .foregroundColor(.primary)
+                .frame(width: 80, height: 80)
+                .background(.ultraThinMaterial)
+                .clipShape(Circle())
+
+            Text(item)
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .frame(width: 80, height: 40)
+        }
+        .frame(width: 120, height: 120)
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(12)
     }
 
     
