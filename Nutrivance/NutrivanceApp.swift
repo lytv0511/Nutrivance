@@ -2,6 +2,80 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+private func allViewControllers(from root: UIViewController) -> [UIViewController] {
+    var controllers: [UIViewController] = [root]
+    
+    if let presented = root.presentedViewController {
+        controllers.append(contentsOf: allViewControllers(from: presented))
+    }
+    
+    for child in root.children {
+        controllers.append(contentsOf: allViewControllers(from: child))
+    }
+    
+    return controllers
+}
+
+extension Notification.Name {
+    static let nutrivanceViewControlToday = Notification.Name("nutrivance.viewControl.today")
+    static let nutrivanceViewControlPrevious = Notification.Name("nutrivance.viewControl.previous")
+    static let nutrivanceViewControlNext = Notification.Name("nutrivance.viewControl.next")
+    static let nutrivanceViewControlFilter1 = Notification.Name("nutrivance.viewControl.filter1")
+    static let nutrivanceViewControlFilter2 = Notification.Name("nutrivance.viewControl.filter2")
+    static let nutrivanceViewControlFilter3 = Notification.Name("nutrivance.viewControl.filter3")
+    static let nutrivanceViewControlFilter4 = Notification.Name("nutrivance.viewControl.filter4")
+}
+
+func toggleSystemSidebar() {
+    #if os(iOS)
+    let selector = Selector(("toggleSidebar:"))
+    let activeScenes = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .filter { $0.activationState == .foregroundActive }
+    
+    for scene in activeScenes {
+        if let keyWindow = scene.windows.first(where: \.isKeyWindow) {
+            if let rootViewController = keyWindow.rootViewController {
+                for controller in allViewControllers(from: rootViewController) {
+                    if let target = controller.targetViewController(forAction: selector, sender: nil) {
+                        _ = target.perform(selector, with: nil)
+                        return
+                    }
+                    
+                    if controller.responds(to: selector) {
+                        _ = controller.perform(selector, with: nil)
+                        return
+                    }
+                }
+                
+                UIApplication.shared.sendAction(
+                    selector,
+                    to: nil,
+                    from: rootViewController,
+                    for: nil
+                )
+                return
+            }
+            
+            UIApplication.shared.sendAction(
+                selector,
+                to: nil,
+                from: keyWindow,
+                for: nil
+            )
+            return
+        }
+    }
+    
+    UIApplication.shared.sendAction(
+        selector,
+        to: nil,
+        from: nil,
+        for: nil
+    )
+    #endif
+}
+
 enum AppFocus: String, CaseIterable {
     case nutrition = "Nutrition"
     case fitness = "Fitness"
@@ -265,6 +339,32 @@ struct NutrivanceApp: App {
         }
     }
     
+    private func postViewControl(_ name: Notification.Name) {
+        NotificationCenter.default.post(name: name, object: nil)
+    }
+    
+    private func hasContextualControls(for tab: RootTabSelection) -> Bool {
+        switch tab {
+        case .strainRecovery, .stress, .sleep:
+            return true
+        default:
+            return false
+        }
+    }
+    
+    private func filterButtonTitles(for tab: RootTabSelection) -> [String] {
+        switch tab {
+        case .strainRecovery:
+            return ["1W", "1M", "1Y"]
+        case .stress:
+            return ["24H", "1W", "1M"]
+        case .sleep:
+            return ["Night", "Week", "Month", "Year"]
+        default:
+            return []
+        }
+    }
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -272,6 +372,12 @@ struct NutrivanceApp: App {
                 .environmentObject(searchState)
         }
         .commands {
+            CommandGroup(replacing: .sidebar) {
+                Button("Toggle Sidebar") {
+                    toggleSystemSidebar()
+                }
+                .keyboardShortcut("S", modifiers: [.command, .control])
+            }
             CommandMenu("Navigation") {
                 Button("Insights") {
                     navigate(focus: .nutrition, view: "Insights", tab: .insights)
@@ -432,6 +538,45 @@ struct NutrivanceApp: App {
                     }
                 }
                 .keyboardShortcut("F", modifiers: [.command])
+            }
+            CommandMenu("View Controls") {
+                if hasContextualControls(for: navigationState.selectedRootTab) {
+                    Button("Today") {
+                        postViewControl(.nutrivanceViewControlToday)
+                    }
+                    .keyboardShortcut("T", modifiers: [.command])
+                    
+                    Button("Previous") {
+                        postViewControl(.nutrivanceViewControlPrevious)
+                    }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command])
+                    
+                    Button("Next") {
+                        postViewControl(.nutrivanceViewControlNext)
+                    }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command])
+                    
+                    ForEach(Array(filterButtonTitles(for: navigationState.selectedRootTab).enumerated()), id: \.offset) { index, title in
+                        Button(title) {
+                            switch index {
+                            case 0:
+                                postViewControl(.nutrivanceViewControlFilter1)
+                            case 1:
+                                postViewControl(.nutrivanceViewControlFilter2)
+                            case 2:
+                                postViewControl(.nutrivanceViewControlFilter3)
+                            case 3:
+                                postViewControl(.nutrivanceViewControlFilter4)
+                            default:
+                                break
+                            }
+                        }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command])
+                    }
+                } else {
+                    Button("No View Controls Available") {}
+                        .disabled(true)
+                }
             }
         }
     }

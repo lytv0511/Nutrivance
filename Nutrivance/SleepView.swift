@@ -769,6 +769,32 @@ struct SleepView: View {
         Calendar.current
     }
     
+    private func selectPeriod(_ period: SleepPeriod) {
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.impactOccurred()
+        viewModel.selectedPeriod = period
+        let newDate = defaultDate(for: period)
+        selectedDate = newDate
+        Task { await viewModel.loadSleepData(for: newDate) }
+    }
+    
+    private func stepSelectedDate(by value: Int) {
+        let newDate = calendar.date(byAdding: nextPeriodComponent(), value: value, to: selectedDate) ?? selectedDate
+        guard isValidDate(newDate, for: viewModel.selectedPeriod) else { return }
+        selectedDate = newDate
+        Task { await viewModel.loadSleepData(for: newDate) }
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+    }
+    
+    private func jumpToToday() {
+        let newDate = defaultDate(for: viewModel.selectedPeriod)
+        selectedDate = newDate
+        Task { await viewModel.loadSleepData(for: newDate) }
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+    }
+    
     var body: some View {
         NavigationStack {
             ZStack {
@@ -785,14 +811,9 @@ struct SleepView: View {
                     VStack(spacing: 24) {
                         // Filter buttons
                         HStack(spacing: 12) {
-                            ForEach(SleepPeriod.allCases, id: \.self) { period in
+                            ForEach(Array(SleepPeriod.allCases.enumerated()), id: \.element) { index, period in
                                 Button(action: {
-                                    let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-                                    impactFeedback.impactOccurred()
-                                    viewModel.selectedPeriod = period
-                                    let newDate = defaultDate(for: period)
-                                    selectedDate = newDate
-                                    Task { await viewModel.loadSleepData(for: newDate) }
+                                    selectPeriod(period)
                                 }) {
                                     Text(period.rawValue)
                                         .font(.caption)
@@ -848,15 +869,18 @@ struct SleepView: View {
             .navigationTitle("Sleep")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                ToolbarItemGroup(placement: .navigationBarLeading) {
+                    Button(action: {
+                        jumpToToday()
+                    }) {
+                        Text("Today")
+                            .font(.system(.caption, design: .rounded))
+                            .fontWeight(.semibold)
+                    }
+                }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button(action: {
-                        let newDate = calendar.date(byAdding: nextPeriodComponent(), value: -1, to: selectedDate) ?? selectedDate
-                        if isValidDate(newDate, for: viewModel.selectedPeriod) {
-                            selectedDate = newDate
-                            Task { await viewModel.loadSleepData(for: newDate) }
-                        }
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
+                        stepSelectedDate(by: -1)
                     }) {
                         Image(systemName: "chevron.left")
                             .font(.body)
@@ -864,18 +888,33 @@ struct SleepView: View {
                 }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button(action: {
-                        let newDate = calendar.date(byAdding: nextPeriodComponent(), value: 1, to: selectedDate) ?? selectedDate
-                        if isValidDate(newDate, for: viewModel.selectedPeriod) {
-                            selectedDate = newDate
-                            Task { await viewModel.loadSleepData(for: newDate) }
-                        }
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
+                        stepSelectedDate(by: 1)
                     }) {
                         Image(systemName: "chevron.right")
                             .font(.body)
                     }
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in
+                jumpToToday()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlPrevious)) { _ in
+                stepSelectedDate(by: -1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNext)) { _ in
+                stepSelectedDate(by: 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter1)) { _ in
+                selectPeriod(.lastNight)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter2)) { _ in
+                selectPeriod(.thisWeek)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter3)) { _ in
+                selectPeriod(.thisMonth)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter4)) { _ in
+                selectPeriod(.thisYear)
             }
         }
         .task {
@@ -2217,4 +2256,3 @@ func periodDateRange(period: SleepPeriod, earliest: Date?) -> (Date, Date) {
         return (minDate, currentJan1)
     }
 }
-

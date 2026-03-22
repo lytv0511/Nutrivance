@@ -51,6 +51,50 @@ struct StressView: View {
     @State private var aggregatedData: [HRVSession] = []
     @State private var averageValue: Double = 0
     
+    private func selectTimeFilter(_ filter: TimeFilter) {
+        timeFilter = filter
+        selectedSession = nil
+        updateAggregatedData()
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+    }
+    
+    private func stepSelectedDate(by value: Int) {
+        let calendar = Calendar.current
+        let unit: Calendar.Component
+        
+        switch timeFilter {
+        case .hourly24:
+            unit = .day
+        case .dailyWeek:
+            unit = .weekOfYear
+        case .dailyMonth:
+            unit = .month
+        }
+        
+        guard let newDate = calendar.date(byAdding: unit, value: value, to: selectedDate) else {
+            return
+        }
+        
+        if value > 0, newDate > Date() {
+            return
+        }
+        
+        selectedDate = newDate
+        updateAggregatedData()
+        syncSelectedSessionToDate()
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+    }
+    
+    private func jumpToToday() {
+        selectedDate = Date()
+        updateAggregatedData()
+        syncSelectedSessionToDate()
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+    }
+    
     var body: some View {
         NavigationStack {
             ZStack {
@@ -201,11 +245,7 @@ struct StressView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarLeading) {
                     Button(action: {
-                        selectedDate = Date()
-                        updateAggregatedData()
-                        syncSelectedSessionToDate()
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
+                        jumpToToday()
                     }) {
                         Text("Today")
                             .font(.system(.caption, design: .rounded))
@@ -214,66 +254,37 @@ struct StressView: View {
                 }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button(action: {
-                        let calendar = Calendar.current
-                        let increment: Int
-                        let unit: Calendar.Component
-                        
-                        switch timeFilter {
-                        case .hourly24:
-                            increment = -1
-                            unit = .day
-                        case .dailyWeek:
-                            increment = -1
-                            unit = .weekOfYear
-                        case .dailyMonth:
-                            increment = -1
-                            unit = .month
-                        }
-                        
-                        if let newDate = calendar.date(byAdding: unit, value: increment, to: selectedDate) {
-                            selectedDate = newDate
-                            updateAggregatedData()
-                            syncSelectedSessionToDate()
-                        }
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
+                        stepSelectedDate(by: -1)
                     }) {
                         Image(systemName: "chevron.left")
                             .font(.system(.body, design: .rounded))
                     }
                     
                     Button(action: {
-                        let calendar = Calendar.current
-                        let increment: Int
-                        let unit: Calendar.Component
-                        
-                        switch timeFilter {
-                        case .hourly24:
-                            increment = 1
-                            unit = .day
-                        case .dailyWeek:
-                            increment = 1
-                            unit = .weekOfYear
-                        case .dailyMonth:
-                            increment = 1
-                            unit = .month
-                        }
-                        
-                        if let newDate = calendar.date(byAdding: unit, value: increment, to: selectedDate) {
-                            // Don't allow going past today
-                            if newDate <= Date() {
-                                selectedDate = newDate
-                                updateAggregatedData()
-                                syncSelectedSessionToDate()
-                            }
-                        }
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
+                        stepSelectedDate(by: 1)
                     }) {
                         Image(systemName: "chevron.right")
                             .font(.system(.body, design: .rounded))
                     }
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in
+                jumpToToday()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlPrevious)) { _ in
+                stepSelectedDate(by: -1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNext)) { _ in
+                stepSelectedDate(by: 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter1)) { _ in
+                selectTimeFilter(.hourly24)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter2)) { _ in
+                selectTimeFilter(.dailyWeek)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter3)) { _ in
+                selectTimeFilter(.dailyMonth)
             }
         }
     }
@@ -1045,9 +1056,15 @@ struct FilterButtonGroup: View {
     @Binding var selectedSession: StressView.HRVSession?
     let onFilterChange: () -> Void
     
+    private let filters: [StressView.TimeFilter] = [
+        .hourly24,
+        .dailyWeek,
+        .dailyMonth
+    ]
+    
     var body: some View {
         HStack(spacing: 16) {
-            ForEach([StressView.TimeFilter.hourly24, StressView.TimeFilter.dailyWeek, StressView.TimeFilter.dailyMonth], id: \.self) { filter in
+            ForEach(Array(filters.enumerated()), id: \.element) { index, filter in
                 FilterButton(
                     filter: filter,
                     isSelected: timeFilter == filter,

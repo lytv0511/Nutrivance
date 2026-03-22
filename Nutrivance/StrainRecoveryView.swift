@@ -41,6 +41,18 @@ struct StrainRecoveryView: View {
     @State private var sportFilter: String? = nil // nil means all sports
     @State private var selectedDate = Date()
     
+    private func selectTimeFilter(_ filter: TimeFilter) {
+        timeFilter = filter
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+    }
+    
+    private func handleFilterShortcut(_ index: Int) {
+        let filters = TimeFilter.allCases
+        guard filters.indices.contains(index) else { return }
+        selectTimeFilter(filters[index])
+    }
+    
     private func stepSelectedDate(by value: Int) {
         let calendar = Calendar.current
         let currentDay = calendar.startOfDay(for: selectedDate)
@@ -64,6 +76,12 @@ struct StrainRecoveryView: View {
         
         return steppedDate <= today
     }
+    
+    private func jumpToToday() {
+        selectedDate = Date()
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+    }
 
     var body: some View {
         NavigationStack {
@@ -71,12 +89,20 @@ struct StrainRecoveryView: View {
                 VStack(alignment: .leading, spacing: 28) {
                     // Time and Sport Filters
                     HStack {
-                        Picker("Time", selection: $timeFilter) {
-                            ForEach(TimeFilter.allCases, id: \.self) { filter in
-                                Text(filter.rawValue).tag(filter)
+                        HStack(spacing: 8) {
+                            ForEach(Array(TimeFilter.allCases.enumerated()), id: \.element) { index, filter in
+                                Button {
+                                    selectTimeFilter(filter)
+                                } label: {
+                                    Text(filter.rawValue)
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(timeFilter == filter ? .accentColor : .gray.opacity(0.35))
                             }
                         }
-                        .pickerStyle(.segmented)
                         Spacer()
                         Menu {
                             Button("All Sports") { sportFilter = nil
@@ -203,13 +229,12 @@ struct StrainRecoveryView: View {
             .navigationTitle("Strain vs Recovery")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-//                    Button {
-//                        selectedDate = Date()
-//                        let impact = UIImpactFeedbackGenerator(style: .medium)
-//                        impact.impactOccurred()
-//                    } label: {
-//                        Text("Today")
-//                    }
+                    Button {
+                        jumpToToday()
+                    } label: {
+                        Text("Today")
+                    }
+                    
                     Button {
                         stepSelectedDate(by: -1)
                         let impact = UIImpactFeedbackGenerator(style: .medium)
@@ -235,6 +260,25 @@ struct StrainRecoveryView: View {
                     }
                     .disabled(!canStepForward)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in
+                jumpToToday()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlPrevious)) { _ in
+                stepSelectedDate(by: -1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNext)) { _ in
+                guard canStepForward else { return }
+                stepSelectedDate(by: 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter1)) { _ in
+                handleFilterShortcut(0)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter2)) { _ in
+                handleFilterShortcut(1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter3)) { _ in
+                handleFilterShortcut(2)
             }
             .task {
                 await engine.refreshWorkoutAnalytics(days: 3650) // Load long-term history for aggregation cards
