@@ -13,6 +13,7 @@ struct MovanceView: View {
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
+    @State private var selectedItem: String?
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     private var navigationBinding: Binding<String?> {
@@ -87,6 +88,13 @@ struct MovanceView: View {
             return "brain.head.profile"
         }
     }
+    
+    private func openFirstResult() {
+        guard searchBarFocused, let firstResult = filteredItems.first else { return }
+        searchBarFocused = false
+        searchState.isSearching = false
+        selectedItem = firstResult
+    }
         
     var body: some View {
         NavigationStack {
@@ -99,12 +107,13 @@ struct MovanceView: View {
                         SearchScopeBar(
                             placeholder: "Summon your inner beast...",
                             searchText: $searchState.searchText,
-                            focus: $searchBarFocused
+                            focus: $searchBarFocused,
+                            onSubmitSearch: openFirstResult
                         )
                         ScrollView {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
                                 ForEach(filteredItems, id: \.self) { item in
-                                    NavigationLink {
+                                    NavigationLink(tag: item, selection: $selectedItem) {
                                         switch item {
                                         case "Home":
                                             HomeView()

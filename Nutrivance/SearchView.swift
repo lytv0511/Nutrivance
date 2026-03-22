@@ -6,6 +6,7 @@ struct SearchScopeBar: View {
     let placeholder: String
     @Binding var searchText: String
     let focus: FocusState<Bool>.Binding
+    let onSubmitSearch: () -> Void
 
     private func shortcut(for scope: SearchScope) -> KeyEquivalent {
         switch scope {
@@ -87,6 +88,7 @@ struct SearchScopeBar: View {
                         .textFieldStyle(.plain)
                         .focused(focus)
                         .autocorrectionDisabled(true)
+                        .onSubmit(onSubmitSearch)
 
                     if !searchText.isEmpty {
                         Button {
@@ -109,7 +111,9 @@ struct SearchScopeBar: View {
                 if focus.wrappedValue {
                     Button("Cancel") {
                         focus.wrappedValue = false
+                        searchState.isSearching = false
                     }
+                    .keyboardShortcut(.cancelAction)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
@@ -129,6 +133,7 @@ struct SearchView: View {
     @FocusState private var searchBarFocused: Bool
     @FocusState private var sidebarFocused: Bool
     @FocusState private var contentFocused: Bool
+    @State private var selectedItem: String?
     @State private var animationPhase: Double = 0
     private let gradients = GradientBackgrounds()
 //    @Environment(\.horizontalSizeClass) var horizontalSizeClass
@@ -259,6 +264,13 @@ struct SearchView: View {
         let current = UserDefaults.standard.integer(forKey: key)
         UserDefaults.standard.set(current + 1, forKey: key)
     }
+    
+    private func openFirstResult() {
+        guard searchBarFocused, let firstResult = filteredItems.first else { return }
+        searchBarFocused = false
+        searchState.isSearching = false
+        selectedItem = firstResult
+    }
 
     // MARK: - Typo Tolerance (Levenshtein Distance)
     private func levenshtein(_ a: String, _ b: String) -> Int {
@@ -360,12 +372,13 @@ struct SearchView: View {
                             SearchScopeBar(
                                 placeholder: "Find in List",
                                 searchText: $searchState.searchText,
-                                focus: $searchBarFocused
+                                focus: $searchBarFocused,
+                                onSubmitSearch: openFirstResult
                             )
 
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
                                 ForEach(filteredItems, id: \.self) { item in
-                                    NavigationLink {
+                                    NavigationLink(tag: item, selection: $selectedItem) {
                                         Group {
                                             switch item {
                                             case "Dashboard":

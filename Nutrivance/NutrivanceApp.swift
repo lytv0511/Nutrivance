@@ -16,6 +16,57 @@ private func allViewControllers(from root: UIViewController) -> [UIViewControlle
     return controllers
 }
 
+private func topViewController(from controller: UIViewController) -> UIViewController {
+    if let presented = controller.presentedViewController {
+        return topViewController(from: presented)
+    }
+    
+    if let navigationController = controller as? UINavigationController,
+       let visibleViewController = navigationController.visibleViewController {
+        return topViewController(from: visibleViewController)
+    }
+    
+    if let tabBarController = controller as? UITabBarController,
+       let selectedViewController = tabBarController.selectedViewController {
+        return topViewController(from: selectedViewController)
+    }
+    
+    for child in controller.children.reversed() {
+        return topViewController(from: child)
+    }
+    
+    return controller
+}
+
+private func activeNavigationController() -> UINavigationController? {
+    let activeScenes = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .filter { $0.activationState == .foregroundActive }
+    
+    for scene in activeScenes {
+        if let keyWindow = scene.windows.first(where: \.isKeyWindow),
+           let rootViewController = keyWindow.rootViewController {
+            let topController = topViewController(from: rootViewController)
+            
+            if let navigationController = topController.navigationController {
+                return navigationController
+            }
+            
+            if let navigationController = topController as? UINavigationController {
+                return navigationController
+            }
+            
+            for controller in allViewControllers(from: rootViewController).reversed() {
+                if let navigationController = controller as? UINavigationController {
+                    return navigationController
+                }
+            }
+        }
+    }
+    
+    return nil
+}
+
 extension Notification.Name {
     static let nutrivanceViewControlToday = Notification.Name("nutrivance.viewControl.today")
     static let nutrivanceViewControlPrevious = Notification.Name("nutrivance.viewControl.previous")
@@ -73,6 +124,29 @@ func toggleSystemSidebar() {
         from: nil,
         for: nil
     )
+    #endif
+}
+
+func performBackNavigation(
+    presentedDestination: Binding<AppDestination?>,
+    dismissAction: (() -> Void)?
+) {
+    #if os(iOS)
+    if let dismissAction {
+        dismissAction()
+        return
+    }
+    
+    if presentedDestination.wrappedValue != nil {
+        presentedDestination.wrappedValue = nil
+        return
+    }
+    
+    if let navigationController = activeNavigationController(),
+       navigationController.viewControllers.count > 1 {
+        navigationController.popViewController(animated: true)
+        return
+    }
     #endif
 }
 
@@ -379,6 +453,14 @@ struct NutrivanceApp: App {
                 .keyboardShortcut("S", modifiers: [.command, .control])
             }
             CommandMenu("Navigation") {
+                Button("Back") {
+                    performBackNavigation(
+                        presentedDestination: $navigationState.presentedDestination,
+                        dismissAction: navigationState.dismissAction
+                    )
+                }
+                .keyboardShortcut("[", modifiers: [.command])
+
                 Button("Insights") {
                     navigate(focus: .nutrition, view: "Insights", tab: .insights)
                 }
