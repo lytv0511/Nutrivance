@@ -480,6 +480,8 @@ struct WorkoutDetailView: View {
     @State private var selectedHRPoint: (Date, Double)? = nil
     @State private var selectedPostHRPoint: (Date, Double)? = nil
     @State private var selectedPowerPoint: (Date, Double)? = nil
+    @State private var selectedCadencePoint: (Date, Double)? = nil
+    @State private var selectedPacePoint: (Date, Double)? = nil
 
     @State private var showHRZones = false
     @State private var routePoints: [RoutePoint] = []
@@ -529,6 +531,122 @@ struct WorkoutDetailView: View {
 
     private var maxHeartRate: Double? {
         analytics.heartRates.map { $0.1 }.max()
+    }
+
+    private func nearestPoint(in data: [(Date, Double)], to date: Date) -> (Date, Double)? {
+        data.min { lhs, rhs in
+            abs(lhs.0.timeIntervalSince(date)) < abs(rhs.0.timeIntervalSince(date))
+        }
+    }
+
+    private func pointSelection(
+        at location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy,
+        data: [(Date, Double)]
+    ) -> (Date, Double)? {
+        let plotFrame = geometry[proxy.plotAreaFrame]
+        guard plotFrame.contains(location) else { return nil }
+
+        let xPosition = location.x - plotFrame.origin.x
+        guard let date: Date = proxy.value(atX: xPosition) else { return nil }
+        return nearestPoint(in: data, to: date)
+    }
+
+    private func updateSelection(
+        from location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy,
+        data: [(Date, Double)],
+        selection: Binding<(Date, Double)?>
+    ) {
+        guard let point = pointSelection(at: location, proxy: proxy, geometry: geometry, data: data) else { return }
+        if selection.wrappedValue?.0 != point.0 || selection.wrappedValue?.1 != point.1 {
+            selection.wrappedValue = point
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
+    @ViewBuilder
+    private func selectionOverlay(
+        proxy: ChartProxy,
+        geometry: GeometryProxy,
+        data: [(Date, Double)],
+        selection: Binding<(Date, Double)?>
+    ) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        updateSelection(
+                            from: value.location,
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: data,
+                            selection: selection
+                        )
+                    }
+                    .onEnded { value in
+                        updateSelection(
+                            from: value.location,
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: data,
+                            selection: selection
+                        )
+                    }
+            )
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    updateSelection(
+                        from: location,
+                        proxy: proxy,
+                        geometry: geometry,
+                        data: data,
+                        selection: selection
+                    )
+                case .ended:
+                    break
+                }
+            }
+    }
+
+    @ChartContentBuilder
+    private func selectionMarks(
+        selected: (Date, Double)?,
+        xLabel: String,
+        yLabel: String,
+        color: Color,
+        valueText: @escaping (Double) -> String
+    ) -> some ChartContent {
+        if let selected {
+            RuleMark(x: .value(xLabel, selected.0))
+                .foregroundStyle(color.opacity(0.35))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                .annotation(position: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selected.0, format: .dateTime.hour().minute())
+                            .font(.caption2.monospacedDigit())
+                            .foregroundColor(.secondary)
+                        Text(valueText(selected.1))
+                            .font(.caption.bold())
+                            .foregroundColor(color)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
+            PointMark(
+                x: .value(xLabel, selected.0),
+                y: .value(yLabel, selected.1)
+            )
+            .symbolSize(90)
+            .foregroundStyle(color)
+        }
     }
 
     /// Convert hex color string to SwiftUI Color
@@ -730,28 +848,31 @@ struct WorkoutDetailView: View {
                 Text("MET Time Series")
                     .font(.subheadline)
                     .bold()
-                Chart(analytics.metSeries, id: \.0) { point in
-                    LineMark(
-                        x: .value("Time", point.0),
-                        y: .value("MET", point.1)
+                Chart {
+                    ForEach(analytics.metSeries, id: \.0) { point in
+                        LineMark(
+                            x: .value("Time", point.0),
+                            y: .value("MET", point.1)
+                        )
+                        .foregroundStyle(.green)
+                    }
+                    selectionMarks(
+                        selected: selectedMETPoint,
+                        xLabel: "Time",
+                        yLabel: "MET",
+                        color: .green,
+                        valueText: { String(format: "%.1f MET", $0) }
                     )
-                    .foregroundStyle(.green)
                 }
                 .frame(height: 150)
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
-                        Rectangle().fill(.clear).contentShape(Rectangle())
-                            .gesture(
-                                SpatialTapGesture()
-                                    .onEnded { value in
-                                        let location = value.location
-                                        if let date = proxy.value(atX: location.x, as: Date.self),
-                                           let met = proxy.value(atY: location.y, as: Double.self) {
-                                            selectedMETPoint = (date, met)
-                                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                        }
-                                    }
-                            )
+                        selectionOverlay(
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: analytics.metSeries,
+                            selection: $selectedMETPoint
+                        )
                     }
                 }
                 if let selected = selectedMETPoint {
@@ -802,30 +923,23 @@ struct WorkoutDetailView: View {
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [5]))
                         }
                     }
-                    if let selected = selectedHRPoint {
-                        PointMark(
-                            x: .value("Time", selected.0),
-                            y: .value("HR", selected.1)
-                        )
-                        .symbolSize(120)
-                        .foregroundStyle(.yellow)
-                    }
+                    selectionMarks(
+                        selected: selectedHRPoint,
+                        xLabel: "Time",
+                        yLabel: "HR",
+                        color: .yellow,
+                        valueText: { "\(Int($0)) bpm" }
+                    )
                 }
                 .frame(height: 180)
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
-                        Rectangle().fill(.clear).contentShape(Rectangle())
-                            .gesture(
-                                SpatialTapGesture()
-                                    .onEnded { value in
-                                        let location = value.location
-                                        if let date = proxy.value(atX: location.x, as: Date.self),
-                                           let hr = proxy.value(atY: location.y, as: Double.self) {
-                                            selectedHRPoint = (date, hr)
-                                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                        }
-                                    }
-                            )
+                        selectionOverlay(
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: analytics.heartRates,
+                            selection: $selectedHRPoint
+                        )
                     }
                 }
 
@@ -880,33 +994,36 @@ struct WorkoutDetailView: View {
                 Text("Post-Workout HR (0-2 min)")
                     .font(.subheadline)
                     .bold()
-                Chart(analytics.postWorkoutHRSeries, id: \.0) { point in
-                    LineMark(
-                        x: .value("Time", point.0),
-                        y: .value("HR", point.1)
-                    )
-                    .foregroundStyle(.orange)
+                Chart {
+                    ForEach(analytics.postWorkoutHRSeries, id: \.0) { point in
+                        LineMark(
+                            x: .value("Time", point.0),
+                            y: .value("HR", point.1)
+                        )
+                        .foregroundStyle(.orange)
+                    }
                     if let peak = analytics.peakHR {
                         RuleMark(y: .value("Peak HR", peak))
                             .foregroundStyle(.red.opacity(0.5))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [5]))
                     }
+                    selectionMarks(
+                        selected: selectedPostHRPoint,
+                        xLabel: "Time",
+                        yLabel: "HR",
+                        color: .orange,
+                        valueText: { "\(Int($0)) bpm" }
+                    )
                 }
                 .frame(height: 150)
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
-                        Rectangle().fill(.clear).contentShape(Rectangle())
-                            .gesture(
-                                SpatialTapGesture()
-                                    .onEnded { value in
-                                        let location = value.location
-                                        if let date = proxy.value(atX: location.x, as: Date.self),
-                                           let hr = proxy.value(atY: location.y, as: Double.self) {
-                                            selectedPostHRPoint = (date, hr)
-                                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                        }
-                                    }
-                            )
+                        selectionOverlay(
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: analytics.postWorkoutHRSeries,
+                            selection: $selectedPostHRPoint
+                        )
                     }
                 }
                 HStack {
@@ -930,28 +1047,31 @@ struct WorkoutDetailView: View {
                     Text("Cycling Power")
                         .font(.subheadline)
                         .bold()
-                    Chart(analytics.powerSeries, id: \.0) { point in
-                        LineMark(
-                            x: .value("Time", point.0),
-                            y: .value("Power", point.1)
+                    Chart {
+                        ForEach(analytics.powerSeries, id: \.0) { point in
+                            LineMark(
+                                x: .value("Time", point.0),
+                                y: .value("Power", point.1)
+                            )
+                            .foregroundStyle(.purple)
+                        }
+                        selectionMarks(
+                            selected: selectedPowerPoint,
+                            xLabel: "Time",
+                            yLabel: "Power",
+                            color: .purple,
+                            valueText: { String(format: "%.0f W", $0) }
                         )
-                        .foregroundStyle(.purple)
                     }
                     .frame(height: 150)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
-                            Rectangle().fill(.clear).contentShape(Rectangle())
-                                .gesture(
-                                    SpatialTapGesture()
-                                        .onEnded { value in
-                                            let location = value.location
-                                            if let date = proxy.value(atX: location.x, as: Date.self),
-                                               let power = proxy.value(atY: location.y, as: Double.self) {
-                                                selectedPowerPoint = (date, power)
-                                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                            }
-                                        }
-                                )
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: analytics.powerSeries,
+                                selection: $selectedPowerPoint
+                            )
                         }
                     }
                     HStack {
@@ -996,17 +1116,39 @@ struct WorkoutDetailView: View {
                     Text("Cycling Cadence")
                         .font(.subheadline)
                         .bold()
-                    Chart(analytics.cadenceSeries, id: \.0) { point in
-                        LineMark(
-                            x: .value("Time", point.0),
-                            y: .value("Cadence", point.1)
+                    Chart {
+                        ForEach(analytics.cadenceSeries, id: \.0) { point in
+                            LineMark(
+                                x: .value("Time", point.0),
+                                y: .value("Cadence", point.1)
+                            )
+                            .foregroundStyle(.mint)
+                        }
+                        selectionMarks(
+                            selected: selectedCadencePoint,
+                            xLabel: "Time",
+                            yLabel: "Cadence",
+                            color: .mint,
+                            valueText: { String(format: "%.0f rpm", $0) }
                         )
-                        .foregroundStyle(.mint)
                     }
                     .frame(height: 150)
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: analytics.cadenceSeries,
+                                selection: $selectedCadencePoint
+                            )
+                        }
+                    }
                     HStack {
                         let avgCadence = analytics.cadenceSeries.map { $0.1 }.average
                         Text("Avg Cadence: \(avgCadence.map { String(format: "%.0f", $0) } ?? "-") rpm")
+                        if let point = selectedCadencePoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.0f", point.1)) rpm")
+                        }
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -1043,18 +1185,43 @@ struct WorkoutDetailView: View {
                     Text("Pace")
                         .font(.subheadline)
                         .bold()
-                    Chart(analytics.speedSeries, id: \.0) { point in
-                        let paceMinKm = 60 / (point.1 * 3.6) // min/km
-                        BarMark(
-                            x: .value("Time", point.0),
-                            y: .value("Pace", paceMinKm)
+                    Chart {
+                        ForEach(analytics.speedSeries, id: \.0) { point in
+                            let paceMinKm = 60 / (point.1 * 3.6) // min/km
+                            BarMark(
+                                x: .value("Time", point.0),
+                                y: .value("Pace", paceMinKm)
+                            )
+                            .foregroundStyle(.teal)
+                        }
+                        selectionMarks(
+                            selected: selectedPacePoint,
+                            xLabel: "Time",
+                            yLabel: "Pace",
+                            color: .teal,
+                            valueText: { String(format: "%.2f min/km", $0) }
                         )
-                        .foregroundStyle(.teal)
                     }
                     .frame(height: 150)
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            let paceSeries = analytics.speedSeries.map { point in
+                                (point.0, 60 / (point.1 * 3.6))
+                            }
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: paceSeries,
+                                selection: $selectedPacePoint
+                            )
+                        }
+                    }
                     HStack {
                         let avgPace = analytics.speedSeries.map { 60 / ($0.1 * 3.6) }.average
                         Text("Avg Pace: \(avgPace.map { String(format: "%.1f", $0) } ?? "-") min/km")
+                        if let point = selectedPacePoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.2f", point.1)) min/km")
+                        }
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)

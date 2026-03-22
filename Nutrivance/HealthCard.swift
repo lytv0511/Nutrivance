@@ -311,6 +311,28 @@ struct HealthLineChartSheet: View {
         ["Strain", "Effort", "Acute Load", "Session Load"].contains(label)
     }
 
+    private func updateSelection(
+        from location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        let plotFrame = geometry[proxy.plotAreaFrame]
+        guard plotFrame.contains(location) else { return }
+
+        let xPosition = location.x - plotFrame.origin.x
+        guard let date: Date = proxy.value(atX: xPosition) else { return }
+
+        guard let closest = data.min(by: {
+            abs($0.0.timeIntervalSince1970 - date.timeIntervalSince1970) <
+            abs($1.0.timeIntervalSince1970 - date.timeIntervalSince1970)
+        }) else { return }
+
+        if selected?.0 != closest.0 || selected?.1 != closest.1 {
+            selected = closest
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             Text(label)
@@ -339,6 +361,22 @@ struct HealthLineChartSheet: View {
                     .lineStyle(.init(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
                 }
                 if let selected = selected {
+                    RuleMark(x: .value("Date", selected.0))
+                        .foregroundStyle(color.opacity(0.35))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                        .annotation(position: .top, spacing: 8, overflowResolution: .init(x: .fit, y: .disabled)) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(selected.0, format: .dateTime.month().day())
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundColor(.secondary)
+                                Text(String(format: "%.1f %@", selected.1, unit))
+                                    .font(.caption.bold())
+                                    .foregroundColor(color)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
                     PointMark(
                         x: .value("Date", selected.0),
                         y: .value(label, selected.1)
@@ -367,19 +405,17 @@ struct HealthLineChartSheet: View {
                     Rectangle().fill(Color.clear).contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                let x = value.location.x - geo[proxy.plotAreaFrame].origin.x
-                                if let date: Date = proxy.value(atX: x) {
-                                    if let closest = data.min(by: { abs($0.0.timeIntervalSince1970 - date.timeIntervalSince1970) < abs($1.0.timeIntervalSince1970 - date.timeIntervalSince1970) }) {
-                                        if self.selected?.0 != closest.0 || self.selected?.1 != closest.1 {
-                                            self.selected = closest
-                                            let generator = UIImpactFeedbackGenerator(style: .light)
-                                            generator.impactOccurred()
-                                        }
-                                    }
-                                }
+                                updateSelection(from: value.location, proxy: proxy, geometry: geo)
                             }
-                            // Persistent indicator: do not clear selected on end
                         )
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                updateSelection(from: location, proxy: proxy, geometry: geo)
+                            case .ended:
+                                break
+                            }
+                        }
                 }
             }
             .onAppear {

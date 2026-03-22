@@ -319,7 +319,7 @@ struct DashboardView: View {
                     dashboardItemOrder: $dashboardItemOrder,
                     summaryCardsOrder: $summaryCardsOrder
                 )
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
             }
