@@ -218,16 +218,16 @@ struct WorkoutHistoryView: View {
                                             workout: pair.workout,
                                             analytics: pair.analytics,
                                             isExpanded: expandedWorkout == pair.workout,
-                                            hrZoneSettings: hrZoneSettings
-                                        )
-                                            .id(pair.workout.startDate)
-                                            .onTapGesture {
+                                            hrZoneSettings: hrZoneSettings,
+                                            onHeaderTap: {
                                                 withAnimation {
                                                     expandedWorkout = expandedWorkout == pair.workout ? nil : pair.workout
                                                 }
                                                 let impact = UIImpactFeedbackGenerator(style: .medium)
                                                 impact.impactOccurred()
                                             }
+                                        )
+                                            .id(pair.workout.startDate)
                                     }
                                 }
                             }
@@ -397,6 +397,7 @@ struct WorkoutCard: View {
     let analytics: WorkoutAnalytics
     let isExpanded: Bool
     let hrZoneSettings: HRZoneUserSettings
+    let onHeaderTap: () -> Void
 
     private static let dateFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -438,6 +439,8 @@ struct WorkoutCard: View {
                     }
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onHeaderTap)
             if isExpanded {
                 WorkoutDetailView(analytics: analytics, hrZoneSettings: hrZoneSettings)
             }
@@ -570,6 +573,10 @@ struct WorkoutDetailView: View {
         }
     }
 
+    private func isHorizontalScrub(_ value: DragGesture.Value) -> Bool {
+        abs(value.translation.width) > abs(value.translation.height)
+    }
+
     @ViewBuilder
     private func selectionOverlay(
         proxy: ChartProxy,
@@ -581,8 +588,12 @@ struct WorkoutDetailView: View {
             .fill(Color.clear)
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: 16)
                     .onChanged { value in
+                        guard isHorizontalScrub(value) else {
+                            selection.wrappedValue = nil
+                            return
+                        }
                         updateSelection(
                             from: value.location,
                             proxy: proxy,
@@ -592,6 +603,10 @@ struct WorkoutDetailView: View {
                         )
                     }
                     .onEnded { value in
+                        guard isHorizontalScrub(value) else {
+                            selection.wrappedValue = nil
+                            return
+                        }
                         updateSelection(
                             from: value.location,
                             proxy: proxy,
