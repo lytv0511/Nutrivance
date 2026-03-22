@@ -92,44 +92,11 @@ struct SpirivanceView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 24)
-                    HStack {
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundColor(.secondary)
-                                .padding(.leading, 8)
-                            
-                            TextField("Awaken the spirit...", text: $searchState.searchText)
-                                .textFieldStyle(.plain)
-                                .focused($searchBarFocused)
-                                .autocorrectionDisabled(true)
-                            
-                            if !searchState.searchText.isEmpty {
-                                Button(action: {
-                                    searchState.searchText = ""
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 16, height: 16)
-                                }
-                                .hoverEffect(.automatic)
-                                .padding(.trailing, 8)
-                            }
-                        }
-                        .padding(8)
-                        .background(Color(.systemGray5))
-                        .cornerRadius(8)
-                        
-                        if searchBarFocused {
-                            Button("Cancel") {
-                                searchBarFocused = false
-                            }
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                            .padding(8)
-                            .hoverEffect(.automatic)
-                        }
-                    }
-                    .padding(.horizontal)
-                    .animation(.spring(), value: searchBarFocused)
+                    SearchScopeBar(
+                        placeholder: "Awaken the spirit...",
+                        searchText: $searchState.searchText,
+                        focus: $searchBarFocused
+                    )
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
                             ForEach(filteredItems, id: \.self) { item in
@@ -260,6 +227,17 @@ struct SpirivanceView: View {
                         }
                     }
             )
+            .onChange(of: searchState.isSearching) { _, isSearching in
+                searchBarFocused = isSearching
+            }
+            .onChange(of: searchBarFocused) { _, isFocused in
+                if !isFocused {
+                    searchState.isSearching = false
+                }
+            }
+            .onAppear {
+                searchState.selectedScope = .mentalHealth
+            }
         }
     }
     

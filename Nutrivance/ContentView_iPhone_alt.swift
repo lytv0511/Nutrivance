@@ -15,29 +15,66 @@
 import SwiftUI
 
 struct ContentView_iPhone_alt: View {
+    @EnvironmentObject var navigationState: NavigationState
     @State private var selectedNutrient: String?
     @State private var showCamera = false
     @State private var showHome: Bool = true
     @State private var showConfirmation = false
     @State var customization = TabViewCustomization()
     @State private var capturedImage: UIImage?
+
+    @ViewBuilder
+    private func destinationView(for destination: AppDestination) -> some View {
+        switch destination {
+        case .todaysPlan:
+            TodaysPlanView(planType: .all)
+        case .trainingCalendar:
+            TrainingCalendarView()
+        case .coach:
+            CoachView()
+        case .recoveryScore:
+            RecoveryScoreView()
+        case .readiness:
+            ReadinessCheckView()
+        case .strainRecovery:
+            StrainRecoveryView()
+        case .workoutHistory:
+            WorkoutHistoryView()
+        case .activityRings:
+            ActivityRingsView()
+        case .heartZones:
+            HeartZonesView()
+        case .personalRecords:
+            PersonalRecordsView()
+        case .mindfulnessRealm:
+            MindfulnessRealmView()
+        case .moodTracker:
+            MoodTrackerView()
+        case .journal:
+            JournalView()
+        case .sleep:
+            SleepView()
+        case .stress:
+            StressView()
+        }
+    }
     
     var body: some View {
-        TabView {
+        TabView(selection: $navigationState.selectedRootTab) {
             // Nutrivance Section
-                Tab("Home", systemImage: "house") {
+                Tab("Home", systemImage: "house", value: RootTabSelection.dashboard) {
                     DashboardView()
                 }
                 .customizationID( "iPhone.tab.home")
                 .defaultVisibility(.visible, for: .tabBar)
             
-                Tab("Playground", systemImage: "arrow.triangle.2.circlepath") {
+                Tab("Playground", systemImage: "arrow.triangle.2.circlepath", value: RootTabSelection.playground) {
                     PlaygroundView()
                 }
                 .customizationID("iPhone.tab.playground")
                 .defaultVisibility(.visible, for: .tabBar)
                 
-                Tab(role: .search) {
+                Tab(value: RootTabSelection.search, role: .search) {
                     SearchView_iPhone()
                 }
                 .customizationID("iPhone.tab.searchiPhone")
@@ -291,6 +328,18 @@ struct ContentView_iPhone_alt: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)
+        .fullScreenCover(item: $navigationState.presentedDestination) { destination in
+            NavigationStack {
+                destinationView(for: destination)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") {
+                                navigationState.presentedDestination = nil
+                            }
+                        }
+                    }
+            }
+        }
     }
     private func getCapturedImage() -> UIImage? {
             // Implementation to get the captured image

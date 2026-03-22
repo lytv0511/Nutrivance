@@ -560,7 +560,10 @@ struct WorkoutDetailView: View {
         data: [(Date, Double)],
         selection: Binding<(Date, Double)?>
     ) {
-        guard let point = pointSelection(at: location, proxy: proxy, geometry: geometry, data: data) else { return }
+        guard let point = pointSelection(at: location, proxy: proxy, geometry: geometry, data: data) else {
+            selection.wrappedValue = nil
+            return
+        }
         if selection.wrappedValue?.0 != point.0 || selection.wrappedValue?.1 != point.1 {
             selection.wrappedValue = point
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -596,6 +599,7 @@ struct WorkoutDetailView: View {
                             data: data,
                             selection: selection
                         )
+                        selection.wrappedValue = nil
                     }
             )
             .onContinuousHover { phase in
@@ -609,7 +613,7 @@ struct WorkoutDetailView: View {
                         selection: selection
                     )
                 case .ended:
-                    break
+                    selection.wrappedValue = nil
                 }
             }
     }
@@ -620,6 +624,7 @@ struct WorkoutDetailView: View {
         xLabel: String,
         yLabel: String,
         color: Color,
+        secondaryText: String? = nil,
         valueText: @escaping (Double) -> String
     ) -> some ChartContent {
         if let selected {
@@ -634,6 +639,11 @@ struct WorkoutDetailView: View {
                         Text(valueText(selected.1))
                             .font(.caption.bold())
                             .foregroundColor(color)
+                        if let secondaryText {
+                            Text(secondaryText)
+                                .font(.caption2.bold())
+                                .foregroundColor(color)
+                        }
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
@@ -646,6 +656,14 @@ struct WorkoutDetailView: View {
             )
             .symbolSize(90)
             .foregroundStyle(color)
+        }
+    }
+
+    private func zoneForHeartRate(_ heartRate: Double) -> HRZone? {
+        heartRateZoneBreakdown.first { zone in
+            zone.range.contains(heartRate)
+        } ?? dynamicHeartRateZones.first { zone in
+            zone.range.contains(heartRate)
         }
     }
 
@@ -923,11 +941,13 @@ struct WorkoutDetailView: View {
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [5]))
                         }
                     }
+                    let selectedZone = showHRZones ? selectedHRPoint.flatMap { zoneForHeartRate($0.1) } : nil
                     selectionMarks(
                         selected: selectedHRPoint,
                         xLabel: "Time",
                         yLabel: "HR",
-                        color: .yellow,
+                        color: selectedZone?.color ?? .red,
+                        secondaryText: selectedZone?.name,
                         valueText: { "\(Int($0)) bpm" }
                     )
                 }

@@ -1,6 +1,123 @@
 import SwiftUI
 import HealthKit
 
+struct SearchScopeBar: View {
+    @EnvironmentObject var searchState: SearchState
+    let placeholder: String
+    @Binding var searchText: String
+    let focus: FocusState<Bool>.Binding
+
+    private func shortcut(for scope: SearchScope) -> KeyEquivalent {
+        switch scope {
+        case .all:
+            return "1"
+        case .nutrition:
+            return "2"
+        case .fitness:
+            return "3"
+        case .mentalHealth:
+            return "4"
+        }
+    }
+
+    private func shortcutLabel(for scope: SearchScope) -> String {
+        switch scope {
+        case .all:
+            return "1"
+        case .nutrition:
+            return "2"
+        case .fitness:
+            return "3"
+        case .mentalHealth:
+            return "4"
+        }
+    }
+
+    private func scopeButtonTitle(for scope: SearchScope) -> String {
+        switch scope {
+        case .all:
+            return "Search"
+        case .nutrition:
+            return "Nutrivance"
+        case .fitness:
+            return "Movance"
+        case .mentalHealth:
+            return "Spirivance"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(SearchScope.allCases, id: \.self) { scope in
+                        Button {
+                            searchState.selectedScope = scope
+                        } label: {
+                            Label(scopeButtonTitle(for: scope), systemImage: scope.icon)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(searchState.selectedScope == scope ? .white : .primary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    Group {
+                                        if searchState.selectedScope == scope {
+                                            Capsule()
+                                                .fill(Color.accentColor)
+                                        } else {
+                                            Capsule()
+                                                .fill(.ultraThinMaterial)
+                                        }
+                                    }
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(shortcut(for: scope), modifiers: [.control])
+                        .accessibilityHint("Control plus \(shortcutLabel(for: scope))")
+                    }
+                }
+            }
+
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+
+                    TextField(placeholder, text: $searchText)
+                        .textFieldStyle(.plain)
+                        .focused(focus)
+                        .autocorrectionDisabled(true)
+
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+
+                if focus.wrappedValue {
+                    Button("Cancel") {
+                        focus.wrappedValue = false
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+}
+
 struct SearchView: View {
     @EnvironmentObject var navigationState: NavigationState
     @EnvironmentObject var searchState: SearchState
@@ -69,7 +186,7 @@ struct SearchView: View {
     ]
     
     var filteredItems: [String] {
-        let allItems = ["Dashboard", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Workout History", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
+        let allItems = ["Dashboard", "Today's Plan", "Training Calendar", "Coach", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Workout History", "Activity Rings", "Heart Zones", "Personal Records", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
 
         let query = searchState.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
@@ -218,153 +335,164 @@ struct SearchView: View {
     
     var body: some View {
         NavigationStack {
-            VStack {
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("Explore health, unlock the impossible")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 24)
-                    HStack {
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundColor(.secondary)
-                                .padding(.leading, 8)
-                            
-                            TextField("Find in List", text: $searchState.searchText)
-                                .textFieldStyle(.plain)
-                                .focused($searchBarFocused)
-                                .autocorrectionDisabled(true)
-                            
-                            if !searchState.searchText.isEmpty {
-                                Button(action: {
-                                    searchState.searchText = ""
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 16, height: 16)
-                                }
-                                .hoverEffect(.automatic)
-                                .padding(.trailing, 8)
-                            }
-                        }
-                        .padding(8)
-                        .background(Color(.systemGray5))
-                        .cornerRadius(8)
-                        
-                        if searchBarFocused {
-                            Button("Cancel") {
-                                searchBarFocused = false
-                            }
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                            .padding(8)
-                            .hoverEffect(.automatic)
+            ZStack {
+                currentGradient
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                            animationPhase = 20
                         }
                     }
-                    .padding(.horizontal)
-                    .animation(.spring(), value: searchBarFocused)
+
+                ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
-                            ForEach(filteredItems, id: \.self) { item in
-                                NavigationLink {
-                                    Group {
-                                        switch item {
-                                        case "Dashboard":
-                                            DashboardView()
-                                        case "Recovery Score":
-                                            RecoveryScoreView()
-                                        case "Readiness Check":
-                                            ReadinessCheckView()
-                                        case "Strain vs Recovery":
-                                            StrainRecoveryView()
-                                        case "Fuel Check":
-                                            FuelCheckView()
-                                        case "Workout History":
-                                            WorkoutHistoryView()
-                                        case "Mindfulness Realm":
-                                            MindfulnessRealmView()
-                                        case "Mood Tracker":
-                                            MoodTrackerView()
-                                        case "Journal":
-                                            JournalView()
-                                        case "Sleep":
-                                            SleepView()
-                                        case "Stress":
-                                            StressView()
-                                        case "Home":
-                                            HomeView()
-                                        case "Insights":
-                                            HealthInsightsView()
-                                        case "Labels":
-                                            NutritionScannerView()
-                                        case "Log":
-                                            LogView()
-                                        case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                            NutrientDetailView(nutrientName: item)
-                                        default:
-                                            HomeView()
+                        VStack(alignment: .leading, spacing: 20) {
+//                            Color.clear
+//                                .frame(height: 0)
+//                                .id("search-top")
+
+                            Text("Explore health, unlock the impossible")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 24)
+
+                            SearchScopeBar(
+                                placeholder: "Find in List",
+                                searchText: $searchState.searchText,
+                                focus: $searchBarFocused
+                            )
+
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
+                                ForEach(filteredItems, id: \.self) { item in
+                                    NavigationLink {
+                                        Group {
+                                            switch item {
+                                            case "Dashboard":
+                                                DashboardView()
+                                            case "Today's Plan":
+                                                TodaysPlanView(planType: .all)
+                                            case "Training Calendar":
+                                                TrainingCalendarView()
+                                            case "Coach":
+                                                CoachView()
+                                            case "Recovery Score":
+                                                RecoveryScoreView()
+                                            case "Readiness Check":
+                                                ReadinessCheckView()
+                                            case "Strain vs Recovery":
+                                                StrainRecoveryView()
+                                            case "Fuel Check":
+                                                FuelCheckView()
+                                            case "Workout History":
+                                                WorkoutHistoryView()
+                                            case "Activity Rings":
+                                                ActivityRingsView()
+                                            case "Heart Zones":
+                                                HeartZonesView()
+                                            case "Personal Records":
+                                                PersonalRecordsView()
+                                            case "Mindfulness Realm":
+                                                MindfulnessRealmView()
+                                            case "Mood Tracker":
+                                                MoodTrackerView()
+                                            case "Journal":
+                                                JournalView()
+                                            case "Sleep":
+                                                SleepView()
+                                            case "Stress":
+                                                StressView()
+                                            case "Home":
+                                                HomeView()
+                                            case "Insights":
+                                                HealthInsightsView()
+                                            case "Labels":
+                                                NutritionScannerView()
+                                            case "Log":
+                                                LogView()
+                                            case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+                                                NutrientDetailView(nutrientName: item)
+                                            default:
+                                                HomeView()
+                                            }
                                         }
+                                        .onAppear {
+                                            recordUsage(for: item)
+                                        }
+                                    } label: {
+                                        VStack {
+                                            Image(systemName: getIconName(for: item))
+                                                .font(.system(size: 40))
+                                                .foregroundColor(.primary)
+                                                .frame(width: 80, height: 80)
+                                                .background(.ultraThinMaterial)
+                                                .clipShape(Circle())
+
+                                            Text(item)
+                                                .font(.caption)
+                                                .multilineTextAlignment(.center)
+                                                .frame(width: 80, height: 40)
+                                        }
+                                        .frame(width: 120, height: 120)
+                                        .padding()
+                                        .background(.ultraThinMaterial)
+                                        .cornerRadius(12)
                                     }
-                                    .onAppear {
-                                        recordUsage(for: item)
-                                    }
-                                } label: {
-                                    VStack {
-                                        Image(systemName: getIconName(for: item))
-                                            .font(.system(size: 40))
-                                            .foregroundColor(.primary)
-                                            .frame(width: 80, height: 80)
-                                            .background(.ultraThinMaterial)
-                                            .clipShape(Circle())
-                                        
-                                        Text(item)
-                                            .font(.caption)
-                                            .multilineTextAlignment(.center)
-                                            .frame(width: 80, height: 40)
-                                    }
-                                    .frame(width: 120, height: 120)
-                                    .padding()
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(12)
                                 }
                             }
+                            .padding()
                         }
-                        .padding()
                     }
-                }
-                .navigationTitle("Search")
-                .background(
-                    currentGradient
-                        .onAppear {
-                            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                                animationPhase = 20
+                    .onChange(of: searchState.searchText) { _, newValue in
+                        let newGradient: EquatableAnyView
+
+                        if !newValue.isEmpty, let firstResult = filteredItems.first {
+                            if nutritionItems.contains(firstResult) {
+                                newGradient = EquatableAnyView(view: AnyView(gradients.forestGradient(animationPhase: $animationPhase)))
+                            } else if fitnessItems.contains(firstResult) {
+                                newGradient = EquatableAnyView(view: AnyView(gradients.burningGradient(animationPhase: $animationPhase)))
+                            } else if mentalHealthItems.contains(firstResult) {
+                                newGradient = EquatableAnyView(view: AnyView(gradients.spiritGradient(animationPhase: $animationPhase)))
+                            } else {
+                                newGradient = EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
                             }
-                        }
-                )
-                .onChange(of: searchState.searchText) { _, newValue in
-                    let newGradient: EquatableAnyView
-                    
-                    if !newValue.isEmpty, let firstResult = filteredItems.first {
-                        if nutritionItems.contains(firstResult) {
-                            newGradient = EquatableAnyView(view: AnyView(gradients.forestGradient(animationPhase: $animationPhase)))
-                        } else if fitnessItems.contains(firstResult) {
-                            newGradient = EquatableAnyView(view: AnyView(gradients.burningGradient(animationPhase: $animationPhase)))
-                        } else if mentalHealthItems.contains(firstResult) {
-                            newGradient = EquatableAnyView(view: AnyView(gradients.spiritGradient(animationPhase: $animationPhase)))
                         } else {
                             newGradient = EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
                         }
-                    } else {
-                        newGradient = EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
-                    }
-                    
-                    withAnimation(.easeInOut(duration: 1)) {
-                        currentGradientView = newGradient
-                    }
-                    
-                    withAnimation(.easeInOut(duration: 0.3)) {
+
+                        withAnimation(.easeInOut(duration: 1)) {
+                            currentGradientView = newGradient
+                        }
+
                         animationPhase += 0.2
+
+                        if searchState.isSearching {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo("search-top", anchor: .top)
+                            }
+                        }
                     }
                 }
+            }
+            .navigationTitle("Search")
+//            .navigationBarTitleDisplayMode(.large)
+//            .toolbar {
+//                ToolbarItem(placement: .principal) {
+//                    Text("Search")
+//                        .font(.headline)
+//                }
+//            }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            .onChange(of: searchState.isSearching) { _, isSearching in
+                searchBarFocused = isSearching
+            }
+            .onChange(of: searchBarFocused) { _, isFocused in
+                if !isFocused {
+                    searchState.isSearching = false
+                }
+            }
+            .onAppear {
+                searchState.selectedScope = .all
             }
         }
     }

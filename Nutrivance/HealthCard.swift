@@ -317,7 +317,10 @@ struct HealthLineChartSheet: View {
         geometry: GeometryProxy
     ) {
         let plotFrame = geometry[proxy.plotAreaFrame]
-        guard plotFrame.contains(location) else { return }
+        guard plotFrame.contains(location) else {
+            selected = nil
+            return
+        }
 
         let xPosition = location.x - plotFrame.origin.x
         guard let date: Date = proxy.value(atX: xPosition) else { return }
@@ -407,20 +410,18 @@ struct HealthLineChartSheet: View {
                             .onChanged { value in
                                 updateSelection(from: value.location, proxy: proxy, geometry: geo)
                             }
+                            .onEnded { _ in
+                                selected = nil
+                            }
                         )
                         .onContinuousHover { phase in
                             switch phase {
                             case .active(let location):
                                 updateSelection(from: location, proxy: proxy, geometry: geo)
                             case .ended:
-                                break
+                                selected = nil
                             }
                         }
-                }
-            }
-            .onAppear {
-                if selected == nil, let last = data.last {
-                    selected = last
                 }
             }
             if let selected = selected {
