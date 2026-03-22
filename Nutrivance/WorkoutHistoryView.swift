@@ -53,6 +53,55 @@ struct HRZoneUserSettings {
     var customZoneUpperBounds: [Double]
 }
 
+private struct HRZonePersistedSettings: Codable, Equatable {
+    var modeRawValue: String
+    var schemaRawValue: String
+    var fixedMaxHR: Double?
+    var fixedRestingHR: Double?
+    var fixedLTHR: Double?
+    var customZoneUpperBounds: [Double]
+}
+
+private enum HRZoneSettingsPersistence {
+    static let storageKey = "hr_zone_user_settings_v1"
+
+    static func load() -> HRZonePersistedSettings? {
+        let ubiquitousStore = NSUbiquitousKeyValueStore.default
+        ubiquitousStore.synchronize()
+
+        if let cloudData = ubiquitousStore.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode(HRZonePersistedSettings.self, from: cloudData) {
+            return decoded
+        }
+
+        if let localData = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode(HRZonePersistedSettings.self, from: localData) {
+            return decoded
+        }
+
+        return nil
+    }
+
+    static func save(_ settings: HRZonePersistedSettings) {
+        guard let encoded = try? JSONEncoder().encode(settings) else { return }
+        UserDefaults.standard.set(encoded, forKey: storageKey)
+        let ubiquitousStore = NSUbiquitousKeyValueStore.default
+        ubiquitousStore.set(encoded, forKey: storageKey)
+        ubiquitousStore.synchronize()
+    }
+}
+
+private extension HRZonePersistedSettings {
+    static let fallback = HRZonePersistedSettings(
+        modeRawValue: HRZoneConfigurationMode.intelligent.rawValue,
+        schemaRawValue: HRZoneSchema.lactatThreshold.rawValue,
+        fixedMaxHR: nil,
+        fixedRestingHR: nil,
+        fixedLTHR: nil,
+        customZoneUpperBounds: [120, 140, 160, 180, 200]
+    )
+}
+
 struct WorkoutHistoryView: View {
     @ObservedObject var engine = HealthStateEngine.shared
     @State private var expandedWorkout: HKWorkout? = nil
@@ -73,11 +122,48 @@ struct WorkoutHistoryView: View {
     @State private var customZone3Upper: Double = 160
     @State private var customZone4Upper: Double = 180
     @State private var customZone5Upper: Double = 200
+    @State private var hasLoadedPersistedHRZoneSettings = false
+
+    init() {
+        let persisted = HRZoneSettingsPersistence.load() ?? .fallback
+        let mode = HRZoneConfigurationMode(rawValue: persisted.modeRawValue) ?? .intelligent
+        let schema = HRZoneSchema(rawValue: persisted.schemaRawValue) ?? .lactatThreshold
+        let bounds = persisted.customZoneUpperBounds.count == 5 ? persisted.customZoneUpperBounds : HRZonePersistedSettings.fallback.customZoneUpperBounds
+
+        _hrZoneConfigurationMode = State(initialValue: mode)
+        _selectedHRZoneSchema = State(initialValue: schema)
+        _fixedMaxHR = State(initialValue: persisted.fixedMaxHR)
+        _fixedRestingHR = State(initialValue: persisted.fixedRestingHR)
+        _fixedLTHR = State(initialValue: persisted.fixedLTHR)
+        _customZone1Upper = State(initialValue: bounds[0])
+        _customZone2Upper = State(initialValue: bounds[1])
+        _customZone3Upper = State(initialValue: bounds[2])
+        _customZone4Upper = State(initialValue: bounds[3])
+        _customZone5Upper = State(initialValue: bounds[4])
+        _hasLoadedPersistedHRZoneSettings = State(initialValue: true)
+    }
 
     private var hrZoneSettings: HRZoneUserSettings {
         HRZoneUserSettings(
             mode: hrZoneConfigurationMode,
             customSchema: selectedHRZoneSchema,
+            fixedMaxHR: fixedMaxHR,
+            fixedRestingHR: fixedRestingHR,
+            fixedLTHR: fixedLTHR,
+            customZoneUpperBounds: [
+                customZone1Upper,
+                customZone2Upper,
+                customZone3Upper,
+                customZone4Upper,
+                customZone5Upper
+            ]
+        )
+    }
+
+    private var persistedHRZoneSettings: HRZonePersistedSettings {
+        HRZonePersistedSettings(
+            modeRawValue: hrZoneConfigurationMode.rawValue,
+            schemaRawValue: selectedHRZoneSchema.rawValue,
             fixedMaxHR: fixedMaxHR,
             fixedRestingHR: fixedRestingHR,
             fixedLTHR: fixedLTHR,
@@ -252,8 +338,50 @@ struct WorkoutHistoryView: View {
                        }
                    }
            )
+            .onChange(of: persistedHRZoneSettings) { _, newValue in
+                guard hasLoadedPersistedHRZoneSettings else { return }
+                HRZoneSettingsPersistence.save(newValue)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+                reloadPersistedHRZoneSettings()
+            }
         }
     }
+
+    private func loadPersistedHRZoneSettingsIfNeeded() {
+        guard !hasLoadedPersistedHRZoneSettings else { return }
+        hasLoadedPersistedHRZoneSettings = true
+        applyPersistedHRZoneSettings(HRZoneSettingsPersistence.load())
+    }
+
+    private func reloadPersistedHRZoneSettings() {
+        guard hasLoadedPersistedHRZoneSettings else { return }
+        applyPersistedHRZoneSettings(HRZoneSettingsPersistence.load())
+    }
+
+    private func applyPersistedHRZoneSettings(_ saved: HRZonePersistedSettings?) {
+        guard let saved else { return }
+        if let mode = HRZoneConfigurationMode(rawValue: saved.modeRawValue) {
+            hrZoneConfigurationMode = mode
+        }
+
+        if let schema = HRZoneSchema(rawValue: saved.schemaRawValue) {
+            selectedHRZoneSchema = schema
+        }
+
+        fixedMaxHR = saved.fixedMaxHR
+        fixedRestingHR = saved.fixedRestingHR
+        fixedLTHR = saved.fixedLTHR
+
+        if saved.customZoneUpperBounds.count == 5 {
+            customZone1Upper = saved.customZoneUpperBounds[0]
+            customZone2Upper = saved.customZoneUpperBounds[1]
+            customZone3Upper = saved.customZoneUpperBounds[2]
+            customZone4Upper = saved.customZoneUpperBounds[3]
+            customZone5Upper = saved.customZoneUpperBounds[4]
+        }
+    }
+
     func scrollToClosestWorkout(to date: Date) {
         let closest = filteredWorkouts.min(by: { abs($0.workout.startDate.timeIntervalSince(date)) < abs($1.workout.startDate.timeIntervalSince(date)) })
         if let closest = closest {
@@ -359,6 +487,7 @@ struct WorkoutDetailView: View {
     @State private var historicalZoneProfile: HRZoneProfile? = nil
     @State private var historicalMaxHR: Double? = nil
     @State private var historicalRestingHR: Double? = nil
+    @State private var hasResolvedZoneProfile = false
 
     private var activeDuration: TimeInterval {
         analytics.workout.duration
@@ -417,7 +546,16 @@ struct WorkoutDetailView: View {
     }
 
     private var activeZoneProfile: HRZoneProfile? {
-        historicalZoneProfile ?? analytics.hrZoneProfile
+        switch hrZoneSettings.mode {
+        case .intelligent:
+            historicalZoneProfile ?? analytics.hrZoneProfile
+        case .customSchema, .customZones:
+            historicalZoneProfile
+        }
+    }
+
+    private var shouldWaitForResolvedZoneProfile: Bool {
+        hrZoneSettings.mode != .intelligent && !hasResolvedZoneProfile
     }
 
     private var customZoneProfile: HRZoneProfile? {
@@ -450,6 +588,10 @@ struct WorkoutDetailView: View {
 
     /// Dynamic heart rate zones from analytics profile
     private var dynamicHeartRateZones: [HRZone] {
+        if shouldWaitForResolvedZoneProfile {
+            return []
+        }
+
         guard let profile = activeZoneProfile else {
             // Fallback if no profile available
             return generateFallbackZones()
@@ -485,6 +627,10 @@ struct WorkoutDetailView: View {
     }
 
     private var heartRateZoneBreakdown: [HRZone] {
+        if shouldWaitForResolvedZoneProfile {
+            return []
+        }
+
         if let profile = activeZoneProfile {
             return healthKitManager.calculateZoneBreakdown(heartRates: analytics.heartRates, zoneProfile: profile).map { breakdown in
                 HRZone(
@@ -558,13 +704,25 @@ struct WorkoutDetailView: View {
 
             // HR Zone Profile Information
             if let profile = activeZoneProfile {
-                HeartRateZoneProfileSummaryView(
-                    profile: profile,
-                    displayedMaxHR: historicalMaxHR,
-                    displayedRestingHR: historicalRestingHR,
-                    maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
-                    restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR"
-                )
+                if hrZoneSettings.mode == .customZones {
+                    HeartRateZoneProfileSummaryView(
+                        profile: profile,
+                        displayedMaxHR: historicalMaxHR,
+                        displayedRestingHR: historicalRestingHR,
+                        maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
+                        restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR",
+                        schemaTitleOverride: "Custom",
+                        showsDescription: false
+                    )
+                } else {
+                    HeartRateZoneProfileSummaryView(
+                        profile: profile,
+                        displayedMaxHR: historicalMaxHR,
+                        displayedRestingHR: historicalRestingHR,
+                        maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
+                        restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR"
+                    )
+                }
             }
 
             // MET Time Series
@@ -943,10 +1101,12 @@ struct WorkoutDetailView: View {
     }
 
     private func loadHistoricalZoneProfile() async {
+        hasResolvedZoneProfile = false
         switch hrZoneSettings.mode {
         case .customZones:
-            historicalMaxHR = nil
-            historicalRestingHR = nil
+            let workoutDate = analytics.workout.startDate
+            historicalMaxHR = await healthKitManager.fetchMaxHR(workoutDate: workoutDate)
+            historicalRestingHR = await healthKitManager.fetchRHR(workoutDate: workoutDate)
             historicalZoneProfile = customZoneProfile
 
         case .customSchema:
@@ -980,6 +1140,7 @@ struct WorkoutDetailView: View {
             historicalRestingHR = restingHR
             historicalZoneProfile = rebuiltProfile
         }
+        hasResolvedZoneProfile = true
     }
 
     private func formattedTime(_ seconds: TimeInterval) -> String {

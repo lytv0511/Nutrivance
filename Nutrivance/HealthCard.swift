@@ -171,13 +171,16 @@ struct HeartRateZoneProfileSummaryView: View {
     var displayedRestingHR: Double? = nil
     var maxHRLabel: String = "Max HR"
     var restingHRLabel: String = "Resting HR"
+    var schemaTitleOverride: String? = nil
+    var descriptionOverride: String? = nil
+    var showsDescription: Bool = true
 
     private var schemaTitle: String {
-        profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+        schemaTitleOverride ?? profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private var schemaDescription: String {
-        profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").lowercased()
+        descriptionOverride ?? "Zones are calculated using the \(profile.schema.rawValue.replacingOccurrences(of: "_", with: " ").lowercased()) method and may update as new training data becomes available."
     }
 
     var body: some View {
@@ -225,9 +228,11 @@ struct HeartRateZoneProfileSummaryView: View {
             .background(.ultraThinMaterial)
             .cornerRadius(12)
 
-            Text("Zones are calculated using the \(schemaDescription) method and may update as new training data becomes available.")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            if showsDescription {
+                Text(schemaDescription)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 }

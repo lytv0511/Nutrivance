@@ -203,13 +203,13 @@ struct StrainRecoveryView: View {
             .navigationTitle("Strain vs Recovery")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        selectedDate = Date()
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
-                    } label: {
-                        Text("Today")
-                    }
+//                    Button {
+//                        selectedDate = Date()
+//                        let impact = UIImpactFeedbackGenerator(style: .medium)
+//                        impact.impactOccurred()
+//                    } label: {
+//                        Text("Today")
+//                    }
                     Button {
                         stepSelectedDate(by: -1)
                         let impact = UIImpactFeedbackGenerator(style: .medium)

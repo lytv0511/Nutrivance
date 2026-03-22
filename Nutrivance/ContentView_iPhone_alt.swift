@@ -26,7 +26,7 @@ struct ContentView_iPhone_alt: View {
         TabView {
             // Nutrivance Section
                 Tab("Home", systemImage: "house") {
-                    WorkoutHistoryView()
+                    DashboardView()
                 }
                 .customizationID( "iPhone.tab.home")
                 .defaultVisibility(.visible, for: .tabBar)

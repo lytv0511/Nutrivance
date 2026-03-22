@@ -43,7 +43,7 @@ struct ContentView_iPad_alt: View {
                 }
 //                .customizationID( "iPad.tab.dashboard")
                 .defaultVisibility(.visible, for: .tabBar)
-                .customizationBehavior(.disabled, for: .sidebar, .tabBar)
+                .customizationBehavior(.disabled, for: .sidebar)
                 Tab("Recovery Score", systemImage: "chart.bar.fill") {
                     RecoveryScoreView()
                 }
@@ -71,7 +71,7 @@ struct ContentView_iPad_alt: View {
                 }
 //                .customizationID( "iPad.tab.mindfulnessRealm")
                 .defaultVisibility(.visible, for: .tabBar)
-                .customizationBehavior(.disabled, for: .sidebar, .tabBar)
+                .customizationBehavior(.disabled, for: .sidebar)
                 Tab("Mood Tracker", systemImage: "sun.max") {
                     MoodTrackerView()
                 }

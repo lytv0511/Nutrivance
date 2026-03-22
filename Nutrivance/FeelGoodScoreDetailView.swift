@@ -32,6 +32,23 @@ struct FeelGoodScoreDetailView: View {
                             .bold()
                             .padding(.bottom, 8)
                         
+                        if !engine.feelGoodScoreInputsAvailable {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Not available")
+                                    .font(.title3.bold())
+                                Text("Feel-Good Score cannot be calculated yet because some required inputs are missing.")
+                                    .foregroundColor(.secondary)
+                                Text("Waiting for: \(engine.missingFeelGoodInputs.joined(separator: ", "))")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .fill(.ultraThinMaterial)
+                            )
+                        }
+                        
                         Group {
                             componentDetail(name: "HRV (7-day)", value: engine.latestHRV, baseline: engine.hrvBaseline7Day, unit: "ms", direction: .higherIsBetter, weight: 0.25)
                             componentDetail(name: "Resting HR (7-day)", value: engine.restingHeartRate, baseline: engine.rhrBaseline7Day, unit: "bpm", direction: .lowerIsBetter, weight: 0.15)
