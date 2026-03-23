@@ -575,6 +575,11 @@ final class StrainRecoveryAggressiveCachingController: ObservableObject {
 
             for (requestIndex, request) in batch.pendingRequests.enumerated() {
                 if Task.isCancelled { break }
+                let latestCache = StrainRecoverySummaryPersistence.load()
+                if let existing = latestCache[request.requestID], existing.source == .appleIntelligence {
+                    statusText = "Skipping cached \(request.selectedSuggestionTitle) for \(batch.title) • \(request.timeFilter.rawValue) already has Apple Intelligence."
+                    continue
+                }
                 statusText = "Generating \(request.selectedSuggestionTitle) • \(requestIndex + 1) of \(batch.pendingRequests.count) for \(batch.title)"
                 _ = await generateAggressiveCachingSummary(for: request)
             }
@@ -822,7 +827,7 @@ private func generateAggressiveCachingSummary(
             )
             let cleaned = try await generateValidatedAggressiveCachingSummary(
                 session: session,
-                request: request
+                prompt: promptWithSiblingTimeFilterContext(for: request, cache: cache)
             )
             guard !cleaned.isEmpty else { return false }
 
@@ -849,12 +854,12 @@ private func generateAggressiveCachingSummary(
 @available(iOS 26.0, *)
 private func generateValidatedAggressiveCachingSummary(
     session: LanguageModelSession,
-    request: StrainRecoverySummaryRequest
+    prompt: String
 ) async throws -> String {
     let maxAttempts = 3
 
     for _ in 0..<maxAttempts {
-        let response = try await session.respond(to: request.prompt)
+        let response = try await session.respond(to: prompt)
         let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
         if !cleaned.isEmpty, !looksLikeInvalidAggressiveCachingSummary(cleaned) {
             return cleaned
@@ -964,6 +969,79 @@ private func aggressiveCachingLiveStatusText(
     case .refresh:
         return "Refreshed live on \(deviceName) using \(sourceText). This version replaced cache and iCloud for this report."
     }
+}
+
+private struct CrossFilterSummaryContext {
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let summaryText: String
+}
+
+private func summaryRequestID(
+    timeFilter: StrainRecoveryView.TimeFilter,
+    scopedSport: String?,
+    anchorDate: Date,
+    suggestionID: String
+) -> String {
+    let selectedDay = Calendar.current.startOfDay(for: anchorDate)
+    return [
+        "strain-recovery-ai-v7",
+        timeFilter.rawValue,
+        scopedSport ?? "all",
+        String(selectedDay.timeIntervalSince1970),
+        suggestionID
+    ].joined(separator: "|")
+}
+
+private func siblingTimeFilterContexts(
+    for request: StrainRecoverySummaryRequest,
+    cache: [String: StrainRecoverySummaryCacheEntry]
+) -> [CrossFilterSummaryContext] {
+    StrainRecoveryView.TimeFilter.allCases.compactMap { filter in
+        guard filter != request.timeFilter else { return nil }
+        let requestID = summaryRequestID(
+            timeFilter: filter,
+            scopedSport: request.scopedSport,
+            anchorDate: request.anchorDate,
+            suggestionID: request.suggestionID
+        )
+        guard let entry = cache[requestID],
+              entry.source == .appleIntelligence else {
+            return nil
+        }
+        return CrossFilterSummaryContext(
+            timeFilter: filter,
+            summaryText: entry.summaryText
+        )
+    }
+}
+
+private func promptWithSiblingTimeFilterContext(
+    for request: StrainRecoverySummaryRequest,
+    cache: [String: StrainRecoverySummaryCacheEntry]
+) -> String {
+    guard !request.prompt.isEmpty else { return request.prompt }
+
+    let siblings = siblingTimeFilterContexts(for: request, cache: cache)
+    guard !siblings.isEmpty else { return request.prompt }
+
+    let contextBlock = siblings
+        .map { sibling in
+            "- \(sibling.timeFilter.rawValue): \(sibling.summaryText)"
+        }
+        .joined(separator: "\n")
+
+    return """
+    \(request.prompt)
+
+    Cross-filter context for the same report and anchor date
+    \(contextBlock)
+
+    Context stitching rules
+    - Keep the \(request.timeFilter.rawValue) view as the primary lens.
+    - Reconcile any tension with the sibling summaries by explicitly framing the different time horizons rather than contradicting them.
+    - Treat the day, week, and month as one connected training story around the same anchor date.
+    - If the horizons point in different directions, explain why that can still be true at the same time.
+    """
 }
 
 private struct StrainRecoverySummarySettingsView: View {
@@ -1575,6 +1653,22 @@ private struct StrainRecoveryAISummarySection: View {
         statusText = "AI summaries are paused while browsing. Tap a suggestion to load one for this date and filter."
     }
 
+    @MainActor
+    @discardableResult
+    private func restoreCachedSummaryIfAvailable(for request: StrainRecoverySummaryRequest) -> Bool {
+        guard let entry = cacheSnapshot[request.requestID] else {
+            return false
+        }
+
+        persistedEntry = entry
+        summaryText = entry.summaryText
+        statusText = entry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
+        displayedRequestID = entry.requestID
+        requestedRequestID = entry.requestID
+        isLoading = false
+        return true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -1786,12 +1880,14 @@ private struct StrainRecoveryAISummarySection: View {
         }
         .task(id: generationTaskID) {
             refreshLocalSnapshots()
-            resetSummaryForNavigation()
             if selectedSuggestionID == nil {
                 selectedSuggestionID = suggestions.first?.id
                 if intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     intentText = suggestions.first?.queryText ?? ""
                 }
+            }
+            if !restoreCachedSummaryIfAvailable(for: request) {
+                resetSummaryForNavigation()
             }
         }
         .task(id: suggestionsContextID) {
@@ -1979,6 +2075,10 @@ private struct StrainRecoveryAISummarySection: View {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             let model = SystemLanguageModel(useCase: .general)
+            let generationPrompt = promptWithSiblingTimeFilterContext(
+                for: request,
+                cache: StrainRecoverySummaryPersistence.load()
+            )
 
             guard model.isAvailable else {
                 if requireAppleIntelligence {
@@ -2038,7 +2138,8 @@ private struct StrainRecoveryAISummarySection: View {
 
                 let cleaned = try await generateValidatedModelSummary(
                     session: session,
-                    request: request
+                    prompt: generationPrompt,
+                    refreshVersion: request.refreshVersion
                 )
 
                 let resolvedSummary: String
@@ -2148,14 +2249,15 @@ private struct StrainRecoveryAISummarySection: View {
     @available(iOS 26.0, *)
     private func generateValidatedModelSummary(
         session: LanguageModelSession,
-        request: StrainRecoverySummaryRequest
+        prompt: String,
+        refreshVersion: Int
     ) async throws -> String {
         let maxAttempts = 3
 
         for attempt in 0..<maxAttempts {
-            let retrySeedOffset = request.refreshVersion + attempt
+            let retrySeedOffset = refreshVersion + attempt
             let response = try await session.respond(
-                to: request.prompt + coachRetryInstruction(forAttempt: attempt),
+                to: prompt + coachRetryInstruction(forAttempt: attempt),
                 options: GenerationOptions(
                     sampling: retrySeedOffset == 0 ? .greedy : .random(top: 6, seed: UInt64(retrySeedOffset)),
                     temperature: retrySeedOffset == 0 ? 0 : min(0.6, 0.35 + (Double(attempt) * 0.08)),

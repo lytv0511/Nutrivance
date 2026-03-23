@@ -434,10 +434,27 @@ struct CoachComparisonView: View {
     }
 
     private var highlightRange: ClosedRange<Date>? {
-        guard let start = insight.startDate else { return nil }
-        let end = insight.endDate ?? start
         let calendar = Calendar.current
-        return calendar.startOfDay(for: start)...calendar.startOfDay(for: end)
+        if let start = insight.startDate {
+            let end = insight.endDate ?? start
+            return calendar.startOfDay(for: start)...calendar.startOfDay(for: end)
+        }
+        guard timeFilter == .day else { return nil }
+        let day = calendar.startOfDay(for: anchorDate)
+        return day...day
+    }
+
+    private var comparisonSupportText: String {
+        if timeFilter == .day {
+            return "The chart keeps a full week of surrounding data in view so the highlighted day has context. The tinted band marks the exact day the coach is emphasizing."
+        }
+        guard let highlightRange else {
+            return "The coach note is supported by the related metric charts below. Scrub across the graph to inspect how the nearby data builds the point."
+        }
+        if Calendar.current.isDate(highlightRange.lowerBound, inSameDayAs: highlightRange.upperBound) {
+            return "The tinted band marks the exact point the coach is talking about, while the surrounding trend shows what led into it."
+        }
+        return "The tinted band marks the exact window the coach is referencing, and the surrounding trend explains the lead-in and follow-through."
     }
 
     private var highlightWindow: DateInterval? {
@@ -454,8 +471,14 @@ struct CoachComparisonView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Coach Whiteboard")
                             .font(.title2.bold())
+                        Text(insight.label)
+                            .font(.headline)
+                            .foregroundColor(.orange)
                         Text(insight.snippet)
                             .font(.body)
+                        Text(comparisonSupportText)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                         if let highlightRange {
                             Text("Highlighted window: \(highlightRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(highlightRange.upperBound.formatted(date: .abbreviated, time: .omitted)) • \(insight.label)")
                                 .font(.caption)
@@ -475,7 +498,8 @@ struct CoachComparisonView: View {
                             selectedDate: $selectedDate,
                             highlightRange: highlightRange,
                             highlightWindow: highlightWindow,
-                            label: insight.label
+                            label: insight.label,
+                            supportingText: comparisonSupportText
                         )
                     }
 
@@ -505,6 +529,7 @@ private struct CoachComparisonChartCard: View {
     let highlightRange: ClosedRange<Date>?
     let highlightWindow: DateInterval?
     let label: String
+    let supportingText: String
 
     private var currentSelection: (Date, Double)? {
         guard let selectedDate else { return nil }
@@ -540,7 +565,13 @@ private struct CoachComparisonChartCard: View {
                         yStart: .value("Min", series.data.map(\.1).min() ?? 0),
                         yEnd: .value("Max", series.data.map(\.1).max() ?? 1)
                     )
-                    .foregroundStyle(series.color.opacity(0.12))
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [series.color.opacity(0.24), series.color.opacity(0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                     .annotation(position: .topLeading, alignment: .leading) {
                         Text(label)
                             .font(.caption2.bold())
@@ -656,6 +687,10 @@ private struct CoachComparisonChartCard: View {
                         .foregroundColor(series.color)
                 }
             }
+
+            Text(supportingText)
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
         .padding(18)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -809,7 +844,7 @@ private func comparisonWindow(
     let dayCount: Int
     switch timeFilter {
     case .day:
-        dayCount = 1
+        dayCount = 7
     case .week:
         dayCount = 7
     case .month:
