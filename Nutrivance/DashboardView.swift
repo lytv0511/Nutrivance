@@ -35,7 +35,6 @@ private enum DashboardLayoutPersistence {
 
     static func load() -> DashboardLayoutSettings {
         let cloudStore = NSUbiquitousKeyValueStore.default
-        cloudStore.synchronize()
 
         if let cloudData = cloudStore.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode(DashboardLayoutSettings.self, from: cloudData) {
@@ -55,7 +54,23 @@ private enum DashboardLayoutPersistence {
         UserDefaults.standard.set(encoded, forKey: storageKey)
         let cloudStore = NSUbiquitousKeyValueStore.default
         cloudStore.set(encoded, forKey: storageKey)
-        cloudStore.synchronize()
+    }
+}
+
+private enum DashboardSnapshotPersistence {
+    static let storageKey = "dashboard_load_snapshot_v1"
+
+    static func load() -> DashboardView.DashboardLoadSnapshot? {
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode(DashboardView.DashboardLoadSnapshot.self, from: data) {
+            return decoded
+        }
+        return nil
+    }
+
+    static func save(_ snapshot: DashboardView.DashboardLoadSnapshot) {
+        guard let encoded = try? JSONEncoder().encode(snapshot) else { return }
+        UserDefaults.standard.set(encoded, forKey: storageKey)
     }
 }
 
@@ -82,7 +97,7 @@ struct DashboardView: View {
         case recovery, readiness, strain, allostatic, autonomic
     }
 
-    struct DashboardLoadSnapshot {
+    struct DashboardLoadSnapshot: Codable, Equatable {
         let acuteLoad: Double
         let acuteTotal: Double
         let chronicLoad: Double
@@ -106,6 +121,7 @@ struct DashboardView: View {
     @State private var hasLoadedLayoutSettings = false
     @State private var isRefreshingDashboardMetrics = false
     @State private var hasStartedBackgroundRefresh = false
+    @State private var dashboardRefreshTask: Task<Void, Never>? = nil
     @State private var liveLoadSnapshot: DashboardLoadSnapshot = DashboardLoadSnapshot(
         acuteLoad: 0,
         acuteTotal: 0,
@@ -122,6 +138,15 @@ struct DashboardView: View {
         _dashboardItemOrder = State(initialValue: saved.dashboardItemOrder)
         _summaryCardsOrder = State(initialValue: saved.summaryCardsOrder)
         _hasLoadedLayoutSettings = State(initialValue: true)
+        _liveLoadSnapshot = State(initialValue: DashboardSnapshotPersistence.load() ?? DashboardLoadSnapshot(
+            acuteLoad: 0,
+            acuteTotal: 0,
+            chronicLoad: 0,
+            chronicTotal: 0,
+            acwr: 0,
+            activeDaysLast28: 0,
+            daysSinceLastWorkout: nil
+        ))
     }
 
     private var layoutSettings: DashboardLayoutSettings {
@@ -218,6 +243,39 @@ struct DashboardView: View {
             activeDaysLast28: activeDaysLast28,
             daysSinceLastWorkout: daysSinceLastWorkout
         )
+    }
+
+    private var backgroundRefreshDelayNanoseconds: UInt64 {
+        let processInfo = ProcessInfo.processInfo
+        switch processInfo.thermalState {
+        case .serious, .critical:
+            return 2_500_000_000
+        case .fair:
+            return processInfo.isLowPowerModeEnabled ? 1_800_000_000 : 1_200_000_000
+        case .nominal:
+            return processInfo.isLowPowerModeEnabled ? 1_000_000_000 : 450_000_000
+        @unknown default:
+            return 1_500_000_000
+        }
+    }
+
+    private var shouldFetchWorkoutHistoryNow: Bool {
+        let processInfo = ProcessInfo.processInfo
+        guard !processInfo.isLowPowerModeEnabled else { return false }
+        switch processInfo.thermalState {
+        case .serious, .critical:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func updateLiveLoadSnapshot() {
+        let snapshot = calculateLatestLoadSnapshot()
+        if snapshot != liveLoadSnapshot {
+            liveLoadSnapshot = snapshot
+            DashboardSnapshotPersistence.save(snapshot)
+        }
     }
 
     private var hasEnoughLoadedWorkoutsForDashboard: Bool {
@@ -326,24 +384,30 @@ struct DashboardView: View {
             .task {
                 guard !hasStartedBackgroundRefresh else { return }
                 hasStartedBackgroundRefresh = true
-                liveLoadSnapshot = calculateLatestLoadSnapshot()
-                await refreshDashboardMetricsInBackground()
+                updateLiveLoadSnapshot()
+                dashboardRefreshTask?.cancel()
+                dashboardRefreshTask = Task(priority: .utility) {
+                    await refreshDashboardMetricsInBackground()
+                }
             }
             .onChange(of: layoutSettings) { _, newValue in
                 guard hasLoadedLayoutSettings else { return }
                 DashboardLayoutPersistence.save(newValue)
             }
             .onChange(of: engine.workoutAnalytics.count) { _, _ in
-                liveLoadSnapshot = calculateLatestLoadSnapshot()
+                updateLiveLoadSnapshot()
             }
             .onChange(of: engine.workoutAnalytics.last?.workout.endDate) { _, _ in
-                liveLoadSnapshot = calculateLatestLoadSnapshot()
+                updateLiveLoadSnapshot()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 let saved = DashboardLayoutPersistence.load()
                 groupSummaryCards = saved.groupSummaryCards
                 dashboardItemOrder = saved.dashboardItemOrder
                 summaryCardsOrder = saved.summaryCardsOrder
+            }
+            .onDisappear {
+                dashboardRefreshTask?.cancel()
             }
         }
     }
@@ -353,11 +417,27 @@ struct DashboardView: View {
         isRefreshingDashboardMetrics = true
         defer { isRefreshingDashboardMetrics = false }
 
-        engine.refreshAllMetrics()
-        if !hasEnoughLoadedWorkoutsForDashboard {
+        try? await Task.sleep(nanoseconds: backgroundRefreshDelayNanoseconds)
+        guard !Task.isCancelled else { return }
+
+        await MainActor.run {
+            engine.refreshAllMetrics()
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // Let the initial screen animation and first render settle before heavier history fetches.
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        guard !Task.isCancelled else { return }
+
+        if shouldFetchWorkoutHistoryNow && !hasEnoughLoadedWorkoutsForDashboard {
             await engine.refreshWorkoutAnalytics(days: 35)
         }
-        liveLoadSnapshot = calculateLatestLoadSnapshot()
+
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+            updateLiveLoadSnapshot()
+        }
     }
 
     // MARK: - Dashboard Sections as ViewBuilder functions

@@ -31,7 +31,7 @@ struct TappableChartPreview: View {
 // Main technical view for strain/recovery analytics
 
 struct StrainRecoveryView: View {
-    @StateObject private var engine = HealthStateEngine()
+    @StateObject private var engine = HealthStateEngine.shared
     @State private var animationPhase: Double = 0
 
     enum TimeFilter: String, CaseIterable {
@@ -43,6 +43,7 @@ struct StrainRecoveryView: View {
     @State private var timeFilter: TimeFilter = .week
     @State private var sportFilter: String? = nil // nil means all sports
     @State private var selectedDate = Date()
+    @State private var showingSummarySettings = false
     
     private func selectTimeFilter(_ filter: TimeFilter) {
         timeFilter = filter
@@ -235,6 +236,12 @@ struct StrainRecoveryView: View {
                     } label: {
                         Text("Today")
                     }
+
+                    Button {
+                        showingSummarySettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
                     
                     Button {
                         stepSelectedDate(by: -1)
@@ -281,8 +288,8 @@ struct StrainRecoveryView: View {
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter3)) { _ in
                 handleFilterShortcut(2)
             }
-            .task {
-                await engine.refreshWorkoutAnalytics(days: 3650) // Load long-term history for aggregation cards
+            .sheet(isPresented: $showingSummarySettings) {
+                StrainRecoverySummarySettingsView()
             }
         }
     }
@@ -309,6 +316,123 @@ private extension StrainRecoveryView.TimeFilter {
             return .day
         case .month:
             return .weekOfYear
+        }
+    }
+}
+
+private enum TemporaryPrimarySelection: String, CaseIterable, Identifiable {
+    case off
+    case oneDay
+    case oneWeek
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .oneDay: return "1 Day"
+        case .oneWeek: return "1 Week"
+        }
+    }
+
+    var expirationDate: Date? {
+        let calendar = Calendar.current
+        switch self {
+        case .off:
+            return nil
+        case .oneDay:
+            return calendar.date(byAdding: .day, value: 1, to: Date())
+        case .oneWeek:
+            return calendar.date(byAdding: .day, value: 7, to: Date())
+        }
+    }
+}
+
+private struct StrainRecoverySummarySettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var settings = StrainRecoverySummaryPersistence.loadSyncSettings()
+    @State private var temporarySelection: TemporaryPrimarySelection = .off
+
+    private let currentDevice = StrainRecoverySummaryDevice.current
+
+    private var isCurrentDevicePrimary: Bool {
+        settings.isPrimary(deviceID: currentDevice.id)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Current Device") {
+                    LabeledContent("Device") {
+                        Text(currentDevice.name)
+                    }
+                    LabeledContent("Role") {
+                        Text(isCurrentDevicePrimary ? "Primary" : "Secondary")
+                            .foregroundColor(isCurrentDevicePrimary ? .orange : .secondary)
+                    }
+                }
+
+                Section("Primary Device") {
+                    Toggle("Use This Device As Default Primary", isOn: Binding(
+                        get: {
+                            settings.primaryDeviceID == currentDevice.id
+                        },
+                        set: { newValue in
+                            settings.primaryDeviceID = newValue ? currentDevice.id : nil
+                            StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                        }
+                    ))
+
+                    Picker("Temporary Primary", selection: $temporarySelection) {
+                        ForEach(TemporaryPrimarySelection.allCases) { selection in
+                            Text(selection.title).tag(selection)
+                        }
+                    }
+                    .onChange(of: temporarySelection) { _, newValue in
+                        settings.temporaryPrimaryDeviceID = newValue == .off ? nil : currentDevice.id
+                        settings.temporaryPrimaryUntil = newValue.expirationDate
+                        StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                    }
+
+                    if let temporaryUntil = settings.temporaryPrimaryUntil,
+                       settings.temporaryPrimaryDeviceID == currentDevice.id {
+                        Text("Temporary primary active until \(temporaryUntil.formatted(date: .abbreviated, time: .shortened)).")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Sync Rules") {
+                    Text("Primary-device summaries win when the same report exists from multiple devices.")
+                    Text("Secondary devices can still generate missing reports and sync them to iCloud.")
+                    Text("Refreshing a report always overwrites cache and iCloud for that exact date, filter, and coaching mode.")
+                }
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            }
+            .navigationTitle("Coach Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                settings = StrainRecoverySummaryPersistence.loadSyncSettings()
+                if let until = settings.temporaryPrimaryUntil,
+                   settings.temporaryPrimaryDeviceID == currentDevice.id,
+                   until > Date() {
+                    if until <= Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? until {
+                        temporarySelection = .oneDay
+                    } else {
+                        temporarySelection = .oneWeek
+                    }
+                } else {
+                    temporarySelection = .off
+                }
+            }
         }
     }
 }
@@ -348,6 +472,26 @@ private func dateSequence(from start: Date, to end: Date) -> [Date] {
     return (0..<dayCount).compactMap {
         calendar.date(byAdding: .day, value: $0, to: safeStart)
     }
+}
+
+private func summaryExpirationDate(anchorDate: Date, generatedAt: Date) -> Date? {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: Date())
+    let normalizedAnchor = calendar.startOfDay(for: anchorDate)
+    let last28Start = calendar.date(byAdding: .day, value: -27, to: today) ?? today
+
+    let currentMonth = calendar.dateComponents([.year, .month], from: today)
+    let lastMonthDate = calendar.date(byAdding: .month, value: -1, to: today) ?? today
+    let lastMonth = calendar.dateComponents([.year, .month], from: lastMonthDate)
+    let anchorMonth = calendar.dateComponents([.year, .month], from: normalizedAnchor)
+
+    let isCurrentMonth = anchorMonth.year == currentMonth.year && anchorMonth.month == currentMonth.month
+    let isLastMonth = anchorMonth.year == lastMonth.year && anchorMonth.month == lastMonth.month
+    let isPast28Days = normalizedAnchor >= last28Start
+
+    return (isCurrentMonth || isLastMonth || isPast28Days)
+        ? nil
+        : generatedAt.addingTimeInterval(24 * 60 * 60)
 }
 
 private func average(_ values: [Double]) -> Double? {
@@ -398,6 +542,9 @@ private struct StrainRecoveryAISummarySection: View {
     @State private var selectedSuggestionID: String? = nil
     @State private var refreshVersions: [String: Int] = [:]
     @State private var selectedComparisonInsight: CoachSummaryInsight?
+    @State private var backgroundGenerationTask: Task<Void, Never>? = nil
+    @State private var requestedRequestID: String? = nil
+    @State private var backgroundGenerationContextID: String? = nil
 
     private struct SummaryGenerationReadiness {
         let canGenerate: Bool
@@ -495,13 +642,17 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var displayedSummaryBody: String {
-        if !summaryText.isEmpty {
+        if displayedRequestID == request.requestID,
+           !summaryText.isEmpty {
             return summaryText
         }
         if !summaryGenerationReadiness.canGenerate {
             return summaryGenerationReadiness.placeholderText
         }
-        return request.fallbackSummary
+        if requestedRequestID == request.requestID && isLoading {
+            return "This coach report is still being prepared for \(selectedSuggestion?.title ?? detectedIntent.displayName). The current filter does not have a finished summary yet."
+        }
+        return "No completed coach report is ready for \(selectedSuggestion?.title ?? detectedIntent.displayName) yet."
     }
 
     private var comparisonInsights: [CoachSummaryInsight] {
@@ -526,6 +677,12 @@ private struct StrainRecoveryAISummarySection: View {
             return false
         }
         return latestWorkoutTimestamp > cachedWorkoutTimestamp + 1
+    }
+
+    private var shouldRunBackgroundGeneration: Bool {
+        let today = Calendar.current.startOfDay(for: Date())
+        let selectedDay = Calendar.current.startOfDay(for: anchorDate)
+        return selectedDay == today && sportFilter == nil
     }
 
     var body: some View {
@@ -604,6 +761,11 @@ private struct StrainRecoveryAISummarySection: View {
                     Button {
                         selectedSuggestionID = suggestion.id
                         intentText = suggestion.queryText
+                        requestedRequestID = nil
+                        displayedRequestID = nil
+                        persistedEntry = nil
+                        summaryText = ""
+                        selectedComparisonInsight = nil
                         Task {
                             statusText = "Generating new tailored response... focusing on \(suggestion.title)."
                             let request = StrainRecoverySummaryRequest.build(
@@ -687,6 +849,8 @@ private struct StrainRecoveryAISummarySection: View {
             )
         }
         .task(id: generationTaskID) {
+            requestedRequestID = request.requestID
+            selectedComparisonInsight = nil
             if selectedSuggestionID == nil {
                 selectedSuggestionID = suggestions.first?.id
                 if intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -704,13 +868,14 @@ private struct StrainRecoveryAISummarySection: View {
             if displayedRequestID != request.requestID && persistedEntry == nil {
                 await generateSummary(for: request)
             }
-            Task(priority: .utility) {
-                await preGenerateSuggestions()
-            }
+            startBackgroundGenerationIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
             guard displayedRequestID != request.requestID else { return }
             loadPersistedSummary(for: request)
+        }
+        .onDisappear {
+            cancelBackgroundGeneration()
         }
     }
 
@@ -727,15 +892,17 @@ private struct StrainRecoveryAISummarySection: View {
         }
         persistedEntry = entry
         summaryText = entry.summaryText
-        statusText = entry.statusText
+        statusText = entry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
         displayedRequestID = request.requestID
+        requestedRequestID = request.requestID
     }
 
     @MainActor
     private func savePersistedSummary(_ entry: StrainRecoverySummaryCacheEntry, updateDisplayed: Bool = true) {
-        var cache = StrainRecoverySummaryPersistence.load()
-        cache[entry.requestID] = entry
-        StrainRecoverySummaryPersistence.save(cache)
+        StrainRecoverySummaryPersistence.saveEntry(
+            entry,
+            forceOverwrite: entry.isRefreshOverride
+        )
         if updateDisplayed {
             persistedEntry = entry
             displayedRequestID = entry.requestID
@@ -743,33 +910,113 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     @MainActor
-    private func preGenerateSuggestions() async {
-        for suggestion in suggestions.prefix(8) {
-            let request = StrainRecoverySummaryRequest.build(
-                engine: engine,
-                timeFilter: timeFilter,
-                sportFilter: sportFilter,
-                anchorDate: anchorDate,
-                intentText: suggestion.queryText,
-                selectedSuggestion: suggestion,
-                refreshVersion: refreshVersions[suggestion.id, default: 0]
-            )
-
-            let cache = StrainRecoverySummaryPersistence.load()
-            if cache[request.requestID] != nil {
-                continue
-            }
-
-            await generateSummary(for: request, updateDisplayed: false)
+    private func startBackgroundGenerationIfNeeded() {
+        guard summaryGenerationReadiness.canGenerate, shouldRunBackgroundGeneration else {
+            cancelBackgroundGeneration()
+            return
         }
+
+        let contextID = [
+            Calendar.current.startOfDay(for: anchorDate).formatted(date: .numeric, time: .omitted),
+            sportFilter ?? "all"
+        ].joined(separator: "|")
+
+        if backgroundGenerationTask != nil, backgroundGenerationContextID == contextID {
+            return
+        }
+
+        backgroundGenerationTask?.cancel()
+        backgroundGenerationContextID = contextID
+
+        let queue = backgroundGenerationRequests()
+        guard !queue.isEmpty else { return }
+
+        backgroundGenerationTask = Task(priority: .utility) { @MainActor in
+            for queuedRequest in queue {
+                if Task.isCancelled { break }
+                let cache = StrainRecoverySummaryPersistence.load()
+                if cache[queuedRequest.requestID] != nil {
+                    continue
+                }
+                await generateSummary(
+                    for: queuedRequest,
+                    updateDisplayed: false,
+                    generationMode: .background
+                )
+                try? await Task.sleep(nanoseconds: 450_000_000)
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelBackgroundGeneration() {
+        backgroundGenerationTask?.cancel()
+        backgroundGenerationTask = nil
+        backgroundGenerationContextID = nil
+    }
+
+    @MainActor
+    private func backgroundGenerationRequests() -> [StrainRecoverySummaryRequest] {
+        let today = Date()
+        var requests: [StrainRecoverySummaryRequest] = []
+
+        let prioritySuggestionIDs = [
+            "overall",
+            "deload",
+            "hrr-hrv",
+            "recovery",
+            "recovery-vitals",
+            "trend-balance"
+        ]
+
+        let prioritySuggestions = suggestions.filter { prioritySuggestionIDs.contains($0.id) }
+
+        for suggestion in prioritySuggestions {
+            requests.append(
+                StrainRecoverySummaryRequest.build(
+                    engine: engine,
+                    timeFilter: .day,
+                    sportFilter: sportFilter,
+                    anchorDate: today,
+                    intentText: suggestion.queryText,
+                    selectedSuggestion: suggestion,
+                    refreshVersion: 0
+                )
+            )
+        }
+
+        for filter in StrainRecoveryView.TimeFilter.allCases {
+            requests.append(
+                StrainRecoverySummaryRequest.build(
+                    engine: engine,
+                    timeFilter: filter,
+                    sportFilter: sportFilter,
+                    anchorDate: today,
+                    intentText: SummarySuggestion.defaultSuggestion.queryText,
+                    selectedSuggestion: SummarySuggestion.defaultSuggestion,
+                    refreshVersion: 0
+                )
+            )
+        }
+
+        var seen = Set<String>()
+        return requests
+            .filter { seen.insert($0.requestID).inserted }
+            .prefix(12)
+            .map { $0 }
     }
 
     @MainActor
     private func generateSummary(
         for request: StrainRecoverySummaryRequest,
         forceRefresh: Bool = false,
-        updateDisplayed: Bool = true
+        updateDisplayed: Bool = true,
+        generationMode: StrainRecoverySummaryGenerationMode = .live
     ) async {
+        if updateDisplayed {
+            cancelBackgroundGeneration()
+            requestedRequestID = request.requestID
+        }
         guard summaryGenerationReadiness.canGenerate else {
             if updateDisplayed {
                 if summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || displayedRequestID != request.requestID {
@@ -788,7 +1035,7 @@ private struct StrainRecoveryAISummarySection: View {
         if !forceRefresh, let persistedEntry, persistedEntry.requestID == request.requestID {
             if updateDisplayed {
                 summaryText = persistedEntry.summaryText
-                statusText = persistedEntry.statusText
+                statusText = persistedEntry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
                 displayedRequestID = request.requestID
             }
             return
@@ -818,16 +1065,15 @@ private struct StrainRecoveryAISummarySection: View {
                 let resolvedStatus = request.unavailableStatusText(for: model.availability)
                 if updateDisplayed {
                     summaryText = resolvedSummary
-                    statusText = resolvedStatus
+                    statusText = liveStatusText(for: generationMode, source: .localFallback)
                 }
                 savePersistedSummary(
-                    StrainRecoverySummaryCacheEntry(
-                        requestID: request.requestID,
+                    buildCacheEntry(
+                        for: request,
                         summaryText: resolvedSummary,
                         statusText: resolvedStatus,
-                        generatedAt: Date(),
-                        latestWorkoutTimestamp: request.latestWorkoutTimestamp,
-                        intentDisplayName: request.intent.displayName
+                        generationMode: generationMode,
+                        isRefreshOverride: forceRefresh
                     ),
                     updateDisplayed: updateDisplayed
                 )
@@ -876,39 +1122,37 @@ private struct StrainRecoveryAISummarySection: View {
                     resolvedStatus = "Model returned an empty response, so this summary is using local metric rules."
                 } else {
                     resolvedSummary = cleaned
-                    resolvedStatus = "Generated once from on-device Apple Intelligence for this tailored coaching view."
+                    resolvedStatus = liveStatusText(for: generationMode, source: .appleIntelligence)
                 }
                 if updateDisplayed {
                     summaryText = resolvedSummary
                     statusText = resolvedStatus
                 }
                 savePersistedSummary(
-                    StrainRecoverySummaryCacheEntry(
-                        requestID: request.requestID,
+                    buildCacheEntry(
+                        for: request,
                         summaryText: resolvedSummary,
                         statusText: resolvedStatus,
-                        generatedAt: Date(),
-                        latestWorkoutTimestamp: request.latestWorkoutTimestamp,
-                        intentDisplayName: request.intent.displayName
+                        generationMode: forceRefresh ? .refresh : generationMode,
+                        isRefreshOverride: forceRefresh
                     ),
                     updateDisplayed: updateDisplayed
                 )
                 return
             } catch {
                 let resolvedSummary = request.fallbackSummary
-                let resolvedStatus = "Apple Intelligence could not finish this summary, so this version is using local metric rules."
+                let resolvedStatus = liveStatusText(for: generationMode, source: .localFallback)
                 if updateDisplayed {
                     summaryText = resolvedSummary
                     statusText = resolvedStatus
                 }
                 savePersistedSummary(
-                    StrainRecoverySummaryCacheEntry(
-                        requestID: request.requestID,
+                    buildCacheEntry(
+                        for: request,
                         summaryText: resolvedSummary,
                         statusText: resolvedStatus,
-                        generatedAt: Date(),
-                        latestWorkoutTimestamp: request.latestWorkoutTimestamp,
-                        intentDisplayName: request.intent.displayName
+                        generationMode: generationMode,
+                        isRefreshOverride: forceRefresh
                     ),
                     updateDisplayed: updateDisplayed
                 )
@@ -918,22 +1162,72 @@ private struct StrainRecoveryAISummarySection: View {
         #endif
 
         let resolvedSummary = request.fallbackSummary
-        let resolvedStatus = "Apple Intelligence is unavailable here, so this summary is using local metric rules."
+        let resolvedStatus = liveStatusText(for: generationMode, source: .localFallback)
         if updateDisplayed {
             summaryText = resolvedSummary
             statusText = resolvedStatus
         }
         savePersistedSummary(
-            StrainRecoverySummaryCacheEntry(
-                requestID: request.requestID,
+            buildCacheEntry(
+                for: request,
                 summaryText: resolvedSummary,
                 statusText: resolvedStatus,
-                generatedAt: Date(),
-                latestWorkoutTimestamp: request.latestWorkoutTimestamp,
-                intentDisplayName: request.intent.displayName
+                generationMode: generationMode,
+                isRefreshOverride: forceRefresh
             ),
             updateDisplayed: updateDisplayed
         )
+    }
+
+    private enum SummarySourceKind {
+        case appleIntelligence
+        case localFallback
+    }
+
+    @MainActor
+    private func buildCacheEntry(
+        for request: StrainRecoverySummaryRequest,
+        summaryText: String,
+        statusText: String,
+        generationMode: StrainRecoverySummaryGenerationMode,
+        isRefreshOverride: Bool
+    ) -> StrainRecoverySummaryCacheEntry {
+        let device = StrainRecoverySummaryDevice.current
+        return StrainRecoverySummaryCacheEntry(
+            requestID: request.requestID,
+            summaryText: summaryText,
+            statusText: statusText,
+            generatedAt: Date(),
+            latestWorkoutTimestamp: request.latestWorkoutTimestamp,
+            intentDisplayName: request.intent.displayName,
+            anchorDate: request.anchorDate,
+            timeFilterRawValue: request.timeFilter.rawValue,
+            suggestionID: request.suggestionID,
+            scopedSport: request.scopedSport,
+            createdByDeviceID: device.id,
+            createdByDeviceName: device.name,
+            generationModeRawValue: generationMode.rawValue,
+            expiresAt: request.expiresAt,
+            lastRefreshedAt: isRefreshOverride ? Date() : nil,
+            isRefreshOverride: isRefreshOverride
+        )
+    }
+
+    @MainActor
+    private func liveStatusText(
+        for generationMode: StrainRecoverySummaryGenerationMode,
+        source: SummarySourceKind
+    ) -> String {
+        let deviceName = StrainRecoverySummaryDevice.current.name
+        let sourceText = source == .appleIntelligence ? "Apple Intelligence" : "local metric rules"
+        switch generationMode {
+        case .live:
+            return "Generated live on \(deviceName) using \(sourceText). Saved to cache and iCloud."
+        case .background:
+            return "Generated in background on \(deviceName) using \(sourceText). Saved to cache and iCloud."
+        case .refresh:
+            return "Refreshed live on \(deviceName) using \(sourceText). This version replaced cache and iCloud for this report."
+        }
     }
 }
 
@@ -945,6 +1239,11 @@ private struct StrainRecoverySummaryRequest {
     let intent: SummaryIntent
     let focusMode: AthleticCoachFocusMode
     let refreshVersion: Int
+    let anchorDate: Date
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let suggestionID: String
+    let scopedSport: String?
+    let expiresAt: Date?
 
     @MainActor
     static func build(
@@ -1212,9 +1511,13 @@ private struct StrainRecoverySummaryRequest {
             timeFilter.rawValue,
             scopedSport ?? "all",
             String(selectedDay.timeIntervalSince1970),
-            effectiveSuggestion.id,
-            String(refreshVersion)
+            effectiveSuggestion.id
         ].joined(separator: "|")
+
+        let expiresAt = summaryExpirationDate(
+            anchorDate: selectedDay,
+            generatedAt: Date()
+        )
 
         return Self(
             prompt: prompt,
@@ -1223,7 +1526,12 @@ private struct StrainRecoverySummaryRequest {
             latestWorkoutTimestamp: latestWorkoutTimestamp,
             intent: intent,
             focusMode: focusMode,
-            refreshVersion: refreshVersion
+            refreshVersion: refreshVersion,
+            anchorDate: selectedDay,
+            timeFilter: timeFilter,
+            suggestionID: effectiveSuggestion.id,
+            scopedSport: scopedSport,
+            expiresAt: expiresAt
         )
     }
 
@@ -1249,41 +1557,277 @@ private struct StrainRecoverySummaryRequest {
     #endif
 }
 
-private struct StrainRecoverySummaryCacheEntry: Codable {
+private enum StrainRecoverySummaryGenerationMode: String, Codable {
+    case live
+    case background
+    case refresh
+}
+
+private struct StrainRecoverySummaryCacheEntry: Codable, Equatable {
     let requestID: String
     let summaryText: String
     let statusText: String
     let generatedAt: Date
     let latestWorkoutTimestamp: TimeInterval?
     let intentDisplayName: String
+    let anchorDate: Date
+    let timeFilterRawValue: String
+    let suggestionID: String
+    let scopedSport: String?
+    let createdByDeviceID: String
+    let createdByDeviceName: String
+    let generationModeRawValue: String
+    let expiresAt: Date?
+    let lastRefreshedAt: Date?
+    let isRefreshOverride: Bool
+
+    var generationMode: StrainRecoverySummaryGenerationMode {
+        StrainRecoverySummaryGenerationMode(rawValue: generationModeRawValue) ?? .live
+    }
+
+    var isExpired: Bool {
+        if let expiresAt {
+            return expiresAt < Date()
+        }
+        return false
+    }
+
+    func cacheStatusText(currentDeviceID: String) -> String {
+        let sourceDevice = createdByDeviceID == currentDeviceID ? "this device" : createdByDeviceName
+        let sourceMode: String
+        switch generationMode {
+        case .live:
+            sourceMode = "generated live"
+        case .background:
+            sourceMode = "generated in background"
+        case .refresh:
+            sourceMode = "generated from refresh"
+        }
+        return "Loaded from cache. Originally \(sourceMode) on \(sourceDevice)."
+    }
 }
 
 private enum StrainRecoverySummaryPersistence {
-    static let storageKey = "strain_recovery_ai_summary_cache_v1"
+    static let storageKey = "strain_recovery_ai_summary_cache_v2"
+    static let settingsKey = "strain_recovery_ai_summary_sync_settings_v1"
 
     static func load() -> [String: StrainRecoverySummaryCacheEntry] {
         let cloudStore = NSUbiquitousKeyValueStore.default
-        cloudStore.synchronize()
 
-        if let cloudData = cloudStore.data(forKey: storageKey),
-           let decoded = try? JSONDecoder().decode([String: StrainRecoverySummaryCacheEntry].self, from: cloudData) {
-            return decoded
-        }
-
+        let localCache: [String: StrainRecoverySummaryCacheEntry]
         if let localData = UserDefaults.standard.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([String: StrainRecoverySummaryCacheEntry].self, from: localData) {
-            return decoded
+            localCache = decoded
+        } else {
+            localCache = [:]
         }
 
-        return [:]
+        let cloudCache: [String: StrainRecoverySummaryCacheEntry]
+        if let cloudData = cloudStore.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([String: StrainRecoverySummaryCacheEntry].self, from: cloudData) {
+            cloudCache = decoded
+        } else {
+            cloudCache = [:]
+        }
+
+        let merged = mergeCaches(
+            localCache,
+            cloudCache,
+            settings: loadSyncSettings(),
+            currentDeviceID: StrainRecoverySummaryDevice.current.id
+        )
+        let pruned = pruneExpiredEntries(from: merged)
+        if pruned != merged {
+            save(pruned)
+        }
+        return pruned
     }
 
-    static func save(_ cache: [String: StrainRecoverySummaryCacheEntry]) {
-        guard let encoded = try? JSONEncoder().encode(cache) else { return }
-        UserDefaults.standard.set(encoded, forKey: storageKey)
+    static func save(
+        _ cache: [String: StrainRecoverySummaryCacheEntry],
+        forceOverwriteRequestID: String? = nil
+    ) {
+        let settings = loadSyncSettings()
+        let currentDeviceID = StrainRecoverySummaryDevice.current.id
         let cloudStore = NSUbiquitousKeyValueStore.default
+
+        let existingLocal: [String: StrainRecoverySummaryCacheEntry]
+        if let localData = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([String: StrainRecoverySummaryCacheEntry].self, from: localData) {
+            existingLocal = decoded
+        } else {
+            existingLocal = [:]
+        }
+
+        let existingCloud: [String: StrainRecoverySummaryCacheEntry]
+        if let cloudData = cloudStore.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([String: StrainRecoverySummaryCacheEntry].self, from: cloudData) {
+            existingCloud = decoded
+        } else {
+            existingCloud = [:]
+        }
+
+        let mergedExisting = mergeCaches(existingLocal, existingCloud, settings: settings, currentDeviceID: currentDeviceID)
+        var resolved = mergedExisting
+        for (key, value) in cache {
+            if let forceOverwriteRequestID, forceOverwriteRequestID == key {
+                resolved[key] = value
+            } else if let existing = resolved[key] {
+                resolved[key] = preferredEntry(
+                    existing: existing,
+                    incoming: value,
+                    settings: settings,
+                    currentDeviceID: currentDeviceID
+                )
+            } else {
+                resolved[key] = value
+            }
+        }
+
+        let pruned = pruneExpiredEntries(from: resolved)
+        guard let encoded = try? JSONEncoder().encode(pruned) else { return }
+        UserDefaults.standard.set(encoded, forKey: storageKey)
         cloudStore.set(encoded, forKey: storageKey)
-        cloudStore.synchronize()
+    }
+
+    static func saveEntry(_ entry: StrainRecoverySummaryCacheEntry, forceOverwrite: Bool = false) {
+        save(
+            [entry.requestID: entry],
+            forceOverwriteRequestID: forceOverwrite ? entry.requestID : nil
+        )
+    }
+
+    static func pruneExpiredEntries(from cache: [String: StrainRecoverySummaryCacheEntry]) -> [String: StrainRecoverySummaryCacheEntry] {
+        cache.filter { _, entry in
+            !entry.isExpired
+        }
+    }
+
+    static func loadSyncSettings() -> StrainRecoverySummarySyncSettings {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+
+        if let cloudData = cloudStore.data(forKey: settingsKey),
+           let decoded = try? JSONDecoder().decode(StrainRecoverySummarySyncSettings.self, from: cloudData) {
+            return decoded.resolved()
+        }
+
+        if let localData = UserDefaults.standard.data(forKey: settingsKey),
+           let decoded = try? JSONDecoder().decode(StrainRecoverySummarySyncSettings.self, from: localData) {
+            return decoded.resolved()
+        }
+
+        return .defaultValue
+    }
+
+    static func saveSyncSettings(_ settings: StrainRecoverySummarySyncSettings) {
+        let resolved = settings.resolved()
+        guard let encoded = try? JSONEncoder().encode(resolved) else { return }
+        UserDefaults.standard.set(encoded, forKey: settingsKey)
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.set(encoded, forKey: settingsKey)
+    }
+
+    private static func mergeCaches(
+        _ lhs: [String: StrainRecoverySummaryCacheEntry],
+        _ rhs: [String: StrainRecoverySummaryCacheEntry],
+        settings: StrainRecoverySummarySyncSettings,
+        currentDeviceID: String
+    ) -> [String: StrainRecoverySummaryCacheEntry] {
+        var merged = lhs
+        for (key, value) in rhs {
+            if let existing = merged[key] {
+                merged[key] = preferredEntry(
+                    existing: existing,
+                    incoming: value,
+                    settings: settings,
+                    currentDeviceID: currentDeviceID
+                )
+            } else {
+                merged[key] = value
+            }
+        }
+        return merged
+    }
+
+    private static func preferredEntry(
+        existing: StrainRecoverySummaryCacheEntry,
+        incoming: StrainRecoverySummaryCacheEntry,
+        settings: StrainRecoverySummarySyncSettings,
+        currentDeviceID: String
+    ) -> StrainRecoverySummaryCacheEntry {
+        if existing.isExpired { return incoming }
+        if incoming.isExpired { return existing }
+        if incoming.isRefreshOverride && incoming.generatedAt >= existing.generatedAt {
+            return incoming
+        }
+        if existing.isRefreshOverride && existing.generatedAt >= incoming.generatedAt {
+            return existing
+        }
+
+        let existingPrimary = settings.isPrimary(deviceID: existing.createdByDeviceID)
+        let incomingPrimary = settings.isPrimary(deviceID: incoming.createdByDeviceID)
+        if incomingPrimary != existingPrimary {
+            return incomingPrimary ? incoming : existing
+        }
+
+        if incoming.generatedAt != existing.generatedAt {
+            return incoming.generatedAt > existing.generatedAt ? incoming : existing
+        }
+
+        if incoming.createdByDeviceID == currentDeviceID {
+            return incoming
+        }
+        return existing
+    }
+}
+
+private struct StrainRecoverySummaryDevice {
+    let id: String
+    let name: String
+
+    static var current: StrainRecoverySummaryDevice {
+        let storageKey = "strain_recovery_ai_summary_device_id"
+        let id: String
+        if let existing = UserDefaults.standard.string(forKey: storageKey) {
+            id = existing
+        } else {
+            let created = UUID().uuidString
+            UserDefaults.standard.set(created, forKey: storageKey)
+            id = created
+        }
+        return StrainRecoverySummaryDevice(id: id, name: UIDevice.current.name)
+    }
+}
+
+private struct StrainRecoverySummarySyncSettings: Codable {
+    var primaryDeviceID: String?
+    var temporaryPrimaryDeviceID: String?
+    var temporaryPrimaryUntil: Date?
+
+    static let defaultValue = StrainRecoverySummarySyncSettings(
+        primaryDeviceID: StrainRecoverySummaryDevice.current.id,
+        temporaryPrimaryDeviceID: nil,
+        temporaryPrimaryUntil: nil
+    )
+
+    func resolved() -> Self {
+        if let until = temporaryPrimaryUntil, until < Date() {
+            return StrainRecoverySummarySyncSettings(
+                primaryDeviceID: primaryDeviceID,
+                temporaryPrimaryDeviceID: nil,
+                temporaryPrimaryUntil: nil
+            )
+        }
+        return self
+    }
+
+    func isPrimary(deviceID: String) -> Bool {
+        let resolved = resolved()
+        if let temporaryPrimaryDeviceID = resolved.temporaryPrimaryDeviceID,
+           resolved.temporaryPrimaryUntil != nil {
+            return temporaryPrimaryDeviceID == deviceID
+        }
+        return resolved.primaryDeviceID == deviceID
     }
 }
 

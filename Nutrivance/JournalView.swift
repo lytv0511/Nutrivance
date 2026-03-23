@@ -6,7 +6,7 @@ import JournalingSuggestions
 import HealthKit
 import CoreLocation
 
-struct JournalEntry: Identifiable, Codable {
+struct JournalEntry: Identifiable, Codable, Equatable {
     let id: UUID
     var title: String
     var content: String
@@ -63,13 +63,40 @@ struct JournalEntry: Identifiable, Codable {
     }
 }
 
+private func isFitnessReportEntry(_ entry: JournalEntry) -> Bool {
+    entry.kind == "workout_report" || !entry.reportMetrics.isEmpty
+}
+
 enum JournalPersistence {
+    static let cloudStorageKey = "journal_entries_cache_v1"
+
     static var journalFileURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return docs.appendingPathComponent("journal_entries.json")
     }
 
     static func loadEntries() -> [JournalEntry] {
+        let localEntries = loadLocalEntries()
+        let cloudEntries = loadCloudEntries()
+        let merged = merge(localEntries: localEntries, cloudEntries: cloudEntries)
+
+        if merged != localEntries {
+            persistLocalEntries(merged)
+        }
+        if merged != cloudEntries {
+            persistCloudEntries(merged)
+        }
+
+        return merged
+    }
+
+    static func persistEntries(_ entries: [JournalEntry]) {
+        let normalized = deduplicate(entries)
+        persistLocalEntries(normalized)
+        persistCloudEntries(normalized)
+    }
+
+    private static func loadLocalEntries() -> [JournalEntry] {
         do {
             let data = try Data(contentsOf: journalFileURL)
             return try JSONDecoder().decode([JournalEntry].self, from: data)
@@ -78,13 +105,68 @@ enum JournalPersistence {
         }
     }
 
-    static func persistEntries(_ entries: [JournalEntry]) {
+    private static func loadCloudEntries() -> [JournalEntry] {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        guard let data = cloudStore.data(forKey: cloudStorageKey),
+              let entries = try? JSONDecoder().decode([JournalEntry].self, from: data) else {
+            return []
+        }
+        return entries
+    }
+
+    private static func persistLocalEntries(_ entries: [JournalEntry]) {
         do {
             let data = try JSONEncoder().encode(entries)
             try data.write(to: journalFileURL, options: [.atomic])
         } catch {
-            print("Failed to save journal entries:", error)
+            print("Failed to save journal entries locally:", error)
         }
+    }
+
+    private static func persistCloudEntries(_ entries: [JournalEntry]) {
+        do {
+            let data = try JSONEncoder().encode(entries)
+            let cloudStore = NSUbiquitousKeyValueStore.default
+            cloudStore.set(data, forKey: cloudStorageKey)
+        } catch {
+            print("Failed to save journal entries to iCloud:", error)
+        }
+    }
+
+    private static func merge(localEntries: [JournalEntry], cloudEntries: [JournalEntry]) -> [JournalEntry] {
+        var mergedByID: [UUID: JournalEntry] = [:]
+
+        for entry in localEntries {
+            mergedByID[entry.id] = entry
+        }
+
+        for entry in cloudEntries {
+            if let existing = mergedByID[entry.id] {
+                mergedByID[entry.id] = preferredEntry(existing, entry)
+            } else {
+                mergedByID[entry.id] = entry
+            }
+        }
+
+        return mergedByID.values.sorted { lhs, rhs in
+            if lhs.date == rhs.date {
+                return lhs.id.uuidString > rhs.id.uuidString
+            }
+            return lhs.date > rhs.date
+        }
+    }
+
+    private static func deduplicate(_ entries: [JournalEntry]) -> [JournalEntry] {
+        merge(localEntries: entries, cloudEntries: [])
+    }
+
+    private static func preferredEntry(_ lhs: JournalEntry, _ rhs: JournalEntry) -> JournalEntry {
+        if rhs.date != lhs.date {
+            return rhs.date > lhs.date ? rhs : lhs
+        }
+        let lhsSignal = lhs.content.count + lhs.inspiration.count + lhs.imageData.count * 100 + lhs.reportMetrics.count * 10
+        let rhsSignal = rhs.content.count + rhs.inspiration.count + rhs.imageData.count * 100 + rhs.reportMetrics.count * 10
+        return rhsSignal >= lhsSignal ? rhs : lhs
     }
 
     static func appendWorkoutReport(title: String, content: String, date: Date = Date()) {
@@ -304,6 +386,14 @@ struct JournalView: View {
     @State private var entries: [JournalEntry] = []
     @State private var showingEditor = false
     @State private var currentEntry = JournalEntry()
+
+    private var fitnessReportEntries: [JournalEntry] {
+        entries.filter(isFitnessReportEntry)
+    }
+
+    private var standardEntries: [JournalEntry] {
+        entries.filter { !isFitnessReportEntry($0) }
+    }
     
 
     var body: some View {
@@ -334,55 +424,33 @@ struct JournalView: View {
                 } else {
                     
                     List {
-                        ForEach(entries) { entry in
-                            Button {
-                                currentEntry = entry
-                                showingEditor = true
-                            } label: {
-                                VStack(alignment: .leading) {
-                                    
-                                    Text(entry.title.isEmpty ? "Untitled Entry" : entry.title)
-                                        .font(.headline)
-                                    
-                                    Text(entry.date, style: .date)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-
-                                    if entry.kind == "workout_report" {
-                                        Text("Workout Report")
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundColor(.orange)
-                                    }
-                                    
-                                    if !entry.content.isEmpty {
-                                        Text(entry.content)
-                                            .lineLimit(10)
-                                            .foregroundColor(.secondary)
-                                    }
-
-                                    if entry.kind == "workout_report" {
-                                        WorkoutReportMetricsWall(metrics: entry.reportMetrics)
-                                            .padding(.top, 6)
-                                    }
-                                    
-                                    if !entry.inspiration.isEmpty || !entry.imageData.isEmpty {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Text("Inspiration")
-                                                .font(.subheadline.weight(.semibold))
-                                            
-                                            InspirationSectionView(
-                                                inspiration: entry.inspiration,
-                                                imageData: entry.imageData,
-                                                compact: true
-                                            )
-                                        }
-                                        .padding(.top, 6)
+                        if !fitnessReportEntries.isEmpty {
+                            Section("Fitness Reports") {
+                                ForEach(fitnessReportEntries) { entry in
+                                    JournalEntryRow(entry: entry) {
+                                        currentEntry = entry
+                                        showingEditor = true
                                     }
                                 }
-                                .padding(.vertical, 4)
+                                .onDelete { offsets in
+                                    deleteEntries(from: fitnessReportEntries, at: offsets)
+                                }
                             }
                         }
-                        .onDelete(perform: deleteEntry)
+
+                        if !standardEntries.isEmpty {
+                            Section("Entries") {
+                                ForEach(standardEntries) { entry in
+                                    JournalEntryRow(entry: entry) {
+                                        currentEntry = entry
+                                        showingEditor = true
+                                    }
+                                }
+                                .onDelete { offsets in
+                                    deleteEntries(from: standardEntries, at: offsets)
+                                }
+                            }
+                        }
                     }
                     .scrollContentBackground(.hidden)
                 }
@@ -418,6 +486,9 @@ struct JournalView: View {
                 )
                 loadEntries()
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+                loadEntries()
+            }
         }
     }
     
@@ -436,6 +507,12 @@ struct JournalView: View {
         entries.remove(atOffsets: offsets)
         persistEntries()
     }
+
+    func deleteEntries(from source: [JournalEntry], at offsets: IndexSet) {
+        let idsToDelete = offsets.map { source[$0].id }
+        entries.removeAll { idsToDelete.contains($0.id) }
+        persistEntries()
+    }
     
     func persistEntries() {
         JournalPersistence.persistEntries(entries)
@@ -443,6 +520,56 @@ struct JournalView: View {
     
     func loadEntries() {
         entries = JournalPersistence.loadEntries()
+    }
+}
+
+private struct JournalEntryRow: View {
+    let entry: JournalEntry
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading) {
+                Text(entry.title.isEmpty ? "Untitled Entry" : entry.title)
+                    .font(.headline)
+
+                Text(entry.date, style: .date)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if isFitnessReportEntry(entry) {
+                    Text("Fitness Report")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                }
+
+                if !entry.content.isEmpty {
+                    Text(entry.content)
+                        .lineLimit(10)
+                        .foregroundColor(.secondary)
+                }
+
+                if isFitnessReportEntry(entry) {
+                    WorkoutReportMetricsWall(metrics: entry.reportMetrics)
+                        .padding(.top, 6)
+                }
+
+                if !entry.inspiration.isEmpty || !entry.imageData.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Inspiration")
+                            .font(.subheadline.weight(.semibold))
+
+                        InspirationSectionView(
+                            inspiration: entry.inspiration,
+                            imageData: entry.imageData,
+                            compact: true
+                        )
+                    }
+                    .padding(.top, 6)
+                }
+            }
+            .padding(.vertical, 4)
+        }
     }
 }
 

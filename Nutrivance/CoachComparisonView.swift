@@ -329,6 +329,15 @@ struct CoachSummaryInteractiveText: View {
     private var attributedText: AttributedString {
         var attributed = AttributedString(text)
         for insight in insights {
+            if let stringRange = Range(insight.range, in: text),
+               let attributedRange = Range(stringRange, in: attributed) {
+                attributed[attributedRange].foregroundColor = .orange
+                attributed[attributedRange].backgroundColor = Color.orange.opacity(0.12)
+                attributed[attributedRange].underlineStyle = .single
+                attributed[attributedRange].link = URL(string: "nutrivance-coach://comparison/\(insight.id)")
+                continue
+            }
+
             guard let attributedRange = attributed.range(of: insight.snippet) else {
                 continue
             }

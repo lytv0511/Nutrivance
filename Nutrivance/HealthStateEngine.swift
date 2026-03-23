@@ -841,6 +841,12 @@ final class HealthStateEngine: ObservableObject {
     @Published var allostaticStressScore: Double = 50
     @Published var autonomicBalanceScore: Double = 50
     private var scoreRefreshTask: Task<Void, Never>?
+    private var lastMetricsRefreshAt: Date?
+    private var activeWorkoutRefreshDays: Int?
+    private var hasStartedInitialDifferentialRefresh = false
+    private var smartDifferentialRefreshTask: Task<Void, Never>?
+    private var historicalBatchLoadTask: Task<Void, Never>?
+    private let metricsRefreshCooldown: TimeInterval = 20
 
     // MARK: - Initialization
 
@@ -880,7 +886,14 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Public Refresh
 
-    func refreshAllMetrics() {
+    func refreshAllMetrics(force: Bool = false) {
+        if !force,
+           let lastMetricsRefreshAt,
+           Date().timeIntervalSince(lastMetricsRefreshAt) < metricsRefreshCooldown {
+            return
+        }
+        lastMetricsRefreshAt = Date()
+
         // All fetches are now on the main actor
         self.fetchLatestHRV()
         self.fetchHRVHistory(days: longTermLookbackDays)
@@ -909,11 +922,22 @@ final class HealthStateEngine: ObservableObject {
     /// Refresh workout analytics with smart caching
     /// Only fetches from HealthKit if cache is stale or days range changed
     func refreshWorkoutAnalytics(days: Int = 30, forceRefresh: Bool = false) async {
+        if !forceRefresh, activeWorkoutRefreshDays == days {
+            return
+        }
+
         // Check if cache is still valid
         if !forceRefresh && isCacheValid(for: days) {
             return // Use cached data
         }
-        
+
+        activeWorkoutRefreshDays = days
+        defer {
+            if activeWorkoutRefreshDays == days {
+                activeWorkoutRefreshDays = nil
+            }
+        }
+
         let end = Date()
         let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
         let analytics = await hkManager.fetchWorkoutsWithAnalytics(from: start, to: end)
@@ -943,6 +967,9 @@ final class HealthStateEngine: ObservableObject {
     
     /// Load cached workouts from disk synchronously - no blocking, immediate HealthKit fetch
     func initializeWithCachedData() {
+        guard !hasStartedInitialDifferentialRefresh else { return }
+        hasStartedInitialDifferentialRefresh = true
+
         // CRITICAL: Check for persistent cache synchronously
         // Mark initialized immediately - view won't show stale data
         let cachedSummaries = loadCachedAnalyticsFromDisk()
@@ -962,8 +989,9 @@ final class HealthStateEngine: ObservableObject {
         // - If cache exists: fetch only NEW workouts + validate 30-day window
         // - If cache empty: fetch ALL workouts (first run)
         // Either way, smartDifferentialRefresh is optimized for speed
-        Task.detached { [weak self] in
-            guard let self = self else { return }
+        smartDifferentialRefreshTask?.cancel()
+        smartDifferentialRefreshTask = Task { [weak self] in
+            guard let self = self, !Task.isCancelled else { return }
             print("[Cache] Starting differential refresh...")
             await self.smartDifferentialRefresh(totalDays: 3650)
         }
@@ -1023,9 +1051,7 @@ final class HealthStateEngine: ObservableObject {
             // NOW: Launch background batch loading for historical data (non-blocking)
             // This populates the view progressively without blocking UI
             if totalStartDate < overlapStart {
-                Task.detached { [weak self] in
-                    await self?.batchLoadHistoricalWorkouts(from: totalStartDate, to: overlapStart, batchSize: 30)
-                }
+                scheduleHistoricalBatchLoad(from: totalStartDate, to: overlapStart, batchSize: 30)
             }
             return
         }
@@ -1048,9 +1074,7 @@ final class HealthStateEngine: ObservableObject {
             
             // Then batch-load remaining historical data in background (non-blocking)
             if totalStartDate < recentStart {
-                Task.detached { [weak self] in
-                    await self?.batchLoadHistoricalWorkouts(from: totalStartDate, to: recentStart, batchSize: 30)
-                }
+                scheduleHistoricalBatchLoad(from: totalStartDate, to: recentStart, batchSize: 30)
             }
             return
         }
@@ -1100,6 +1124,13 @@ final class HealthStateEngine: ObservableObject {
             self.hasNewDataAvailable = false
         }
     }
+
+    private func scheduleHistoricalBatchLoad(from earliestDate: Date, to latestDate: Date, batchSize: Int) {
+        historicalBatchLoadTask?.cancel()
+        historicalBatchLoadTask = Task { [weak self] in
+            await self?.batchLoadHistoricalWorkouts(from: earliestDate, to: latestDate, batchSize: batchSize)
+        }
+    }
     
     /// Batch-load historical workouts in chunks (non-blocking, progressive population)
     /// Loads data backwards in time: from newest unfetched to oldest
@@ -1118,15 +1149,12 @@ final class HealthStateEngine: ObservableObject {
             print("[Cache] Loading batch \(batchCount + 1): \(batchStart.formatted()) to \(currentEnd.formatted())")
             
             let batchWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: batchStart, to: currentEnd)
+            guard !Task.isCancelled else { break }
             
             if !batchWorkouts.isEmpty {
-                // Append batch to workoutAnalytics on main thread for UI update
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.workoutAnalytics.append(contentsOf: batchWorkouts)
-                    self.savePersistentCacheMetadata(self.workoutAnalytics)
-                    print("[Cache] ✅ Batch \(batchCount + 1) complete: +\(batchWorkouts.count) workouts (total: \(self.workoutAnalytics.count))")
-                }
+                self.workoutAnalytics.append(contentsOf: batchWorkouts)
+                self.savePersistentCacheMetadata(self.workoutAnalytics)
+                print("[Cache] ✅ Batch \(batchCount + 1) complete: +\(batchWorkouts.count) workouts (total: \(self.workoutAnalytics.count))")
             } else {
                 print("[Cache] Batch \(batchCount + 1): No workouts found")
             }

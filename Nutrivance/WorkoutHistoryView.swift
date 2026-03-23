@@ -67,7 +67,6 @@ private enum HRZoneSettingsPersistence {
 
     static func load() -> HRZonePersistedSettings? {
         let ubiquitousStore = NSUbiquitousKeyValueStore.default
-        ubiquitousStore.synchronize()
 
         if let cloudData = ubiquitousStore.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode(HRZonePersistedSettings.self, from: cloudData) {
@@ -87,7 +86,6 @@ private enum HRZoneSettingsPersistence {
         UserDefaults.standard.set(encoded, forKey: storageKey)
         let ubiquitousStore = NSUbiquitousKeyValueStore.default
         ubiquitousStore.set(encoded, forKey: storageKey)
-        ubiquitousStore.synchronize()
     }
 }
 
