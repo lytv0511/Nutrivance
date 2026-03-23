@@ -13,6 +13,8 @@ struct JournalEntry: Identifiable, Codable {
     var inspiration: String
     var date: Date
     var imageData: [Data] = []
+    var kind: String
+    var reportMetrics: [WorkoutReportMetric]
     
     init(title: String = "", content: String = "") {
         self.id = UUID()
@@ -21,6 +23,8 @@ struct JournalEntry: Identifiable, Codable {
         self.inspiration = ""
         self.date = Date()
         self.imageData = []
+        self.kind = "standard"
+        self.reportMetrics = []
     }
     
     enum CodingKeys: String, CodingKey {
@@ -30,6 +34,8 @@ struct JournalEntry: Identifiable, Codable {
         case inspiration
         case date
         case imageData
+        case kind
+        case reportMetrics
     }
     
     init(from decoder: Decoder) throws {
@@ -40,6 +46,8 @@ struct JournalEntry: Identifiable, Codable {
         inspiration = try container.decodeIfPresent(String.self, forKey: .inspiration) ?? ""
         date = try container.decode(Date.self, forKey: .date)
         imageData = try container.decodeIfPresent([Data].self, forKey: .imageData) ?? []
+        kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "standard"
+        reportMetrics = try container.decodeIfPresent([WorkoutReportMetric].self, forKey: .reportMetrics) ?? []
     }
     
     func encode(to encoder: Encoder) throws {
@@ -50,6 +58,72 @@ struct JournalEntry: Identifiable, Codable {
         try container.encode(inspiration, forKey: .inspiration)
         try container.encode(date, forKey: .date)
         try container.encode(imageData, forKey: .imageData)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(reportMetrics, forKey: .reportMetrics)
+    }
+}
+
+enum JournalPersistence {
+    static var journalFileURL: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("journal_entries.json")
+    }
+
+    static func loadEntries() -> [JournalEntry] {
+        do {
+            let data = try Data(contentsOf: journalFileURL)
+            return try JSONDecoder().decode([JournalEntry].self, from: data)
+        } catch {
+            return []
+        }
+    }
+
+    static func persistEntries(_ entries: [JournalEntry]) {
+        do {
+            let data = try JSONEncoder().encode(entries)
+            try data.write(to: journalFileURL, options: [.atomic])
+        } catch {
+            print("Failed to save journal entries:", error)
+        }
+    }
+
+    static func appendWorkoutReport(title: String, content: String, date: Date = Date()) {
+        var entries = loadEntries()
+        var entry = JournalEntry(title: title, content: content)
+        entry.date = date
+        entry.kind = "workout_report"
+        entry.reportMetrics = WorkoutReportNLPParser.parseMetrics(from: content)
+        entries.insert(entry, at: 0)
+        persistEntries(entries)
+    }
+}
+
+private struct WorkoutReportMetricsWall: View {
+    let metrics: [WorkoutReportMetric]
+
+    var body: some View {
+        if !metrics.isEmpty {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
+                ForEach(metrics) { metric in
+                    VStack(spacing: 8) {
+                        Image(systemName: metric.icon)
+                            .font(.title3.bold())
+                            .foregroundColor(.orange)
+                        Text(metric.title)
+                            .font(.caption.weight(.semibold))
+                        Text(metric.value)
+                            .font(.headline)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.orange.opacity(0.22), lineWidth: 1)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -232,11 +306,6 @@ struct JournalView: View {
     @State private var currentEntry = JournalEntry()
     
 
-    private var journalFileURL: URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return docs.appendingPathComponent("journal_entries.json")
-    }
-    
     var body: some View {
         NavigationStack {
             
@@ -278,11 +347,22 @@ struct JournalView: View {
                                     Text(entry.date, style: .date)
                                         .font(.caption)
                                         .foregroundColor(.secondary)
+
+                                    if entry.kind == "workout_report" {
+                                        Text("Workout Report")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundColor(.orange)
+                                    }
                                     
                                     if !entry.content.isEmpty {
                                         Text(entry.content)
                                             .lineLimit(10)
                                             .foregroundColor(.secondary)
+                                    }
+
+                                    if entry.kind == "workout_report" {
+                                        WorkoutReportMetricsWall(metrics: entry.reportMetrics)
+                                            .padding(.top, 6)
                                     }
                                     
                                     if !entry.inspiration.isEmpty || !entry.imageData.isEmpty {
@@ -329,6 +409,15 @@ struct JournalView: View {
                     }
                 )
             }
+            .onReceive(NotificationCenter.default.publisher(for: .saveWorkoutReportToJournal)) { notification in
+                guard let payload = notification.object as? SavedWorkoutReportPayload else { return }
+                JournalPersistence.appendWorkoutReport(
+                    title: payload.title,
+                    content: payload.content,
+                    date: payload.date
+                )
+                loadEntries()
+            }
         }
     }
     
@@ -349,22 +438,11 @@ struct JournalView: View {
     }
     
     func persistEntries() {
-        do {
-            let data = try JSONEncoder().encode(entries)
-            try data.write(to: journalFileURL, options: [.atomic])
-        } catch {
-            print("Failed to save journal entries:", error)
-        }
+        JournalPersistence.persistEntries(entries)
     }
     
     func loadEntries() {
-        do {
-            let data = try Data(contentsOf: journalFileURL)
-            let decoded = try JSONDecoder().decode([JournalEntry].self, from: data)
-            entries = decoded
-        } catch {
-            entries = []
-        }
+        entries = JournalPersistence.loadEntries()
     }
 }
 

@@ -1,5 +1,8 @@
 import SwiftUI
 import HealthKit
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 #if !os(visionOS)
 // Inline TappableChartPreview definition
@@ -32,9 +35,9 @@ struct StrainRecoveryView: View {
     @State private var animationPhase: Double = 0
 
     enum TimeFilter: String, CaseIterable {
+        case day = "1D"
         case week = "1W"
         case month = "1M"
-        case year = "1Y"
     }
 
     @State private var timeFilter: TimeFilter = .week
@@ -123,14 +126,12 @@ struct StrainRecoveryView: View {
                     }
                     .padding(.horizontal)
 
-                    // ML-powered summary (placeholder)
-                    Section {
-                        Text("\u{1F916} ML-powered summary goes here.\nExplain how your sleep, HRV, RHR, mood, and workouts contributed to your current strain and recovery.")
-                            .font(.headline)
-                            .padding(.bottom, 8)
-                    } header: {
-                        Text("AI Coach Summary").font(.title2.bold())
-                    }
+                    StrainRecoveryAISummarySection(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        sportFilter: sportFilter,
+                        anchorDate: selectedDate
+                    )
 
                     MetricSectionGroup(title: "Training Load") {
                         StrainRecoveryMathSection(
@@ -294,20 +295,20 @@ import Charts
 private extension StrainRecoveryView.TimeFilter {
     var dayCount: Int {
         switch self {
+        case .day: return 1
         case .week: return 7
         case .month: return 30
-        case .year: return 365
         }
     }
     
     var navigationComponent: Calendar.Component {
         switch self {
+        case .day:
+            return .day
         case .week:
             return .day
         case .month:
             return .weekOfYear
-        case .year:
-            return .month
         }
     }
 }
@@ -379,6 +380,1750 @@ struct MetricSectionGroup<Content: View>: View {
             content()
         }
     }
+}
+
+private struct StrainRecoveryAISummarySection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let sportFilter: String?
+    let anchorDate: Date
+
+    @State private var intentText = ""
+    @State private var summaryText = ""
+    @State private var isLoading = false
+    @State private var statusText = "Preparing your summary..."
+    @State private var activeRequestKey: String? = nil
+    @State private var persistedEntry: StrainRecoverySummaryCacheEntry?
+    @State private var displayedRequestID: String? = nil
+    @State private var selectedSuggestionID: String? = nil
+    @State private var refreshVersions: [String: Int] = [:]
+    @State private var selectedComparisonInsight: CoachSummaryInsight?
+
+    private struct SummaryGenerationReadiness {
+        let canGenerate: Bool
+        let statusText: String
+        let placeholderText: String
+        let triggerToken: String
+    }
+
+    private var request: StrainRecoverySummaryRequest {
+        StrainRecoverySummaryRequest.build(
+            engine: engine,
+            timeFilter: timeFilter,
+            sportFilter: sportFilter,
+            anchorDate: anchorDate,
+            intentText: intentText,
+            selectedSuggestion: selectedSuggestion,
+            refreshVersion: refreshVersions[selectedSuggestion?.id ?? "default", default: 0]
+        )
+    }
+
+    private var detectedIntent: SummaryIntent {
+        SummaryIntent.detect(from: intentText, sportFilter: sportFilter)
+    }
+
+    private var suggestions: [SummarySuggestion] {
+        SummarySuggestion.buildSuggestions(
+            engine: engine,
+            timeFilter: timeFilter,
+            sportFilter: sportFilter,
+            anchorDate: anchorDate
+        )
+    }
+
+    private var filteredSuggestions: [SummarySuggestion] {
+        let query = intentText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return suggestions }
+        return suggestions.filter {
+            $0.title.lowercased().contains(query) || $0.queryText.lowercased().contains(query)
+        }
+    }
+
+    private var selectedSuggestion: SummarySuggestion? {
+        filteredSuggestions.first(where: { $0.id == selectedSuggestionID })
+            ?? suggestions.first(where: { $0.id == selectedSuggestionID })
+            ?? suggestions.first
+    }
+
+    private var summaryGenerationReadiness: SummaryGenerationReadiness {
+        let hasWorkoutContext = engine.hasInitializedWorkoutAnalytics
+        let hasRecoveryCore = engine.feelGoodScoreInputsAvailable
+        let hasRecoverySeries = !engine.dailyHRV.isEmpty || !engine.dailyRestingHeartRate.isEmpty
+        let hasSleepContext = !engine.sleepStages.isEmpty || engine.sleepHours != nil
+
+        let missing: [String] = [
+            hasWorkoutContext ? nil : "workout history",
+            hasRecoveryCore ? nil : "HRV, resting heart rate, and sleep",
+            (hasRecoverySeries || hasSleepContext) ? nil : "trend data"
+        ].compactMap { $0 }
+
+        let isReady = hasWorkoutContext && hasRecoveryCore && (hasRecoverySeries || hasSleepContext)
+        let statusText: String
+        let placeholderText: String
+
+        if isReady {
+            statusText = "Coach summary ready to generate."
+            placeholderText = ""
+        } else {
+            let joinedMissing = ListFormatter.localizedString(byJoining: missing)
+            statusText = "Waiting for enough health data to generate your coach summary."
+            placeholderText = "Loading \(joinedMissing.lowercased()) before generating your coach summary so the report does not lock onto empty startup values."
+        }
+
+        let triggerToken = [
+            hasWorkoutContext ? "workouts-ready" : "workouts-waiting",
+            hasRecoveryCore ? "core-ready" : "core-waiting",
+            String(engine.workoutAnalytics.count),
+            String(engine.dailyHRV.count),
+            String(engine.dailyRestingHeartRate.count),
+            String(engine.sleepStages.count),
+            engine.latestHRV != nil ? "latest-hrv" : "no-latest-hrv",
+            engine.restingHeartRate != nil ? "latest-rhr" : "no-latest-rhr",
+            engine.sleepHours != nil ? "sleep-hours" : "no-sleep-hours"
+        ].joined(separator: "|")
+
+        return SummaryGenerationReadiness(
+            canGenerate: isReady,
+            statusText: statusText,
+            placeholderText: placeholderText,
+            triggerToken: triggerToken
+        )
+    }
+
+    private var generationTaskID: String {
+        [request.requestID, summaryGenerationReadiness.triggerToken].joined(separator: "|")
+    }
+
+    private var displayedSummaryBody: String {
+        if !summaryText.isEmpty {
+            return summaryText
+        }
+        if !summaryGenerationReadiness.canGenerate {
+            return summaryGenerationReadiness.placeholderText
+        }
+        return request.fallbackSummary
+    }
+
+    private var comparisonInsights: [CoachSummaryInsight] {
+        CoachSummaryNLP.detectInsights(
+            in: displayedSummaryBody,
+            anchorDate: anchorDate,
+            timeFilter: timeFilter
+        )
+    }
+
+    private var shouldShowRefresh: Bool {
+        !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var shouldRecommendRefresh: Bool {
+        guard let persistedEntry else { return false }
+        if Date().timeIntervalSince(persistedEntry.generatedAt) > 24 * 60 * 60 {
+            return true
+        }
+        guard let cachedWorkoutTimestamp = persistedEntry.latestWorkoutTimestamp,
+              let latestWorkoutTimestamp = request.latestWorkoutTimestamp else {
+            return false
+        }
+        return latestWorkoutTimestamp > cachedWorkoutTimestamp + 1
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center) {
+                Text("AI Coach Summary")
+                    .font(.title2.bold())
+                Spacer()
+                if shouldShowRefresh {
+                    Button("Refresh") {
+                        let key = selectedSuggestion?.id ?? "default"
+                        refreshVersions[key, default: 0] += 1
+                        Task {
+                            await generateSummary(for: request, forceRefresh: true)
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                }
+                if !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("Save To Journal") {
+                        NotificationCenter.default.post(
+                            name: .saveWorkoutReportToJournal,
+                            object: SavedWorkoutReportPayload(
+                                title: selectedSuggestion?.title ?? "Workout Report",
+                                content: summaryText,
+                                date: anchorDate
+                            )
+                        )
+                        statusText = "Saved as a workout report in Journal."
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                }
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                    .foregroundColor(.orange)
+                TextField("Search coaching suggestions", text: $intentText)
+                    .textInputAutocapitalization(.sentences)
+                    .autocorrectionDisabled(false)
+                    .submitLabel(.search)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.orange.opacity(0.55), Color.blue.opacity(0.25)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+
+            if shouldRecommendRefresh {
+                Text("New summary available. A new workout was detected or this report is older than a day, so a refresh is recommended.")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                ForEach(filteredSuggestions.prefix(24)) { suggestion in
+                    Button {
+                        selectedSuggestionID = suggestion.id
+                        intentText = suggestion.queryText
+                        Task {
+                            statusText = "Generating new tailored response... focusing on \(suggestion.title)."
+                            let request = StrainRecoverySummaryRequest.build(
+                                engine: engine,
+                                timeFilter: timeFilter,
+                                sportFilter: sportFilter,
+                                anchorDate: anchorDate,
+                                intentText: suggestion.queryText,
+                                selectedSuggestion: suggestion,
+                                refreshVersion: refreshVersions[suggestion.id, default: 0]
+                            )
+                            await generateSummary(for: request)
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: suggestion.symbol)
+                                .font(.caption.weight(.bold))
+                            Text(suggestion.title)
+                                .font(.caption.weight(.semibold))
+                                .multilineTextAlignment(.leading)
+                        }
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(
+                                    (selectedSuggestionID == suggestion.id ? Color.orange : Color.orange.opacity(0.35)),
+                                    lineWidth: selectedSuggestionID == suggestion.id ? 1.4 : 1
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                if summaryText.isEmpty && isLoading {
+                    Text("Generating new tailored response... focusing on \(selectedSuggestion?.title ?? detectedIntent.displayName).")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else {
+                    CoachSummaryInteractiveText(
+                        text: displayedSummaryBody,
+                        insights: comparisonInsights
+                    ) { insight in
+                        selectedComparisonInsight = insight
+                    }
+                    .font(.body)
+                    .foregroundColor(.primary)
+                }
+
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if !comparisonInsights.isEmpty {
+                    Text("Tap the highlighted coach cues to compare the linked metrics on a shared whiteboard.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.orange.opacity(0.16), lineWidth: 1.1)
+            )
+        }
+        .sheet(item: $selectedComparisonInsight) { insight in
+            CoachComparisonView(
+                engine: engine,
+                insight: insight,
+                summaryText: displayedSummaryBody,
+                timeFilter: timeFilter,
+                sportFilter: sportFilter,
+                anchorDate: anchorDate
+            )
+        }
+        .task(id: generationTaskID) {
+            if selectedSuggestionID == nil {
+                selectedSuggestionID = suggestions.first?.id
+                if intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    intentText = suggestions.first?.queryText ?? ""
+                }
+            }
+            loadPersistedSummary(for: request)
+            guard summaryGenerationReadiness.canGenerate else {
+                if persistedEntry == nil && displayedRequestID != request.requestID {
+                    summaryText = ""
+                }
+                statusText = summaryGenerationReadiness.statusText
+                return
+            }
+            if displayedRequestID != request.requestID && persistedEntry == nil {
+                await generateSummary(for: request)
+            }
+            Task(priority: .utility) {
+                await preGenerateSuggestions()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+            guard displayedRequestID != request.requestID else { return }
+            loadPersistedSummary(for: request)
+        }
+    }
+
+    @MainActor
+    private func loadPersistedSummary(for request: StrainRecoverySummaryRequest) {
+        let cache = StrainRecoverySummaryPersistence.load()
+        guard let entry = cache[request.requestID] else {
+            persistedEntry = nil
+            if displayedRequestID != request.requestID {
+                summaryText = ""
+                statusText = "Preparing your summary..."
+            }
+            return
+        }
+        persistedEntry = entry
+        summaryText = entry.summaryText
+        statusText = entry.statusText
+        displayedRequestID = request.requestID
+    }
+
+    @MainActor
+    private func savePersistedSummary(_ entry: StrainRecoverySummaryCacheEntry, updateDisplayed: Bool = true) {
+        var cache = StrainRecoverySummaryPersistence.load()
+        cache[entry.requestID] = entry
+        StrainRecoverySummaryPersistence.save(cache)
+        if updateDisplayed {
+            persistedEntry = entry
+            displayedRequestID = entry.requestID
+        }
+    }
+
+    @MainActor
+    private func preGenerateSuggestions() async {
+        for suggestion in suggestions.prefix(8) {
+            let request = StrainRecoverySummaryRequest.build(
+                engine: engine,
+                timeFilter: timeFilter,
+                sportFilter: sportFilter,
+                anchorDate: anchorDate,
+                intentText: suggestion.queryText,
+                selectedSuggestion: suggestion,
+                refreshVersion: refreshVersions[suggestion.id, default: 0]
+            )
+
+            let cache = StrainRecoverySummaryPersistence.load()
+            if cache[request.requestID] != nil {
+                continue
+            }
+
+            await generateSummary(for: request, updateDisplayed: false)
+        }
+    }
+
+    @MainActor
+    private func generateSummary(
+        for request: StrainRecoverySummaryRequest,
+        forceRefresh: Bool = false,
+        updateDisplayed: Bool = true
+    ) async {
+        guard summaryGenerationReadiness.canGenerate else {
+            if updateDisplayed {
+                if summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || displayedRequestID != request.requestID {
+                    summaryText = ""
+                }
+                statusText = summaryGenerationReadiness.statusText
+            }
+            return
+        }
+
+        if !forceRefresh, updateDisplayed, displayedRequestID == request.requestID,
+           !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return
+        }
+
+        if !forceRefresh, let persistedEntry, persistedEntry.requestID == request.requestID {
+            if updateDisplayed {
+                summaryText = persistedEntry.summaryText
+                statusText = persistedEntry.statusText
+                displayedRequestID = request.requestID
+            }
+            return
+        }
+
+        guard activeRequestKey != request.requestID else { return }
+
+        guard !request.prompt.isEmpty else {
+            summaryText = request.fallbackSummary
+            statusText = "Not enough strain and recovery data yet."
+            return
+        }
+
+        activeRequestKey = request.requestID
+        isLoading = true
+        defer {
+            isLoading = false
+            activeRequestKey = nil
+        }
+
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            let model = SystemLanguageModel(useCase: .general)
+
+            guard model.isAvailable else {
+                let resolvedSummary = request.fallbackSummary
+                let resolvedStatus = request.unavailableStatusText(for: model.availability)
+                if updateDisplayed {
+                    summaryText = resolvedSummary
+                    statusText = resolvedStatus
+                }
+                savePersistedSummary(
+                    StrainRecoverySummaryCacheEntry(
+                        requestID: request.requestID,
+                        summaryText: resolvedSummary,
+                        statusText: resolvedStatus,
+                        generatedAt: Date(),
+                        latestWorkoutTimestamp: request.latestWorkoutTimestamp,
+                        intentDisplayName: request.intent.displayName
+                    ),
+                    updateDisplayed: updateDisplayed
+                )
+                return
+            }
+
+            do {
+                let session = LanguageModelSession(
+                    model: model,
+                    instructions: """
+                    You are an AI Athletic Coach. Analyze the provided health data through the Equalizer Framework. Your goal is to identify how Strain and Recovery are balancing. Look for trends where metrics move in tandem or diverge. If vitals are within normal range, simply state they are Stable. Only call out specific vitals if they deviate from the athlete's norm. Speak directly to the athlete. Do not summarize, coach.
+                    Your tone is direct, motivating, and professional.
+                    Never refer to the athlete in the third person. Use You and Your.
+                    Focus on actionable coaching, not generic explanation.
+                    If strain and recovery rise together, recognize the athlete for matching recovery to load.
+                    If heart rate recovery falls while strain or training load are above optimal, flag a possible overreach pattern.
+                    Follow the selected report type strictly and do not drift into unrelated categories.
+                    Use supporting metrics only when they directly strengthen the chosen focus.
+                    Treat each report type like a distinct coaching mode with its own reasoning style and vocabulary.
+                    Respect explicit ignore lists as hard constraints unless a forbidden topic is truly required for causal explanation.
+                    Do not reuse the same generic paragraph structure across different report types.
+                    Strain is a training-load/stress score, where higher usually means more accumulated recent load. Recovery is a recovery-readiness score, where higher is better.
+                    Never describe strain near 20/100 as high. That is low strain in this app's logic.
+                    Never describe recovery near 80/100 as a problem by itself. That is strong recovery in this app's logic.
+                    A low strain score paired with a high recovery score is usually a positive fresh-state pattern unless the selected focus specifically suggests undertraining.
+                    Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
+                    """
+                )
+
+                let response = try await session.respond(
+                    to: request.prompt,
+                    options: GenerationOptions(
+                        sampling: request.refreshVersion == 0 ? .greedy : .random(top: 6, seed: UInt64(request.refreshVersion)),
+                        temperature: request.refreshVersion == 0 ? 0 : 0.45,
+                        maximumResponseTokens: 420
+                    )
+                )
+
+                let cleaned = response.content
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let resolvedSummary: String
+                let resolvedStatus: String
+                if cleaned.isEmpty {
+                    resolvedSummary = request.fallbackSummary
+                    resolvedStatus = "Model returned an empty response, so this summary is using local metric rules."
+                } else {
+                    resolvedSummary = cleaned
+                    resolvedStatus = "Generated once from on-device Apple Intelligence for this tailored coaching view."
+                }
+                if updateDisplayed {
+                    summaryText = resolvedSummary
+                    statusText = resolvedStatus
+                }
+                savePersistedSummary(
+                    StrainRecoverySummaryCacheEntry(
+                        requestID: request.requestID,
+                        summaryText: resolvedSummary,
+                        statusText: resolvedStatus,
+                        generatedAt: Date(),
+                        latestWorkoutTimestamp: request.latestWorkoutTimestamp,
+                        intentDisplayName: request.intent.displayName
+                    ),
+                    updateDisplayed: updateDisplayed
+                )
+                return
+            } catch {
+                let resolvedSummary = request.fallbackSummary
+                let resolvedStatus = "Apple Intelligence could not finish this summary, so this version is using local metric rules."
+                if updateDisplayed {
+                    summaryText = resolvedSummary
+                    statusText = resolvedStatus
+                }
+                savePersistedSummary(
+                    StrainRecoverySummaryCacheEntry(
+                        requestID: request.requestID,
+                        summaryText: resolvedSummary,
+                        statusText: resolvedStatus,
+                        generatedAt: Date(),
+                        latestWorkoutTimestamp: request.latestWorkoutTimestamp,
+                        intentDisplayName: request.intent.displayName
+                    ),
+                    updateDisplayed: updateDisplayed
+                )
+                return
+            }
+        }
+        #endif
+
+        let resolvedSummary = request.fallbackSummary
+        let resolvedStatus = "Apple Intelligence is unavailable here, so this summary is using local metric rules."
+        if updateDisplayed {
+            summaryText = resolvedSummary
+            statusText = resolvedStatus
+        }
+        savePersistedSummary(
+            StrainRecoverySummaryCacheEntry(
+                requestID: request.requestID,
+                summaryText: resolvedSummary,
+                statusText: resolvedStatus,
+                generatedAt: Date(),
+                latestWorkoutTimestamp: request.latestWorkoutTimestamp,
+                intentDisplayName: request.intent.displayName
+            ),
+            updateDisplayed: updateDisplayed
+        )
+    }
+}
+
+private struct StrainRecoverySummaryRequest {
+    let prompt: String
+    let fallbackSummary: String
+    let requestID: String
+    let latestWorkoutTimestamp: TimeInterval?
+    let intent: SummaryIntent
+    let focusMode: AthleticCoachFocusMode
+    let refreshVersion: Int
+
+    @MainActor
+    static func build(
+        engine: HealthStateEngine,
+        timeFilter: StrainRecoveryView.TimeFilter,
+        sportFilter: String?,
+        anchorDate: Date,
+        intentText: String,
+        selectedSuggestion: SummarySuggestion?,
+        refreshVersion: Int
+    ) -> Self {
+        let calendar = Calendar.current
+        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
+        let selectedDay = calendar.startOfDay(for: anchorDate)
+        let effectiveSuggestion = selectedSuggestion ?? SummarySuggestion.defaultSuggestion
+        let intent = effectiveSuggestion.intent
+        let focusMode = effectiveSuggestion.focusMode
+        let scopedSport = effectiveSuggestion.scopedSport ?? sportFilter
+
+        let sleepTotals = engine.sleepStages.mapValues { stages in
+            ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
+        }
+
+        let sleepData = filteredDailyValues(sleepTotals, timeFilter: timeFilter, anchorDate: anchorDate)
+        let midpointSeries = filteredWindowSeries(
+            values: engine.sleepMidpointHours,
+            in: window
+        )
+        let sleepHRData = filteredWindowSeries(values: engine.dailySleepHeartRate, in: window)
+        let rhrData = filteredDailyValues(engine.dailyRestingHeartRate, timeFilter: timeFilter, anchorDate: anchorDate)
+        let hrvValues = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
+        let hrvData = filteredDailyValues(hrvValues, timeFilter: timeFilter, anchorDate: anchorDate)
+        let respiratoryData = filteredDailyValues(engine.respiratoryRate, timeFilter: timeFilter, anchorDate: anchorDate)
+        let wristTempData = filteredDailyValues(engine.wristTemperature, timeFilter: timeFilter, anchorDate: anchorDate)
+        let spo2Data = filteredDailyValues(engine.spO2, timeFilter: timeFilter, anchorDate: anchorDate)
+        let effortData = filteredDailyValues(engine.effortRating, timeFilter: timeFilter, anchorDate: anchorDate)
+        let metData = filteredDailyValues(engine.dailyMETAggregates, timeFilter: timeFilter, anchorDate: anchorDate)
+        let vo2Data = filteredDailyValues(engine.dailyVO2Aggregates, timeFilter: timeFilter, anchorDate: anchorDate)
+        let hrrData = filteredDailyValues(engine.dailyHRRAggregates, timeFilter: timeFilter, anchorDate: anchorDate)
+
+        let historicalWindowStart = calendar.date(byAdding: .day, value: -27, to: window.start) ?? window.start
+        let workouts = engine.workoutAnalytics.filter { workout, _ in
+            let matchesDate = workout.startDate >= historicalWindowStart && workout.startDate < window.endExclusive
+            let matchesSport = scopedSport == nil || workout.workoutActivityType.name == scopedSport
+            return matchesDate && matchesSport
+        }
+
+        let displayWorkouts = workouts.filter { pair in
+            pair.workout.startDate >= window.start && pair.workout.startDate < window.endExclusive
+        }
+        let selectedDayWorkouts = displayWorkouts.filter { pair in
+            calendar.isDate(pair.workout.startDate, inSameDayAs: selectedDay)
+        }
+        let scenario = dayScenario(
+            timeFilter: timeFilter,
+            selectedDayWorkouts: selectedDayWorkouts
+        )
+        let latestWorkoutTimestamp = engine.workoutAnalytics
+            .map(\.workout.endDate.timeIntervalSince1970)
+            .max()
+
+        let loadSnapshots = dailyLoadSnapshots(
+            workouts: workouts,
+            displayWindow: window
+        )
+        let selectedSnapshot = loadSnapshots.last(where: { calendar.isDate($0.date, inSameDayAs: selectedDay) }) ?? loadSnapshots.last
+
+        let workoutHighlights = workoutHighlights(
+            displayWorkouts: displayWorkouts,
+            dayCount: timeFilter.dayCount
+        )
+
+        let consistencyScore = sleepConsistencyScore(midpointSeries: midpointSeries, fallback: engine.sleepConsistency ?? 0)
+        let midpointDeviationMinutes = sleepMidpointDeviationMinutes(midpointSeries: midpointSeries, fallback: engine.sleepConsistency ?? 0)
+        let averageSleepEfficiency = averageSleepEfficiency(engine: engine, midpointSeries: midpointSeries)
+        let sleepDebtHours = sleepDebt(
+            sleepData: sleepData
+        )
+        let activityRecoveryGap = activityRecoverySleepGap(
+            engine: engine,
+            midpointSeries: midpointSeries
+        )
+
+        let displayedStrain = min(100, (average(effortData.map(\.1)) ?? 0) * 10)
+        let totalLoad = effortData.map(\.1).reduce(0, +)
+
+        let vitalsSummary = vitalsNormSummary(
+            respiratoryData: respiratoryData,
+            wristTempData: wristTempData,
+            spo2Data: spo2Data
+        )
+        let focusedEvidence = focusedEvidenceBlock(
+            focusMode: focusMode,
+            scopedSport: scopedSport,
+            displayWorkouts: displayWorkouts,
+            workoutHighlights: workoutHighlights,
+            selectedSnapshot: selectedSnapshot,
+            sleepData: sleepData,
+            averageSleepEfficiency: averageSleepEfficiency,
+            hrvData: hrvData,
+            rhrData: rhrData,
+            sleepHRData: sleepHRData,
+            vitalsSummary: vitalsSummary
+        )
+
+        let sportIdentityLine: String
+        if let scopedSport, focusMode == .sportDeepDive {
+            sportIdentityLine = "- You are acting as the athlete's dedicated \(scopedSport.capitalized) coach. Evaluate only \(scopedSport) performance and adaptation."
+        } else {
+            sportIdentityLine = ""
+        }
+
+        let trainingSection: String
+        if focusMode == .sportDeepDive {
+            trainingSection = """
+            \(scopedSport.map { "- Selected sport: \($0.capitalized)" } ?? "- Selected sport: Unavailable")
+            - \(scopedSport?.capitalized ?? "Sport") session count in display window: \(displayWorkouts.count)
+            - \(scopedSport?.capitalized ?? "Sport") frequency normalized to weekly rate: \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions/week
+            - Total \(scopedSport ?? "sport") minutes: \(formatted(workoutHighlights.totalMinutes, digits: 0))
+            - Longest \(scopedSport ?? "sport") workout: \(workoutHighlights.longestWorkout)
+            - Highest \(scopedSport ?? "sport") session load workout: \(workoutHighlights.highestLoadWorkout)
+            - Highest \(scopedSport ?? "sport") average power workout: \(workoutHighlights.highestPowerWorkout)
+            - Highest \(scopedSport ?? "sport") peak HR workout: \(workoutHighlights.highestPeakHRWorkout)
+            - Total \(scopedSport ?? "sport") time in HR zone 4: \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) min
+            - Total \(scopedSport ?? "sport") time in HR zone 5: \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) min
+            - Single-\(scopedSport ?? "sport") workout max zone 4 time: \(workoutHighlights.maxZone4Workout)
+            - Single-\(scopedSport ?? "sport") workout max zone 5 time: \(workoutHighlights.maxZone5Workout)
+            - Acute \(scopedSport ?? "sport") load selected day: \(formatted(selectedSnapshot?.acuteLoad ?? 0, digits: 1)) pts/day
+            - Chronic \(scopedSport ?? "sport") load selected day: \(formatted(selectedSnapshot?.chronicLoad ?? 0, digits: 1)) pts/day
+            - \(scopedSport?.capitalized ?? "Sport") ACWR selected day: \(formatted(selectedSnapshot?.acwr ?? 0, digits: 2))
+            - \(scopedSport?.capitalized ?? "Sport") load status: \(workoutLoadStatus(for: selectedSnapshot).title)
+            - \(scopedSport?.capitalized ?? "Sport") load interpretation: \(workoutLoadStatus(for: selectedSnapshot).detail)
+            - Highest \(scopedSport ?? "sport") MET day: \(bestDayDescription(for: metData, unit: "MET-min", digits: 1))
+            - Highest \(scopedSport ?? "sport") VO2 day: \(bestDayDescription(for: vo2Data, unit: "ml/kg/min", digits: 1))
+            - Highest \(scopedSport ?? "sport") HRR day: \(bestDayDescription(for: hrrData, unit: "bpm", digits: 0))
+            """
+        } else {
+            trainingSection = """
+            - Workout count in display window: \(displayWorkouts.count)
+            - Workout frequency normalized to weekly rate: \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions/week
+            - Total training minutes: \(formatted(workoutHighlights.totalMinutes, digits: 0))
+            - Most frequent sport: \(workoutHighlights.mostFrequentSport ?? "Unavailable")
+            - Sport with the most total minutes: \(workoutHighlights.favoriteSport ?? "Unavailable")
+            - Longest workout: \(workoutHighlights.longestWorkout)
+            - Highest session load workout: \(workoutHighlights.highestLoadWorkout)
+            - Highest average power workout: \(workoutHighlights.highestPowerWorkout)
+            - Highest peak HR workout: \(workoutHighlights.highestPeakHRWorkout)
+            - Total time in HR zone 4: \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) min
+            - Total time in HR zone 5: \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) min
+            - Single-workout max zone 4 time: \(workoutHighlights.maxZone4Workout)
+            - Single-workout max zone 5 time: \(workoutHighlights.maxZone5Workout)
+            - Acute load selected day: \(formatted(selectedSnapshot?.acuteLoad ?? 0, digits: 1)) pts/day
+            - Chronic load selected day: \(formatted(selectedSnapshot?.chronicLoad ?? 0, digits: 1)) pts/day
+            - ACWR selected day: \(formatted(selectedSnapshot?.acwr ?? 0, digits: 2))
+            - Load status: \(workoutLoadStatus(for: selectedSnapshot).title)
+            - Load interpretation: \(workoutLoadStatus(for: selectedSnapshot).detail)
+            - Highest MET day: \(bestDayDescription(for: metData, unit: "MET-min", digits: 1))
+            - Highest VO2 day: \(bestDayDescription(for: vo2Data, unit: "ml/kg/min", digits: 1))
+            - Highest HRR day: \(bestDayDescription(for: hrrData, unit: "bpm", digits: 0))
+            """
+        }
+
+        let sleepSection = focusMode == .sportDeepDive ? "" : """
+        Sleep
+        - Latest sleep duration: \(formatted(sleepData.last?.1 ?? 0, digits: 1)) h
+        - Average sleep duration: \(formatted(average(sleepData.map(\.1)) ?? 0, digits: 1)) h
+        - Longest sleep night: \(bestDayDescription(for: sleepData, unit: "h", digits: 1))
+        - Sleep consistency score: \(formatted(consistencyScore, digits: 0))%
+        - Sleep midpoint deviation: \(formatted(midpointDeviationMinutes, digits: 0)) min
+        - Average sleep efficiency: \(formatted(averageSleepEfficiency, digits: 0))%
+        - Sleep debt versus prior baseline: \(formatted(sleepDebtHours, digits: 1)) h
+        - Recovery day minus training day sleep gap: \(signedFormatted(activityRecoveryGap, digits: 1)) h
+        """
+
+        let recoverySection = focusMode == .sportDeepDive ? "" : """
+        Recovery and vitals
+        - HRV: \(seriesSummary(hrvData, unit: "ms", digits: 0))
+        - Resting heart rate: \(seriesSummary(rhrData, unit: "bpm", digits: 0))
+        - Sleep heart rate: \(seriesSummary(sleepHRData, unit: "bpm", digits: 0))
+        - Respiratory rate: \(seriesSummary(respiratoryData, unit: "breaths/min", digits: 1))
+        - Wrist temperature: \(seriesSummary(wristTempData, unit: "C", digits: 2))
+        - SpO2: \(seriesSummary(spo2Data, unit: "%", digits: 1))
+        - Vital norms summary: \(vitalsSummary)
+        """
+
+        let prompt = """
+        Coach me directly as an athletic performance coach using the Equalizer Framework.
+
+        Window
+        - Filter: \(timeFilter.rawValue) view
+        - Anchor date: \(anchorDate.formatted(date: .abbreviated, time: .omitted))
+        - Sport filter: \(scopedSport ?? "All Sports")
+        - Report title: \(effectiveSuggestion.title)
+        - Intent focus: \(intent.promptFocus)
+        - Analysis scenario: \(scenario)
+        - Focus mode: \(focusMode.rawValue)
+        - Focus rules: \(focusMode.promptRules)
+        - Suggestion-specific directive: \(effectiveSuggestion.promptInstructions)
+        - Analytical framework: \(effectiveSuggestion.analyticalFramework)
+        - Ignore list: \(effectiveSuggestion.negativeConstraints)
+        - Language style: \(effectiveSuggestion.languageStyle)
+        - Refresh generation: \(refreshVersion)
+        - If refresh generation is greater than 0, produce a genuinely fresh angle for the same focus and avoid reusing the same opening or evidence ordering.
+        - Treat this selected report as its own mini-app. Stay in its lane and do not collapse back into a general summary.
+        - If a topic appears on the ignore list, do not mention it unless it is strictly necessary to explain the selected focus.
+        - Pick a reasoning frame that matches the selected report and keep the entire answer inside that frame.
+        \(sportIdentityLine)
+
+        Focused evidence
+        \(focusedEvidence)
+
+        Scores
+        - Displayed strain score: \(formatted(displayedStrain, digits: 0))/100
+        - Recovery score: \(formatted(engine.recoveryScore, digits: 0))/100
+        - Readiness score: \(formatted(engine.readinessScore, digits: 0))/100
+        - Window total effort load: \(formatted(totalLoad, digits: 1))
+
+        Training load and workouts
+        \(trainingSection)
+
+        \(sleepSection)
+
+        \(recoverySection)
+
+        Interpretation rules
+        - Strain is load/stress. Higher means more accumulated recent load.
+        - Recovery is readiness/recovery reserve. Higher is better.
+        - Approximate strain reading guide for this app: 0-30 low, 31-60 moderate, 61-80 high, 81-100 very high.
+        - Approximate recovery reading guide for this app: 0-30 suppressed, 31-60 mixed, 61-100 strong.
+        - Higher HRV is generally favorable for recovery.
+        - Lower resting heart rate and lower sleep heart rate are generally favorable for recovery.
+        - If strain and recovery both rise, recognize that synergy.
+        - If heart rate recovery drops while acute load or strain are above optimal, flag a possible overreach pattern.
+        - If sleep debt is elevated or sleep consistency is poor, connect that to readiness and recovery quality.
+        - Keep vitals as Stable or Baseline unless there is a meaningful outlier.
+        - A low strain score with a high recovery score is usually a fresh or well-recovered state, not a mismatch problem.
+        - Prioritize coaching based on this intent: \(intent.promptInstruction)
+        - Distinguish this report from other filters through both content selection and vocabulary.
+        - Avoid repeating the same stock explanation patterns across different filters.
+        """
+
+        let fallbackSummary = localFallbackSummary(
+            displayedStrain: displayedStrain,
+            recoveryScore: engine.recoveryScore,
+            readinessScore: engine.readinessScore,
+            workoutHighlights: workoutHighlights,
+            selectedSnapshot: selectedSnapshot,
+            scenario: scenario,
+            intent: intent,
+            sleepData: sleepData,
+            sleepDebtHours: sleepDebtHours,
+            consistencyScore: consistencyScore,
+            activityRecoveryGap: activityRecoveryGap,
+            hrvData: hrvData,
+            rhrData: rhrData,
+            sleepHRData: sleepHRData,
+            hrrData: hrrData,
+            respiratoryData: respiratoryData,
+            wristTempData: wristTempData,
+            spo2Data: spo2Data
+        )
+
+        let requestID = [
+            "strain-recovery-ai-v6",
+            timeFilter.rawValue,
+            scopedSport ?? "all",
+            String(selectedDay.timeIntervalSince1970),
+            effectiveSuggestion.id,
+            String(refreshVersion)
+        ].joined(separator: "|")
+
+        return Self(
+            prompt: prompt,
+            fallbackSummary: fallbackSummary,
+            requestID: requestID,
+            latestWorkoutTimestamp: latestWorkoutTimestamp,
+            intent: intent,
+            focusMode: focusMode,
+            refreshVersion: refreshVersion
+        )
+    }
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, *)
+    func unavailableStatusText(for availability: SystemLanguageModel.Availability) -> String {
+        switch availability {
+        case .available:
+            return "Generated from on-device Apple Intelligence."
+        case .unavailable(let reason):
+            switch reason {
+            case .appleIntelligenceNotEnabled:
+                return "Apple Intelligence is turned off on this device, so this summary is using local metric rules."
+            case .deviceNotEligible:
+                return "This device does not support Apple Intelligence, so this summary is using local metric rules."
+            case .modelNotReady:
+                return "Apple Intelligence is still getting ready on this device, so this summary is using local metric rules."
+            @unknown default:
+                return "Apple Intelligence is unavailable, so this summary is using local metric rules."
+            }
+        }
+    }
+    #endif
+}
+
+private struct StrainRecoverySummaryCacheEntry: Codable {
+    let requestID: String
+    let summaryText: String
+    let statusText: String
+    let generatedAt: Date
+    let latestWorkoutTimestamp: TimeInterval?
+    let intentDisplayName: String
+}
+
+private enum StrainRecoverySummaryPersistence {
+    static let storageKey = "strain_recovery_ai_summary_cache_v1"
+
+    static func load() -> [String: StrainRecoverySummaryCacheEntry] {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.synchronize()
+
+        if let cloudData = cloudStore.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([String: StrainRecoverySummaryCacheEntry].self, from: cloudData) {
+            return decoded
+        }
+
+        if let localData = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([String: StrainRecoverySummaryCacheEntry].self, from: localData) {
+            return decoded
+        }
+
+        return [:]
+    }
+
+    static func save(_ cache: [String: StrainRecoverySummaryCacheEntry]) {
+        guard let encoded = try? JSONEncoder().encode(cache) else { return }
+        UserDefaults.standard.set(encoded, forKey: storageKey)
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.set(encoded, forKey: storageKey)
+        cloudStore.synchronize()
+    }
+}
+
+private enum SummaryIntent: String, Codable {
+    case general
+    case trendPB
+    case sportSpecific
+    case intensityLoad
+    case recoveryVitals
+
+    static func detect(from text: String, sportFilter: String?) -> SummaryIntent {
+        let normalized = text.lowercased()
+
+        if normalized.contains("pb") || normalized.contains("personal best") || normalized.contains("trend") || normalized.contains("trajectory") || normalized.contains("progress") {
+            return .trendPB
+        }
+
+        if sportFilter != nil || normalized.contains("cycling") || normalized.contains("running") || normalized.contains("sport") || normalized.contains("discipline") {
+            return .sportSpecific
+        }
+
+        if normalized.contains("load") || normalized.contains("intensity") || normalized.contains("vo2") || normalized.contains("push") || normalized.contains("pull") {
+            return .intensityLoad
+        }
+
+        if normalized.contains("recovery") || normalized.contains("vitals") || normalized.contains("sleep") || normalized.contains("biometric") {
+            return .recoveryVitals
+        }
+
+        return .general
+    }
+
+    var displayName: String {
+        switch self {
+        case .general: return "Overall Coaching"
+        case .trendPB: return "Trend and PB Focus"
+        case .sportSpecific: return "Sport-Specific Focus"
+        case .intensityLoad: return "Intensity and Load Focus"
+        case .recoveryVitals: return "Recovery and Vitals Focus"
+        }
+    }
+
+    var storageKey: String {
+        rawValue
+    }
+
+    var promptFocus: String {
+        displayName
+    }
+
+    var promptInstruction: String {
+        switch self {
+        case .general:
+            return "Give the most balanced coaching read on strain, recovery, readiness, and training direction."
+        case .trendPB:
+            return "Prioritize long-term trajectory, standout improvements, and personal-best style efforts."
+        case .sportSpecific:
+            return "Coach through the lens of the selected discipline and the demands of that sport."
+        case .intensityLoad:
+            return "Prioritize VO2 max, load optimality, acute versus chronic balance, and whether to push or pull back."
+        case .recoveryVitals:
+            return "Prioritize sleep architecture, biometric recovery, and whether the athlete is absorbing training well."
+        }
+    }
+}
+
+private struct SummarySuggestion: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let queryText: String
+    let symbol: String
+    let intent: SummaryIntent
+    let focusMode: AthleticCoachFocusMode
+    let scopedSport: String?
+    let promptInstructions: String
+    let analyticalFramework: String
+    let negativeConstraints: String
+    let languageStyle: String
+
+    static let defaultSuggestion = SummarySuggestion(
+        id: "overall",
+        title: "Overall Coaching",
+        queryText: "overall coaching on strain and recovery balance",
+        symbol: "sparkles",
+        intent: .general,
+        focusMode: .general,
+        scopedSport: nil,
+        promptInstructions: "Synthesize the selected period into one high-level narrative. Avoid lists. Bridge the gap between effort and restoration.",
+        analyticalFramework: "Use a whole-system coaching lens. Find the main tension between load and restoration, then explain what that means next.",
+        negativeConstraints: "Do not break the report into category-by-category recitation and do not dump every metric that exists.",
+        languageStyle: "Sound like an executive performance briefing with one central thesis."
+    )
+
+    @MainActor
+    static func buildSuggestions(
+        engine: HealthStateEngine,
+        timeFilter: StrainRecoveryView.TimeFilter,
+        sportFilter: String?,
+        anchorDate: Date
+    ) -> [SummarySuggestion] {
+        let calendar = Calendar.current
+        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
+        let last30 = calendar.date(byAdding: .day, value: -29, to: window.end) ?? window.end
+        let last365 = calendar.date(byAdding: .day, value: -364, to: window.end) ?? window.end
+
+        let workouts30 = engine.workoutAnalytics.filter {
+            $0.workout.startDate >= last30 && $0.workout.startDate < window.endExclusive
+        }
+        let workouts365 = engine.workoutAnalytics.filter {
+            $0.workout.startDate >= last365 && $0.workout.startDate < window.endExclusive
+        }
+
+        let grouped30 = Dictionary(grouping: workouts30, by: { $0.workout.workoutActivityType.name })
+        let grouped365 = Dictionary(grouping: workouts365, by: { $0.workout.workoutActivityType.name })
+
+        var suggestions: [SummarySuggestion] = [
+            .init(id: "overall", title: "Overall Coaching", queryText: "overall balance", symbol: "sparkles", intent: .general, focusMode: .general, scopedSport: nil, promptInstructions: "Synthesize the period into one high-level narrative. Avoid lists. Bridge the gap between effort and restoration.", analyticalFramework: "Use a whole-system coaching lens and identify the single most important balance story.", negativeConstraints: "Do not break the answer into metric buckets and do not recite raw stats line by line.", languageStyle: "Use concise executive-coach language with one thesis and one implication."),
+            .init(id: "recovery", title: "Recovery Focus", queryText: "recovery absorption", symbol: "heart.circle", intent: .recoveryVitals, focusMode: .recoveryVitalsSleep, scopedSport: nil, promptInstructions: "Focus on how well your body is absorbing training. Ignore workout specifics unless they explain a recovery failure.", analyticalFramework: "Treat recovery as the body's ability to absorb stress and turn work into adaptation.", negativeConstraints: "Ignore workout-by-workout details, zone totals, and sport counts unless they clearly explain suppressed recovery.", languageStyle: "Sound like a readiness coach interpreting whether the system is absorbing load or not."),
+            .init(id: "recovery-vitals", title: "Sleep & Biometrics", queryText: "biometric stability", symbol: "bed.double", intent: .recoveryVitals, focusMode: .recoveryVitalsSleep, scopedSport: nil, promptInstructions: "Analyze sleep architecture and autonomic stability. Exclude all workout data. Focus on baseline deviations only.", analyticalFramework: "Use a recovery physiology lens centered on sleep timing, sleep quality, HRV, resting trends, and autonomic stability.", negativeConstraints: "Exclude workout counts, HR zones, sport frequency, power, and load descriptions unless there is absolutely no other useful evidence.", languageStyle: "Use calm biometric language such as stable, elevated, suppressed, irregular, and restoring."),
+            .init(id: "trend-balance", title: "Trend Focus", queryText: "long term patterns", symbol: "chart.line.uptrend.xyaxis", intent: .trendPB, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Speak only in gradients: accelerating, plateauing, declining, stabilizing. Do not mention today's specific numbers.", analyticalFramework: "Think like a trend analyst reading the slope of training and recovery over the selected scope.", negativeConstraints: "Do not anchor on one workout, one night of sleep, or isolated daily values.", languageStyle: "Use trajectory words and gradient language rather than static descriptions."),
+            .init(id: "equalizer", title: "Equalizer Balance", queryText: "strain vs recovery ledger", symbol: "slider.horizontal.3", intent: .trendPB, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Contrast Strain vs Recovery as a financial ledger. Identify where you are in debt, balanced, or in surplus.", analyticalFramework: "Use the Equalizer as a ledger: strain spends, recovery restores, readiness reflects net position.", negativeConstraints: "Do not drift into generic wellness commentary or list unrelated fitness stats.", languageStyle: "Use balance-sheet language like overspend, surplus, payback, buffer, and debt."),
+            .init(id: "intensity", title: "Intensity & Load", queryText: "training load dynamics", symbol: "flame", intent: .intensityLoad, focusMode: .general, scopedSport: nil, promptInstructions: "Focus on push-pull dynamics. Analyze Training Load versus fitness upside. Ignore sleep and vitals unless they limit your ceiling.", analyticalFramework: "Treat the period like a load-management problem: what is pushing adaptation and what is limiting productive intensity.", negativeConstraints: "Ignore passive recovery detail, sleep architecture, and generic wellness chatter unless they directly cap performance.", languageStyle: "Use direct training language about ceiling, dose, push, pull back, and productive load."),
+            .init(id: "zones", title: "Zone 4/5 Focus", queryText: "high intensity exposure", symbol: "waveform.path.ecg", intent: .intensityLoad, focusMode: .general, scopedSport: nil, promptInstructions: "Analyze time spent at the ceiling. Ignore low-intensity work. Explain the cost of the highest-intensity efforts.", analyticalFramework: "Use a high-intensity exposure lens centered on threshold and above-threshold work.", negativeConstraints: "Ignore low-zone volume, recovery vitals, and broad weekly counts unless they directly explain tolerance to high intensity.", languageStyle: "Use language about ceiling, sharp efforts, neurological cost, and recovery toll."),
+            .init(id: "overreach", title: "Overreach Watch", queryText: "risk audit", symbol: "exclamationmark.triangle", intent: .recoveryVitals, focusMode: .recoveryVitalsSleep, scopedSport: nil, promptInstructions: "Act as a risk auditor. Look for red flags in HRR and HRV. Ignore fitness gains and focus on systemic fatigue.", analyticalFramework: "Audit for warning signals that say stress is outrunning adaptation.", negativeConstraints: "Do not celebrate PRs or fitness upside in this mode unless the pattern is clearly safe.", languageStyle: "Sound like a performance risk audit using terms like red flag, suppressed, lagging, and accumulating."),
+            .init(id: "deload", title: "Deload Readiness", queryText: "recovery suppression", symbol: "arrow.down.circle", intent: .intensityLoad, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Build a case for or against a deload. If recovery is stagnant despite lower load, advocate for immediate rest.", analyticalFramework: "Use a decision memo framework: evidence for continuing versus evidence for backing off.", negativeConstraints: "Do not meander into broad summaries. End with a directional coaching call.", languageStyle: "Use decisive coaching language with a verdict and rationale."),
+            .init(id: "sleep", title: "Sleep Depth", queryText: "sleep debt and quality", symbol: "moon.zzz", intent: .recoveryVitals, focusMode: .recoveryVitalsSleep, scopedSport: nil, promptInstructions: "Spotlight sleep debt and consistency. Treat training only as the cause for the sleep effect.", analyticalFramework: "Use a sleep-first framework: debt, timing regularity, efficiency, and downstream readiness impact.", negativeConstraints: "Do not list sports, zone totals, or workout counts unless they explain why sleep shifted.", languageStyle: "Use restorative language about debt, rebound, irregularity, timing, and overnight repair."),
+            .init(id: "pb", title: "PB & Trajectory", queryText: "performance peaks", symbol: "trophy", intent: .trendPB, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Ignore daily fatigue. Highlight only personal-best style progress and all-time trajectory markers.", analyticalFramework: "Think like a performance storyteller highlighting breakthrough signals and long-arc progress.", negativeConstraints: "Do not spend time on routine fatigue commentary or generic wellness caveats.", languageStyle: "Use celebratory but precise performance language around breakthroughs, upward trajectory, and markers."),
+            .init(id: "consistency", title: "Sustainability", queryText: "training streaks", symbol: "calendar.badge.clock", intent: .trendPB, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Evaluate the rhythm of training. Is this pace sustainable for 90 days? Identify erratic versus steady behavior.", analyticalFramework: "Treat the block like a pacing pattern and evaluate whether it looks steady, chaotic, or brittle.", negativeConstraints: "Do not over-focus on one standout session or one biometric datapoint.", languageStyle: "Use rhythm language such as cadence, steadiness, drift, spikes, and sustainability."),
+            .init(id: "met", title: "MET Spike Focus", queryText: "effort density", symbol: "bolt.heart", intent: .intensityLoad, focusMode: .general, scopedSport: nil, promptInstructions: "Analyze effort density. Focus on high-MET shocks to the system and the recovery lag that follows.", analyticalFramework: "Use a density-and-shock framework centered on clustered effort spikes and their aftereffects.", negativeConstraints: "Ignore routine background training and low-signal recovery commentary.", languageStyle: "Use energetic language around spikes, shocks, density, and rebound."),
+            .init(id: "hrr-hrv", title: "HRR + HRV Link", queryText: "autonomic relationship", symbol: "heart.text.square", intent: .recoveryVitals, focusMode: .recoveryVitalsSleep, scopedSport: nil, promptInstructions: "Strictly analyze the interplay between Heart Rate Recovery and HRV. Ignore sleep stages and caloric burn.", analyticalFramework: "Use an autonomic-control lens centered on recovery speed and parasympathetic readiness.", negativeConstraints: "Ignore sleep architecture, calorie burn, session counts, and sports unless they directly explain HRR-HRV divergence.", languageStyle: "Use autonomic language such as rebound, suppression, restoration, and nervous-system tone."),
+            .init(id: "undertraining", title: "Base Building", queryText: "load sufficiency", symbol: "figure.walk", intent: .intensityLoad, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Assess whether you are under-dosed. Is the load too low to trigger adaptation? Be direct.", analyticalFramework: "Use an adaptation-dose framework and ask whether the current block is enough stimulus to move fitness.", negativeConstraints: "Do not frame low strain plus high recovery as a problem unless the sustained pattern truly suggests insufficient stimulus.", languageStyle: "Use direct developmental language around dosage, headroom, and untapped capacity."),
+            .init(id: "strain-days", title: "Strain Review", queryText: "high strain patterns", symbol: "gauge.with.dots.needle.bottom.50percent", intent: .trendPB, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Isolate days where Strain exceeded Recovery. Identify the specific behavior that caused the over-spend.", analyticalFramework: "Use a forensic review of strain-led days and what behavior repeatedly tipped the balance.", negativeConstraints: "Do not spend equal time on recovery-led days unless they clearly resolved the strain problem.", languageStyle: "Use causal language around triggers, overspend, stacking, and consequences."),
+            .init(id: "recovery-days", title: "Rest Review", queryText: "rest day impact", symbol: "cross.case", intent: .trendPB, focusMode: .trendBalance, scopedSport: nil, promptInstructions: "Analyze the return on recovery-led days. Did they actually move the needle, or were they wasted?", analyticalFramework: "Use an ROI framework for rest and lighter days: did they restore readiness, stabilize vitals, or fail to help.", negativeConstraints: "Do not dwell on hardest sessions except as the setup for whether recovery worked.", languageStyle: "Use efficiency language like payoff, carryover, reset, and return on recovery."),
+            .init(id: "ask-latest", title: "Latest Workout", queryText: "recent session analysis", symbol: "figure.run", intent: .sportSpecific, focusMode: .latestWorkout, scopedSport: sportFilter, promptInstructions: "Analyze only the most recent session. Compare it to your 30-day baseline for that specific sport.", analyticalFramework: "Use a session-review framework: what was done, how hard it was, and what changed versus norm.", negativeConstraints: "Ignore general weekly trends, unrelated sleep commentary, and broader wellness data unless they explain this exact session.", languageStyle: "Sound like a post-session debrief with concrete evidence."),
+            .init(id: "ask-hardest", title: "Toughest Workout", queryText: "peak effort analysis", symbol: "figure.strengthtraining.traditional", intent: .sportSpecific, focusMode: .toughestWorkout, scopedSport: sportFilter, promptInstructions: "Deconstruct the highest-intensity effort. Analyze the mechanical and cardiovascular cost versus your norm.", analyticalFramework: "Use a peak-effort autopsy: identify why this session was the hardest and what cost markers prove it.", negativeConstraints: "Do not wander into generic sleep or week summaries unless they directly explain the response to this workout.", languageStyle: "Use high-intensity deconstruction language around cost, toll, demand, and exceptional effort.")
+        ]
+
+        let candidateSports = (sportFilter.map { [$0] } ?? Array(grouped30.keys).sorted())
+        for sport in candidateSports.prefix(4) {
+            let workoutsIn30 = grouped30[sport]?.count ?? 0
+            let workoutsIn365 = grouped365[sport]?.count ?? 0
+            guard workoutsIn30 > 0 || workoutsIn365 > 0 else { continue }
+
+            let sportID = sport.lowercased().replacingOccurrences(of: " ", with: "-")
+            suggestions.append(
+                .init(
+                    id: "sport-\(sportID)",
+                    title: "\(sport.capitalized) Focus",
+                    queryText: "\(sport) focus on training direction, readiness, and performance trends",
+                    symbol: "scope",
+                    intent: .sportSpecific,
+                    focusMode: .sportDeepDive,
+                    scopedSport: sport,
+                    promptInstructions: "Isolate \(sport) and compare performance metrics against that discipline's own baseline.",
+                    analyticalFramework: "Use a discipline-only lens and judge \(sport) on its own terms, not against the athlete's other activities.",
+                    negativeConstraints: "Ignore other sports and irrelevant modalities unless they materially affect \(sport) performance.",
+                    languageStyle: "Sound like a specialized \(sport) coach."
+                )
+            )
+            suggestions.append(
+                .init(
+                    id: "sport-load-\(sportID)",
+                    title: "\(sport.capitalized) Load",
+                    queryText: "\(sport) load focus on zones, load, and whether you are pushing or pulling back",
+                    symbol: "chart.bar",
+                    intent: .intensityLoad,
+                    focusMode: .sportDeepDive,
+                    scopedSport: sport,
+                    promptInstructions: "Focus on \(sport) load, zones, and adaptation signals only.",
+                    analyticalFramework: "Use a sport-specific load-management lens for \(sport), centered on dose, tolerance, and fitness return.",
+                    negativeConstraints: "Ignore general recovery commentary and other sports unless they directly cap \(sport) output.",
+                    languageStyle: "Sound like a performance planner for \(sport)."
+                )
+            )
+
+            if workoutsIn30 >= 14 || workoutsIn365 >= 30 {
+                suggestions.append(
+                    .init(
+                        id: "sport-deep-\(sportID)",
+                        title: "\(sport.capitalized) Deep Dive",
+                        queryText: "\(sport) deep dive on training load, heart rate zones, VO2 max, personal records, cadence or power when available, and baseline progress",
+                        symbol: "brain.head.profile",
+                        intent: .sportSpecific,
+                        focusMode: .sportDeepDive,
+                        scopedSport: sport,
+                        promptInstructions: "Deliver a deep \(sport) report using only sport-relevant metrics and exclude zeros or irrelevant modalities.",
+                        analyticalFramework: "Use a full discipline synthesis for \(sport): load, zones, power or pace, cadence, HR behavior, and adaptation signals.",
+                        negativeConstraints: "Ignore unrelated modalities, zero-valued fields, and generic wellness talk that does not change the \(sport) read.",
+                        languageStyle: "Sound like an elite \(sport) coach writing a detailed performance report."
+                    )
+                )
+                suggestions.append(
+                    .init(
+                        id: "sport-pr-\(sportID)",
+                        title: "\(sport.capitalized) PR Story",
+                        queryText: "\(sport) personal records and baseline changes including power, cadence, and lactate threshold if supported",
+                        symbol: "medal",
+                        intent: .trendPB,
+                        focusMode: .sportDeepDive,
+                        scopedSport: sport,
+                        promptInstructions: "Focus on how \(sport) performance is improving, what metrics moved, and why those changes matter.",
+                        analyticalFramework: "Use a breakthrough-story framework for \(sport) and connect changed metrics to changed performance.",
+                        negativeConstraints: "Do not waste space on routine sessions or non-\(sport) details.",
+                        languageStyle: "Use celebratory but evidence-backed \(sport) progression language."
+                    )
+                )
+            }
+        }
+
+        var seenIDs = Set<String>()
+        return suggestions.filter { suggestion in
+            seenIDs.insert(suggestion.id).inserted
+        }
+    }
+}
+
+private func dayScenario(
+    timeFilter: StrainRecoveryView.TimeFilter,
+    selectedDayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)]
+) -> String {
+    guard timeFilter == .day else {
+        return "Multi-day coaching window. Focus on trend interpretation and balance across the selected period."
+    }
+
+    if selectedDayWorkouts.isEmpty {
+        return "Pre-workout day. Focus on readiness and whether the last 30 days suggest pushing or deloading."
+    }
+
+    return "Post-workout day. Focus on the specific session, how hard it was relative to recent baseline, and what recovery should do next."
+}
+
+private func vitalsNormSummary(
+    respiratoryData: [(Date, Double)],
+    wristTempData: [(Date, Double)],
+    spo2Data: [(Date, Double)]
+) -> String {
+    let respiratory = vitalLabel(for: respiratoryData, higherIsWorse: true)
+    let wristTemp = vitalLabel(for: wristTempData, higherIsWorse: true)
+    let spo2 = vitalLabel(for: spo2Data, higherIsWorse: false)
+    return "Respiratory rate is \(respiratory), wrist temperature is \(wristTemp), and SpO2 is \(spo2)."
+}
+
+private func focusedEvidenceBlock(
+    focusMode: AthleticCoachFocusMode,
+    scopedSport: String?,
+    displayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    workoutHighlights: WorkoutHighlights,
+    selectedSnapshot: WorkoutSummarySnapshot?,
+    sleepData: [(Date, Double)],
+    averageSleepEfficiency: Double,
+    hrvData: [(Date, Double)],
+    rhrData: [(Date, Double)],
+    sleepHRData: [(Date, Double)],
+    vitalsSummary: String
+) -> String {
+    switch focusMode {
+    case .toughestWorkout:
+        return toughestWorkoutEvidence(from: displayWorkouts, selectedSnapshot: selectedSnapshot)
+    case .latestWorkout:
+        return latestWorkoutEvidence(from: displayWorkouts, selectedSnapshot: selectedSnapshot)
+    case .recoveryVitalsSleep:
+        let sleepAverage = average(sleepData.map(\.1)) ?? 0
+        return """
+        - Keep the spotlight on sleep and recovery biomarkers.
+        - Sleep trend: \(sleepAverage > 0 ? "average sleep is present and should be described qualitatively" : "sleep data is limited")
+        - Sleep efficiency: \(averageSleepEfficiency >= 90 ? "consistently above 90%" : averageSleepEfficiency > 0 ? "irregular or below ideal at times" : "limited")
+        - HRV trend: \(trendSummary(for: hrvData, digits: 0))
+        - Resting HR trend: \(trendSummary(for: rhrData, digits: 0))
+        - Sleep HR trend: \(trendSummary(for: sleepHRData, digits: 0))
+        - Vitals: \(vitalsSummary)
+        - Mention training only as supporting context, not as a list.
+        """
+    case .trendBalance:
+        return """
+        - Focus on repeated patterns across the selected scope.
+        - Explain whether strain is repeatedly outrunning recovery, recovery is leading, or both are moving in balance.
+        - Use the selected scope to tell the trend story, not isolated metrics.
+        - Load status: \(workoutLoadStatus(for: selectedSnapshot).detail)
+        """
+    case .sportDeepDive:
+        return """
+        - Treat this as a pure \(scopedSport?.capitalized ?? "sport") report, written by a dedicated coach for that discipline.
+        - Use only \(scopedSport ?? "sport") workouts as evidence.
+        - Prioritize sport-native evidence such as power, cadence, HR zones, VO2, HRR, and session-to-session progression when available.
+        - Do not mention other sports, all-sport frequency, or generic wellness framing.
+        - Strongest \(scopedSport ?? "sport") markers: longest session \(workoutHighlights.longestWorkout), highest load \(workoutHighlights.highestLoadWorkout), highest power \(workoutHighlights.highestPowerWorkout), highest peak HR \(workoutHighlights.highestPeakHRWorkout).
+        - \(scopedSport?.capitalized ?? "Sport") load context: \(workoutLoadStatus(for: selectedSnapshot).detail)
+        """
+    case .general:
+        return """
+        - Use broad context, but still narrow the report to the most meaningful themes.
+        - Dominant sport: \(workoutHighlights.favoriteSport ?? workoutHighlights.mostFrequentSport ?? "Unavailable")
+        - Load status: \(workoutLoadStatus(for: selectedSnapshot).detail)
+        """
+    }
+}
+
+private func toughestWorkoutEvidence(
+    from displayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    selectedSnapshot: WorkoutSummarySnapshot?
+) -> String {
+    guard let toughest = displayWorkouts.max(by: {
+        workoutSessionLoad(for: $0.workout, analytics: $0.analytics) < workoutSessionLoad(for: $1.workout, analytics: $1.analytics)
+    }) else {
+        return "- No workout is available, so do not fake a toughest-workout report."
+    }
+
+    let dateText = toughest.workout.startDate.formatted(date: .abbreviated, time: .omitted)
+    let sport = toughest.workout.workoutActivityType.name.capitalized
+    let load = workoutSessionLoad(for: toughest.workout, analytics: toughest.analytics)
+    let duration = toughest.workout.duration / 60.0
+    let zone4 = (toughest.analytics.hrZoneBreakdown.first(where: { $0.zone.zoneNumber == 4 })?.timeInZone ?? 0) / 60.0
+    let zone5 = (toughest.analytics.hrZoneBreakdown.first(where: { $0.zone.zoneNumber == 5 })?.timeInZone ?? 0) / 60.0
+    let power = toughest.analytics.powerSeries.map(\.1).average
+    let cadence = toughest.analytics.cadenceSeries.map(\.1).average
+
+    return """
+    - Toughest workout date: \(dateText)
+    - Toughest workout sport: \(sport)
+    - Session load: \(formatted(load, digits: 0)) pts
+    - Duration: \(formatted(duration, digits: 0)) min
+    - Zone 4 time: \(formatted(zone4, digits: 0)) min
+    - Zone 5 time: \(formatted(zone5, digits: 0)) min
+    - Average power: \(power.map { formatted($0, digits: 0) + " W" } ?? "Unavailable")
+    - Average cadence: \(cadence.map { formatted($0, digits: 0) + " rpm" } ?? "Unavailable")
+    - Peak HR: \(toughest.analytics.peakHR.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
+    - HRR: \(toughest.analytics.hrr2.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
+    - Only mention broader strain if you connect it directly back to this workout's impact.
+    - Current load context: \(workoutLoadStatus(for: selectedSnapshot).detail)
+    """
+}
+
+private func latestWorkoutEvidence(
+    from displayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    selectedSnapshot: WorkoutSummarySnapshot?
+) -> String {
+    guard let latest = displayWorkouts.max(by: { $0.workout.startDate < $1.workout.startDate }) else {
+        return "- No latest workout is available."
+    }
+
+    let dateText = latest.workout.startDate.formatted(date: .abbreviated, time: .omitted)
+    let sport = latest.workout.workoutActivityType.name.capitalized
+    let load = workoutSessionLoad(for: latest.workout, analytics: latest.analytics)
+    return """
+    - Latest workout date: \(dateText)
+    - Latest workout sport: \(sport)
+    - Session load: \(formatted(load, digits: 0)) pts
+    - Peak HR: \(latest.analytics.peakHR.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
+    - HRR: \(latest.analytics.hrr2.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
+    - Explain what changed versus the recent baseline.
+    - Current load context: \(workoutLoadStatus(for: selectedSnapshot).detail)
+    """
+}
+
+private func vitalLabel(for series: [(Date, Double)], higherIsWorse: Bool) -> String {
+    guard let latest = series.last?.1,
+          let avg = average(series.map(\.1)),
+          avg != 0 else {
+        return "Baseline"
+    }
+
+    let deltaRatio = (latest - avg) / abs(avg)
+    if abs(deltaRatio) < 0.03 {
+        return "Stable"
+    }
+
+    if higherIsWorse {
+        return deltaRatio > 0 ? "High" : "Baseline"
+    }
+
+    return deltaRatio < -0.02 ? "Low" : "Stable"
+}
+
+private struct WorkoutSummarySnapshot {
+    let date: Date
+    let sessionLoad: Double
+    let acuteLoad: Double
+    let chronicLoad: Double
+    let acwr: Double
+    let workoutCount: Int
+    let activeDaysLast28: Int
+    let daysSinceLastWorkout: Int?
+}
+
+private struct WorkoutHighlights {
+    let totalMinutes: Double
+    let sessionsPerWeek: Double
+    let mostFrequentSport: String?
+    let favoriteSport: String?
+    let longestWorkout: String
+    let highestLoadWorkout: String
+    let highestPowerWorkout: String
+    let highestPeakHRWorkout: String
+    let totalZone4Minutes: Double
+    let totalZone5Minutes: Double
+    let maxZone4Workout: String
+    let maxZone5Workout: String
+}
+
+private func filteredWindowSeries(
+    values: [Date: Double],
+    in window: (start: Date, end: Date, endExclusive: Date)
+) -> [(Date, Double)] {
+    values
+        .filter { date, value in
+            date >= window.start && date <= window.end && value > 0
+        }
+        .sorted { $0.0 < $1.0 }
+}
+
+private func workoutEffortScore(from workout: HKWorkout) -> Double? {
+    guard let metadata = workout.metadata else { return nil }
+
+    let preferredKeys = [
+        "HKMetadataKeyWorkloadEffortScore",
+        "HKMetadataKeyWorkoutEffortScore"
+    ]
+
+    for key in preferredKeys {
+        if let value = metadata[key] as? NSNumber {
+            return value.doubleValue
+        }
+        if let value = metadata[key] as? Double {
+            return value
+        }
+    }
+
+    for (key, value) in metadata where key.localizedCaseInsensitiveContains("effort") {
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let doubleValue = value as? Double {
+            return doubleValue
+        }
+    }
+
+    return nil
+}
+
+private func workoutSessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
+    let zoneWeightedLoad = analytics.hrZoneBreakdown.reduce(0.0) { partial, entry in
+        let zoneWeight = Double(min(max(entry.zone.zoneNumber, 1), 5))
+        let zoneMinutes = entry.timeInZone / 60.0
+        return partial + (zoneMinutes * zoneWeight)
+    }
+
+    if zoneWeightedLoad > 0 {
+        return zoneWeightedLoad.rounded()
+    }
+
+    let durationMinutes = workout.duration / 60.0
+    if let effortScore = workoutEffortScore(from: workout) {
+        return (durationMinutes * max(1, effortScore)).rounded()
+    }
+
+    return 0
+}
+
+private func dailyLoadSnapshots(
+    workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    displayWindow: (start: Date, end: Date, endExclusive: Date)
+) -> [WorkoutSummarySnapshot] {
+    let calendar = Calendar.current
+    var sessionLoadByDay: [Date: Double] = [:]
+    var workoutCountByDay: [Date: Int] = [:]
+
+    for (workout, analytics) in workouts {
+        let day = calendar.startOfDay(for: workout.startDate)
+        sessionLoadByDay[day, default: 0] += workoutSessionLoad(for: workout, analytics: analytics)
+        workoutCountByDay[day, default: 0] += 1
+    }
+
+    return dateSequence(from: displayWindow.start, to: displayWindow.end).map { day in
+        let acuteTotal = (0..<7).reduce(0.0) { partial, offset in
+            let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+            return partial + (sessionLoadByDay[sourceDay] ?? 0)
+        }
+
+        let chronicTotal = (0..<28).reduce(0.0) { partial, offset in
+            let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+            return partial + (sessionLoadByDay[sourceDay] ?? 0)
+        }
+
+        let chronicLoad = chronicTotal / 28.0
+        let acuteLoad = acuteTotal / 7.0
+        let activeDaysLast28 = (0..<28).reduce(0) { partial, offset in
+            let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+            return partial + ((sessionLoadByDay[sourceDay] ?? 0) > 0 ? 1 : 0)
+        }
+        let daysSinceLastWorkout = (0..<28).first(where: { offset in
+            let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+            return (sessionLoadByDay[sourceDay] ?? 0) > 0
+        })
+
+        return WorkoutSummarySnapshot(
+            date: day,
+            sessionLoad: sessionLoadByDay[day] ?? 0,
+            acuteLoad: acuteLoad,
+            chronicLoad: chronicLoad,
+            acwr: chronicLoad > 0 ? acuteLoad / chronicLoad : 0,
+            workoutCount: workoutCountByDay[day] ?? 0,
+            activeDaysLast28: activeDaysLast28,
+            daysSinceLastWorkout: daysSinceLastWorkout
+        )
+    }
+}
+
+private func workoutLoadStatus(for snapshot: WorkoutSummarySnapshot?) -> WorkoutLoadStatus {
+    guard let snapshot else {
+        return WorkoutLoadStatus(
+            title: "No Baseline",
+            color: .gray,
+            detail: "No recent training load found. The model needs fresh workouts to establish readiness.",
+            hidesRatio: true
+        )
+    }
+
+    if snapshot.activeDaysLast28 < 14 {
+        return WorkoutLoadStatus(
+            title: "Baseline Outdated",
+            color: .orange,
+            detail: "Baseline out of date. 14 active days in the last 28 are recommended to recalculate your fitness floor.",
+            hidesRatio: true
+        )
+    }
+
+    if let daysSinceLastWorkout = snapshot.daysSinceLastWorkout {
+        if daysSinceLastWorkout > 21 {
+            return WorkoutLoadStatus(
+                title: "Reset",
+                color: .gray,
+                detail: "More than 21 inactive days. Treat this as a new build and re-establish 28 days of baseline.",
+                hidesRatio: true
+            )
+        }
+        if daysSinceLastWorkout >= 8 {
+            return WorkoutLoadStatus(
+                title: "Re-establishing",
+                color: .orange,
+                detail: "Restarting training. ACWR may be sensitive for the next 7 days as you rebuild your acute baseline.",
+                hidesRatio: true
+            )
+        }
+    } else {
+        return WorkoutLoadStatus(
+            title: "No Baseline",
+            color: .gray,
+            detail: "No recent training load found. The model needs fresh workouts to establish readiness.",
+            hidesRatio: true
+        )
+    }
+
+    switch snapshot.acwr {
+    case ..<0.8:
+        return WorkoutLoadStatus(
+            title: "Detraining",
+            color: .blue,
+            detail: "Fitness baseline is dropping. Intensity may be too low to maintain gains.",
+            hidesRatio: false
+        )
+    case 0.8...1.2:
+        return WorkoutLoadStatus(
+            title: "Optimal",
+            color: .green,
+            detail: "Acute load is tracking inside the sweet spot relative to your chronic load.",
+            hidesRatio: false
+        )
+    case 1.3...1.5:
+        return WorkoutLoadStatus(
+            title: "Aggressive",
+            color: .yellow,
+            detail: "Pushing limits. Monitor fatigue, recovery quality, and the next session closely.",
+            hidesRatio: false
+        )
+    default:
+        return WorkoutLoadStatus(
+            title: "Spike",
+            color: .red,
+            detail: "High workload spike. Risk of injury is increased. Consider a lower-intensity session.",
+            hidesRatio: false
+        )
+    }
+}
+
+private func workoutHighlights(
+    displayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    dayCount: Int
+) -> WorkoutHighlights {
+    let totalMinutes = displayWorkouts.reduce(0.0) { $0 + ($1.workout.duration / 60.0) }
+    let sessionsPerWeek = dayCount > 0 ? (Double(displayWorkouts.count) / Double(dayCount)) * 7.0 : 0
+
+    let sportCount = Dictionary(grouping: displayWorkouts, by: { $0.workout.workoutActivityType.name })
+        .mapValues(\.count)
+    let sportMinutes = Dictionary(grouping: displayWorkouts, by: { $0.workout.workoutActivityType.name })
+        .mapValues { items in
+            items.reduce(0.0) { $0 + ($1.workout.duration / 60.0) }
+        }
+
+    let longestWorkout = displayWorkouts.max { lhs, rhs in
+        lhs.workout.duration < rhs.workout.duration
+    }.map { pair in
+        "\(pair.workout.workoutActivityType.name.capitalized) for \(formatted(pair.workout.duration / 60.0, digits: 0)) min on \(pair.workout.startDate.formatted(date: .abbreviated, time: .omitted))"
+    } ?? "Unavailable"
+
+    let highestLoadWorkout = displayWorkouts.max { lhs, rhs in
+        workoutSessionLoad(for: lhs.workout, analytics: lhs.analytics) < workoutSessionLoad(for: rhs.workout, analytics: rhs.analytics)
+    }.map { pair in
+        "\(pair.workout.workoutActivityType.name.capitalized) at \(formatted(workoutSessionLoad(for: pair.workout, analytics: pair.analytics), digits: 0)) load points on \(pair.workout.startDate.formatted(date: .abbreviated, time: .omitted))"
+    } ?? "Unavailable"
+
+    let highestPowerWorkout = displayWorkouts.compactMap { pair -> (String, Double)? in
+        guard let avgPower = pair.analytics.powerSeries.map(\.1).average else { return nil }
+        let description = "\(pair.workout.workoutActivityType.name.capitalized) at \(formatted(avgPower, digits: 0)) W average on \(pair.workout.startDate.formatted(date: .abbreviated, time: .omitted))"
+        return (description, avgPower)
+    }.max { $0.1 < $1.1 }?.0 ?? "Unavailable"
+
+    let highestPeakHRWorkout = displayWorkouts.compactMap { pair -> (String, Double)? in
+        guard let peakHR = pair.analytics.peakHR else { return nil }
+        let description = "\(pair.workout.workoutActivityType.name.capitalized) peaked at \(formatted(peakHR, digits: 0)) bpm on \(pair.workout.startDate.formatted(date: .abbreviated, time: .omitted))"
+        return (description, peakHR)
+    }.max { $0.1 < $1.1 }?.0 ?? "Unavailable"
+
+    let zone4Entries = displayWorkouts.compactMap { pair -> (String, Double)? in
+        let minutes = pair.analytics.hrZoneBreakdown.first(where: { $0.zone.zoneNumber == 4 })?.timeInZone ?? 0
+        guard minutes > 0 else { return nil }
+        let workoutMinutes = minutes / 60.0
+        let description = "\(pair.workout.workoutActivityType.name.capitalized) with \(formatted(workoutMinutes, digits: 0)) min in Zone 4 on \(pair.workout.startDate.formatted(date: .abbreviated, time: .omitted))"
+        return (description, workoutMinutes)
+    }
+
+    let zone5Entries = displayWorkouts.compactMap { pair -> (String, Double)? in
+        let minutes = pair.analytics.hrZoneBreakdown.first(where: { $0.zone.zoneNumber == 5 })?.timeInZone ?? 0
+        guard minutes > 0 else { return nil }
+        let workoutMinutes = minutes / 60.0
+        let description = "\(pair.workout.workoutActivityType.name.capitalized) with \(formatted(workoutMinutes, digits: 0)) min in Zone 5 on \(pair.workout.startDate.formatted(date: .abbreviated, time: .omitted))"
+        return (description, workoutMinutes)
+    }
+
+    let totalZone4Minutes = zone4Entries.reduce(0.0) { $0 + $1.1 }
+    let totalZone5Minutes = zone5Entries.reduce(0.0) { $0 + $1.1 }
+
+    return WorkoutHighlights(
+        totalMinutes: totalMinutes,
+        sessionsPerWeek: sessionsPerWeek,
+        mostFrequentSport: sportCount.max(by: { $0.value < $1.value })?.key,
+        favoriteSport: sportMinutes.max(by: { $0.value < $1.value })?.key,
+        longestWorkout: longestWorkout,
+        highestLoadWorkout: highestLoadWorkout,
+        highestPowerWorkout: highestPowerWorkout,
+        highestPeakHRWorkout: highestPeakHRWorkout,
+        totalZone4Minutes: totalZone4Minutes,
+        totalZone5Minutes: totalZone5Minutes,
+        maxZone4Workout: zone4Entries.max(by: { $0.1 < $1.1 })?.0 ?? "Unavailable",
+        maxZone5Workout: zone5Entries.max(by: { $0.1 < $1.1 })?.0 ?? "Unavailable"
+    )
+}
+
+private func sleepConsistencyScore(midpointSeries: [(Date, Double)], fallback: Double) -> Double {
+    let midpointDeviationHours = (standardDeviation(midpointSeries.map(\.1)) ?? fallback)
+    let best = 0.25
+    let worst = 3.0
+    let clamped = min(max(midpointDeviationHours, best), worst)
+    return ((worst - clamped) / (worst - best)) * 100
+}
+
+private func sleepMidpointDeviationMinutes(midpointSeries: [(Date, Double)], fallback: Double) -> Double {
+    (standardDeviation(midpointSeries.map(\.1)) ?? fallback) * 60
+}
+
+@MainActor
+private func averageSleepEfficiency(engine: HealthStateEngine, midpointSeries: [(Date, Double)]) -> Double {
+    let values = midpointSeries.compactMap { day, _ -> Double? in
+        guard let stages = engine.sleepStages[day] else { return nil }
+        let asleep = ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
+        let awake = stages["awake"] ?? 0
+        let denominator = asleep + awake
+        guard denominator > 0 else { return nil }
+        return asleep / denominator
+    }
+    return (average(values) ?? 0) * 100
+}
+
+private func sleepDebt(sleepData: [(Date, Double)]) -> Double {
+    let series = sleepData.filter { $0.1 > 0 }.sorted { $0.0 < $1.0 }
+    guard !series.isEmpty else { return 0 }
+
+    let last7 = Array(series.suffix(7)).map(\.1)
+    guard !last7.isEmpty else { return 0 }
+
+    let previousSeries = Array(series.dropLast(last7.count))
+    let baseline28 = Array(previousSeries.suffix(28)).map(\.1)
+    guard !baseline28.isEmpty else { return 0 }
+
+    let recentAverage = average(last7) ?? 0
+    let baselineAverage = average(baseline28) ?? 0
+    return max(0, (baselineAverage - recentAverage) * 7.0)
+}
+
+@MainActor
+private func activityRecoverySleepGap(
+    engine: HealthStateEngine,
+    midpointSeries: [(Date, Double)]
+) -> Double {
+    let calendar = Calendar.current
+    let sleepHoursByDay = midpointSeries.compactMap { day, _ -> (Date, Double)? in
+        guard let stages = engine.sleepStages[day] else { return nil }
+        let sleepHours = ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
+        guard sleepHours > 0 else { return nil }
+        return (day, sleepHours)
+    }
+
+    let activityDaySleep = sleepHoursByDay.filter { day, _ in
+        engine.workoutAnalytics.contains { calendar.isDate($0.workout.startDate, inSameDayAs: day) }
+    }.map(\.1)
+
+    let recoveryDaySleep = sleepHoursByDay.filter { day, _ in
+        !engine.workoutAnalytics.contains { calendar.isDate($0.workout.startDate, inSameDayAs: day) }
+    }.map(\.1)
+
+    guard let activityAverage = average(activityDaySleep),
+          let recoveryAverage = average(recoveryDaySleep) else { return 0 }
+
+    return recoveryAverage - activityAverage
+}
+
+private func formatted(_ value: Double, digits: Int) -> String {
+    String(format: "%.\(digits)f", value)
+}
+
+private func signedFormatted(_ value: Double, digits: Int) -> String {
+    String(format: "%+.\(digits)f", value)
+}
+
+private func bestDayDescription(
+    for series: [(Date, Double)],
+    unit: String,
+    digits: Int
+) -> String {
+    guard let best = series.max(by: { $0.1 < $1.1 }) else { return "Unavailable" }
+    return "\(formatted(best.1, digits: digits)) \(unit) on \(best.0.formatted(date: .abbreviated, time: .omitted))"
+}
+
+private func seriesSummary(
+    _ series: [(Date, Double)],
+    unit: String,
+    digits: Int
+) -> String {
+    guard !series.isEmpty else { return "Unavailable" }
+    let latest = series.last?.1 ?? 0
+    let avg = average(series.map(\.1)) ?? 0
+    return "latest \(formatted(latest, digits: digits)) \(unit), average \(formatted(avg, digits: digits)) \(unit), trend \(trendSummary(for: series, digits: digits))"
+}
+
+private func trendSummary(
+    for series: [(Date, Double)],
+    digits: Int
+) -> String {
+    guard series.count >= 4 else { return "insufficient data" }
+
+    let values = series.map(\.1)
+    let splitIndex = values.count / 2
+    let earlier = Array(values.prefix(splitIndex))
+    let recent = Array(values.suffix(values.count - splitIndex))
+    guard let earlierAverage = average(earlier),
+          let recentAverage = average(recent) else {
+        return "insufficient data"
+    }
+
+    let delta = recentAverage - earlierAverage
+    let threshold = max(abs(earlierAverage) * 0.03, 0.5)
+    if abs(delta) < threshold {
+        return "stable (\(signedFormatted(delta, digits: digits)))"
+    }
+    return delta > 0
+        ? "rising (\(signedFormatted(delta, digits: digits)))"
+        : "falling (\(signedFormatted(delta, digits: digits)))"
+}
+
+private func localFallbackSummary(
+    displayedStrain: Double,
+    recoveryScore: Double,
+    readinessScore: Double,
+    workoutHighlights: WorkoutHighlights,
+    selectedSnapshot: WorkoutSummarySnapshot?,
+    scenario: String,
+    intent: SummaryIntent,
+    sleepData: [(Date, Double)],
+    sleepDebtHours: Double,
+    consistencyScore: Double,
+    activityRecoveryGap: Double,
+    hrvData: [(Date, Double)],
+    rhrData: [(Date, Double)],
+    sleepHRData: [(Date, Double)],
+    hrrData: [(Date, Double)],
+    respiratoryData: [(Date, Double)],
+    wristTempData: [(Date, Double)],
+    spo2Data: [(Date, Double)]
+) -> String {
+    let loadStatus = workoutLoadStatus(for: selectedSnapshot)
+    let latestSleep = sleepData.last?.1 ?? 0
+    let averageSleep = average(sleepData.map(\.1)) ?? 0
+    let hrvTrend = trendSummary(for: hrvData, digits: 0)
+    let rhrTrend = trendSummary(for: rhrData, digits: 0)
+    let sleepHRTrend = trendSummary(for: sleepHRData, digits: 0)
+    let vitalsState = vitalsNormSummary(
+        respiratoryData: respiratoryData,
+        wristTempData: wristTempData,
+        spo2Data: spo2Data
+    )
+    let equalizerSignal: String = {
+        if recoveryScore >= 70 && displayedStrain >= 60 {
+            return "Your Equalizer is working. You are asking more from training and your recovery is rising with it."
+        }
+
+        if loadStatus.title == "Spike" || loadStatus.title == "Aggressive" {
+            return "Your Equalizer is tilting toward strain. You need recovery to catch up before you keep pressing."
+        }
+
+        return "Your Equalizer looks manageable right now, but the next step depends on whether recovery keeps pace with load."
+    }()
+    let overreachSignal: String = {
+        guard let latestHRR = hrrData.last?.1,
+              let averageHRR = average(hrrData.map(\.1)),
+              averageHRR > 0,
+              let acwr = selectedSnapshot?.acwr else {
+            return ""
+        }
+
+        if latestHRR < averageHRR * 0.92 && acwr > 1.2 {
+            return " Your heart rate recovery is softer than its recent baseline while load is elevated, so treat that as an overreach warning."
+        }
+
+        return ""
+    }()
+
+    return """
+    \(scenario) \(equalizerSignal)\(overreachSignal) Your current strain is \(formatted(displayedStrain, digits: 0))/100, recovery is \(formatted(recoveryScore, digits: 0))/100, and readiness is \(formatted(readinessScore, digits: 0))/100. Your load status is \(loadStatus.title.lowercased()), with \(formatted(workoutHighlights.totalMinutes, digits: 0)) total training minutes and \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions per week in this window. Your standout work came from \(workoutHighlights.longestWorkout.lowercased()) and \(workoutHighlights.highestLoadWorkout.lowercased()). You also spent \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) minutes in Zone 4 and \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) minutes in Zone 5, so intensity is a real part of the story.
+
+    Your sleep is averaging \(formatted(averageSleep, digits: 1)) hours, with \(formatted(latestSleep, digits: 1)) hours most recently. Sleep consistency is \(formatted(consistencyScore, digits: 0))%, and sleep debt is \(formatted(sleepDebtHours, digits: 1)) hours. HRV is \(hrvTrend), resting heart rate is \(rhrTrend), and sleep heart rate is \(sleepHRTrend). \(vitalsState) A recovery-day sleep gap of \(signedFormatted(activityRecoveryGap, digits: 1)) hours is worth keeping if you want better absorption of training. Coaching focus right now: \(intent.promptInstruction)
+    """
 }
 
 struct StrainRecoveryMathSection: View {

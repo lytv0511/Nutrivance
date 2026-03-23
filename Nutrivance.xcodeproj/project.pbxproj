@@ -25,6 +25,7 @@
 		15561A712D6B8945006B8741 /* PlaygroundTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A702D6B8945006B8741 /* PlaygroundTypes.swift */; };
 		1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */; };
 		1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0592CD26FA6004E1D13 /* HomeView.swift */; };
+		155F788F2F70F3F40018E661 /* CoachComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155F788E2F70F3F40018E661 /* CoachComparisonView.swift */; };
 		1567DE082D79150500881AD5 /* BarcodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1567DE072D79150500881AD5 /* BarcodeScannerView.swift */; };
 		1567DE0A2D7BB5E000881AD5 /* UnifiedLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1567DE092D7BB5E000881AD5 /* UnifiedLogView.swift */; };
 		1568141B2D5C0E80003C861E /* ComingSoonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568141A2D5C0E80003C861E /* ComingSoonView.swift */; };
@@ -164,6 +165,7 @@
 		15561A702D6B8945006B8741 /* PlaygroundTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundTypes.swift; sourceTree = "<group>"; };
 		1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone.swift; sourceTree = "<group>"; };
 		1557A0592CD26FA6004E1D13 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		155F788E2F70F3F40018E661 /* CoachComparisonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachComparisonView.swift; sourceTree = "<group>"; };
 		1567DE072D79150500881AD5 /* BarcodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarcodeScannerView.swift; sourceTree = "<group>"; };
 		1567DE092D7BB5E000881AD5 /* UnifiedLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedLogView.swift; sourceTree = "<group>"; };
 		1568141A2D5C0E80003C861E /* ComingSoonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComingSoonView.swift; sourceTree = "<group>"; };
@@ -583,6 +585,7 @@
 				1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */,
 				159F51722CD6E82B001F5FFC /* ContentView_iPhone_alt.swift */,
 				1568141F2D5C0F2D003C861E /* DashboardView.swift */,
+				155F788E2F70F3F40018E661 /* CoachComparisonView.swift */,
 				1525B1462F6495DA00E85899 /* HealthCard.swift */,
 				1508BD982F63745D00DFE65A /* FeelGoodScoreDetailView.swift */,
 				156814202D5C0F2D003C861E /* DistanceView.swift */,
@@ -920,6 +923,7 @@
 				1568144F2D5C0F2D003C861E /* TodaysPlanView.swift in Sources */,
 				156814502D5C0F2D003C861E /* ShareWorkoutsView.swift in Sources */,
 				156814512D5C0F2D003C861E /* WorkoutHistoryView.swift in Sources */,
+				155F788F2F70F3F40018E661 /* CoachComparisonView.swift in Sources */,
 				156814522D5C0F2D003C861E /* FriendActivityView.swift in Sources */,
 				156814532D5C0F2D003C861E /* CaloriesBurnedView.swift in Sources */,
 				157C20B62D6E6E7200D1FA9A /* SleepView.swift in Sources */,

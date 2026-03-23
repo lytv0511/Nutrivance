@@ -135,14 +135,14 @@ struct StressView: View {
                                         MonthlyChartView(
                                             aggregatedData: aggregatedData,
                                             selectedSession: $selectedSession,
-                                            onChartTap: handleChartTap(at:)
+                                            selectedDate: $selectedDate
                                         )
                                     } else {
                                         HourlyWeeklyChartView(
                                             aggregatedData: aggregatedData,
                                             selectedSession: $selectedSession,
-                                            timeFilter: timeFilter,
-                                            onChartTap: handleChartTap(at:)
+                                            selectedDate: $selectedDate,
+                                            timeFilter: timeFilter
                                         )
                                     }
                                     
@@ -293,7 +293,30 @@ struct StressView: View {
     struct MonthlyChartView: View {
         let aggregatedData: [StressView.HRVSession]
         @Binding var selectedSession: StressView.HRVSession?
-        let onChartTap: (CGPoint) -> Void
+        @Binding var selectedDate: Date
+
+        private func updateSelection(
+            from location: CGPoint,
+            proxy: ChartProxy,
+            geometry: GeometryProxy
+        ) {
+            let plotFrame = geometry[proxy.plotAreaFrame]
+            guard plotFrame.contains(location) else { return }
+
+            let xPosition = location.x - plotFrame.origin.x
+            guard let date: Date = proxy.value(atX: xPosition) else { return }
+
+            guard let closest = aggregatedData.min(by: {
+                abs($0.date.timeIntervalSince1970 - date.timeIntervalSince1970) <
+                abs($1.date.timeIntervalSince1970 - date.timeIntervalSince1970)
+            }) else { return }
+
+            if selectedSession?.id != closest.id {
+                selectedSession = closest
+                selectedDate = closest.date
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
+        }
 
         var body: some View {
             GeometryReader { geometry in
@@ -303,7 +326,10 @@ struct StressView: View {
                         ZStack(alignment: .leading) {
                             MonthlyChartContent(
                                 aggregatedData: aggregatedData,
-                                selectedSession: selectedSession
+                                selectedSession: selectedSession,
+                                onSelectionDrag: { location, proxy, geo in
+                                    updateSelection(from: location, proxy: proxy, geometry: geo)
+                                }
                             )
                             .frame(width: chartWidth)
                             
@@ -319,10 +345,6 @@ struct StressView: View {
                                 }
                             }
                         }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { location in
-                        onChartTap(location)
                     }
                     .onChange(of: selectedSession?.id) { _ in
                         if let selectedId = selectedSession?.id {
@@ -342,6 +364,7 @@ struct StressView: View {
     struct MonthlyChartContent: View {
         let aggregatedData: [StressView.HRVSession]
         let selectedSession: StressView.HRVSession?
+        let onSelectionDrag: (CGPoint, ChartProxy, GeometryProxy) -> Void
         
         var body: some View {
             Chart {
@@ -376,6 +399,19 @@ struct StressView: View {
                     AxisValueLabel(format: .dateTime.month().day(), centered: true)
                 }
             }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    onSelectionDrag(value.location, proxy, geo)
+                                }
+                        )
+                }
+            }
         }
     }
     
@@ -383,8 +419,33 @@ struct StressView: View {
     struct HourlyWeeklyChartView: View {
         let aggregatedData: [StressView.HRVSession]
         @Binding var selectedSession: StressView.HRVSession?
+        @Binding var selectedDate: Date
         let timeFilter: StressView.TimeFilter
-        let onChartTap: (CGPoint) -> Void
+
+        private func updateSelection(
+            from location: CGPoint,
+            proxy: ChartProxy,
+            geometry: GeometryProxy
+        ) {
+            let plotFrame = geometry[proxy.plotAreaFrame]
+            guard plotFrame.contains(location) else { return }
+
+            let xPosition = location.x - plotFrame.origin.x
+            guard let date: Date = proxy.value(atX: xPosition) else { return }
+
+            guard let closest = aggregatedData.min(by: {
+                abs($0.date.timeIntervalSince1970 - date.timeIntervalSince1970) <
+                abs($1.date.timeIntervalSince1970 - date.timeIntervalSince1970)
+            }) else { return }
+
+            if selectedSession?.id != closest.id {
+                selectedSession = closest
+                if timeFilter != .hourly24 {
+                    selectedDate = closest.date
+                }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
+        }
         
         var body: some View {
             Chart {
@@ -423,9 +484,18 @@ struct StressView: View {
                     }
                 }
             }
-            .contentShape(Rectangle())
-            .onTapGesture { location in
-                onChartTap(location)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    updateSelection(from: value.location, proxy: proxy, geometry: geo)
+                                }
+                        )
+                }
             }
         }
     }
@@ -773,38 +843,6 @@ struct StressView: View {
             }
             
             aggregatedData = dailyData
-        }
-        
-        // MARK: - Chart Interaction
-        
-        func handleChartTap(at location: CGPoint) {
-            // Find the closest data point to the tap location
-            guard !aggregatedData.isEmpty else { return }
-            
-            // For simplicity, cycle through the data or find nearest
-            // A more sophisticated approach would use chart coordinates
-            if let current = selectedSession {
-                if let index = aggregatedData.firstIndex(where: { $0.id == current.id }) {
-                    let nextIndex = (index + 1) % aggregatedData.count
-                    selectedSession = aggregatedData[nextIndex]
-                    // Only update selectedDate for weekly/monthly views, not for 24H
-                    if timeFilter != .hourly24 {
-                        selectedDate = aggregatedData[nextIndex].date
-                    }
-                }
-            } else {
-                selectedSession = aggregatedData.first
-                // Only update selectedDate for weekly/monthly views, not for 24H
-                if timeFilter != .hourly24 {
-                    if let firstSession = aggregatedData.first {
-                        selectedDate = firstSession.date
-                    }
-                }
-            }
-            
-            // Haptic feedback
-            let impact = UIImpactFeedbackGenerator(style: .medium)
-            impact.impactOccurred()
         }
         
         // MARK: - Sync Selected Session to Date
