@@ -252,14 +252,61 @@ enum CoachSummaryNLP {
     private static func splitSentences(_ text: String) -> [SentenceSlice] {
         var result: [SentenceSlice] = []
         let nsText = text as NSString
-        let fullRange = NSRange(location: 0, length: nsText.length)
-        let regex = try? NSRegularExpression(pattern: #"[^.!?\n]+[.!?]?"#)
-        regex?.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            let snippet = nsText.substring(with: match.range).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !snippet.isEmpty else { return }
-            result.append(SentenceSlice(text: snippet, range: match.range))
+        var sentenceStart = 0
+
+        func isDigit(at index: Int) -> Bool {
+            guard index >= 0, index < nsText.length else { return false }
+            guard let scalar = UnicodeScalar(nsText.character(at: index)) else { return false }
+            return CharacterSet.decimalDigits.contains(scalar)
         }
+
+        func appendSentence(start: Int, endExclusive: Int) {
+            guard endExclusive > start else { return }
+
+            var trimmedStart = start
+            var trimmedEnd = endExclusive
+
+            while trimmedStart < trimmedEnd,
+                  let scalar = UnicodeScalar(nsText.character(at: trimmedStart)),
+                  CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                trimmedStart += 1
+            }
+
+            while trimmedEnd > trimmedStart,
+                  let scalar = UnicodeScalar(nsText.character(at: trimmedEnd - 1)),
+                  CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                trimmedEnd -= 1
+            }
+
+            guard trimmedEnd > trimmedStart else { return }
+
+            let range = NSRange(location: trimmedStart, length: trimmedEnd - trimmedStart)
+            let snippet = nsText.substring(with: range)
+            guard !snippet.isEmpty else { return }
+            result.append(SentenceSlice(text: snippet, range: range))
+        }
+
+        for index in 0..<nsText.length {
+            let character = nsText.character(at: index)
+            let isSentenceBoundary: Bool
+
+            switch character {
+            case 10, 13:
+                isSentenceBoundary = true
+            case 46, 33, 63: // . ! ?
+                let decimalBoundary = isDigit(at: index - 1) && isDigit(at: index + 1)
+                isSentenceBoundary = !decimalBoundary
+            default:
+                isSentenceBoundary = false
+            }
+
+            guard isSentenceBoundary else { continue }
+            let boundaryEnd = (character == 10 || character == 13) ? index : index + 1
+            appendSentence(start: sentenceStart, endExclusive: boundaryEnd)
+            sentenceStart = index + 1
+        }
+
+        appendSentence(start: sentenceStart, endExclusive: nsText.length)
         return result
     }
 
@@ -389,7 +436,15 @@ struct CoachComparisonView: View {
     private var highlightRange: ClosedRange<Date>? {
         guard let start = insight.startDate else { return nil }
         let end = insight.endDate ?? start
-        return start...end
+        let calendar = Calendar.current
+        return calendar.startOfDay(for: start)...calendar.startOfDay(for: end)
+    }
+
+    private var highlightWindow: DateInterval? {
+        guard let highlightRange else { return nil }
+        let calendar = Calendar.current
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: highlightRange.upperBound) ?? highlightRange.upperBound
+        return DateInterval(start: highlightRange.lowerBound, end: endExclusive)
     }
 
     var body: some View {
@@ -419,6 +474,7 @@ struct CoachComparisonView: View {
                             series: series,
                             selectedDate: $selectedDate,
                             highlightRange: highlightRange,
+                            highlightWindow: highlightWindow,
                             label: insight.label
                         )
                     }
@@ -447,11 +503,20 @@ private struct CoachComparisonChartCard: View {
     let series: CoachMetricSeries
     @Binding var selectedDate: Date?
     let highlightRange: ClosedRange<Date>?
+    let highlightWindow: DateInterval?
     let label: String
 
     private var currentSelection: (Date, Double)? {
         guard let selectedDate else { return nil }
         return nearestPoint(in: series.data, to: selectedDate)
+    }
+
+    private var highlightedPoints: [(Date, Double)] {
+        guard let highlightWindow else { return [] }
+        let calendar = Calendar.current
+        return series.data.filter { point in
+            highlightWindow.contains(calendar.startOfDay(for: point.0))
+        }
     }
 
     var body: some View {
@@ -471,7 +536,7 @@ private struct CoachComparisonChartCard: View {
                 if let highlightRange {
                     RectangleMark(
                         xStart: .value("Highlight Start", highlightRange.lowerBound),
-                        xEnd: .value("Highlight End", highlightRange.upperBound.addingTimeInterval(12 * 60 * 60)),
+                        xEnd: .value("Highlight End", highlightWindow?.end ?? highlightRange.upperBound),
                         yStart: .value("Min", series.data.map(\.1).min() ?? 0),
                         yEnd: .value("Max", series.data.map(\.1).max() ?? 1)
                     )
@@ -506,6 +571,15 @@ private struct CoachComparisonChartCard: View {
                     .foregroundStyle(series.color)
                     .interpolationMethod(.catmullRom)
                     .lineStyle(.init(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+                }
+
+                ForEach(highlightedPoints, id: \.0) { point in
+                    PointMark(
+                        x: .value("Highlighted Date", point.0),
+                        y: .value(series.title, point.1)
+                    )
+                    .foregroundStyle(series.color)
+                    .symbolSize(80)
                 }
 
                 if let selection = currentSelection {

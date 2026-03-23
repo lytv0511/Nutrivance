@@ -13,6 +13,10 @@
 			</array>
 		</dict>
 	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.nutrivance.strain-recovery.aggressive-caching</string>
+	</array>
 	<key>LSSupportsAutomaticTermination</key>
 	<false/>
 	<key>MKDirectionsApplicationSupportedModes</key>
@@ -53,6 +57,10 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

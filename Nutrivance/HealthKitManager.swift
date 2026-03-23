@@ -269,7 +269,7 @@ extension HealthKitManager {
         var beneficialMETMinutes: Double = 0
         let threshold = 7.34
         if metSeries.count > 1 {
-            for i in 0..<(metSeries.count - 1) {
+            for i in metSeries.indices.dropLast() {
                 let (currentDate, currentValue) = metSeries[i]
                 let (nextDate, _) = metSeries[i+1]
                 let durationMinutes = nextDate.timeIntervalSince(currentDate) / 60.0
@@ -2851,7 +2851,7 @@ extension HealthKitManager {
         }
         
         let sorted = heartRates.sorted { $0.0 < $1.0 }
-        for i in 0..<(sorted.count - 1) {
+        for i in sorted.indices.dropLast() {
             let hr = sorted[i].1
             let timeToNext = sorted[i + 1].0.timeIntervalSince(sorted[i].0)
             

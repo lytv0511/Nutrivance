@@ -1,6 +1,9 @@
 import SwiftUI
 import SwiftData
 import UIKit
+#if canImport(BackgroundTasks)
+import BackgroundTasks
+#endif
 
 private func allViewControllers(from root: UIViewController) -> [UIViewController] {
     var controllers: [UIViewController] = [root]
@@ -438,6 +441,11 @@ struct NutrivanceApp: App {
     @StateObject private var navigationState = NavigationState()
     @StateObject private var searchState = SearchState()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        StrainRecoveryAggressiveCachingController.shared.registerBackgroundTasks()
+    }
 
     private func navigate(
         focus: AppFocus,
@@ -478,6 +486,9 @@ struct NutrivanceApp: App {
             ContentView()
                 .environmentObject(navigationState)
                 .environmentObject(searchState)
+                .onChange(of: scenePhase) { _, newPhase in
+                    StrainRecoveryAggressiveCachingController.shared.handleScenePhaseChange(newPhase)
+                }
         }
         .commands {
             CommandGroup(replacing: .sidebar) {

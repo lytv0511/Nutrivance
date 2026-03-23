@@ -1,5 +1,8 @@
 import SwiftUI
 import HealthKit
+#if canImport(BackgroundTasks)
+import BackgroundTasks
+#endif
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -32,6 +35,7 @@ struct TappableChartPreview: View {
 
 struct StrainRecoveryView: View {
     @StateObject private var engine = HealthStateEngine.shared
+    @StateObject private var aggressiveCachingController = StrainRecoveryAggressiveCachingController.shared
     @State private var animationPhase: Double = 0
 
     enum TimeFilter: String, CaseIterable {
@@ -89,8 +93,9 @@ struct StrainRecoveryView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
+            ZStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
                     // Time and Sport Filters
                     HStack {
                         HStack(spacing: 8) {
@@ -127,12 +132,13 @@ struct StrainRecoveryView: View {
                     }
                     .padding(.horizontal)
 
-                    StrainRecoveryAISummarySection(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        sportFilter: sportFilter,
-                        anchorDate: selectedDate
-                    )
+                        StrainRecoveryAISummarySection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            sportFilter: sportFilter,
+                            anchorDate: selectedDate,
+                            aggressiveCachingController: aggressiveCachingController
+                        )
 
                     MetricSectionGroup(title: "Training Load") {
                         StrainRecoveryMathSection(
@@ -217,8 +223,15 @@ struct StrainRecoveryView: View {
                             anchorDate: selectedDate
                         )
                     }
+                    }
+                    .padding()
                 }
-                .padding()
+                .allowsHitTesting(!aggressiveCachingController.isActive)
+                .blur(radius: aggressiveCachingController.isActive ? 3 : 0)
+
+                if aggressiveCachingController.isActive {
+                    aggressiveCachingOverlay
+                }
             }
             .background(
                 GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
@@ -289,9 +302,51 @@ struct StrainRecoveryView: View {
                 handleFilterShortcut(2)
             }
             .sheet(isPresented: $showingSummarySettings) {
-                StrainRecoverySummarySettingsView()
+                StrainRecoverySummarySettingsView(
+                    engine: engine,
+                    aggressiveCachingController: aggressiveCachingController
+                )
             }
         }
+    }
+
+    private var aggressiveCachingOverlay: some View {
+        VStack(spacing: 16) {
+            Text("Aggressive Cache Mode")
+                .font(.title3.bold())
+            if aggressiveCachingController.isPreparing {
+                ProgressView()
+                    .tint(.orange)
+            } else {
+                ProgressView(value: aggressiveCachingController.progress)
+                    .progressViewStyle(.linear)
+                    .tint(.orange)
+            }
+            Text(aggressiveCachingController.progressPercentText)
+                .font(.system(.title2, design: .rounded, weight: .bold))
+            if !aggressiveCachingController.currentBatchTitle.isEmpty {
+                Text("Current Batch: \(aggressiveCachingController.currentBatchTitle)")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+            Text(aggressiveCachingController.statusText)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Cancel") {
+                aggressiveCachingController.requestCancel()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+        }
+        .padding(24)
+        .frame(maxWidth: 360)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.orange.opacity(0.2), lineWidth: 1.2)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 20, y: 8)
     }
 }
 
@@ -348,15 +403,619 @@ private enum TemporaryPrimarySelection: String, CaseIterable, Identifiable {
     }
 }
 
+enum AggressiveCachingAction: Equatable {
+    case start
+    case cancel
+}
+
+@MainActor
+final class StrainRecoveryAggressiveCachingController: ObservableObject {
+    static let shared = StrainRecoveryAggressiveCachingController()
+    static let backgroundTaskIdentifier = "com.nutrivance.strain-recovery.aggressive-caching"
+
+    @Published var isActive = false
+    @Published var completedCount = 0
+    @Published var totalCount = 0
+    @Published var statusText = "Preparing aggressive cache run..."
+    @Published var pendingAction: AggressiveCachingAction?
+    @Published var currentBatchTitle = ""
+
+    private var activeTask: Task<Void, Never>? = nil
+#if canImport(BackgroundTasks)
+    private var activeBackgroundTask: BGProcessingTask?
+#endif
+
+    private init() {}
+
+    var progress: Double {
+        guard totalCount > 0 else { return 0 }
+        return Double(completedCount) / Double(totalCount)
+    }
+
+    var isPreparing: Bool {
+        isActive && totalCount == 0
+    }
+
+    var progressPercentText: String {
+        guard totalCount > 0 else { return "Preparing..." }
+        return "\(Int((progress * 100).rounded()))%"
+    }
+
+    func requestStart() {
+        isActive = true
+        completedCount = 0
+        totalCount = 0
+        statusText = "Preparing aggressive cache run..."
+        pendingAction = .start
+    }
+
+    func requestCancel() {
+        pendingAction = .cancel
+    }
+
+    func begin(totalCount: Int, completedCount: Int = 0, statusText: String, batchTitle: String = "") {
+        self.totalCount = totalCount
+        self.completedCount = completedCount
+        self.statusText = statusText
+        self.currentBatchTitle = batchTitle
+        self.isActive = true
+    }
+
+    func advance(statusText: String, batchTitle: String = "") {
+        completedCount = min(completedCount + 1, totalCount)
+        self.statusText = statusText
+        self.currentBatchTitle = batchTitle
+    }
+
+    func finish(statusText: String) {
+        self.statusText = statusText
+        self.currentBatchTitle = ""
+        self.isActive = false
+        self.pendingAction = nil
+    }
+
+    func reset() {
+        isActive = false
+        completedCount = 0
+        totalCount = 0
+        statusText = "Preparing aggressive cache run..."
+        currentBatchTitle = ""
+        pendingAction = nil
+    }
+
+    func startIfNeeded() async {
+        guard activeTask == nil else { return }
+
+        let plan = aggressiveCachingPlan()
+        let totalBatchCount = plan.batches.count
+        let completedBatchCount = plan.completedBatchCount
+        let pendingBatches = plan.pendingBatches
+
+        guard plan.isEligible else {
+            markAggressiveCachingRequested(false)
+            finish(statusText: "Aggressive cache mode is only available on the current primary Apple Intelligence device.")
+            return
+        }
+
+        guard totalBatchCount > 0 else {
+            markAggressiveCachingRequested(false)
+            finish(statusText: "No coach summary batches are available for aggressive caching right now.")
+            return
+        }
+
+        guard !pendingBatches.isEmpty else {
+            markAggressiveCachingRequested(false)
+            begin(
+                totalCount: totalBatchCount,
+                completedCount: totalBatchCount,
+                statusText: "All day batches already have synced Apple Intelligence summaries."
+            )
+            finish(statusText: "All day batches already have synced Apple Intelligence summaries.")
+            return
+        }
+
+        markAggressiveCachingRequested(true)
+        scheduleBackgroundProcessingIfNeeded()
+        begin(
+            totalCount: totalBatchCount,
+            completedCount: completedBatchCount,
+            statusText: "Preparing \(pendingBatches.count) remaining day batches for Apple Intelligence generation and sync...",
+            batchTitle: pendingBatches.first?.title ?? ""
+        )
+
+        activeTask = Task(priority: .userInitiated) { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runPendingBatches(pendingBatches, totalBatchCount: totalBatchCount)
+        }
+    }
+
+    func cancelByUser() {
+        activeTask?.cancel()
+        activeTask = nil
+        markAggressiveCachingRequested(false)
+#if canImport(BackgroundTasks)
+        activeBackgroundTask?.setTaskCompleted(success: false)
+        activeBackgroundTask = nil
+#endif
+        reset()
+    }
+
+    func handleScenePhaseChange(_ scenePhase: ScenePhase) {
+        guard scenePhase == .background else { return }
+        if shouldContinueAggressiveCachingInBackground() {
+            scheduleBackgroundProcessingIfNeeded()
+        }
+    }
+
+    func registerBackgroundTasks() {
+#if canImport(BackgroundTasks)
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: Self.backgroundTaskIdentifier,
+            using: nil
+        ) { task in
+            guard let processingTask = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            Task { @MainActor in
+                self.handleBackgroundProcessingTask(processingTask)
+            }
+        }
+#endif
+    }
+
+    private func runPendingBatches(
+        _ batches: [StrainRecoveryAggressiveCachingDayBatch],
+        totalBatchCount: Int
+    ) async {
+        for (index, batch) in batches.enumerated() {
+            if Task.isCancelled { break }
+            currentBatchTitle = batch.title
+            statusText = "Processing \(batch.title) • \(index + 1) of \(batches.count) remaining day batches"
+
+            for (requestIndex, request) in batch.pendingRequests.enumerated() {
+                if Task.isCancelled { break }
+                statusText = "Generating \(request.selectedSuggestionTitle) • \(requestIndex + 1) of \(batch.pendingRequests.count) for \(batch.title)"
+                _ = await generateAggressiveCachingSummary(for: request)
+            }
+
+            if Task.isCancelled { break }
+
+            advance(
+                statusText: "Synced batch \(min(completedCount + 1, totalBatchCount)) of \(totalBatchCount) • \(batch.title)",
+                batchTitle: batch.title
+            )
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+
+        activeTask = nil
+#if canImport(BackgroundTasks)
+        activeBackgroundTask?.setTaskCompleted(success: !Task.isCancelled)
+        activeBackgroundTask = nil
+#endif
+
+        if Task.isCancelled {
+            if markAggressiveCachingRequestedIfWorkRemains() {
+                scheduleBackgroundProcessingIfNeeded()
+            }
+            finish(statusText: "Aggressive cache run paused. Finished summaries are already stored and synced.")
+        } else {
+            markAggressiveCachingRequested(false)
+            finish(statusText: "Aggressive cache run finished. All completed summaries were stored and synced immediately.")
+        }
+    }
+
+#if canImport(BackgroundTasks)
+    private func handleBackgroundProcessingTask(_ task: BGProcessingTask) {
+        guard shouldContinueAggressiveCachingInBackground() else {
+            task.setTaskCompleted(success: true)
+            return
+        }
+
+        activeBackgroundTask = task
+        task.expirationHandler = { [weak self] in
+            Task { @MainActor in
+                self?.activeTask?.cancel()
+                self?.activeTask = nil
+                self?.activeBackgroundTask?.setTaskCompleted(success: false)
+                self?.activeBackgroundTask = nil
+                if self?.markAggressiveCachingRequestedIfWorkRemains() == true {
+                    self?.scheduleBackgroundProcessingIfNeeded()
+                }
+            }
+        }
+
+        Task { @MainActor in
+            await self.startIfNeeded()
+        }
+    }
+#endif
+
+    private func hasRemainingAggressiveCachingWork() -> Bool {
+        aggressiveCachingPlan().pendingBatches.isEmpty == false
+    }
+
+    @discardableResult
+    private func markAggressiveCachingRequestedIfWorkRemains() -> Bool {
+        let stillHasWork = hasRemainingAggressiveCachingWork()
+        markAggressiveCachingRequested(stillHasWork)
+        return stillHasWork
+    }
+
+    private func shouldContinueAggressiveCachingInBackground() -> Bool {
+        let settings = StrainRecoverySummaryPersistence.loadSyncSettings()
+        return settings.aggressiveCachingRequested && hasRemainingAggressiveCachingWork()
+    }
+
+    private func markAggressiveCachingRequested(_ requested: Bool) {
+        var settings = StrainRecoverySummaryPersistence.loadSyncSettings()
+        settings.aggressiveCachingRequested = requested
+        settings.intensiveFetchingEnabled = false
+        StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+    }
+
+    private func scheduleBackgroundProcessingIfNeeded() {
+#if canImport(BackgroundTasks)
+        guard shouldContinueAggressiveCachingInBackground() else { return }
+
+        let request = BGProcessingTaskRequest(identifier: Self.backgroundTaskIdentifier)
+        request.requiresExternalPower = false
+        request.requiresNetworkConnectivity = false
+
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            // The foreground task is already running or queued. Failing to submit a background request
+            // should not interrupt the current aggressive caching run.
+        }
+#endif
+    }
+}
+
+private struct StrainRecoveryAggressiveCachingDayBatch {
+    let anchorDate: Date
+    let pendingRequests: [StrainRecoverySummaryRequest]
+
+    var title: String {
+        anchorDate.formatted(date: .abbreviated, time: .omitted)
+    }
+}
+
+enum AggressiveSyncSelectionMode: String, Codable, CaseIterable, Identifiable {
+    case fullMonth
+    case selectedDate
+    case reportType
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fullMonth:
+            return "Past Month"
+        case .selectedDate:
+            return "Single Date"
+        case .reportType:
+            return "Single Report Type"
+        }
+    }
+}
+
+private struct AggressiveSyncSelection {
+    let mode: AggressiveSyncSelectionMode
+    let selectedDate: Date
+    let selectedSuggestionID: String?
+}
+
+private struct StrainRecoveryAggressiveCachingPlan {
+    let isEligible: Bool
+    let batches: [StrainRecoveryAggressiveCachingDayBatch]
+    let completedBatchCount: Int
+
+    var pendingBatches: [StrainRecoveryAggressiveCachingDayBatch] {
+        batches.filter { !$0.pendingRequests.isEmpty }
+    }
+}
+
+@MainActor
+private func aggressiveCachingPlan() -> StrainRecoveryAggressiveCachingPlan {
+    let settings = StrainRecoverySummaryPersistence.loadSyncSettings()
+    guard settings.isPrimary(deviceID: StrainRecoverySummaryDevice.current.id),
+          deviceSupportsAppleIntelligence() else {
+        return StrainRecoveryAggressiveCachingPlan(
+            isEligible: false,
+            batches: [],
+            completedBatchCount: 0
+        )
+    }
+
+    let today = Date()
+    let cache = StrainRecoverySummaryPersistence.load()
+    let calendar = Calendar.current
+    let selection = AggressiveSyncSelection(
+        mode: settings.aggressiveSyncSelectionMode,
+        selectedDate: settings.aggressiveSyncSelectedDate,
+        selectedSuggestionID: settings.aggressiveSyncSelectedSuggestionID
+    )
+    var batches: [StrainRecoveryAggressiveCachingDayBatch] = []
+    var completedBatchCount = 0
+
+    for dayOffset in 0..<28 {
+        guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
+        if selection.mode == .selectedDate,
+           calendar.startOfDay(for: selection.selectedDate) != calendar.startOfDay(for: date) {
+            continue
+        }
+        var pendingRequests: [StrainRecoverySummaryRequest] = []
+        var seen = Set<String>()
+
+        for filter in StrainRecoveryView.TimeFilter.allCases {
+            let suggestions = SummarySuggestion.buildSuggestions(
+                engine: HealthStateEngine.shared,
+                timeFilter: filter,
+                sportFilter: nil,
+                anchorDate: date
+            )
+
+            for suggestion in suggestions {
+                if selection.mode == .reportType,
+                   suggestion.id != selection.selectedSuggestionID {
+                    continue
+                }
+                let request = StrainRecoverySummaryRequest.build(
+                    engine: HealthStateEngine.shared,
+                    timeFilter: filter,
+                    sportFilter: nil,
+                    anchorDate: date,
+                    intentText: suggestion.queryText,
+                    selectedSuggestion: suggestion,
+                    refreshVersion: 0
+                )
+                guard seen.insert(request.requestID).inserted else { continue }
+
+                if let existing = cache[request.requestID], existing.source == .appleIntelligence {
+                    StrainRecoverySummaryPersistence.saveEntry(existing)
+                    continue
+                }
+                pendingRequests.append(request)
+            }
+        }
+
+        if pendingRequests.isEmpty {
+            completedBatchCount += 1
+        }
+
+        batches.append(
+            StrainRecoveryAggressiveCachingDayBatch(
+                anchorDate: date,
+                pendingRequests: pendingRequests
+            )
+        )
+    }
+
+    return StrainRecoveryAggressiveCachingPlan(
+        isEligible: true,
+        batches: batches,
+        completedBatchCount: completedBatchCount
+    )
+}
+
+@MainActor
+@discardableResult
+private func generateAggressiveCachingSummary(
+    for request: StrainRecoverySummaryRequest
+) async -> Bool {
+    let cache = StrainRecoverySummaryPersistence.load()
+    if let existing = cache[request.requestID], existing.source == .appleIntelligence {
+        StrainRecoverySummaryPersistence.saveEntry(existing)
+        return true
+    }
+
+    #if canImport(FoundationModels)
+    if #available(iOS 26.0, *) {
+        let model = SystemLanguageModel(useCase: .general)
+        guard model.isAvailable else {
+            return false
+        }
+
+        do {
+            let session = LanguageModelSession(
+                model: model,
+                instructions: strainRecoveryModelInstructions
+            )
+            let cleaned = try await generateValidatedAggressiveCachingSummary(
+                session: session,
+                request: request
+            )
+            guard !cleaned.isEmpty else { return false }
+
+            let entry = aggressiveCachingCacheEntry(
+                for: request,
+                summaryText: cleaned,
+                statusText: aggressiveCachingLiveStatusText(
+                    for: .background,
+                    source: .appleIntelligence
+                ),
+                source: .appleIntelligence
+            )
+            StrainRecoverySummaryPersistence.saveEntry(entry)
+            return true
+        } catch {
+            return false
+        }
+    }
+    #endif
+
+    return false
+}
+
+@available(iOS 26.0, *)
+private func generateValidatedAggressiveCachingSummary(
+    session: LanguageModelSession,
+    request: StrainRecoverySummaryRequest
+) async throws -> String {
+    let maxAttempts = 3
+
+    for _ in 0..<maxAttempts {
+        let response = try await session.respond(to: request.prompt)
+        let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleaned.isEmpty, !looksLikeInvalidAggressiveCachingSummary(cleaned) {
+            return cleaned
+        }
+    }
+
+    return ""
+}
+
+private func looksLikeInvalidAggressiveCachingSummary(_ summary: String) -> Bool {
+    let normalized = summary
+        .lowercased()
+        .replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\t", with: " ")
+
+    let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+        return true
+    }
+
+    let tokens = trimmed
+        .components(separatedBy: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+        .filter { !$0.isEmpty }
+
+    if tokens.count < 40 {
+        return true
+    }
+
+    let bigrams = zip(tokens, tokens.dropFirst()).map { "\($0.0) \($0.1)" }
+    let bigramCounts = Dictionary(bigrams.map { ($0, 1) }, uniquingKeysWith: +)
+    let repeatedBigrams = bigramCounts.values.filter { $0 >= 3 }.count
+    if repeatedBigrams >= 2 {
+        return true
+    }
+
+    let suspiciousPhrases = [
+        "again and again",
+        "over and over",
+        "again again",
+        "it is junk",
+        "junk output"
+    ]
+
+    return suspiciousPhrases.contains(where: normalized.contains)
+}
+
+private let strainRecoveryModelInstructions = """
+You are an AI Athletic Coach. Analyze the provided health data through the Equalizer Framework. Your goal is to identify how Strain and Recovery are balancing. Look for trends where metrics move in tandem or diverge. If vitals are within normal range, simply state they are Stable. Only call out specific vitals if they deviate from the athlete's norm. Speak directly to the athlete. Do not summarize, coach.
+Your tone is direct, motivating, and professional.
+Never refer to the athlete in the third person. Use You and Your.
+Focus on actionable coaching, not generic explanation.
+If strain and recovery rise together, recognize the athlete for matching recovery to load.
+If heart rate recovery falls while strain or training load are above optimal, flag a possible overreach pattern.
+Follow the selected report type strictly and do not drift into unrelated categories.
+Use supporting metrics only when they directly strengthen the chosen focus.
+Treat each report type like a distinct coaching mode with its own reasoning style and vocabulary.
+Respect explicit ignore lists as hard constraints unless a forbidden topic is truly required for causal explanation.
+Do not reuse the same generic paragraph structure across different report types.
+Strain is a training-load/stress score, where higher usually means more accumulated recent load. Recovery is a recovery-readiness score, where higher is better.
+Never describe strain near 20/100 as high. That is low strain in this app's logic.
+Never describe recovery near 80/100 as a problem by itself. That is strong recovery in this app's logic.
+A low strain score paired with a high recovery score is usually a positive fresh-state pattern unless the selected focus specifically suggests undertraining.
+Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
+"""
+
+@MainActor
+private func aggressiveCachingCacheEntry(
+    for request: StrainRecoverySummaryRequest,
+    summaryText: String,
+    statusText: String,
+    source: SummarySourceKind
+) -> StrainRecoverySummaryCacheEntry {
+    let device = StrainRecoverySummaryDevice.current
+    return StrainRecoverySummaryCacheEntry(
+        requestID: request.requestID,
+        summaryText: summaryText,
+        statusText: statusText,
+        generatedAt: Date(),
+        latestWorkoutTimestamp: request.latestWorkoutTimestamp,
+        intentDisplayName: request.intent.displayName,
+        anchorDate: request.anchorDate,
+        timeFilterRawValue: request.timeFilter.rawValue,
+        suggestionID: request.suggestionID,
+        scopedSport: request.scopedSport,
+        createdByDeviceID: device.id,
+        createdByDeviceName: device.name,
+        sourceRawValue: source.rawValue,
+        generationModeRawValue: StrainRecoverySummaryGenerationMode.background.rawValue,
+        expiresAt: request.expiresAt,
+        lastRefreshedAt: nil,
+        isRefreshOverride: false
+    )
+}
+
+@MainActor
+private func aggressiveCachingLiveStatusText(
+    for generationMode: StrainRecoverySummaryGenerationMode,
+    source: SummarySourceKind
+) -> String {
+    let deviceName = StrainRecoverySummaryDevice.current.name
+    let sourceText = source == .appleIntelligence ? "Apple Intelligence" : "local metric rules"
+    switch generationMode {
+    case .live:
+        return "Generated live on \(deviceName) using \(sourceText). Saved to cache and iCloud."
+    case .background:
+        return "Generated in background on \(deviceName) using \(sourceText). Saved to cache and iCloud."
+    case .refresh:
+        return "Refreshed live on \(deviceName) using \(sourceText). This version replaced cache and iCloud for this report."
+    }
+}
+
 private struct StrainRecoverySummarySettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject var engine: HealthStateEngine
     @State private var settings = StrainRecoverySummaryPersistence.loadSyncSettings()
     @State private var temporarySelection: TemporaryPrimarySelection = .off
+    @ObservedObject var aggressiveCachingController: StrainRecoveryAggressiveCachingController
 
     private let currentDevice = StrainRecoverySummaryDevice.current
 
     private var isCurrentDevicePrimary: Bool {
         settings.isPrimary(deviceID: currentDevice.id)
+    }
+
+    private var syncSelectionDateBinding: Binding<Date> {
+        Binding(
+            get: { settings.aggressiveSyncSelectedDate },
+            set: { newValue in
+                settings.aggressiveSyncSelectedDate = Calendar.current.startOfDay(for: newValue)
+                StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+            }
+        )
+    }
+
+    private var availablePrioritySuggestions: [SummarySuggestion] {
+        SummarySuggestion.buildSuggestions(
+            engine: engine,
+            timeFilter: .day,
+            sportFilter: nil,
+            anchorDate: Date()
+        )
+    }
+
+    private var selectedAggressiveSuggestion: SummarySuggestion {
+        SummarySuggestion.resolveSuggestion(
+            id: settings.aggressiveSyncSelectedSuggestionID ?? SummarySuggestion.defaultSuggestion.id,
+            from: availablePrioritySuggestions,
+            scopedSport: nil
+        )
+    }
+
+    private func togglePassivePriority(_ suggestionID: String) {
+        if settings.passivePrioritySuggestionIDs.contains(suggestionID) {
+            settings.passivePrioritySuggestionIDs.removeAll { $0 == suggestionID }
+        } else {
+            guard settings.passivePrioritySuggestionIDs.count < 5 else { return }
+            settings.passivePrioritySuggestionIDs.append(suggestionID)
+        }
+        StrainRecoverySummaryPersistence.saveSyncSettings(settings)
     }
 
     var body: some View {
@@ -378,16 +1037,32 @@ private struct StrainRecoverySummarySettingsView: View {
                             settings.primaryDeviceID == currentDevice.id
                         },
                         set: { newValue in
-                            settings.primaryDeviceID = newValue ? currentDevice.id : nil
+                            if newValue {
+                                settings.primaryDeviceID = currentDevice.id
+                            } else if settings.primaryDeviceID == nil {
+                                settings.primaryDeviceID = currentDevice.id
+                            }
                             StrainRecoverySummaryPersistence.saveSyncSettings(settings)
                         }
                     ))
+                    .disabled(!deviceSupportsAppleIntelligence())
+
+                    Text("Only one device can be the default primary. To move primary status, turn this on from the device you want to promote.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if !deviceSupportsAppleIntelligence() {
+                        Text("This device does not support Apple Intelligence, so it cannot be the primary device for coach summary syncing.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
 
                     Picker("Temporary Primary", selection: $temporarySelection) {
                         ForEach(TemporaryPrimarySelection.allCases) { selection in
                             Text(selection.title).tag(selection)
                         }
                     }
+                    .disabled(!deviceSupportsAppleIntelligence())
                     .onChange(of: temporarySelection) { _, newValue in
                         settings.temporaryPrimaryDeviceID = newValue == .off ? nil : currentDevice.id
                         settings.temporaryPrimaryUntil = newValue.expirationDate
@@ -409,6 +1084,108 @@ private struct StrainRecoverySummarySettingsView: View {
                 }
                 .font(.footnote)
                 .foregroundColor(.secondary)
+
+                Section("Intensive Fetching") {
+                    Picker("Aggressive Sync Scope", selection: Binding(
+                        get: { settings.aggressiveSyncSelectionMode },
+                        set: { newValue in
+                            settings.aggressiveSyncSelectionMode = newValue
+                            if newValue == .reportType, settings.aggressiveSyncSelectedSuggestionID == nil {
+                                settings.aggressiveSyncSelectedSuggestionID = SummarySuggestion.defaultSuggestion.id
+                            }
+                            StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                        }
+                    )) {
+                        ForEach(AggressiveSyncSelectionMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+
+                    if settings.aggressiveSyncSelectionMode == .selectedDate {
+                        DatePicker(
+                            "Sync Date",
+                            selection: syncSelectionDateBinding,
+                            in: ...Date(),
+                            displayedComponents: .date
+                        )
+                    }
+
+                    if settings.aggressiveSyncSelectionMode == .reportType {
+                        Picker("Report Type", selection: Binding(
+                            get: { settings.aggressiveSyncSelectedSuggestionID ?? SummarySuggestion.defaultSuggestion.id },
+                            set: { newValue in
+                                settings.aggressiveSyncSelectedSuggestionID = newValue
+                                StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                            }
+                        )) {
+                            ForEach(availablePrioritySuggestions) { suggestion in
+                                Text(suggestion.title).tag(suggestion.id)
+                            }
+                        }
+                    }
+
+                    Button {
+                        if aggressiveCachingController.isActive {
+                            aggressiveCachingController.requestCancel()
+                        } else {
+                            settings.intensiveFetchingEnabled = false
+                            StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                            aggressiveCachingController.requestStart()
+                            dismiss()
+                        }
+                    } label: {
+                        HStack {
+                            Text(aggressiveCachingController.isActive ? "Cancel Aggressive Cache Fill" : "Run Aggressive Cache Fill")
+                            Spacer()
+                            Image(systemName: aggressiveCachingController.isActive ? "xmark.circle.fill" : "bolt.fill")
+                        }
+                    }
+                    .disabled(!aggressiveCachingController.isActive && (!isCurrentDevicePrimary || !deviceSupportsAppleIntelligence()))
+
+                    Text("Runs immediately on the current primary Apple Intelligence device. Progress advances one day-batch at a time, and each generated summary is stored and synced before the next one begins so the run can resume later without losing completed work.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if settings.aggressiveSyncSelectionMode == .selectedDate {
+                        Text("This scope syncs every report across 1D, 1W, and 1M for \(settings.aggressiveSyncSelectedDate.formatted(date: .abbreviated, time: .omitted)).")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if settings.aggressiveSyncSelectionMode == .reportType {
+                        Text("This scope syncs \(selectedAggressiveSuggestion.title) across the past month, including all 1D, 1W, and 1M versions for each day.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Passive Sync Priority") {
+                    Text("Pick up to 5 report types to prioritize when aggressive syncing is not running. Foreground refreshes still take precedence over passive background work.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    ForEach(availablePrioritySuggestions) { suggestion in
+                        Button {
+                            togglePassivePriority(suggestion.id)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestion.title)
+                                    if let scopedSport = suggestion.scopedSport {
+                                        Text(scopedSport.capitalized)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Image(systemName: settings.passivePrioritySuggestionIDs.contains(suggestion.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor(settings.passivePrioritySuggestionIDs.contains(suggestion.id) ? .orange : .secondary)
+                            }
+                        }
+                        .disabled(
+                            !settings.passivePrioritySuggestionIDs.contains(suggestion.id) &&
+                            settings.passivePrioritySuggestionIDs.count >= 5
+                        )
+                    }
+                }
             }
             .navigationTitle("Coach Sync")
             .navigationBarTitleDisplayMode(.inline)
@@ -421,6 +1198,10 @@ private struct StrainRecoverySummarySettingsView: View {
             }
             .onAppear {
                 settings = StrainRecoverySummaryPersistence.loadSyncSettings()
+                if settings.intensiveFetchingEnabled {
+                    settings.intensiveFetchingEnabled = false
+                    StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                }
                 if let until = settings.temporaryPrimaryUntil,
                    settings.temporaryPrimaryDeviceID == currentDevice.id,
                    until > Date() {
@@ -526,11 +1307,47 @@ struct MetricSectionGroup<Content: View>: View {
     }
 }
 
+private enum SummarySourceKind: String, Codable {
+    case appleIntelligence
+    case localFallback
+}
+
+private func deviceSupportsAppleIntelligence() -> Bool {
+    #if canImport(FoundationModels)
+    if #available(iOS 26.0, *) {
+        let model = SystemLanguageModel(useCase: .general)
+        switch model.availability {
+        case .available, .unavailable(.modelNotReady), .unavailable(.appleIntelligenceNotEnabled):
+            return true
+        case .unavailable(.deviceNotEligible):
+            return false
+        @unknown default:
+            return false
+        }
+    }
+    #endif
+    return false
+}
+
+private func allowsBackgroundAISummaryUpgrades() -> Bool {
+    let processInfo = ProcessInfo.processInfo
+    if processInfo.isLowPowerModeEnabled {
+        return false
+    }
+    switch processInfo.thermalState {
+    case .serious, .critical:
+        return false
+    default:
+        return true
+    }
+}
+
 private struct StrainRecoveryAISummarySection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
     let anchorDate: Date
+    @ObservedObject var aggressiveCachingController: StrainRecoveryAggressiveCachingController
 
     @State private var intentText = ""
     @State private var summaryText = ""
@@ -545,6 +1362,7 @@ private struct StrainRecoveryAISummarySection: View {
     @State private var backgroundGenerationTask: Task<Void, Never>? = nil
     @State private var requestedRequestID: String? = nil
     @State private var backgroundGenerationContextID: String? = nil
+    @State private var backgroundFetchStatusText: String? = nil
 
     private struct SummaryGenerationReadiness {
         let canGenerate: Bool
@@ -590,6 +1408,41 @@ private struct StrainRecoveryAISummarySection: View {
         filteredSuggestions.first(where: { $0.id == selectedSuggestionID })
             ?? suggestions.first(where: { $0.id == selectedSuggestionID })
             ?? suggestions.first
+    }
+
+    private var suggestionCacheStates: [String: (hasAISummary: Bool, isPassivePriority: Bool)] {
+        let cache = StrainRecoverySummaryPersistence.load()
+        let priorityIDs = Set(StrainRecoverySummaryPersistence.loadSyncSettings().passivePrioritySuggestionIDs)
+        var states: [String: (hasAISummary: Bool, isPassivePriority: Bool)] = [:]
+
+        for suggestion in filteredSuggestions.prefix(24) {
+            let suggestionRequest = StrainRecoverySummaryRequest.build(
+                engine: engine,
+                timeFilter: timeFilter,
+                sportFilter: sportFilter,
+                anchorDate: anchorDate,
+                intentText: suggestion.queryText,
+                selectedSuggestion: suggestion,
+                refreshVersion: refreshVersions[suggestion.id, default: 0]
+            )
+            let hasAISummary = cache[suggestionRequest.requestID]?.source == .appleIntelligence
+            states[suggestion.id] = (hasAISummary, priorityIDs.contains(suggestion.id))
+        }
+
+        return states
+    }
+
+    private var currentRequestDescriptor: String {
+        let title = selectedSuggestion?.title ?? detectedIntent.displayName
+        let dateText = anchorDate.formatted(date: .abbreviated, time: .omitted)
+        return "\(title) for \(dateText) for \(timeFilter.rawValue)"
+    }
+
+    private var liveOperationStatusText: String? {
+        if isLoading {
+            return "Loading requested report of \(currentRequestDescriptor)"
+        }
+        return backgroundFetchStatusText
     }
 
     private var summaryGenerationReadiness: SummaryGenerationReadiness {
@@ -669,6 +1522,9 @@ private struct StrainRecoveryAISummarySection: View {
 
     private var shouldRecommendRefresh: Bool {
         guard let persistedEntry else { return false }
+        if persistedEntry.source == .localFallback {
+            return true
+        }
         if Date().timeIntervalSince(persistedEntry.generatedAt) > 24 * 60 * 60 {
             return true
         }
@@ -696,7 +1552,12 @@ private struct StrainRecoveryAISummarySection: View {
                         let key = selectedSuggestion?.id ?? "default"
                         refreshVersions[key, default: 0] += 1
                         Task {
-                            await generateSummary(for: request, forceRefresh: true)
+                            await generateSummary(
+                                for: request,
+                                forceRefresh: true,
+                                requireAppleIntelligence: true,
+                                allowLocalRefreshFallback: true
+                            )
                         }
                     }
                     .font(.caption.weight(.semibold))
@@ -724,6 +1585,12 @@ private struct StrainRecoveryAISummarySection: View {
                 }
             }
 
+            if let liveOperationStatusText {
+                Text(liveOperationStatusText)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
             HStack(spacing: 10) {
                 Image(systemName: "sparkles")
                     .foregroundColor(.orange)
@@ -731,6 +1598,15 @@ private struct StrainRecoveryAISummarySection: View {
                     .textInputAutocapitalization(.sentences)
                     .autocorrectionDisabled(false)
                     .submitLabel(.search)
+                if !intentText.isEmpty {
+                    Button {
+                        intentText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -780,6 +1656,7 @@ private struct StrainRecoveryAISummarySection: View {
                             await generateSummary(for: request)
                         }
                     } label: {
+                        let cacheState = suggestionCacheStates[suggestion.id] ?? (false, false)
                         HStack(spacing: 8) {
                             Image(systemName: suggestion.symbol)
                                 .font(.caption.weight(.bold))
@@ -792,6 +1669,12 @@ private struct StrainRecoveryAISummarySection: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .shadow(
+                            color: cacheState.hasAISummary ? Color.orange.opacity(0.28) : .clear,
+                            radius: cacheState.isPassivePriority ? 16 : 10,
+                            x: 0,
+                            y: 0
+                        )
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .stroke(
@@ -799,6 +1682,14 @@ private struct StrainRecoveryAISummarySection: View {
                                     lineWidth: selectedSuggestionID == suggestion.id ? 1.4 : 1
                                 )
                         )
+                        .overlay {
+                            if cacheState.hasAISummary {
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.orange.opacity(0.45), lineWidth: cacheState.isPassivePriority ? 2.4 : 1.6)
+                                    .blur(radius: cacheState.isPassivePriority ? 8 : 4)
+                                    .padding(cacheState.isPassivePriority ? -8 : -3)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -874,6 +1765,17 @@ private struct StrainRecoveryAISummarySection: View {
             guard displayedRequestID != request.requestID else { return }
             loadPersistedSummary(for: request)
         }
+        .onChange(of: aggressiveCachingController.pendingAction) { _, action in
+            guard let action else { return }
+            switch action {
+            case .start:
+                Task { @MainActor in
+                    await aggressiveCachingController.startIfNeeded()
+                }
+            case .cancel:
+                aggressiveCachingController.cancelByUser()
+            }
+        }
         .onDisappear {
             cancelBackgroundGeneration()
         }
@@ -895,6 +1797,30 @@ private struct StrainRecoveryAISummarySection: View {
         statusText = entry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
         displayedRequestID = request.requestID
         requestedRequestID = request.requestID
+    }
+
+    @MainActor
+    private func restorePreferredCachedSummary(
+        for request: StrainRecoverySummaryRequest,
+        fallbackStatus: String
+    ) -> Bool {
+        let cache = StrainRecoverySummaryPersistence.load()
+        guard let entry = cache[request.requestID] else {
+            statusText = fallbackStatus
+            return false
+        }
+
+        persistedEntry = entry
+        summaryText = entry.summaryText
+        displayedRequestID = entry.requestID
+        requestedRequestID = entry.requestID
+
+        if entry.source == .appleIntelligence {
+            statusText = "Apple Intelligence refresh used the synced AI summary from \(entry.createdByDeviceName)."
+        } else {
+            statusText = fallbackStatus
+        }
+        return entry.source == .appleIntelligence
     }
 
     @MainActor
@@ -928,23 +1854,32 @@ private struct StrainRecoveryAISummarySection: View {
         backgroundGenerationTask?.cancel()
         backgroundGenerationContextID = contextID
 
-        let queue = backgroundGenerationRequests()
+        let queue = backgroundGenerationRequests() + backgroundAIUpgradeRequests()
         guard !queue.isEmpty else { return }
 
         backgroundGenerationTask = Task(priority: .utility) { @MainActor in
             for queuedRequest in queue {
                 if Task.isCancelled { break }
                 let cache = StrainRecoverySummaryPersistence.load()
-                if cache[queuedRequest.requestID] != nil {
+                if let existing = cache[queuedRequest.requestID],
+                   existing.source == .appleIntelligence {
                     continue
+                }
+                let priorityIDs = Set(StrainRecoverySummaryPersistence.loadSyncSettings().passivePrioritySuggestionIDs.prefix(5))
+                if priorityIDs.contains(queuedRequest.suggestionID) {
+                    backgroundFetchStatusText = "Fetching top 5 priority metrics \(queuedRequest.selectedSuggestionTitle) for \(queuedRequest.anchorDate.formatted(date: .abbreviated, time: .omitted)) for \(queuedRequest.timeFilter.rawValue)"
+                } else {
+                    backgroundFetchStatusText = "Fetching priority metrics \(queuedRequest.selectedSuggestionTitle) for \(queuedRequest.anchorDate.formatted(date: .abbreviated, time: .omitted)) for \(queuedRequest.timeFilter.rawValue)"
                 }
                 await generateSummary(
                     for: queuedRequest,
                     updateDisplayed: false,
-                    generationMode: .background
+                    generationMode: .background,
+                    requireAppleIntelligence: deviceSupportsAppleIntelligence()
                 )
                 try? await Task.sleep(nanoseconds: 450_000_000)
             }
+            backgroundFetchStatusText = nil
         }
     }
 
@@ -953,21 +1888,19 @@ private struct StrainRecoveryAISummarySection: View {
         backgroundGenerationTask?.cancel()
         backgroundGenerationTask = nil
         backgroundGenerationContextID = nil
+        backgroundFetchStatusText = nil
     }
 
     @MainActor
     private func backgroundGenerationRequests() -> [StrainRecoverySummaryRequest] {
         let today = Date()
         var requests: [StrainRecoverySummaryRequest] = []
+        let syncSettings = StrainRecoverySummaryPersistence.loadSyncSettings()
+        let passivePriorityIDs = syncSettings.passivePrioritySuggestionIDs
 
-        let prioritySuggestionIDs = [
-            "overall",
-            "deload",
-            "hrr-hrv",
-            "recovery",
-            "recovery-vitals",
-            "trend-balance"
-        ]
+        let prioritySuggestionIDs = passivePriorityIDs.isEmpty
+            ? ["overall", "deload", "hrr-hrv", "recovery", "recovery-vitals", "trend-balance"]
+            : passivePriorityIDs
 
         let prioritySuggestions = suggestions.filter { prioritySuggestionIDs.contains($0.id) }
 
@@ -1002,8 +1935,62 @@ private struct StrainRecoveryAISummarySection: View {
         var seen = Set<String>()
         return requests
             .filter { seen.insert($0.requestID).inserted }
-            .prefix(12)
+            .prefix(max(12, prioritySuggestionIDs.count * StrainRecoveryView.TimeFilter.allCases.count))
             .map { $0 }
+    }
+
+    @MainActor
+    private func backgroundAIUpgradeRequests() -> [StrainRecoverySummaryRequest] {
+        guard deviceSupportsAppleIntelligence(), allowsBackgroundAISummaryUpgrades() else {
+            return []
+        }
+
+        let cache = StrainRecoverySummaryPersistence.load()
+        let upgradeCandidates = cache.values
+            .filter { !$0.isExpired && $0.source == .localFallback }
+            .sorted { lhs, rhs in
+                if lhs.anchorDate == rhs.anchorDate {
+                    return lhs.generatedAt > rhs.generatedAt
+                }
+                return lhs.anchorDate > rhs.anchorDate
+            }
+
+        var requests: [StrainRecoverySummaryRequest] = []
+        for entry in upgradeCandidates {
+            guard let request = requestForCachedEntry(entry) else { continue }
+            requests.append(request)
+        }
+        return Array(requests.prefix(10))
+    }
+
+    @MainActor
+    private func requestForCachedEntry(_ entry: StrainRecoverySummaryCacheEntry) -> StrainRecoverySummaryRequest? {
+        guard let filter = StrainRecoveryView.TimeFilter(rawValue: entry.timeFilterRawValue) else {
+            return nil
+        }
+
+        let suggestions = SummarySuggestion.buildSuggestions(
+            engine: engine,
+            timeFilter: filter,
+            sportFilter: entry.scopedSport,
+            anchorDate: entry.anchorDate
+        )
+
+        let suggestion = SummarySuggestion.resolveSuggestion(
+            id: entry.suggestionID,
+            from: suggestions,
+            scopedSport: entry.scopedSport
+        )
+
+        return StrainRecoverySummaryRequest.build(
+            engine: engine,
+            timeFilter: filter,
+            sportFilter: entry.scopedSport,
+            anchorDate: entry.anchorDate,
+            intentText: suggestion.queryText,
+            selectedSuggestion: suggestion,
+            refreshVersion: 0
+        )
     }
 
     @MainActor
@@ -1011,7 +1998,9 @@ private struct StrainRecoveryAISummarySection: View {
         for request: StrainRecoverySummaryRequest,
         forceRefresh: Bool = false,
         updateDisplayed: Bool = true,
-        generationMode: StrainRecoverySummaryGenerationMode = .live
+        generationMode: StrainRecoverySummaryGenerationMode = .live,
+        requireAppleIntelligence: Bool = false,
+        allowLocalRefreshFallback: Bool = false
     ) async {
         if updateDisplayed {
             cancelBackgroundGeneration()
@@ -1045,7 +2034,7 @@ private struct StrainRecoveryAISummarySection: View {
 
         guard !request.prompt.isEmpty else {
             summaryText = request.fallbackSummary
-            statusText = "Not enough strain and recovery data yet."
+            statusText = request.insufficiencyReason ?? "Not enough strain and recovery data yet."
             return
         }
 
@@ -1061,6 +2050,18 @@ private struct StrainRecoveryAISummarySection: View {
             let model = SystemLanguageModel(useCase: .general)
 
             guard model.isAvailable else {
+                if requireAppleIntelligence {
+                    guard updateDisplayed else { return }
+                    if updateDisplayed {
+                        let restoredAI = restorePreferredCachedSummary(
+                            for: request,
+                            fallbackStatus: "Apple Intelligence is unavailable on this device, and no synced AI summary was found yet. Your existing summary was kept."
+                        )
+                        if restoredAI || !allowLocalRefreshFallback {
+                            return
+                        }
+                    }
+                }
                 let resolvedSummary = request.fallbackSummary
                 let resolvedStatus = request.unavailableStatusText(for: model.availability)
                 if updateDisplayed {
@@ -1072,6 +2073,7 @@ private struct StrainRecoveryAISummarySection: View {
                         for: request,
                         summaryText: resolvedSummary,
                         statusText: resolvedStatus,
+                        source: .localFallback,
                         generationMode: generationMode,
                         isRefreshOverride: forceRefresh
                     ),
@@ -1103,23 +2105,28 @@ private struct StrainRecoveryAISummarySection: View {
                     """
                 )
 
-                let response = try await session.respond(
-                    to: request.prompt,
-                    options: GenerationOptions(
-                        sampling: request.refreshVersion == 0 ? .greedy : .random(top: 6, seed: UInt64(request.refreshVersion)),
-                        temperature: request.refreshVersion == 0 ? 0 : 0.45,
-                        maximumResponseTokens: 420
-                    )
+                let cleaned = try await generateValidatedModelSummary(
+                    session: session,
+                    request: request
                 )
-
-                let cleaned = response.content
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
 
                 let resolvedSummary: String
                 let resolvedStatus: String
                 if cleaned.isEmpty {
+                    if requireAppleIntelligence {
+                        guard updateDisplayed else { return }
+                        if updateDisplayed {
+                            let restoredAI = restorePreferredCachedSummary(
+                                for: request,
+                                fallbackStatus: "Apple Intelligence did not return a usable summary, and no synced AI summary was found yet. Your existing summary was kept."
+                            )
+                            if restoredAI || !allowLocalRefreshFallback {
+                                return
+                            }
+                        }
+                    }
                     resolvedSummary = request.fallbackSummary
-                    resolvedStatus = "Model returned an empty response, so this summary is using local metric rules."
+                    resolvedStatus = "Model returned an unusable response, so this summary is using local metric rules."
                 } else {
                     resolvedSummary = cleaned
                     resolvedStatus = liveStatusText(for: generationMode, source: .appleIntelligence)
@@ -1133,6 +2140,7 @@ private struct StrainRecoveryAISummarySection: View {
                         for: request,
                         summaryText: resolvedSummary,
                         statusText: resolvedStatus,
+                        source: cleaned.isEmpty ? .localFallback : .appleIntelligence,
                         generationMode: forceRefresh ? .refresh : generationMode,
                         isRefreshOverride: forceRefresh
                     ),
@@ -1140,6 +2148,18 @@ private struct StrainRecoveryAISummarySection: View {
                 )
                 return
             } catch {
+                if requireAppleIntelligence {
+                    guard updateDisplayed else { return }
+                    if updateDisplayed {
+                        let restoredAI = restorePreferredCachedSummary(
+                            for: request,
+                            fallbackStatus: "Apple Intelligence refresh failed, and no synced AI summary was found yet. Your existing summary was kept."
+                        )
+                        if restoredAI || !allowLocalRefreshFallback {
+                            return
+                        }
+                    }
+                }
                 let resolvedSummary = request.fallbackSummary
                 let resolvedStatus = liveStatusText(for: generationMode, source: .localFallback)
                 if updateDisplayed {
@@ -1151,6 +2171,7 @@ private struct StrainRecoveryAISummarySection: View {
                         for: request,
                         summaryText: resolvedSummary,
                         statusText: resolvedStatus,
+                        source: .localFallback,
                         generationMode: generationMode,
                         isRefreshOverride: forceRefresh
                     ),
@@ -1160,6 +2181,19 @@ private struct StrainRecoveryAISummarySection: View {
             }
         }
         #endif
+
+        if requireAppleIntelligence {
+            guard updateDisplayed else { return }
+            if updateDisplayed {
+                let restoredAI = restorePreferredCachedSummary(
+                    for: request,
+                    fallbackStatus: "Apple Intelligence is unavailable here, and no synced AI summary was found yet. Your existing summary was kept."
+                )
+                if restoredAI || !allowLocalRefreshFallback {
+                    return
+                }
+            }
+        }
 
         let resolvedSummary = request.fallbackSummary
         let resolvedStatus = liveStatusText(for: generationMode, source: .localFallback)
@@ -1172,6 +2206,7 @@ private struct StrainRecoveryAISummarySection: View {
                 for: request,
                 summaryText: resolvedSummary,
                 statusText: resolvedStatus,
+                source: .localFallback,
                 generationMode: generationMode,
                 isRefreshOverride: forceRefresh
             ),
@@ -1179,9 +2214,102 @@ private struct StrainRecoveryAISummarySection: View {
         )
     }
 
-    private enum SummarySourceKind {
-        case appleIntelligence
-        case localFallback
+    @available(iOS 26.0, *)
+    private func generateValidatedModelSummary(
+        session: LanguageModelSession,
+        request: StrainRecoverySummaryRequest
+    ) async throws -> String {
+        let maxAttempts = 3
+
+        for attempt in 0..<maxAttempts {
+            let retrySeedOffset = request.refreshVersion + attempt
+            let response = try await session.respond(
+                to: request.prompt + coachRetryInstruction(forAttempt: attempt),
+                options: GenerationOptions(
+                    sampling: retrySeedOffset == 0 ? .greedy : .random(top: 6, seed: UInt64(retrySeedOffset)),
+                    temperature: retrySeedOffset == 0 ? 0 : min(0.6, 0.35 + (Double(attempt) * 0.08)),
+                    maximumResponseTokens: 420
+                )
+            )
+
+            let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !isJunkCoachOutput(cleaned) {
+                return cleaned
+            }
+        }
+
+        return ""
+    }
+
+    private func coachRetryInstruction(forAttempt attempt: Int) -> String {
+        guard attempt > 0 else { return "" }
+        return """
+
+        Retry guidance:
+        - The previous draft was rejected because it was repetitive, low-quality, or looped awkwardly.
+        - Write one clean coaching paragraph with no repeated phrases, no filler, and no looping wording.
+        - If evidence is thin, say that briefly instead of guessing.
+        """
+    }
+
+    private func isJunkCoachOutput(_ text: String) -> Bool {
+        let normalized = text
+            .lowercased()
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !normalized.isEmpty else { return true }
+        guard normalized.count >= 80 else { return true }
+
+        let sentences = normalized
+            .components(separatedBy: CharacterSet(charactersIn: ".!?"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !sentences.isEmpty else { return true }
+
+        let uniqueSentences = Set(sentences)
+        if uniqueSentences.count * 2 <= sentences.count {
+            return true
+        }
+
+        let words = normalized
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+
+        guard words.count >= 20 else { return true }
+
+        let uniqueWords = Set(words)
+        if Double(uniqueWords.count) / Double(words.count) < 0.38 {
+            return true
+        }
+
+        var bigramCounts: [String: Int] = [:]
+        if words.count >= 2 {
+            for index in 0..<(words.count - 1) {
+                let bigram = words[index] + " " + words[index + 1]
+                bigramCounts[bigram, default: 0] += 1
+            }
+        }
+
+        let repeatedBigrams = bigramCounts.values.filter { $0 >= 3 }.count
+        if repeatedBigrams >= 2 {
+            return true
+        }
+
+        let suspiciousPhrases = [
+            "again and again",
+            "over and over",
+            "again again",
+            "it is junk",
+            "junk output"
+        ]
+
+        if suspiciousPhrases.contains(where: normalized.contains) {
+            return true
+        }
+
+        return false
     }
 
     @MainActor
@@ -1189,6 +2317,7 @@ private struct StrainRecoveryAISummarySection: View {
         for request: StrainRecoverySummaryRequest,
         summaryText: String,
         statusText: String,
+        source: SummarySourceKind,
         generationMode: StrainRecoverySummaryGenerationMode,
         isRefreshOverride: Bool
     ) -> StrainRecoverySummaryCacheEntry {
@@ -1206,6 +2335,7 @@ private struct StrainRecoveryAISummarySection: View {
             scopedSport: request.scopedSport,
             createdByDeviceID: device.id,
             createdByDeviceName: device.name,
+            sourceRawValue: source.rawValue,
             generationModeRawValue: generationMode.rawValue,
             expiresAt: request.expiresAt,
             lastRefreshedAt: isRefreshOverride ? Date() : nil,
@@ -1242,8 +2372,10 @@ private struct StrainRecoverySummaryRequest {
     let anchorDate: Date
     let timeFilter: StrainRecoveryView.TimeFilter
     let suggestionID: String
+    let selectedSuggestionTitle: String
     let scopedSport: String?
     let expiresAt: Date?
+    let insufficiencyReason: String?
 
     @MainActor
     static func build(
@@ -1329,6 +2461,21 @@ private struct StrainRecoverySummaryRequest {
 
         let displayedStrain = min(100, (average(effortData.map(\.1)) ?? 0) * 10)
         let totalLoad = effortData.map(\.1).reduce(0, +)
+        let insufficiencyReason = summaryInsufficiencyReason(
+            focusMode: focusMode,
+            scopedSport: scopedSport,
+            displayWorkouts: displayWorkouts,
+            sleepData: sleepData,
+            hrvData: hrvData,
+            rhrData: rhrData,
+            sleepHRData: sleepHRData,
+            hrrData: hrrData,
+            respiratoryData: respiratoryData,
+            wristTempData: wristTempData,
+            spo2Data: spo2Data,
+            metData: metData,
+            vo2Data: vo2Data
+        )
 
         let vitalsSummary = vitalsNormSummary(
             respiratoryData: respiratoryData,
@@ -1429,7 +2576,7 @@ private struct StrainRecoverySummaryRequest {
         - Vital norms summary: \(vitalsSummary)
         """
 
-        let prompt = """
+        let prompt = insufficiencyReason == nil ? """
         Coach me directly as an athletic performance coach using the Equalizer Framework.
 
         Window
@@ -1484,30 +2631,32 @@ private struct StrainRecoverySummaryRequest {
         - Distinguish this report from other filters through both content selection and vocabulary.
         - Avoid repeating the same stock explanation patterns across different filters.
         """
+        : ""
 
-        let fallbackSummary = localFallbackSummary(
-            displayedStrain: displayedStrain,
-            recoveryScore: engine.recoveryScore,
-            readinessScore: engine.readinessScore,
-            workoutHighlights: workoutHighlights,
-            selectedSnapshot: selectedSnapshot,
-            scenario: scenario,
-            intent: intent,
-            sleepData: sleepData,
-            sleepDebtHours: sleepDebtHours,
-            consistencyScore: consistencyScore,
-            activityRecoveryGap: activityRecoveryGap,
-            hrvData: hrvData,
-            rhrData: rhrData,
-            sleepHRData: sleepHRData,
-            hrrData: hrrData,
-            respiratoryData: respiratoryData,
-            wristTempData: wristTempData,
-            spo2Data: spo2Data
-        )
+        let fallbackSummary = insufficiencyReason
+            ?? localFallbackSummary(
+                displayedStrain: displayedStrain,
+                recoveryScore: engine.recoveryScore,
+                readinessScore: engine.readinessScore,
+                workoutHighlights: workoutHighlights,
+                selectedSnapshot: selectedSnapshot,
+                scenario: scenario,
+                intent: intent,
+                sleepData: sleepData,
+                sleepDebtHours: sleepDebtHours,
+                consistencyScore: consistencyScore,
+                activityRecoveryGap: activityRecoveryGap,
+                hrvData: hrvData,
+                rhrData: rhrData,
+                sleepHRData: sleepHRData,
+                hrrData: hrrData,
+                respiratoryData: respiratoryData,
+                wristTempData: wristTempData,
+                spo2Data: spo2Data
+            )
 
         let requestID = [
-            "strain-recovery-ai-v6",
+            "strain-recovery-ai-v7",
             timeFilter.rawValue,
             scopedSport ?? "all",
             String(selectedDay.timeIntervalSince1970),
@@ -1530,8 +2679,10 @@ private struct StrainRecoverySummaryRequest {
             anchorDate: selectedDay,
             timeFilter: timeFilter,
             suggestionID: effectiveSuggestion.id,
+            selectedSuggestionTitle: effectiveSuggestion.title,
             scopedSport: scopedSport,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            insufficiencyReason: insufficiencyReason
         )
     }
 
@@ -1557,6 +2708,54 @@ private struct StrainRecoverySummaryRequest {
     #endif
 }
 
+private func summaryInsufficiencyReason(
+    focusMode: AthleticCoachFocusMode,
+    scopedSport: String?,
+    displayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    sleepData: [(Date, Double)],
+    hrvData: [(Date, Double)],
+    rhrData: [(Date, Double)],
+    sleepHRData: [(Date, Double)],
+    hrrData: [(Date, Double)],
+    respiratoryData: [(Date, Double)],
+    wristTempData: [(Date, Double)],
+    spo2Data: [(Date, Double)],
+    metData: [(Date, Double)],
+    vo2Data: [(Date, Double)]
+) -> String? {
+    let hasWorkouts = !displayWorkouts.isEmpty
+    let hasRecoveryVitals = !hrvData.isEmpty || !rhrData.isEmpty || !sleepHRData.isEmpty || !respiratoryData.isEmpty || !wristTempData.isEmpty || !spo2Data.isEmpty
+    let hasSleep = !sleepData.isEmpty
+    let hasAutonomic = !hrrData.isEmpty || !hrvData.isEmpty
+    let hasPerformanceLoad = hasWorkouts || !metData.isEmpty || !vo2Data.isEmpty
+
+    switch focusMode {
+    case .toughestWorkout:
+        return hasWorkouts
+            ? nil
+            : "There are not enough workout metrics in this period to build a toughest-workout report yet."
+    case .latestWorkout:
+        return hasWorkouts
+            ? nil
+            : "There is no workout in this period yet, so there is not enough session data to make a latest-workout report."
+    case .sportDeepDive:
+        if hasWorkouts { return nil }
+        if let scopedSport {
+            return "There are not enough \(scopedSport.lowercased()) workouts or sport-specific metrics in this period to build that coach report yet."
+        }
+        return "There are not enough sport-specific workouts in this period to build that coach report yet."
+    case .recoveryVitalsSleep:
+        if hasSleep || hasRecoveryVitals || hasAutonomic { return nil }
+        return "There are not enough sleep and recovery metrics in this period to make that report yet."
+    case .trendBalance:
+        if hasWorkouts || hasSleep || hasRecoveryVitals { return nil }
+        return "There are not enough strain, recovery, sleep, or workout metrics in this period to identify a meaningful trend yet."
+    case .general:
+        if hasPerformanceLoad || hasSleep || hasRecoveryVitals { return nil }
+        return "There are not enough health and training metrics in this period to make that coach report yet."
+    }
+}
+
 private enum StrainRecoverySummaryGenerationMode: String, Codable {
     case live
     case background
@@ -1576,10 +2775,15 @@ private struct StrainRecoverySummaryCacheEntry: Codable, Equatable {
     let scopedSport: String?
     let createdByDeviceID: String
     let createdByDeviceName: String
+    let sourceRawValue: String
     let generationModeRawValue: String
     let expiresAt: Date?
     let lastRefreshedAt: Date?
     let isRefreshOverride: Bool
+
+    var source: SummarySourceKind {
+        SummarySourceKind(rawValue: sourceRawValue) ?? .localFallback
+    }
 
     var generationMode: StrainRecoverySummaryGenerationMode {
         StrainRecoverySummaryGenerationMode(rawValue: generationModeRawValue) ?? .live
@@ -1603,7 +2807,8 @@ private struct StrainRecoverySummaryCacheEntry: Codable, Equatable {
         case .refresh:
             sourceMode = "generated from refresh"
         }
-        return "Loaded from cache. Originally \(sourceMode) on \(sourceDevice)."
+        let sourceLabel = source == .appleIntelligence ? "Apple Intelligence" : "local metric rules"
+        return "Loaded from cache. Originally \(sourceMode) on \(sourceDevice) using \(sourceLabel)."
     }
 }
 
@@ -1637,7 +2842,7 @@ private enum StrainRecoverySummaryPersistence {
             currentDeviceID: StrainRecoverySummaryDevice.current.id
         )
         let pruned = pruneExpiredEntries(from: merged)
-        if pruned != merged {
+        if pruned != merged || pruned != localCache || pruned != cloudCache {
             save(pruned)
         }
         return pruned
@@ -1672,6 +2877,8 @@ private enum StrainRecoverySummaryPersistence {
         for (key, value) in cache {
             if let forceOverwriteRequestID, forceOverwriteRequestID == key {
                 resolved[key] = value
+            } else if value.source == .appleIntelligence {
+                resolved[key] = value
             } else if let existing = resolved[key] {
                 resolved[key] = preferredEntry(
                     existing: existing,
@@ -1688,6 +2895,7 @@ private enum StrainRecoverySummaryPersistence {
         guard let encoded = try? JSONEncoder().encode(pruned) else { return }
         UserDefaults.standard.set(encoded, forKey: storageKey)
         cloudStore.set(encoded, forKey: storageKey)
+        cloudStore.synchronize()
     }
 
     static func saveEntry(_ entry: StrainRecoverySummaryCacheEntry, forceOverwrite: Bool = false) {
@@ -1705,26 +2913,45 @@ private enum StrainRecoverySummaryPersistence {
 
     static func loadSyncSettings() -> StrainRecoverySummarySyncSettings {
         let cloudStore = NSUbiquitousKeyValueStore.default
+        let cloudSettings: StrainRecoverySummarySyncSettings?
+        let localSettings: StrainRecoverySummarySyncSettings?
 
         if let cloudData = cloudStore.data(forKey: settingsKey),
            let decoded = try? JSONDecoder().decode(StrainRecoverySummarySyncSettings.self, from: cloudData) {
-            return decoded.resolved()
+            cloudSettings = decoded.resolved()
+        } else {
+            cloudSettings = nil
         }
 
         if let localData = UserDefaults.standard.data(forKey: settingsKey),
            let decoded = try? JSONDecoder().decode(StrainRecoverySummarySyncSettings.self, from: localData) {
-            return decoded.resolved()
+            localSettings = decoded.resolved()
+        } else {
+            localSettings = nil
         }
 
-        return .defaultValue
+        return mergedSyncSettings(
+            local: localSettings,
+            cloud: cloudSettings
+        )
     }
 
     static func saveSyncSettings(_ settings: StrainRecoverySummarySyncSettings) {
-        let resolved = settings.resolved()
+        var resolved = settings.resolved()
+        if resolved.primaryDeviceID == StrainRecoverySummaryDevice.current.id,
+           !deviceSupportsAppleIntelligence() {
+            resolved.primaryDeviceID = nil
+        }
+        if resolved.temporaryPrimaryDeviceID == StrainRecoverySummaryDevice.current.id,
+           !deviceSupportsAppleIntelligence() {
+            resolved.temporaryPrimaryDeviceID = nil
+            resolved.temporaryPrimaryUntil = nil
+        }
         guard let encoded = try? JSONEncoder().encode(resolved) else { return }
         UserDefaults.standard.set(encoded, forKey: settingsKey)
         let cloudStore = NSUbiquitousKeyValueStore.default
         cloudStore.set(encoded, forKey: settingsKey)
+        cloudStore.synchronize()
     }
 
     private static func mergeCaches(
@@ -1749,6 +2976,32 @@ private enum StrainRecoverySummaryPersistence {
         return merged
     }
 
+    private static func mergedSyncSettings(
+        local: StrainRecoverySummarySyncSettings?,
+        cloud: StrainRecoverySummarySyncSettings?
+    ) -> StrainRecoverySummarySyncSettings {
+        let resolvedLocal = local?.resolved()
+        let resolvedCloud = cloud?.resolved()
+
+        if let resolvedCloud, resolvedCloud.hasExplicitPrimarySelection {
+            return resolvedCloud
+        }
+
+        if let resolvedLocal, resolvedLocal.hasExplicitPrimarySelection {
+            return resolvedLocal
+        }
+
+        if let resolvedCloud {
+            return resolvedCloud
+        }
+
+        if let resolvedLocal {
+            return resolvedLocal
+        }
+
+        return .defaultValue
+    }
+
     private static func preferredEntry(
         existing: StrainRecoverySummaryCacheEntry,
         incoming: StrainRecoverySummaryCacheEntry,
@@ -1757,11 +3010,26 @@ private enum StrainRecoverySummaryPersistence {
     ) -> StrainRecoverySummaryCacheEntry {
         if existing.isExpired { return incoming }
         if incoming.isExpired { return existing }
+        if incoming.source == .appleIntelligence && existing.source != .appleIntelligence {
+            return incoming
+        }
+        if existing.source == .appleIntelligence && incoming.source != .appleIntelligence {
+            return existing
+        }
         if incoming.isRefreshOverride && incoming.generatedAt >= existing.generatedAt {
             return incoming
         }
         if existing.isRefreshOverride && existing.generatedAt >= incoming.generatedAt {
             return existing
+        }
+
+        if existing.source != incoming.source {
+            if incoming.source == .appleIntelligence {
+                return incoming
+            }
+            if existing.source == .appleIntelligence {
+                return existing
+            }
         }
 
         let existingPrimary = settings.isPrimary(deviceID: existing.createdByDeviceID)
@@ -1803,19 +3071,102 @@ private struct StrainRecoverySummarySyncSettings: Codable {
     var primaryDeviceID: String?
     var temporaryPrimaryDeviceID: String?
     var temporaryPrimaryUntil: Date?
+    var intensiveFetchingEnabled: Bool
+    var aggressiveCachingRequested: Bool
+    var aggressiveSyncSelectionMode: AggressiveSyncSelectionMode
+    var aggressiveSyncSelectedDate: Date
+    var aggressiveSyncSelectedSuggestionID: String?
+    var passivePrioritySuggestionIDs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case primaryDeviceID
+        case temporaryPrimaryDeviceID
+        case temporaryPrimaryUntil
+        case intensiveFetchingEnabled
+        case aggressiveCachingRequested
+        case aggressiveSyncSelectionMode
+        case aggressiveSyncSelectedDate
+        case aggressiveSyncSelectedSuggestionID
+        case passivePrioritySuggestionIDs
+    }
 
     static let defaultValue = StrainRecoverySummarySyncSettings(
-        primaryDeviceID: StrainRecoverySummaryDevice.current.id,
+        primaryDeviceID: nil,
         temporaryPrimaryDeviceID: nil,
-        temporaryPrimaryUntil: nil
+        temporaryPrimaryUntil: nil,
+        intensiveFetchingEnabled: false,
+        aggressiveCachingRequested: false,
+        aggressiveSyncSelectionMode: .fullMonth,
+        aggressiveSyncSelectedDate: Calendar.current.startOfDay(for: Date()),
+        aggressiveSyncSelectedSuggestionID: SummarySuggestion.defaultSuggestion.id,
+        passivePrioritySuggestionIDs: []
     )
+
+    init(
+        primaryDeviceID: String?,
+        temporaryPrimaryDeviceID: String?,
+        temporaryPrimaryUntil: Date?,
+        intensiveFetchingEnabled: Bool,
+        aggressiveCachingRequested: Bool,
+        aggressiveSyncSelectionMode: AggressiveSyncSelectionMode,
+        aggressiveSyncSelectedDate: Date,
+        aggressiveSyncSelectedSuggestionID: String?,
+        passivePrioritySuggestionIDs: [String]
+    ) {
+        self.primaryDeviceID = primaryDeviceID
+        self.temporaryPrimaryDeviceID = temporaryPrimaryDeviceID
+        self.temporaryPrimaryUntil = temporaryPrimaryUntil
+        self.intensiveFetchingEnabled = intensiveFetchingEnabled
+        self.aggressiveCachingRequested = aggressiveCachingRequested
+        self.aggressiveSyncSelectionMode = aggressiveSyncSelectionMode
+        self.aggressiveSyncSelectedDate = aggressiveSyncSelectedDate
+        self.aggressiveSyncSelectedSuggestionID = aggressiveSyncSelectedSuggestionID
+        self.passivePrioritySuggestionIDs = Array(passivePrioritySuggestionIDs.prefix(5))
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        primaryDeviceID = try container.decodeIfPresent(String.self, forKey: .primaryDeviceID)
+        temporaryPrimaryDeviceID = try container.decodeIfPresent(String.self, forKey: .temporaryPrimaryDeviceID)
+        temporaryPrimaryUntil = try container.decodeIfPresent(Date.self, forKey: .temporaryPrimaryUntil)
+        intensiveFetchingEnabled = try container.decodeIfPresent(Bool.self, forKey: .intensiveFetchingEnabled) ?? false
+        aggressiveCachingRequested = try container.decodeIfPresent(Bool.self, forKey: .aggressiveCachingRequested) ?? false
+        aggressiveSyncSelectionMode = try container.decodeIfPresent(AggressiveSyncSelectionMode.self, forKey: .aggressiveSyncSelectionMode) ?? .fullMonth
+        aggressiveSyncSelectedDate = try container.decodeIfPresent(Date.self, forKey: .aggressiveSyncSelectedDate).map { Calendar.current.startOfDay(for: $0) } ?? Calendar.current.startOfDay(for: Date())
+        aggressiveSyncSelectedSuggestionID = try container.decodeIfPresent(String.self, forKey: .aggressiveSyncSelectedSuggestionID) ?? SummarySuggestion.defaultSuggestion.id
+        passivePrioritySuggestionIDs = Array((try container.decodeIfPresent([String].self, forKey: .passivePrioritySuggestionIDs) ?? []).prefix(5))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(primaryDeviceID, forKey: .primaryDeviceID)
+        try container.encodeIfPresent(temporaryPrimaryDeviceID, forKey: .temporaryPrimaryDeviceID)
+        try container.encodeIfPresent(temporaryPrimaryUntil, forKey: .temporaryPrimaryUntil)
+        try container.encode(intensiveFetchingEnabled, forKey: .intensiveFetchingEnabled)
+        try container.encode(aggressiveCachingRequested, forKey: .aggressiveCachingRequested)
+        try container.encode(aggressiveSyncSelectionMode, forKey: .aggressiveSyncSelectionMode)
+        try container.encode(Calendar.current.startOfDay(for: aggressiveSyncSelectedDate), forKey: .aggressiveSyncSelectedDate)
+        try container.encodeIfPresent(aggressiveSyncSelectedSuggestionID, forKey: .aggressiveSyncSelectedSuggestionID)
+        try container.encode(Array(passivePrioritySuggestionIDs.prefix(5)), forKey: .passivePrioritySuggestionIDs)
+    }
+
+    var hasExplicitPrimarySelection: Bool {
+        let resolved = resolved()
+        return resolved.primaryDeviceID != nil || resolved.temporaryPrimaryDeviceID != nil
+    }
 
     func resolved() -> Self {
         if let until = temporaryPrimaryUntil, until < Date() {
             return StrainRecoverySummarySyncSettings(
                 primaryDeviceID: primaryDeviceID,
                 temporaryPrimaryDeviceID: nil,
-                temporaryPrimaryUntil: nil
+                temporaryPrimaryUntil: nil,
+                intensiveFetchingEnabled: intensiveFetchingEnabled,
+                aggressiveCachingRequested: aggressiveCachingRequested,
+                aggressiveSyncSelectionMode: aggressiveSyncSelectionMode,
+                aggressiveSyncSelectedDate: aggressiveSyncSelectedDate,
+                aggressiveSyncSelectedSuggestionID: aggressiveSyncSelectedSuggestionID,
+                passivePrioritySuggestionIDs: passivePrioritySuggestionIDs
             )
         }
         return self
@@ -2041,6 +3392,23 @@ private struct SummarySuggestion: Identifiable, Hashable {
         return suggestions.filter { suggestion in
             seenIDs.insert(suggestion.id).inserted
         }
+    }
+
+    static func resolveSuggestion(
+        id: String,
+        from suggestions: [SummarySuggestion],
+        scopedSport: String?
+    ) -> SummarySuggestion {
+        if let directMatch = suggestions.first(where: { $0.id == id }) {
+            return directMatch
+        }
+
+        if let scopedSport,
+           let sportMatch = suggestions.first(where: { $0.scopedSport == scopedSport && $0.id.contains(id) }) {
+            return sportMatch
+        }
+
+        return suggestions.first ?? defaultSuggestion
     }
 }
 
