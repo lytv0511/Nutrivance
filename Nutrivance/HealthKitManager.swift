@@ -1,5 +1,26 @@
 // MARK: - Heart Rate Zone Types
 
+final class AppResourceCoordinator {
+    static let shared = AppResourceCoordinator()
+
+    private let lock = NSLock()
+    private var strainRecoveryForegroundCritical = false
+
+    private init() {}
+
+    func setStrainRecoveryForegroundCritical(_ enabled: Bool) {
+        lock.lock()
+        strainRecoveryForegroundCritical = enabled
+        lock.unlock()
+    }
+
+    func isStrainRecoveryForegroundCritical() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return strainRecoveryForegroundCritical
+    }
+}
+
 enum HRZoneSchema: String, Codable {
     case mhrPercentage = "mhr_percentage"
     case karvonen = "karvonen_hrr"
@@ -1568,6 +1589,13 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
     }
 
     func fetchMentalHealthData(from startDate: Date, to endDate: Date, completion: @escaping ([String: Any]) -> Void) {
+        if AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            DispatchQueue.main.async {
+                completion([:])
+            }
+            return
+        }
+
         let group = DispatchGroup()
         var results: [String: Any] = [:]
         
@@ -1748,6 +1776,13 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
     }
     
     func fetchWorkouts(from startDate: Date, to endDate: Date, completion: @escaping ([HKWorkout]) -> Void) {
+        if AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            DispatchQueue.main.async {
+                completion([])
+            }
+            return
+        }
+
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
         
@@ -2591,6 +2626,10 @@ extension HealthKitManager {
     /// Fetch all workouts in a date range with analytics (VO2 max, HRV trend, post-workout HR, recovery)
     @MainActor
     func fetchWorkoutsWithAnalytics(from startDate: Date, to endDate: Date) async -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        if AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            return []
+        }
+
         let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
             fetchWorkouts(from: startDate, to: endDate) { result in
                 continuation.resume(returning: result)

@@ -773,7 +773,6 @@ private func aggressiveCachingPlan() -> StrainRecoveryAggressiveCachingPlan {
                 guard seen.insert(request.requestID).inserted else { continue }
 
                 if let existing = cache[request.requestID], existing.source == .appleIntelligence {
-                    StrainRecoverySummaryPersistence.saveEntry(existing)
                     continue
                 }
                 pendingRequests.append(request)
@@ -806,7 +805,6 @@ private func generateAggressiveCachingSummary(
 ) async -> Bool {
     let cache = StrainRecoverySummaryPersistence.load()
     if let existing = cache[request.requestID], existing.source == .appleIntelligence {
-        StrainRecoverySummaryPersistence.saveEntry(existing)
         return true
     }
 
@@ -1158,7 +1156,7 @@ private struct StrainRecoverySummarySettingsView: View {
                 }
 
                 Section("Passive Sync Priority") {
-                    Text("Pick up to 5 report types to prioritize when aggressive syncing is not running. Foreground refreshes still take precedence over passive background work.")
+                    Text("Pick up to 5 report types to mark as important. While you are browsing this view, AI syncing stays paused so date and filter changes remain fast. Use manual aggressive sync later when the device is idle.")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
@@ -1360,9 +1358,15 @@ private struct StrainRecoveryAISummarySection: View {
     @State private var refreshVersions: [String: Int] = [:]
     @State private var selectedComparisonInsight: CoachSummaryInsight?
     @State private var backgroundGenerationTask: Task<Void, Never>? = nil
+    @State private var backgroundGenerationStarterTask: Task<Void, Never>? = nil
+    @State private var deferredSummaryLoadingTask: Task<Void, Never>? = nil
+    @State private var deferredSuggestionsRefreshTask: Task<Void, Never>? = nil
     @State private var requestedRequestID: String? = nil
     @State private var backgroundGenerationContextID: String? = nil
     @State private var backgroundFetchStatusText: String? = nil
+    @State private var cacheSnapshot = StrainRecoverySummaryPersistence.load()
+    @State private var syncSettingsSnapshot = StrainRecoverySummaryPersistence.loadSyncSettings()
+    @State private var suggestionsSnapshot: [SummarySuggestion] = []
 
     private struct SummaryGenerationReadiness {
         let canGenerate: Bool
@@ -1388,12 +1392,7 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var suggestions: [SummarySuggestion] {
-        SummarySuggestion.buildSuggestions(
-            engine: engine,
-            timeFilter: timeFilter,
-            sportFilter: sportFilter,
-            anchorDate: anchorDate
-        )
+        suggestionsSnapshot
     }
 
     private var filteredSuggestions: [SummarySuggestion] {
@@ -1411,8 +1410,7 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var suggestionCacheStates: [String: (hasAISummary: Bool, isPassivePriority: Bool)] {
-        let cache = StrainRecoverySummaryPersistence.load()
-        let priorityIDs = Set(StrainRecoverySummaryPersistence.loadSyncSettings().passivePrioritySuggestionIDs)
+        let priorityIDs = Set(syncSettingsSnapshot.passivePrioritySuggestionIDs)
         var states: [String: (hasAISummary: Bool, isPassivePriority: Bool)] = [:]
 
         for suggestion in filteredSuggestions.prefix(24) {
@@ -1425,7 +1423,7 @@ private struct StrainRecoveryAISummarySection: View {
                 selectedSuggestion: suggestion,
                 refreshVersion: refreshVersions[suggestion.id, default: 0]
             )
-            let hasAISummary = cache[suggestionRequest.requestID]?.source == .appleIntelligence
+            let hasAISummary = cacheSnapshot[suggestionRequest.requestID]?.source == .appleIntelligence
             states[suggestion.id] = (hasAISummary, priorityIDs.contains(suggestion.id))
         }
 
@@ -1502,10 +1500,10 @@ private struct StrainRecoveryAISummarySection: View {
         if !summaryGenerationReadiness.canGenerate {
             return summaryGenerationReadiness.placeholderText
         }
-        if requestedRequestID == request.requestID && isLoading {
+        if isLoading && requestedRequestID == request.requestID {
             return "This coach report is still being prepared for \(selectedSuggestion?.title ?? detectedIntent.displayName). The current filter does not have a finished summary yet."
         }
-        return "No completed coach report is ready for \(selectedSuggestion?.title ?? detectedIntent.displayName) yet."
+        return "AI summaries are on-demand while you browse. Tap a suggestion to load \(selectedSuggestion?.title ?? detectedIntent.displayName) for this date and filter."
     }
 
     private var comparisonInsights: [CoachSummaryInsight] {
@@ -1521,6 +1519,7 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var shouldRecommendRefresh: Bool {
+        guard displayedRequestID == request.requestID else { return false }
         guard let persistedEntry else { return false }
         if persistedEntry.source == .localFallback {
             return true
@@ -1535,10 +1534,45 @@ private struct StrainRecoveryAISummarySection: View {
         return latestWorkoutTimestamp > cachedWorkoutTimestamp + 1
     }
 
-    private var shouldRunBackgroundGeneration: Bool {
-        let today = Calendar.current.startOfDay(for: Date())
-        let selectedDay = Calendar.current.startOfDay(for: anchorDate)
-        return selectedDay == today && sportFilter == nil
+    private var suggestionsContextID: String {
+        [
+            timeFilter.rawValue,
+            sportFilter ?? "all",
+            Calendar.current.startOfDay(for: anchorDate).formatted(date: .numeric, time: .omitted),
+            String(engine.workoutAnalytics.count)
+        ].joined(separator: "|")
+    }
+
+    @MainActor
+    private func refreshLocalSnapshots(forceReload: Bool = false) {
+        if forceReload {
+            StrainRecoverySummaryPersistence.invalidateInMemoryState()
+        }
+        cacheSnapshot = StrainRecoverySummaryPersistence.load(forceReload: forceReload)
+        syncSettingsSnapshot = StrainRecoverySummaryPersistence.loadSyncSettings(forceReload: forceReload)
+    }
+
+    @MainActor
+    private func refreshSuggestionsSnapshot() {
+        suggestionsSnapshot = SummarySuggestion.buildSuggestions(
+            engine: engine,
+            timeFilter: timeFilter,
+            sportFilter: sportFilter,
+            anchorDate: anchorDate
+        )
+    }
+
+    @MainActor
+    private func resetSummaryForNavigation() {
+        deferredSummaryLoadingTask?.cancel()
+        cancelBackgroundGeneration()
+        selectedComparisonInsight = nil
+        requestedRequestID = nil
+        displayedRequestID = nil
+        persistedEntry = nil
+        summaryText = ""
+        isLoading = false
+        statusText = "AI summaries are paused while browsing. Tap a suggestion to load one for this date and filter."
     }
 
     var body: some View {
@@ -1585,7 +1619,7 @@ private struct StrainRecoveryAISummarySection: View {
                 }
             }
 
-            if let liveOperationStatusText {
+            if isLoading, let liveOperationStatusText {
                 Text(liveOperationStatusText)
                     .font(.caption2)
                     .foregroundColor(.secondary)
@@ -1635,6 +1669,16 @@ private struct StrainRecoveryAISummarySection: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
                 ForEach(filteredSuggestions.prefix(24)) { suggestion in
                     Button {
+                        let request = StrainRecoverySummaryRequest.build(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            sportFilter: sportFilter,
+                            anchorDate: anchorDate,
+                            intentText: suggestion.queryText,
+                            selectedSuggestion: suggestion,
+                            refreshVersion: refreshVersions[suggestion.id, default: 0]
+                        )
+
                         selectedSuggestionID = suggestion.id
                         intentText = suggestion.queryText
                         requestedRequestID = nil
@@ -1642,18 +1686,19 @@ private struct StrainRecoveryAISummarySection: View {
                         persistedEntry = nil
                         summaryText = ""
                         selectedComparisonInsight = nil
-                        Task {
-                            statusText = "Generating new tailored response... focusing on \(suggestion.title)."
-                            let request = StrainRecoverySummaryRequest.build(
-                                engine: engine,
-                                timeFilter: timeFilter,
-                                sportFilter: sportFilter,
-                                anchorDate: anchorDate,
-                                intentText: suggestion.queryText,
-                                selectedSuggestion: suggestion,
-                                refreshVersion: refreshVersions[suggestion.id, default: 0]
-                            )
-                            await generateSummary(for: request)
+
+                        if let cachedEntry = cacheSnapshot[request.requestID],
+                           cachedEntry.source == .appleIntelligence {
+                            persistedEntry = cachedEntry
+                            summaryText = cachedEntry.summaryText
+                            statusText = cachedEntry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
+                            displayedRequestID = cachedEntry.requestID
+                            requestedRequestID = cachedEntry.requestID
+                        } else {
+                            Task {
+                                statusText = "Loading requested report of \(suggestion.title) for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) for \(timeFilter.rawValue)"
+                                await generateSummary(for: request)
+                            }
                         }
                     } label: {
                         let cacheState = suggestionCacheStates[suggestion.id] ?? (false, false)
@@ -1740,30 +1785,28 @@ private struct StrainRecoveryAISummarySection: View {
             )
         }
         .task(id: generationTaskID) {
-            requestedRequestID = request.requestID
-            selectedComparisonInsight = nil
+            refreshLocalSnapshots()
+            resetSummaryForNavigation()
             if selectedSuggestionID == nil {
                 selectedSuggestionID = suggestions.first?.id
                 if intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     intentText = suggestions.first?.queryText ?? ""
                 }
             }
-            loadPersistedSummary(for: request)
-            guard summaryGenerationReadiness.canGenerate else {
-                if persistedEntry == nil && displayedRequestID != request.requestID {
-                    summaryText = ""
+        }
+        .task(id: suggestionsContextID) {
+            deferredSuggestionsRefreshTask?.cancel()
+            deferredSuggestionsRefreshTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+                refreshSuggestionsSnapshot()
+                if selectedSuggestionID == nil || suggestions.contains(where: { $0.id == selectedSuggestionID }) == false {
+                    selectedSuggestionID = suggestions.first?.id
                 }
-                statusText = summaryGenerationReadiness.statusText
-                return
             }
-            if displayedRequestID != request.requestID && persistedEntry == nil {
-                await generateSummary(for: request)
-            }
-            startBackgroundGenerationIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
-            guard displayedRequestID != request.requestID else { return }
-            loadPersistedSummary(for: request)
+            refreshLocalSnapshots(forceReload: true)
         }
         .onChange(of: aggressiveCachingController.pendingAction) { _, action in
             guard let action else { return }
@@ -1776,15 +1819,21 @@ private struct StrainRecoveryAISummarySection: View {
                 aggressiveCachingController.cancelByUser()
             }
         }
+        .onAppear {
+            AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(true)
+            refreshLocalSnapshots()
+        }
         .onDisappear {
+            AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(false)
+            deferredSummaryLoadingTask?.cancel()
+            deferredSuggestionsRefreshTask?.cancel()
             cancelBackgroundGeneration()
         }
     }
 
     @MainActor
     private func loadPersistedSummary(for request: StrainRecoverySummaryRequest) {
-        let cache = StrainRecoverySummaryPersistence.load()
-        guard let entry = cache[request.requestID] else {
+        guard let entry = cacheSnapshot[request.requestID] else {
             persistedEntry = nil
             if displayedRequestID != request.requestID {
                 summaryText = ""
@@ -1804,8 +1853,7 @@ private struct StrainRecoveryAISummarySection: View {
         for request: StrainRecoverySummaryRequest,
         fallbackStatus: String
     ) -> Bool {
-        let cache = StrainRecoverySummaryPersistence.load()
-        guard let entry = cache[request.requestID] else {
+        guard let entry = cacheSnapshot[request.requestID] else {
             statusText = fallbackStatus
             return false
         }
@@ -1829,6 +1877,7 @@ private struct StrainRecoveryAISummarySection: View {
             entry,
             forceOverwrite: entry.isRefreshOverride
         )
+        cacheSnapshot[entry.requestID] = entry
         if updateDisplayed {
             persistedEntry = entry
             displayedRequestID = entry.requestID
@@ -1836,131 +1885,13 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     @MainActor
-    private func startBackgroundGenerationIfNeeded() {
-        guard summaryGenerationReadiness.canGenerate, shouldRunBackgroundGeneration else {
-            cancelBackgroundGeneration()
-            return
-        }
-
-        let contextID = [
-            Calendar.current.startOfDay(for: anchorDate).formatted(date: .numeric, time: .omitted),
-            sportFilter ?? "all"
-        ].joined(separator: "|")
-
-        if backgroundGenerationTask != nil, backgroundGenerationContextID == contextID {
-            return
-        }
-
-        backgroundGenerationTask?.cancel()
-        backgroundGenerationContextID = contextID
-
-        let queue = backgroundGenerationRequests() + backgroundAIUpgradeRequests()
-        guard !queue.isEmpty else { return }
-
-        backgroundGenerationTask = Task(priority: .utility) { @MainActor in
-            for queuedRequest in queue {
-                if Task.isCancelled { break }
-                let cache = StrainRecoverySummaryPersistence.load()
-                if let existing = cache[queuedRequest.requestID],
-                   existing.source == .appleIntelligence {
-                    continue
-                }
-                let priorityIDs = Set(StrainRecoverySummaryPersistence.loadSyncSettings().passivePrioritySuggestionIDs.prefix(5))
-                if priorityIDs.contains(queuedRequest.suggestionID) {
-                    backgroundFetchStatusText = "Fetching top 5 priority metrics \(queuedRequest.selectedSuggestionTitle) for \(queuedRequest.anchorDate.formatted(date: .abbreviated, time: .omitted)) for \(queuedRequest.timeFilter.rawValue)"
-                } else {
-                    backgroundFetchStatusText = "Fetching priority metrics \(queuedRequest.selectedSuggestionTitle) for \(queuedRequest.anchorDate.formatted(date: .abbreviated, time: .omitted)) for \(queuedRequest.timeFilter.rawValue)"
-                }
-                await generateSummary(
-                    for: queuedRequest,
-                    updateDisplayed: false,
-                    generationMode: .background,
-                    requireAppleIntelligence: deviceSupportsAppleIntelligence()
-                )
-                try? await Task.sleep(nanoseconds: 450_000_000)
-            }
-            backgroundFetchStatusText = nil
-        }
-    }
-
-    @MainActor
     private func cancelBackgroundGeneration() {
+        backgroundGenerationStarterTask?.cancel()
+        backgroundGenerationStarterTask = nil
         backgroundGenerationTask?.cancel()
         backgroundGenerationTask = nil
         backgroundGenerationContextID = nil
         backgroundFetchStatusText = nil
-    }
-
-    @MainActor
-    private func backgroundGenerationRequests() -> [StrainRecoverySummaryRequest] {
-        let today = Date()
-        var requests: [StrainRecoverySummaryRequest] = []
-        let syncSettings = StrainRecoverySummaryPersistence.loadSyncSettings()
-        let passivePriorityIDs = syncSettings.passivePrioritySuggestionIDs
-
-        let prioritySuggestionIDs = passivePriorityIDs.isEmpty
-            ? ["overall", "deload", "hrr-hrv", "recovery", "recovery-vitals", "trend-balance"]
-            : passivePriorityIDs
-
-        let prioritySuggestions = suggestions.filter { prioritySuggestionIDs.contains($0.id) }
-
-        for suggestion in prioritySuggestions {
-            requests.append(
-                StrainRecoverySummaryRequest.build(
-                    engine: engine,
-                    timeFilter: .day,
-                    sportFilter: sportFilter,
-                    anchorDate: today,
-                    intentText: suggestion.queryText,
-                    selectedSuggestion: suggestion,
-                    refreshVersion: 0
-                )
-            )
-        }
-
-        for filter in StrainRecoveryView.TimeFilter.allCases {
-            requests.append(
-                StrainRecoverySummaryRequest.build(
-                    engine: engine,
-                    timeFilter: filter,
-                    sportFilter: sportFilter,
-                    anchorDate: today,
-                    intentText: SummarySuggestion.defaultSuggestion.queryText,
-                    selectedSuggestion: SummarySuggestion.defaultSuggestion,
-                    refreshVersion: 0
-                )
-            )
-        }
-
-        var seen = Set<String>()
-        return requests
-            .filter { seen.insert($0.requestID).inserted }
-            .prefix(max(12, prioritySuggestionIDs.count * StrainRecoveryView.TimeFilter.allCases.count))
-            .map { $0 }
-    }
-
-    @MainActor
-    private func backgroundAIUpgradeRequests() -> [StrainRecoverySummaryRequest] {
-        guard deviceSupportsAppleIntelligence(), allowsBackgroundAISummaryUpgrades() else {
-            return []
-        }
-
-        let cache = StrainRecoverySummaryPersistence.load()
-        let upgradeCandidates = cache.values
-            .filter { !$0.isExpired && $0.source == .localFallback }
-            .sorted { lhs, rhs in
-                if lhs.anchorDate == rhs.anchorDate {
-                    return lhs.generatedAt > rhs.generatedAt
-                }
-                return lhs.anchorDate > rhs.anchorDate
-            }
-
-        var requests: [StrainRecoverySummaryRequest] = []
-        for entry in upgradeCandidates {
-            guard let request = requestForCachedEntry(entry) else { continue }
-            requests.append(request)
-        }
-        return Array(requests.prefix(10))
     }
 
     @MainActor
@@ -2815,8 +2746,18 @@ private struct StrainRecoverySummaryCacheEntry: Codable, Equatable {
 private enum StrainRecoverySummaryPersistence {
     static let storageKey = "strain_recovery_ai_summary_cache_v2"
     static let settingsKey = "strain_recovery_ai_summary_sync_settings_v1"
+    private static var inMemoryCache: [String: StrainRecoverySummaryCacheEntry]?
+    private static var inMemorySettings: StrainRecoverySummarySyncSettings?
 
-    static func load() -> [String: StrainRecoverySummaryCacheEntry] {
+    static func load(forceReload: Bool = false) -> [String: StrainRecoverySummaryCacheEntry] {
+        if !forceReload, let inMemoryCache {
+            let pruned = pruneExpiredEntries(from: inMemoryCache)
+            if pruned != inMemoryCache {
+                self.inMemoryCache = pruned
+            }
+            return pruned
+        }
+
         let cloudStore = NSUbiquitousKeyValueStore.default
 
         let localCache: [String: StrainRecoverySummaryCacheEntry]
@@ -2845,6 +2786,7 @@ private enum StrainRecoverySummaryPersistence {
         if pruned != merged || pruned != localCache || pruned != cloudCache {
             save(pruned)
         }
+        inMemoryCache = pruned
         return pruned
     }
 
@@ -2893,9 +2835,9 @@ private enum StrainRecoverySummaryPersistence {
 
         let pruned = pruneExpiredEntries(from: resolved)
         guard let encoded = try? JSONEncoder().encode(pruned) else { return }
+        inMemoryCache = pruned
         UserDefaults.standard.set(encoded, forKey: storageKey)
         cloudStore.set(encoded, forKey: storageKey)
-        cloudStore.synchronize()
     }
 
     static func saveEntry(_ entry: StrainRecoverySummaryCacheEntry, forceOverwrite: Bool = false) {
@@ -2911,7 +2853,11 @@ private enum StrainRecoverySummaryPersistence {
         }
     }
 
-    static func loadSyncSettings() -> StrainRecoverySummarySyncSettings {
+    static func loadSyncSettings(forceReload: Bool = false) -> StrainRecoverySummarySyncSettings {
+        if !forceReload, let inMemorySettings {
+            return inMemorySettings.resolved()
+        }
+
         let cloudStore = NSUbiquitousKeyValueStore.default
         let cloudSettings: StrainRecoverySummarySyncSettings?
         let localSettings: StrainRecoverySummarySyncSettings?
@@ -2930,10 +2876,12 @@ private enum StrainRecoverySummaryPersistence {
             localSettings = nil
         }
 
-        return mergedSyncSettings(
+        let resolved = mergedSyncSettings(
             local: localSettings,
             cloud: cloudSettings
         )
+        inMemorySettings = resolved
+        return resolved
     }
 
     static func saveSyncSettings(_ settings: StrainRecoverySummarySyncSettings) {
@@ -2948,10 +2896,15 @@ private enum StrainRecoverySummaryPersistence {
             resolved.temporaryPrimaryUntil = nil
         }
         guard let encoded = try? JSONEncoder().encode(resolved) else { return }
+        inMemorySettings = resolved
         UserDefaults.standard.set(encoded, forKey: settingsKey)
         let cloudStore = NSUbiquitousKeyValueStore.default
         cloudStore.set(encoded, forKey: settingsKey)
-        cloudStore.synchronize()
+    }
+
+    static func invalidateInMemoryState() {
+        inMemoryCache = nil
+        inMemorySettings = nil
     }
 
     private static func mergeCaches(
@@ -5187,7 +5140,6 @@ struct VitalsSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
-    @State private var isLoading = true
     
     private var respArray: [(Date, Double)] {
         filteredDailyValues(engine.respiratoryRate, timeFilter: timeFilter, anchorDate: anchorDate)
@@ -5228,16 +5180,8 @@ struct VitalsSection: View {
     var body: some View {
         let hasData = !respArray.isEmpty || !tempArray.isEmpty || !spo2Array.isEmpty
         VStack {
-            if isLoading && !hasData {
+            if !hasData {
                 ProgressView("Loading vitals...")
-                    .onAppear {
-                        // Force refresh in case data is not loaded
-                        engine.refreshAllMetrics()
-                        // Simulate loading delay for demo; in production, observe data changes
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            isLoading = false
-                        }
-                    }
             } else {
                 HealthCard(
                     symbol: "lungs.fill",

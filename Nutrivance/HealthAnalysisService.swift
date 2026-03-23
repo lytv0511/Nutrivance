@@ -15,6 +15,10 @@ class HealthAnalysisService: ObservableObject {
     private let endpoint = "https://api.openai.com/v1/chat/completions"
     
     func analyzeNutrientData(_ data: [String: Double]) {
+        if AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            return
+        }
+
         isAnalyzing = true
         let prompt = createAnalysisPrompt(from: data)
         

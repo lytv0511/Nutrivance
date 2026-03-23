@@ -7,6 +7,7 @@ import Combine
 @MainActor
 final class HealthStateEngine: ObservableObject {
     private let longTermLookbackDays = 3650
+    private let interactiveWorkoutLookbackDays = 120
     // Shared singleton instance - persists for entire app session
     static let shared = HealthStateEngine()
     
@@ -847,6 +848,7 @@ final class HealthStateEngine: ObservableObject {
     private var smartDifferentialRefreshTask: Task<Void, Never>?
     private var historicalBatchLoadTask: Task<Void, Never>?
     private let metricsRefreshCooldown: TimeInterval = 20
+    private let allowsAutomaticHistoricalBatchLoading = false
 
     // MARK: - Initialization
 
@@ -887,6 +889,10 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Public Refresh
 
     func refreshAllMetrics(force: Bool = false) {
+        if !force, AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            return
+        }
+
         if !force,
            let lastMetricsRefreshAt,
            Date().timeIntervalSince(lastMetricsRefreshAt) < metricsRefreshCooldown {
@@ -922,6 +928,10 @@ final class HealthStateEngine: ObservableObject {
     /// Refresh workout analytics with smart caching
     /// Only fetches from HealthKit if cache is stale or days range changed
     func refreshWorkoutAnalytics(days: Int = 30, forceRefresh: Bool = false) async {
+        if !forceRefresh, AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            return
+        }
+
         if !forceRefresh, activeWorkoutRefreshDays == days {
             return
         }
@@ -986,14 +996,14 @@ final class HealthStateEngine: ObservableObject {
         self.hasInitializedWorkoutAnalytics = true
         
         // Launch background differential refresh to fetch real data
-        // - If cache exists: fetch only NEW workouts + validate 30-day window
-        // - If cache empty: fetch ALL workouts (first run)
-        // Either way, smartDifferentialRefresh is optimized for speed
+        // Keep the interactive shared engine focused on recent workouts so date switches and
+        // scroll-heavy views stay responsive. Full-history loading remains opt-in from
+        // dedicated history refresh flows instead of running automatically for every screen.
         smartDifferentialRefreshTask?.cancel()
         smartDifferentialRefreshTask = Task { [weak self] in
             guard let self = self, !Task.isCancelled else { return }
             print("[Cache] Starting differential refresh...")
-            await self.smartDifferentialRefresh(totalDays: 3650)
+            await self.smartDifferentialRefresh(totalDays: self.interactiveWorkoutLookbackDays)
         }
     }
     
@@ -1048,9 +1058,8 @@ final class HealthStateEngine: ObservableObject {
             
             print("[Cache] ✅ Loaded \(refreshedWorkouts.count) workouts with fresh data")
             
-            // NOW: Launch background batch loading for historical data (non-blocking)
-            // This populates the view progressively without blocking UI
-            if totalStartDate < overlapStart {
+            // Avoid long-running automatic historical loads while interactive views are active.
+            if allowsAutomaticHistoricalBatchLoading, totalStartDate < overlapStart {
                 scheduleHistoricalBatchLoad(from: totalStartDate, to: overlapStart, batchSize: 30)
             }
             return
@@ -1072,8 +1081,8 @@ final class HealthStateEngine: ObservableObject {
             
             print("[Cache] ✅ Initial load: \(recentWorkouts.count) recent workouts displayed")
             
-            // Then batch-load remaining historical data in background (non-blocking)
-            if totalStartDate < recentStart {
+            // Avoid long-running automatic historical loads while interactive views are active.
+            if allowsAutomaticHistoricalBatchLoading, totalStartDate < recentStart {
                 scheduleHistoricalBatchLoad(from: totalStartDate, to: recentStart, batchSize: 30)
             }
             return
