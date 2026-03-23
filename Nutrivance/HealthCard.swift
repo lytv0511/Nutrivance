@@ -317,13 +317,21 @@ struct HealthLineChartSheet: View {
         geometry: GeometryProxy
     ) {
         let plotFrame = geometry[proxy.plotAreaFrame]
-        guard plotFrame.contains(location) else {
+        guard let xPosition = ChartInteractionSmoothing.clampedXPosition(
+            for: location,
+            plotFrame: plotFrame
+        ) else {
             selected = nil
             return
         }
 
-        let xPosition = location.x - plotFrame.origin.x
-        guard let date: Date = proxy.value(atX: xPosition) else { return }
+        let date = proxy.value(atX: xPosition) as Date?
+            ?? ChartInteractionSmoothing.fallbackBoundaryDate(
+                for: xPosition,
+                plotFrame: plotFrame,
+                data: data
+            )
+        guard let date else { return }
 
         guard let closest = data.min(by: {
             abs($0.0.timeIntervalSince1970 - date.timeIntervalSince1970) <

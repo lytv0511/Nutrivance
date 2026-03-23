@@ -547,10 +547,20 @@ struct WorkoutDetailView: View {
         data: [(Date, Double)]
     ) -> (Date, Double)? {
         let plotFrame = geometry[proxy.plotAreaFrame]
-        guard plotFrame.contains(location) else { return nil }
+        guard let xPosition = ChartInteractionSmoothing.clampedXPosition(
+            for: location,
+            plotFrame: plotFrame
+        ) else {
+            return nil
+        }
 
-        let xPosition = location.x - plotFrame.origin.x
-        guard let date: Date = proxy.value(atX: xPosition) else { return nil }
+        let date = proxy.value(atX: xPosition) as Date?
+            ?? ChartInteractionSmoothing.fallbackBoundaryDate(
+                for: xPosition,
+                plotFrame: plotFrame,
+                data: data
+            )
+        guard let date else { return nil }
         return nearestPoint(in: data, to: date)
     }
 

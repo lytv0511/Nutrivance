@@ -1,6 +1,7 @@
 import SwiftUI
 import Charts
 import HealthKit
+import UIKit
 
 struct CoachSummaryInsight: Identifiable, Hashable {
     let id: String
@@ -185,6 +186,83 @@ struct CoachMetricSeries: Identifiable {
     let unit: String
     let color: Color
     let data: [(Date, Double)]
+}
+
+private enum CoachComparisonFocusKind: String, Identifiable, CaseIterable {
+    case average
+    case maximum
+    case total
+    case trend
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .average:
+            return "Average"
+        case .maximum:
+            return "Peak"
+        case .total:
+            return "Total"
+        case .trend:
+            return "Trend"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .average:
+            return "line.3.horizontal.decrease.circle"
+        case .maximum:
+            return "scope"
+        case .total:
+            return "sum"
+        case .trend:
+            return "chart.line.uptrend.xyaxis"
+        }
+    }
+}
+
+private enum CoachTrendDirection {
+    case up
+    case down
+    case flat
+
+    var symbolName: String {
+        switch self {
+        case .up:
+            return "arrow.up.right"
+        case .down:
+            return "arrow.down.right"
+        case .flat:
+            return "equal"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .up:
+            return "Uptrend"
+        case .down:
+            return "Downtrend"
+        case .flat:
+            return "Flat"
+        }
+    }
+}
+
+private struct CoachComparisonFocusPresentation: Identifiable {
+    let kind: CoachComparisonFocusKind
+    let title: String
+    let chipValueText: String
+    let explanation: String
+    let zoomRange: ClosedRange<Date>?
+    let averageValue: Double?
+    let targetPoint: (Date, Double)?
+    let totalValue: Double?
+    let trendDirection: CoachTrendDirection?
+
+    var id: CoachComparisonFocusKind { kind }
 }
 
 enum CoachSummaryNLP {
@@ -433,6 +511,21 @@ struct CoachComparisonView: View {
         .filter { !$0.data.isEmpty }
     }
 
+    private var snippetLowercased: String {
+        insight.snippet.lowercased()
+    }
+
+    private var timeFilterContextText: String {
+        switch timeFilter {
+        case .day:
+            return "This comparison is anchored to one day, so the chart keeps a week of surrounding context while still treating the selected day as the main point."
+        case .week:
+            return "This comparison is a weekly window, so the coach cue can point to a seven-day average, a weekly total, or the direction of the week-to-week trend."
+        case .month:
+            return "This comparison is a monthly window, so the coach cue should be read as a 30-day story: either the rolling average day, the total accumulated work, or the larger direction of the month."
+        }
+    }
+
     private var highlightRange: ClosedRange<Date>? {
         let calendar = Calendar.current
         if let start = insight.startDate {
@@ -476,6 +569,9 @@ struct CoachComparisonView: View {
                             .foregroundColor(.orange)
                         Text(insight.snippet)
                             .font(.body)
+                        Text(timeFilterContextText)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                         Text(comparisonSupportText)
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -499,7 +595,9 @@ struct CoachComparisonView: View {
                             highlightRange: highlightRange,
                             highlightWindow: highlightWindow,
                             label: insight.label,
-                            supportingText: comparisonSupportText
+                            supportingText: comparisonSupportText,
+                            timeFilter: timeFilter,
+                            snippet: insight.snippet
                         )
                     }
 
@@ -517,8 +615,18 @@ struct CoachComparisonView: View {
             .background(
                 GradientBackgrounds().burningGradient(animationPhase: .constant(16))
             )
+            .background(
+                PencilSqueezeCatcher {
+                    NotificationCenter.default.post(name: .coachComparisonPencilSqueeze, object: nil)
+                }
+            )
             .navigationTitle("Comparison")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ComparisonDismissButton()
+                }
+            }
         }
     }
 }
@@ -530,6 +638,14 @@ private struct CoachComparisonChartCard: View {
     let highlightWindow: DateInterval?
     let label: String
     let supportingText: String
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let snippet: String
+
+    @State private var focusedKind: CoachComparisonFocusKind? = nil
+    @State private var isInteractionPaletteExpanded = false
+    @State private var isHoveringChart = false
+    @State private var overlayOffset: CGSize = .zero
+    @State private var accumulatedOverlayOffset: CGSize = .zero
 
     private var currentSelection: (Date, Double)? {
         guard let selectedDate else { return nil }
@@ -544,17 +660,111 @@ private struct CoachComparisonChartCard: View {
         }
     }
 
+    private var snippetLowercased: String {
+        snippet.lowercased()
+    }
+
+    private var focusKinds: [CoachComparisonFocusKind] {
+        let explicitKinds = detectedFocusKinds(
+            in: snippetLowercased,
+            supportsTotal: series.id.supportsTotalComparison
+        )
+        if !explicitKinds.isEmpty {
+            return explicitKinds
+        }
+
+        switch timeFilter {
+        case .day:
+            return [.maximum, .trend]
+        case .week:
+            return series.id.supportsTotalComparison ? [.average, .total, .trend] : [.average, .trend]
+        case .month:
+            return series.id.supportsTotalComparison ? [.trend, .average, .total] : [.trend, .average]
+        }
+    }
+
+    private var focusPresentations: [CoachComparisonFocusPresentation] {
+        focusKinds.compactMap { focusPresentation(for: $0) }
+    }
+
+    private var activePresentation: CoachComparisonFocusPresentation? {
+        guard let focusedKind else { return nil }
+        return focusPresentations.first(where: { $0.kind == focusedKind })
+    }
+
+    private var chartDomain: ClosedRange<Date> {
+        activePresentation?.zoomRange ?? fullDomain
+    }
+
+    private var fullDomain: ClosedRange<Date> {
+        let firstDate = series.data.first?.0 ?? Date()
+        let lastDate = series.data.last?.0 ?? firstDate
+        return firstDate...lastDate
+    }
+
+    private var averagePresentation: CoachComparisonFocusPresentation? {
+        focusPresentations.first(where: { $0.kind == .average })
+    }
+
+    private var maximumPresentation: CoachComparisonFocusPresentation? {
+        focusPresentations.first(where: { $0.kind == .maximum })
+    }
+
+    private var totalPresentation: CoachComparisonFocusPresentation? {
+        focusPresentations.first(where: { $0.kind == .total })
+    }
+
+    private var trendPresentation: CoachComparisonFocusPresentation? {
+        focusPresentations.first(where: { $0.kind == .trend })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(series.title)
                         .font(.headline)
-                    Text("Scrub any graph to inspect the same day across all related metrics.")
+                    Text("Tap a focus chip to zoom into what the coach likely means, or scrub the chart to inspect the exact day.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 Spacer()
+            }
+
+            if !focusPresentations.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(focusPresentations) { presentation in
+                            Button {
+                                toggleFocus(presentation.kind)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: presentation.kind.icon)
+                                    Text(presentation.title)
+                                    Text(presentation.chipValueText)
+                                        .foregroundColor(.secondary)
+                                }
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    (focusedKind == presentation.kind ? series.color.opacity(0.18) : Color.white.opacity(0.06)),
+                                    in: Capsule()
+                                )
+                                .overlay(
+                                    Capsule()
+                                        .stroke(
+                                            focusedKind == presentation.kind ? series.color.opacity(0.9) : series.color.opacity(0.28),
+                                            lineWidth: focusedKind == presentation.kind ? 1.5 : 1
+                                        )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .opacity(isInteractionPaletteExpanded || focusedKind != nil ? 1 : 0.75)
             }
 
             Chart {
@@ -579,6 +789,19 @@ private struct CoachComparisonChartCard: View {
                             .padding(.vertical, 4)
                             .background(.thinMaterial, in: Capsule())
                     }
+                }
+
+                if let averageValue = averagePresentation?.averageValue {
+                    RuleMark(y: .value("Average", averageValue))
+                        .foregroundStyle(series.color.opacity(0.5))
+                        .lineStyle(.init(lineWidth: focusedKind == .average ? 2 : 1.2, dash: [5, 5]))
+                        .annotation(position: .topTrailing, spacing: 8, overflowResolution: .init(x: .fit, y: .disabled)) {
+                            Text("Avg \(valueString(for: averageValue))")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.thinMaterial, in: Capsule())
+                        }
                 }
 
                 ForEach(series.data, id: \.0) { point in
@@ -613,6 +836,27 @@ private struct CoachComparisonChartCard: View {
                     .symbolSize(80)
                 }
 
+                if let targetPoint = maximumPresentation?.targetPoint {
+                    RuleMark(x: .value("Peak Date Line", targetPoint.0))
+                        .foregroundStyle(series.color.opacity(0.22))
+                        .lineStyle(.init(lineWidth: focusedKind == .maximum ? 1.8 : 1, dash: [3, 5]))
+
+                    PointMark(
+                        x: .value("Peak Date", targetPoint.0),
+                        y: .value(series.title, targetPoint.1)
+                    )
+                    .foregroundStyle(series.color)
+                    .symbol(.diamond)
+                    .symbolSize(focusedKind == .maximum ? 180 : 120)
+                    .annotation(position: .top, spacing: 10, overflowResolution: .init(x: .fit, y: .disabled)) {
+                        Text("\(isMinimumCue(in: snippetLowercased) ? "Low" : "Peak") \(valueString(for: targetPoint.1))")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.thinMaterial, in: Capsule())
+                    }
+                }
+
                 if let selection = currentSelection {
                     RuleMark(x: .value("Selected Date", selection.0))
                         .foregroundStyle(series.color.opacity(0.38))
@@ -640,6 +884,8 @@ private struct CoachComparisonChartCard: View {
                 }
             }
             .frame(height: 220)
+            .chartXScale(domain: chartDomain)
+            .scaleEffect(focusedKind == nil ? 1 : 1.015)
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 6)) { _ in
                     AxisGridLine()
@@ -660,20 +906,84 @@ private struct CoachComparisonChartCard: View {
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
+                                    isInteractionPaletteExpanded = true
+                                    isHoveringChart = true
                                     updateSelection(from: value.location, proxy: proxy, geometry: geo)
                                 }
                                 .onEnded { _ in
                                     selectedDate = nil
+                                    isHoveringChart = false
+                                    if focusedKind == nil {
+                                        isInteractionPaletteExpanded = false
+                                    }
                                 }
                         )
                         .onContinuousHover { phase in
                             switch phase {
                             case .active(let location):
+                                isInteractionPaletteExpanded = true
+                                isHoveringChart = true
                                 updateSelection(from: location, proxy: proxy, geometry: geo)
                             case .ended:
                                 selectedDate = nil
+                                isHoveringChart = false
+                                if focusedKind == nil {
+                                    isInteractionPaletteExpanded = false
+                                }
                             }
                         }
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if let activePresentation {
+                    draggableFocusOverlay(activePresentation)
+                        .offset(
+                            x: -14 + accumulatedOverlayOffset.width + overlayOffset.width,
+                            y: 16 + accumulatedOverlayOffset.height + overlayOffset.height
+                        )
+                        .transition(
+                            .asymmetric(
+                                insertion: .scale(scale: 0.82, anchor: .topTrailing).combined(with: .opacity),
+                                removal: .scale(scale: 0.94, anchor: .topTrailing).combined(with: .opacity)
+                            )
+                        )
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if let trendDirection = trendPresentation?.trendDirection {
+                    HStack(spacing: 6) {
+                        Image(systemName: trendDirection.symbolName)
+                        Text(trendDirection.title)
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(series.color.opacity(0.7))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(10)
+                    .offset(y: activePresentation == nil ? 0 : 72)
+                }
+            }
+            .animation(.interactiveSpring(response: 0.44, dampingFraction: 0.76, blendDuration: 0.14), value: focusedKind)
+            .animation(.interactiveSpring(response: 0.4, dampingFraction: 0.8, blendDuration: 0.12), value: chartDomain.lowerBound)
+            .animation(.interactiveSpring(response: 0.4, dampingFraction: 0.8, blendDuration: 0.12), value: chartDomain.upperBound)
+            .onReceive(NotificationCenter.default.publisher(for: .coachComparisonPencilSqueeze)) { _ in
+                if focusedKind != nil {
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                    withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.72, blendDuration: 0.12)) {
+                        focusedKind = nil
+                        overlayOffset = .zero
+                        accumulatedOverlayOffset = .zero
+                    }
+                    return
+                }
+
+                guard isHoveringChart, let defaultFocus = focusPresentations.first?.kind else { return }
+                let generator = UIImpactFeedbackGenerator(style: .medium)
+                generator.impactOccurred()
+                withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.7, blendDuration: 0.12)) {
+                    focusedKind = defaultFocus
                 }
             }
 
@@ -686,6 +996,27 @@ private struct CoachComparisonChartCard: View {
                         .font(.system(.title3, design: .rounded, weight: .bold))
                         .foregroundColor(series.color)
                 }
+            }
+
+            if let totalPresentation {
+                HStack {
+                    Text("Integrated \(timeFilter.rawValue) total")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(totalPresentation.chipValueText)
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(series.color)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(series.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+
+            if let activePresentation {
+                Text("\(activePresentation.title) is floating on the chart canvas. Drag it anywhere, or tap the active chip again to zoom back out.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Text(supportingText)
@@ -718,19 +1049,184 @@ private struct CoachComparisonChartCard: View {
 
     private func updateSelection(from location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) {
         let plotFrame = geometry[proxy.plotAreaFrame]
-        guard plotFrame.contains(location) else {
+        guard let xPosition = ChartInteractionSmoothing.clampedXPosition(
+            for: location,
+            plotFrame: plotFrame
+        ) else {
             selectedDate = nil
             return
         }
 
-        let xPosition = location.x - plotFrame.origin.x
-        guard let date: Date = proxy.value(atX: xPosition) else { return }
+        let date = proxy.value(atX: xPosition) as Date?
+            ?? ChartInteractionSmoothing.fallbackBoundaryDate(
+                for: xPosition,
+                plotFrame: plotFrame,
+                data: series.data
+            )
+        guard let date else { return }
         if let closest = nearestPoint(in: series.data, to: date) {
             if selectedDate != closest.0 {
                 selectedDate = closest.0
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
             }
         }
+    }
+
+    private func toggleFocus(_ kind: CoachComparisonFocusKind) {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.7, blendDuration: 0.12)) {
+            if focusedKind == kind {
+                focusedKind = nil
+                overlayOffset = .zero
+                accumulatedOverlayOffset = .zero
+            } else {
+                focusedKind = kind
+                isInteractionPaletteExpanded = true
+                overlayOffset = .zero
+                accumulatedOverlayOffset = .zero
+                if let targetDate = focusPresentations.first(where: { $0.kind == kind })?.targetPoint?.0 {
+                    selectedDate = targetDate
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func draggableFocusOverlay(_ presentation: CoachComparisonFocusPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: presentation.kind.icon)
+                    .foregroundColor(series.color)
+                Text("\(presentation.title) Focus")
+                    .font(.caption.weight(.bold))
+                Spacer()
+                Text(presentation.chipValueText)
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(series.color)
+            }
+
+            Text(presentation.explanation)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+
+            Text("Drag this card anywhere on the canvas. Tap the active chip again, or use Apple Pencil squeeze, to zoom back out.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(14)
+        .frame(width: 240, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(series.color.opacity(0.28), lineWidth: 1)
+        )
+        .shadow(color: series.color.opacity(0.14), radius: 14, x: 0, y: 8)
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    overlayOffset = value.translation
+                }
+                .onEnded { value in
+                    accumulatedOverlayOffset.width += value.translation.width
+                    accumulatedOverlayOffset.height += value.translation.height
+                    overlayOffset = .zero
+                }
+        )
+    }
+
+    private func focusPresentation(for kind: CoachComparisonFocusKind) -> CoachComparisonFocusPresentation? {
+        switch kind {
+        case .average:
+            let averageValue = series.data.map(\.1).average
+            guard let averageValue else { return nil }
+            return CoachComparisonFocusPresentation(
+                kind: .average,
+                title: "\(timeFilter.rawValue) Average",
+                chipValueText: valueString(for: averageValue),
+                explanation: "\(series.title) is being read as an average across the \(timeFilter.rawValue) window here, so the dotted line shows the level the coach is describing rather than one isolated day.",
+                zoomRange: contextualZoomRange(around: highlightRange?.lowerBound ?? series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 12 : 5),
+                averageValue: averageValue,
+                targetPoint: nil,
+                totalValue: nil,
+                trendDirection: nil
+            )
+        case .maximum:
+            guard let targetPoint = isMinimumCue(in: snippetLowercased)
+                ? series.data.min(by: { $0.1 < $1.1 })
+                : series.data.max(by: { $0.1 < $1.1 }) else {
+                return nil
+            }
+            let title = isMinimumCue(in: snippetLowercased) ? "Lowest Point" : "Peak Point"
+            return CoachComparisonFocusPresentation(
+                kind: .maximum,
+                title: title,
+                chipValueText: valueString(for: targetPoint.1),
+                explanation: "\(title) is marked directly on the chart so you can see the exact point the coach is anchoring to and the days wrapped around it.",
+                zoomRange: contextualZoomRange(around: targetPoint.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5),
+                averageValue: nil,
+                targetPoint: targetPoint,
+                totalValue: nil,
+                trendDirection: nil
+            )
+        case .total:
+            guard series.id.supportsTotalComparison else { return nil }
+            let totalValue = series.data.map(\.1).reduce(0, +)
+            return CoachComparisonFocusPresentation(
+                kind: .total,
+                title: "\(timeFilter.rawValue) Total",
+                chipValueText: valueString(for: totalValue),
+                explanation: "This cue reads \(series.title.lowercased()) as accumulated exposure across the displayed window, so the value below the chart sums the visible curve rather than pointing to one day.",
+                zoomRange: contextualZoomRange(around: series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 14 : 7),
+                averageValue: nil,
+                targetPoint: nil,
+                totalValue: totalValue,
+                trendDirection: nil
+            )
+        case .trend:
+            let direction = derivedTrendDirection(for: series.data)
+            let delta = (series.data.last?.1 ?? 0) - (series.data.first?.1 ?? 0)
+            return CoachComparisonFocusPresentation(
+                kind: .trend,
+                title: "\(timeFilter.rawValue) Trend",
+                chipValueText: signedValueString(for: delta),
+                explanation: "The faint trend marker summarizes the overall direction of \(series.title.lowercased()) across this \(timeFilter.rawValue) window, so you can see whether the coach is describing climb, fade, or stability.",
+                zoomRange: contextualZoomRange(around: series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 15 : 7),
+                averageValue: nil,
+                targetPoint: nil,
+                totalValue: nil,
+                trendDirection: direction
+            )
+        }
+    }
+
+    private func contextualZoomRange(around centerDate: Date?, preferredVisiblePoints: Int) -> ClosedRange<Date>? {
+        guard let centerDate,
+              let centerIndex = series.data.firstIndex(where: { Calendar.current.isDate($0.0, inSameDayAs: centerDate) }) ?? nearestIndex(to: centerDate) else {
+            return nil
+        }
+
+        let halfWindow = max(1, preferredVisiblePoints / 2)
+        let lowerBound = max(0, centerIndex - halfWindow)
+        let upperBound = min(series.data.count - 1, centerIndex + halfWindow)
+        guard lowerBound < upperBound else { return nil }
+        return series.data[lowerBound].0...series.data[upperBound].0
+    }
+
+    private func nearestIndex(to date: Date) -> Int? {
+        guard let point = nearestPoint(in: series.data, to: date) else { return nil }
+        return series.data.firstIndex(where: { $0.0 == point.0 && $0.1 == point.1 })
+    }
+
+    private func signedValueString(for value: Double) -> String {
+        let prefix = value >= 0 ? "+" : ""
+        if series.unit.isEmpty {
+            return "\(prefix)\(String(format: "%.2f", value))"
+        }
+        if series.unit == "%" || series.unit == "min" || series.unit == "bpm" || series.unit == "W" || series.unit == "rpm" || series.unit == "pts" {
+            return "\(prefix)\(String(format: "%.0f", value)) \(series.unit)"
+        }
+        return "\(prefix)\(String(format: "%.1f", value)) \(series.unit)"
     }
 }
 
@@ -944,6 +1440,128 @@ private func comparisonDateSequence(from start: Date, to end: Date) -> [Date] {
     guard safeStart <= safeEnd else { return [] }
     let count = (calendar.dateComponents([.day], from: safeStart, to: safeEnd).day ?? 0) + 1
     return (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: safeStart) }
+}
+
+private func detectedFocusKinds(
+    in snippet: String,
+    supportsTotal: Bool
+) -> [CoachComparisonFocusKind] {
+    var kinds: [CoachComparisonFocusKind] = []
+
+    let averageKeywords = ["average", "avg", "mean", "baseline", "typical"]
+    let maxKeywords = ["max", "maximum", "highest", "peak", "spike", "top", "lowest", "minimum", "bottom"]
+    let totalKeywords = ["total", "sum", "overall", "accumulated", "cumulative", "combined"]
+    let trendKeywords = ["trend", "trending", "rising", "climbing", "improving", "dropping", "falling", "declining", "stable", "flat", "holding", "direction"]
+
+    if averageKeywords.contains(where: snippet.contains) {
+        kinds.append(.average)
+    }
+    if maxKeywords.contains(where: snippet.contains) {
+        kinds.append(.maximum)
+    }
+    if supportsTotal && totalKeywords.contains(where: snippet.contains) {
+        kinds.append(.total)
+    }
+    if trendKeywords.contains(where: snippet.contains) {
+        kinds.append(.trend)
+    }
+
+    if kinds.isEmpty {
+        kinds.append(.trend)
+    }
+
+    return kinds.removingDuplicates()
+}
+
+private func isMinimumCue(in snippet: String) -> Bool {
+    ["lowest", "minimum", "bottom", "dip", "drop", "suppressed"].contains(where: snippet.contains)
+}
+
+private func derivedTrendDirection(for data: [(Date, Double)]) -> CoachTrendDirection {
+    guard data.count >= 2 else { return .flat }
+    let firstSlice = Array(data.prefix(max(1, data.count / 3))).map(\.1)
+    let lastSlice = Array(data.suffix(max(1, data.count / 3))).map(\.1)
+    let firstAverage = firstSlice.reduce(0, +) / Double(firstSlice.count)
+    let lastAverage = lastSlice.reduce(0, +) / Double(lastSlice.count)
+    let span = max(1, abs(data.map(\.1).max() ?? 0 - (data.map(\.1).min() ?? 0)))
+    let normalizedDelta = (lastAverage - firstAverage) / span
+
+    if normalizedDelta > 0.08 {
+        return .up
+    }
+    if normalizedDelta < -0.08 {
+        return .down
+    }
+    return .flat
+}
+
+private extension CoachMetricKey {
+    var supportsTotalComparison: Bool {
+        switch self {
+        case .sleepHours, .effort, .sessionLoad, .mets, .zone4, .zone5:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private extension Array where Element: Hashable {
+    func removingDuplicates() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
+    }
+}
+
+private struct ComparisonDismissButton: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Button("Done") {
+            dismiss()
+        }
+        .font(.body.weight(.semibold))
+    }
+}
+
+private struct PencilSqueezeCatcher: UIViewRepresentable {
+    let onSqueeze: () -> Void
+
+    func makeUIView(context: Context) -> PencilSqueezeView {
+        PencilSqueezeView(onSqueeze: onSqueeze)
+    }
+
+    func updateUIView(_ uiView: PencilSqueezeView, context: Context) {
+        uiView.onSqueeze = onSqueeze
+    }
+}
+
+private final class PencilSqueezeView: UIView, UIPencilInteractionDelegate {
+    var onSqueeze: () -> Void
+
+    init(onSqueeze: @escaping () -> Void) {
+        self.onSqueeze = onSqueeze
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        isUserInteractionEnabled = true
+        if #available(iOS 17.5, *) {
+            addInteraction(UIPencilInteraction(delegate: self))
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @available(iOS 17.5, *)
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        guard squeeze.phase == .ended else { return }
+        onSqueeze()
+    }
+}
+
+private extension Notification.Name {
+    static let coachComparisonPencilSqueeze = Notification.Name("coachComparisonPencilSqueeze")
 }
 
 @MainActor

@@ -1868,7 +1868,7 @@ private struct StrainRecoveryAISummarySection: View {
                     .stroke(Color.orange.opacity(0.16), lineWidth: 1.1)
             )
         }
-        .sheet(item: $selectedComparisonInsight) { insight in
+        .fullScreenCover(item: $selectedComparisonInsight) { insight in
             CoachComparisonView(
                 engine: engine,
                 insight: insight,

@@ -301,10 +301,18 @@ struct StressView: View {
             geometry: GeometryProxy
         ) {
             let plotFrame = geometry[proxy.plotAreaFrame]
-            guard plotFrame.contains(location) else { return }
+            guard let xPosition = ChartInteractionSmoothing.clampedXPosition(
+                for: location,
+                plotFrame: plotFrame
+            ) else { return }
 
-            let xPosition = location.x - plotFrame.origin.x
-            guard let date: Date = proxy.value(atX: xPosition) else { return }
+            let date = proxy.value(atX: xPosition) as Date?
+                ?? ChartInteractionSmoothing.fallbackBoundaryDate(
+                    for: xPosition,
+                    plotFrame: plotFrame,
+                    data: aggregatedData.map { ($0.date, $0.combinedHRV) }
+                )
+            guard let date else { return }
 
             guard let closest = aggregatedData.min(by: {
                 abs($0.date.timeIntervalSince1970 - date.timeIntervalSince1970) <
@@ -428,10 +436,18 @@ struct StressView: View {
             geometry: GeometryProxy
         ) {
             let plotFrame = geometry[proxy.plotAreaFrame]
-            guard plotFrame.contains(location) else { return }
+            guard let xPosition = ChartInteractionSmoothing.clampedXPosition(
+                for: location,
+                plotFrame: plotFrame
+            ) else { return }
 
-            let xPosition = location.x - plotFrame.origin.x
-            guard let date: Date = proxy.value(atX: xPosition) else { return }
+            let date = proxy.value(atX: xPosition) as Date?
+                ?? ChartInteractionSmoothing.fallbackBoundaryDate(
+                    for: xPosition,
+                    plotFrame: plotFrame,
+                    data: aggregatedData.map { ($0.date, $0.combinedHRV) }
+                )
+            guard let date else { return }
 
             guard let closest = aggregatedData.min(by: {
                 abs($0.date.timeIntervalSince1970 - date.timeIntervalSince1970) <
