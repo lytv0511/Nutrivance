@@ -93,9 +93,10 @@ struct StrainRecoveryView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 28) {
+            GeometryReader { geometry in
+                ZStack {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 28) {
                     // Time and Sport Filters
                     HStack {
                         HStack(spacing: 8) {
@@ -223,14 +224,18 @@ struct StrainRecoveryView: View {
                             anchorDate: selectedDate
                         )
                     }
+                        }
+                        .frame(maxWidth: max(0, geometry.size.width - 32), alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
                     }
-                    .padding()
-                }
-                .allowsHitTesting(!aggressiveCachingController.isActive)
-                .blur(radius: aggressiveCachingController.isActive ? 3 : 0)
+                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                    .allowsHitTesting(!aggressiveCachingController.isActive)
+                    .blur(radius: aggressiveCachingController.isActive ? 3 : 0)
 
-                if aggressiveCachingController.isActive {
-                    aggressiveCachingOverlay
+                    if aggressiveCachingController.isActive {
+                        aggressiveCachingOverlay
+                    }
                 }
             }
             .background(
@@ -1453,18 +1458,6 @@ private struct StrainRecoveryAISummarySection: View {
         let triggerToken: String
     }
 
-    private var request: StrainRecoverySummaryRequest {
-        StrainRecoverySummaryRequest.build(
-            engine: engine,
-            timeFilter: timeFilter,
-            sportFilter: sportFilter,
-            anchorDate: anchorDate,
-            intentText: intentText,
-            selectedSuggestion: selectedSuggestion,
-            refreshVersion: refreshVersions[selectedSuggestion?.id ?? "default", default: 0]
-        )
-    }
-
     private var detectedIntent: SummaryIntent {
         SummaryIntent.detect(from: intentText, sportFilter: sportFilter)
     }
@@ -1487,21 +1480,33 @@ private struct StrainRecoveryAISummarySection: View {
             ?? suggestions.first
     }
 
+    private var selectedSuggestionRequestID: String {
+        summaryRequestID(
+            timeFilter: timeFilter,
+            scopedSport: selectedSuggestion?.scopedSport ?? sportFilter,
+            anchorDate: anchorDate,
+            suggestionID: selectedSuggestion?.id ?? SummarySuggestion.defaultSuggestion.id
+        )
+    }
+
+    private var latestWorkoutTimestamp: TimeInterval? {
+        engine.workoutAnalytics
+            .map(\.workout.endDate.timeIntervalSince1970)
+            .max()
+    }
+
     private var suggestionCacheStates: [String: (hasAISummary: Bool, isPassivePriority: Bool)] {
         let priorityIDs = Set(syncSettingsSnapshot.passivePrioritySuggestionIDs)
         var states: [String: (hasAISummary: Bool, isPassivePriority: Bool)] = [:]
 
         for suggestion in filteredSuggestions.prefix(24) {
-            let suggestionRequest = StrainRecoverySummaryRequest.build(
-                engine: engine,
+            let suggestionRequestID = summaryRequestID(
                 timeFilter: timeFilter,
-                sportFilter: sportFilter,
+                scopedSport: suggestion.scopedSport ?? sportFilter,
                 anchorDate: anchorDate,
-                intentText: suggestion.queryText,
-                selectedSuggestion: suggestion,
-                refreshVersion: refreshVersions[suggestion.id, default: 0]
+                suggestionID: suggestion.id
             )
-            let hasAISummary = cacheSnapshot[suggestionRequest.requestID]?.source == .appleIntelligence
+            let hasAISummary = cacheSnapshot[suggestionRequestID]?.source == .appleIntelligence
             states[suggestion.id] = (hasAISummary, priorityIDs.contains(suggestion.id))
         }
 
@@ -1567,18 +1572,18 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var generationTaskID: String {
-        [request.requestID, summaryGenerationReadiness.triggerToken].joined(separator: "|")
+        [selectedSuggestionRequestID, summaryGenerationReadiness.triggerToken].joined(separator: "|")
     }
 
     private var displayedSummaryBody: String {
-        if displayedRequestID == request.requestID,
+        if displayedRequestID == selectedSuggestionRequestID,
            !summaryText.isEmpty {
             return summaryText
         }
         if !summaryGenerationReadiness.canGenerate {
             return summaryGenerationReadiness.placeholderText
         }
-        if isLoading && requestedRequestID == request.requestID {
+        if isLoading && requestedRequestID == selectedSuggestionRequestID {
             return "This coach report is still being prepared for \(selectedSuggestion?.title ?? detectedIntent.displayName). The current filter does not have a finished summary yet."
         }
         return "AI summaries are on-demand while you browse. Tap a suggestion to load \(selectedSuggestion?.title ?? detectedIntent.displayName) for this date and filter."
@@ -1597,7 +1602,7 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var shouldRecommendRefresh: Bool {
-        guard displayedRequestID == request.requestID else { return false }
+        guard displayedRequestID == selectedSuggestionRequestID else { return false }
         guard let persistedEntry else { return false }
         if persistedEntry.source == .localFallback {
             return true
@@ -1606,7 +1611,7 @@ private struct StrainRecoveryAISummarySection: View {
             return true
         }
         guard let cachedWorkoutTimestamp = persistedEntry.latestWorkoutTimestamp,
-              let latestWorkoutTimestamp = request.latestWorkoutTimestamp else {
+              let latestWorkoutTimestamp else {
             return false
         }
         return latestWorkoutTimestamp > cachedWorkoutTimestamp + 1
@@ -1655,8 +1660,8 @@ private struct StrainRecoveryAISummarySection: View {
 
     @MainActor
     @discardableResult
-    private func restoreCachedSummaryIfAvailable(for request: StrainRecoverySummaryRequest) -> Bool {
-        guard let entry = cacheSnapshot[request.requestID] else {
+    private func restoreCachedSummaryIfAvailable(requestID: String) -> Bool {
+        guard let entry = cacheSnapshot[requestID] else {
             return false
         }
 
@@ -1680,6 +1685,15 @@ private struct StrainRecoveryAISummarySection: View {
                         let key = selectedSuggestion?.id ?? "default"
                         refreshVersions[key, default: 0] += 1
                         Task {
+                            let request = StrainRecoverySummaryRequest.build(
+                                engine: engine,
+                                timeFilter: timeFilter,
+                                sportFilter: sportFilter,
+                                anchorDate: anchorDate,
+                                intentText: intentText,
+                                selectedSuggestion: selectedSuggestion,
+                                refreshVersion: refreshVersions[key, default: 0]
+                            )
                             await generateSummary(
                                 for: request,
                                 forceRefresh: true,
@@ -1886,7 +1900,7 @@ private struct StrainRecoveryAISummarySection: View {
                     intentText = suggestions.first?.queryText ?? ""
                 }
             }
-            if !restoreCachedSummaryIfAvailable(for: request) {
+            if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
                 resetSummaryForNavigation()
             }
         }

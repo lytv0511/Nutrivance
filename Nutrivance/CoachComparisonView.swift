@@ -265,6 +265,23 @@ private struct CoachComparisonFocusPresentation: Identifiable {
     var id: CoachComparisonFocusKind { kind }
 }
 
+private struct CoachComparisonFloatingState: Identifiable, Equatable {
+    let sourceMetric: CoachMetricKey
+    let presentation: CoachComparisonFocusPresentation
+    let color: Color
+
+    var id: String {
+        "\(sourceMetric.rawValue)-\(presentation.kind.rawValue)"
+    }
+
+    static func == (lhs: CoachComparisonFloatingState, rhs: CoachComparisonFloatingState) -> Bool {
+        lhs.sourceMetric == rhs.sourceMetric &&
+        lhs.presentation.id == rhs.presentation.id &&
+        lhs.presentation.chipValueText == rhs.presentation.chipValueText &&
+        lhs.presentation.explanation == rhs.presentation.explanation
+    }
+}
+
 enum CoachSummaryNLP {
     static func detectInsights(
         in summary: String,
@@ -498,6 +515,8 @@ struct CoachComparisonView: View {
     let anchorDate: Date
 
     @State private var selectedDate: Date? = nil
+    @State private var floatingOverlayState: CoachComparisonFloatingState? = nil
+    @State private var floatingOverlayPosition: CGPoint? = nil
 
     private var chartSeries: [CoachMetricSeries] {
         insight.metrics.compactMap {
@@ -559,72 +578,98 @@ struct CoachComparisonView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Coach Whiteboard")
-                            .font(.title2.bold())
-                        Text(insight.label)
-                            .font(.headline)
-                            .foregroundColor(.orange)
-                        Text(insight.snippet)
-                            .font(.body)
-                        Text(timeFilterContextText)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(comparisonSupportText)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        if let highlightRange {
-                            Text("Highlighted window: \(highlightRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(highlightRange.upperBound.formatted(date: .abbreviated, time: .omitted)) • \(insight.label)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+            GeometryReader { geometry in
+                ZStack {
+                    ScrollView {
+                        ZStack(alignment: .topLeading) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Coach Whiteboard")
+                                        .font(.title2.bold())
+                                    Text(insight.label)
+                                        .font(.headline)
+                                        .foregroundColor(.orange)
+                                    Text(insight.snippet)
+                                        .font(.body)
+                                    Text(timeFilterContextText)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text(comparisonSupportText)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    if let highlightRange {
+                                        Text("Highlighted window: \(highlightRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(highlightRange.upperBound.formatted(date: .abbreviated, time: .omitted)) • \(insight.label)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(18)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                        .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                                )
+
+                                ForEach(chartSeries) { series in
+                                    CoachComparisonChartCard(
+                                        series: series,
+                                        selectedDate: $selectedDate,
+                                        floatingOverlayState: $floatingOverlayState,
+                                        floatingOverlayPosition: $floatingOverlayPosition,
+                                        highlightRange: highlightRange,
+                                        highlightWindow: highlightWindow,
+                                        label: insight.label,
+                                        supportingText: comparisonSupportText,
+                                        timeFilter: timeFilter,
+                                        snippet: insight.snippet
+                                    )
+                                }
+
+                                if chartSeries.isEmpty {
+                                    Text("No chart-ready metric series were found for this coach comparison yet.")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                        .padding(18)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                }
+                            }
+
+                            if let floatingOverlayState {
+                                CoachComparisonFloatingOverlay(
+                                    presentation: floatingOverlayState.presentation,
+                                    color: floatingOverlayState.color,
+                                    position: $floatingOverlayPosition,
+                                    canvasSize: geometry.size
+                                )
+                                .zIndex(100)
+                            }
                         }
+                        .padding()
+                        .coordinateSpace(name: "comparisonCanvas")
                     }
-                    .padding(18)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                    .background(
+                        GradientBackgrounds().burningGradient(animationPhase: .constant(16))
+                    )
+                    .background(
+                        PencilSqueezeCatcher {
+                            NotificationCenter.default.post(name: .coachComparisonPencilSqueeze, object: nil)
+                        }
                     )
 
-                    ForEach(chartSeries) { series in
-                        CoachComparisonChartCard(
-                            series: series,
-                            selectedDate: $selectedDate,
-                            highlightRange: highlightRange,
-                            highlightWindow: highlightWindow,
-                            label: insight.label,
-                            supportingText: comparisonSupportText,
-                            timeFilter: timeFilter,
-                            snippet: insight.snippet
-                        )
-                    }
-
-                    if chartSeries.isEmpty {
-                        Text("No chart-ready metric series were found for this coach comparison yet.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .padding(18)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    }
                 }
-                .padding()
             }
-            .background(
-                GradientBackgrounds().burningGradient(animationPhase: .constant(16))
-            )
-            .background(
-                PencilSqueezeCatcher {
-                    NotificationCenter.default.post(name: .coachComparisonPencilSqueeze, object: nil)
-                }
-            )
             .navigationTitle("Comparison")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     ComparisonDismissButton()
+                }
+            }
+            .onChange(of: floatingOverlayState) { _, newValue in
+                guard newValue != nil else {
+                    floatingOverlayPosition = nil
+                    return
                 }
             }
         }
@@ -634,6 +679,8 @@ struct CoachComparisonView: View {
 private struct CoachComparisonChartCard: View {
     let series: CoachMetricSeries
     @Binding var selectedDate: Date?
+    @Binding var floatingOverlayState: CoachComparisonFloatingState?
+    @Binding var floatingOverlayPosition: CGPoint?
     let highlightRange: ClosedRange<Date>?
     let highlightWindow: DateInterval?
     let label: String
@@ -644,8 +691,8 @@ private struct CoachComparisonChartCard: View {
     @State private var focusedKind: CoachComparisonFocusKind? = nil
     @State private var isInteractionPaletteExpanded = false
     @State private var isHoveringChart = false
-    @State private var overlayOffset: CGSize = .zero
-    @State private var accumulatedOverlayOffset: CGSize = .zero
+    @State private var cardFrameInCanvas: CGRect = .zero
+    @State private var hoverLocationInCanvas: CGPoint? = nil
 
     private var currentSelection: (Date, Double)? {
         guard let selectedDate else { return nil }
@@ -935,21 +982,6 @@ private struct CoachComparisonChartCard: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if let activePresentation {
-                    draggableFocusOverlay(activePresentation)
-                        .offset(
-                            x: -14 + accumulatedOverlayOffset.width + overlayOffset.width,
-                            y: 16 + accumulatedOverlayOffset.height + overlayOffset.height
-                        )
-                        .transition(
-                            .asymmetric(
-                                insertion: .scale(scale: 0.82, anchor: .topTrailing).combined(with: .opacity),
-                                removal: .scale(scale: 0.94, anchor: .topTrailing).combined(with: .opacity)
-                            )
-                        )
-                }
-            }
-            .overlay(alignment: .topTrailing) {
                 if let trendDirection = trendPresentation?.trendDirection {
                     HStack(spacing: 6) {
                         Image(systemName: trendDirection.symbolName)
@@ -973,8 +1005,9 @@ private struct CoachComparisonChartCard: View {
                     generator.impactOccurred()
                     withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.72, blendDuration: 0.12)) {
                         focusedKind = nil
-                        overlayOffset = .zero
-                        accumulatedOverlayOffset = .zero
+                    }
+                    if floatingOverlayState?.sourceMetric == series.id {
+                        floatingOverlayState = nil
                     }
                     return
                 }
@@ -984,6 +1017,14 @@ private struct CoachComparisonChartCard: View {
                 generator.impactOccurred()
                 withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.7, blendDuration: 0.12)) {
                     focusedKind = defaultFocus
+                    if let hoverLocationInCanvas {
+                        floatingOverlayPosition = CGPoint(
+                            x: hoverLocationInCanvas.x + 130,
+                            y: hoverLocationInCanvas.y + 10
+                        )
+                    } else {
+                        floatingOverlayPosition = defaultOverlayPosition()
+                    }
                 }
             }
 
@@ -1013,12 +1054,6 @@ private struct CoachComparisonChartCard: View {
                 .background(series.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
 
-            if let activePresentation {
-                Text("\(activePresentation.title) is floating on the chart canvas. Drag it anywhere, or tap the active chip again to zoom back out.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
             Text(supportingText)
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -1029,6 +1064,35 @@ private struct CoachComparisonChartCard: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(series.color.opacity(0.22), lineWidth: 1)
         )
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        cardFrameInCanvas = geo.frame(in: .named("comparisonCanvas"))
+                    }
+                    .onChange(of: geo.frame(in: .named("comparisonCanvas"))) { _, newValue in
+                        cardFrameInCanvas = newValue
+                    }
+            }
+        )
+        .onChange(of: focusedKind) { _, newValue in
+            guard let newValue,
+                  let presentation = focusPresentations.first(where: { $0.kind == newValue }) else {
+                if floatingOverlayState?.sourceMetric == series.id {
+                    floatingOverlayState = nil
+                }
+                return
+            }
+
+            floatingOverlayState = CoachComparisonFloatingState(
+                sourceMetric: series.id,
+                presentation: presentation,
+                color: series.color
+            )
+            if floatingOverlayPosition == nil {
+                floatingOverlayPosition = defaultOverlayPosition()
+            }
+        }
     }
 
     private func valueString(for value: Double) -> String {
@@ -1063,6 +1127,11 @@ private struct CoachComparisonChartCard: View {
                 plotFrame: plotFrame,
                 data: series.data
             )
+        let overlayFrame = geometry.frame(in: .named("comparisonCanvas"))
+        hoverLocationInCanvas = CGPoint(
+            x: overlayFrame.minX + location.x,
+            y: overlayFrame.minY + location.y
+        )
         guard let date else { return }
         if let closest = nearestPoint(in: series.data, to: date) {
             if selectedDate != closest.0 {
@@ -1078,13 +1147,16 @@ private struct CoachComparisonChartCard: View {
         withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.7, blendDuration: 0.12)) {
             if focusedKind == kind {
                 focusedKind = nil
-                overlayOffset = .zero
-                accumulatedOverlayOffset = .zero
+                if floatingOverlayState?.sourceMetric == series.id {
+                    floatingOverlayState = nil
+                }
+                if hoverLocationInCanvas == nil {
+                    floatingOverlayPosition = nil
+                }
             } else {
                 focusedKind = kind
                 isInteractionPaletteExpanded = true
-                overlayOffset = .zero
-                accumulatedOverlayOffset = .zero
+                floatingOverlayPosition = defaultOverlayPosition()
                 if let targetDate = focusPresentations.first(where: { $0.kind == kind })?.targetPoint?.0 {
                     selectedDate = targetDate
                 }
@@ -1092,46 +1164,10 @@ private struct CoachComparisonChartCard: View {
         }
     }
 
-    @ViewBuilder
-    private func draggableFocusOverlay(_ presentation: CoachComparisonFocusPresentation) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: presentation.kind.icon)
-                    .foregroundColor(series.color)
-                Text("\(presentation.title) Focus")
-                    .font(.caption.weight(.bold))
-                Spacer()
-                Text(presentation.chipValueText)
-                    .font(.caption.weight(.bold))
-                    .foregroundColor(series.color)
-            }
-
-            Text(presentation.explanation)
-                .font(.subheadline)
-                .foregroundColor(.primary)
-
-            Text("Drag this card anywhere on the canvas. Tap the active chip again, or use Apple Pencil squeeze, to zoom back out.")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .padding(14)
-        .frame(width: 240, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(series.color.opacity(0.28), lineWidth: 1)
-        )
-        .shadow(color: series.color.opacity(0.14), radius: 14, x: 0, y: 8)
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    overlayOffset = value.translation
-                }
-                .onEnded { value in
-                    accumulatedOverlayOffset.width += value.translation.width
-                    accumulatedOverlayOffset.height += value.translation.height
-                    overlayOffset = .zero
-                }
+    private func defaultOverlayPosition() -> CGPoint {
+        CGPoint(
+            x: max(cardFrameInCanvas.minX + 150, cardFrameInCanvas.maxX - 145),
+            y: cardFrameInCanvas.minY + 120
         )
     }
 
@@ -1521,6 +1557,91 @@ private struct ComparisonDismissButton: View {
             dismiss()
         }
         .font(.body.weight(.semibold))
+    }
+}
+
+private struct CoachComparisonFloatingOverlay: View {
+    let presentation: CoachComparisonFocusPresentation
+    let color: Color
+    @Binding var position: CGPoint?
+    let canvasSize: CGSize
+
+    @GestureState private var dragTranslation: CGSize = .zero
+
+    private let overlaySize = CGSize(width: 240, height: 150)
+
+    private var resolvedPosition: CGPoint {
+        position ?? CGPoint(
+            x: max(overlaySize.width / 2 + 16, canvasSize.width - (overlaySize.width / 2) - 20),
+            y: max(overlaySize.height / 2 + 24, 140)
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: presentation.kind.icon)
+                    .foregroundColor(color)
+                Text("\(presentation.title) Focus")
+                    .font(.caption.weight(.bold))
+                Spacer()
+                Text(presentation.chipValueText)
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(color)
+            }
+
+            Text(presentation.explanation)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+
+            Text("Drag this card anywhere on the canvas. Tap the active chip again, or use Apple Pencil squeeze, to zoom back out.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(14)
+        .frame(width: overlaySize.width, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(color.opacity(0.28), lineWidth: 1)
+        )
+        .shadow(color: color.opacity(0.14), radius: 14, x: 0, y: 8)
+        .position(
+            x: clampedPosition(
+                x: resolvedPosition.x + dragTranslation.width,
+                y: resolvedPosition.y + dragTranslation.height
+            ).x,
+            y: clampedPosition(
+                x: resolvedPosition.x + dragTranslation.width,
+                y: resolvedPosition.y + dragTranslation.height
+            ).y
+        )
+        .gesture(
+            DragGesture()
+                .updating($dragTranslation) { value, state, _ in
+                    state = value.translation
+                }
+                .onEnded { value in
+                    position = clampedPosition(
+                        x: resolvedPosition.x + value.translation.width,
+                        y: resolvedPosition.y + value.translation.height
+                    )
+                }
+        )
+        .onAppear {
+            if position == nil {
+                position = resolvedPosition
+            }
+        }
+    }
+
+    private func clampedPosition(x: CGFloat, y: CGFloat) -> CGPoint {
+        let halfWidth = overlaySize.width / 2
+        let halfHeight = overlaySize.height / 2
+        return CGPoint(
+            x: min(max(x, halfWidth + 12), max(halfWidth + 12, canvasSize.width - halfWidth - 12)),
+            y: min(max(y, halfHeight + 12), max(halfHeight + 12, canvasSize.height - halfHeight - 12))
+        )
     }
 }
 
