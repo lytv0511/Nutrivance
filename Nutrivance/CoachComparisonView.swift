@@ -72,8 +72,10 @@ enum CoachMetricKey: String, CaseIterable, Hashable {
 
     var unit: String {
         switch self {
-        case .strainScore, .recoveryScore, .readinessScore, .sleepEfficiency:
+        case .recoveryScore, .readinessScore, .sleepEfficiency:
             return "%"
+        case .strainScore:
+            return "/21"
         case .hrv:
             return "ms"
         case .restingHeartRate, .sleepHeartRate, .hrr, .peakHeartRate:
@@ -178,6 +180,17 @@ enum CoachMetricKey: String, CaseIterable, Hashable {
             return ["peak hr", "max hr", "peak heart rate", "max heart rate"]
         }
     }
+
+    fileprivate var beneficialTrendDirection: CoachTrendDirection? {
+        switch self {
+        case .recoveryScore, .readinessScore, .hrv, .sleepHours, .sleepEfficiency, .spO2, .hrr, .vo2Max, .power, .cadence:
+            return .up
+        case .restingHeartRate, .sleepConsistency, .sleepHeartRate, .respiratoryRate:
+            return .down
+        case .strainScore, .effort, .sessionLoad, .acuteLoad, .chronicLoad, .acwr, .wristTemperature, .mets, .zone4, .zone5, .peakHeartRate:
+            return nil
+        }
+    }
 }
 
 struct CoachMetricSeries: Identifiable {
@@ -263,6 +276,14 @@ private struct CoachComparisonFocusPresentation: Identifiable {
     let trendDirection: CoachTrendDirection?
 
     var id: CoachComparisonFocusKind { kind }
+}
+
+private struct CoachTrendSegment {
+    let startIndex: Int
+    let endIndex: Int
+    let direction: CoachTrendDirection
+    let delta: Double
+    let normalizedStrength: Double
 }
 
 private struct CoachComparisonFloatingState: Identifiable, Equatable {
@@ -765,6 +786,32 @@ private struct CoachComparisonChartCard: View {
         focusPresentations.first(where: { $0.kind == .trend })
     }
 
+    private var coachTrendIntent: CoachTrendDirection? {
+        if ["rising", "rose", "climbing", "uptrend", "higher", "up", "increase", "increasing"].contains(where: snippetLowercased.contains) {
+            return .up
+        }
+        if ["falling", "declining", "dropping", "downtrend", "lower", "suppressed", "down", "decrease", "decreasing"].contains(where: snippetLowercased.contains) {
+            return .down
+        }
+        if ["stable", "flat", "holding", "steady", "balanced"].contains(where: snippetLowercased.contains) {
+            return .flat
+        }
+        if ["improving", "improved", "better", "healthier", "cleaner", "stronger"].contains(where: snippetLowercased.contains) {
+            return series.id.beneficialTrendDirection
+        }
+        if ["worsening", "worse", "poorer", "fatigued", "elevated"].contains(where: snippetLowercased.contains) {
+            switch series.id.beneficialTrendDirection {
+            case .up:
+                return .down
+            case .down:
+                return .up
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -960,10 +1007,10 @@ private struct CoachComparisonChartCard: View {
                                 .onEnded { _ in
                                     selectedDate = nil
                                     isHoveringChart = false
-                                    if focusedKind == nil {
-                                        isInteractionPaletteExpanded = false
-                                    }
+                                if focusedKind == nil {
+                                    isInteractionPaletteExpanded = false
                                 }
+                            }
                         )
                         .onContinuousHover { phase in
                             switch phase {
@@ -1025,17 +1072,6 @@ private struct CoachComparisonChartCard: View {
                     } else {
                         floatingOverlayPosition = defaultOverlayPosition()
                     }
-                }
-            }
-
-            if let selection = currentSelection {
-                HStack {
-                    Text(selection.0.formatted(date: .abbreviated, time: .omitted))
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text(valueString(for: selection.1))
-                        .font(.system(.title3, design: .rounded, weight: .bold))
-                        .foregroundColor(series.color)
                 }
             }
 
@@ -1117,7 +1153,6 @@ private struct CoachComparisonChartCard: View {
             for: location,
             plotFrame: plotFrame
         ) else {
-            selectedDate = nil
             return
         }
 
@@ -1176,12 +1211,16 @@ private struct CoachComparisonChartCard: View {
         case .average:
             let averageValue = series.data.map(\.1).average
             guard let averageValue else { return nil }
+            let averageRange = bestAverageRange()
             return CoachComparisonFocusPresentation(
                 kind: .average,
                 title: "\(timeFilter.rawValue) Average",
                 chipValueText: valueString(for: averageValue),
-                explanation: "\(series.title) is being read as an average across the \(timeFilter.rawValue) window here, so the dotted line shows the level the coach is describing rather than one isolated day.",
-                zoomRange: contextualZoomRange(around: highlightRange?.lowerBound ?? series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 12 : 5),
+                explanation: averageExplanation(
+                    averageValue: averageValue,
+                    zoomRange: averageRange
+                ),
+                zoomRange: averageRange,
                 averageValue: averageValue,
                 targetPoint: nil,
                 totalValue: nil,
@@ -1198,7 +1237,10 @@ private struct CoachComparisonChartCard: View {
                 kind: .maximum,
                 title: title,
                 chipValueText: valueString(for: targetPoint.1),
-                explanation: "\(title) is marked directly on the chart so you can see the exact point the coach is anchoring to and the days wrapped around it.",
+                explanation: maximumExplanation(
+                    title: title,
+                    point: targetPoint
+                ),
                 zoomRange: contextualZoomRange(around: targetPoint.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5),
                 averageValue: nil,
                 targetPoint: targetPoint,
@@ -1208,32 +1250,144 @@ private struct CoachComparisonChartCard: View {
         case .total:
             guard series.id.supportsTotalComparison else { return nil }
             let totalValue = series.data.map(\.1).reduce(0, +)
+            let range = highlightRange ?? fullDomain
             return CoachComparisonFocusPresentation(
                 kind: .total,
                 title: "\(timeFilter.rawValue) Total",
                 chipValueText: valueString(for: totalValue),
-                explanation: "This cue reads \(series.title.lowercased()) as accumulated exposure across the displayed window, so the value below the chart sums the visible curve rather than pointing to one day.",
-                zoomRange: contextualZoomRange(around: series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 14 : 7),
+                explanation: totalExplanation(
+                    totalValue: totalValue,
+                    range: range
+                ),
+                zoomRange: range,
                 averageValue: nil,
                 targetPoint: nil,
                 totalValue: totalValue,
                 trendDirection: nil
             )
         case .trend:
-            let direction = derivedTrendDirection(for: series.data)
-            let delta = (series.data.last?.1 ?? 0) - (series.data.first?.1 ?? 0)
+            guard let segment = bestTrendSegment() else { return nil }
             return CoachComparisonFocusPresentation(
                 kind: .trend,
                 title: "\(timeFilter.rawValue) Trend",
-                chipValueText: signedValueString(for: delta),
-                explanation: "The faint trend marker summarizes the overall direction of \(series.title.lowercased()) across this \(timeFilter.rawValue) window, so you can see whether the coach is describing climb, fade, or stability.",
-                zoomRange: contextualZoomRange(around: series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 15 : 7),
+                chipValueText: signedValueString(for: segment.delta),
+                explanation: trendExplanation(for: segment),
+                zoomRange: series.data[segment.startIndex].0...series.data[segment.endIndex].0,
                 averageValue: nil,
                 targetPoint: nil,
                 totalValue: nil,
-                trendDirection: direction
+                trendDirection: segment.direction
             )
         }
+    }
+
+    private func bestAverageRange() -> ClosedRange<Date>? {
+        if let highlightRange {
+            return highlightRange
+        }
+        return contextualZoomRange(around: series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 12 : 5)
+    }
+
+    private func averageExplanation(
+        averageValue: Double,
+        zoomRange: ClosedRange<Date>?
+    ) -> String {
+        guard let zoomRange else {
+            return "The coach cue reads \(series.title.lowercased()) as averaging around \(valueString(for: averageValue)) across this \(timeFilter.rawValue) window."
+        }
+        return "The coach text matches an average reading here: \(series.title.lowercased()) sits around \(valueString(for: averageValue)) across \(zoomRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(zoomRange.upperBound.formatted(date: .abbreviated, time: .omitted)), so the dotted line marks the level being referenced."
+    }
+
+    private func maximumExplanation(
+        title: String,
+        point: (Date, Double)
+    ) -> String {
+        let surroundingRange = contextualZoomRange(around: point.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5)
+        let rangeText: String
+        if let surroundingRange {
+            rangeText = " The zoom window shows the lead-in and fade-out from \(surroundingRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(surroundingRange.upperBound.formatted(date: .abbreviated, time: .omitted))."
+        } else {
+            rangeText = ""
+        }
+        return "\(title) lands on \(point.0.formatted(date: .abbreviated, time: .omitted)) at \(valueString(for: point.1)), which best matches the coach wording.\(rangeText)"
+    }
+
+    private func totalExplanation(
+        totalValue: Double,
+        range: ClosedRange<Date>
+    ) -> String {
+        "The coach cue reads \(series.title.lowercased()) as an accumulated load over \(range.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(range.upperBound.formatted(date: .abbreviated, time: .omitted)). Integrated together, the chart totals \(valueString(for: totalValue))."
+    }
+
+    private func trendExplanation(for segment: CoachTrendSegment) -> String {
+        let startDate = series.data[segment.startIndex].0
+        let endDate = series.data[segment.endIndex].0
+        let coachMatchText: String
+        if let coachTrendIntent {
+            coachMatchText = coachTrendIntent == segment.direction
+                ? "That matches the coach wording."
+                : "This is the closest matching segment to the coach wording in the displayed data."
+        } else {
+            coachMatchText = "This is the clearest trend segment in the displayed data."
+        }
+        return "\(coachMatchText) \(series.title) moves \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted)) with a net change of \(signedValueString(for: segment.delta))."
+    }
+
+    private func bestTrendSegment() -> CoachTrendSegment? {
+        guard series.data.count >= 3 else { return nil }
+
+        let minSegmentLength = min(3, series.data.count)
+        let maxSegmentLength = min(series.data.count, timeFilter == .month ? 14 : 7)
+        let valueSpan = max(0.0001, (series.data.map(\.1).max() ?? 0) - (series.data.map(\.1).min() ?? 0))
+        let recentPreference = ["improving", "improved", "better", "recently", "lately", "this week", "past week", "last week"].contains(where: snippetLowercased.contains)
+        var best: CoachTrendSegment?
+        var bestScore = -Double.infinity
+
+        for length in minSegmentLength...maxSegmentLength {
+            for startIndex in 0...(series.data.count - length) {
+                let endIndex = startIndex + length - 1
+                let startValue = series.data[startIndex].1
+                let endValue = series.data[endIndex].1
+                let delta = endValue - startValue
+                let normalizedStrength = abs(delta) / valueSpan
+                let direction: CoachTrendDirection
+                if normalizedStrength < 0.06 {
+                    direction = .flat
+                } else {
+                    direction = delta > 0 ? .up : .down
+                }
+
+                var score = normalizedStrength
+                if let coachTrendIntent {
+                    score += coachTrendIntent == direction ? 0.9 : -0.45
+                }
+                let endRecency = Double(endIndex + 1) / Double(series.data.count)
+                let startRecency = Double(startIndex + 1) / Double(series.data.count)
+                score += endRecency * (recentPreference ? 0.4 : 0.12)
+                score += startRecency * 0.05
+                if recentPreference && timeFilter == .month && length <= 9 {
+                    score += 0.15
+                }
+                if let highlightRange {
+                    let segmentRange = series.data[startIndex].0...series.data[endIndex].0
+                    if rangesOverlap(segmentRange, highlightRange) {
+                        score += 0.35
+                    }
+                }
+                if score > bestScore {
+                    bestScore = score
+                    best = CoachTrendSegment(
+                        startIndex: startIndex,
+                        endIndex: endIndex,
+                        direction: direction,
+                        delta: delta,
+                        normalizedStrength: normalizedStrength
+                    )
+                }
+            }
+        }
+
+        return best
     }
 
     private func contextualZoomRange(around centerDate: Date?, preferredVisiblePoints: Int) -> ClosedRange<Date>? {
@@ -1316,7 +1470,8 @@ private extension CoachMetricKey {
             let recovery = Dictionary(uniqueKeysWithValues: estimatedRecoverySeries(engine: engine, window: window))
             return mergeSeriesDates(window: window) { date in
                 guard let strainValue = strain[date], let recoveryValue = recovery[date] else { return nil }
-                return max(0, min(100, recoveryValue * 0.7 - strainValue * 0.25 + 35))
+                let normalizedStrain = HealthStateEngine.normalizedStrainPercent(from: strainValue)
+                return max(0, min(100, recoveryValue * 0.7 - normalizedStrain * 0.25 + 35))
             }
         case .sessionLoad:
             return derivedLoadSnapshots(engine: engine, sportFilter: sportFilter, window: window).map { ($0.date, $0.sessionLoad) }
@@ -1426,30 +1581,25 @@ private func estimatedRecoverySeries(
 ) -> [(Date, Double)] {
     let hrvDict = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
     return mergeSeriesDates(window: window) { date in
-        let hrv = hrvDict[date]
-        let rhr = engine.dailyRestingHeartRate[date]
-        let sleep = engine.dailySleepDuration[date]
+        let hrv = HealthStateEngine.smoothedValue(for: date, values: engine.effectHRV) ?? HealthStateEngine.smoothedValue(for: date, values: hrvDict)
+        let rhr = HealthStateEngine.smoothedValue(for: date, values: engine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: date, values: engine.dailyRestingHeartRate)
+        let sleep = HealthStateEngine.smoothedValue(for: date, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: date, values: engine.dailySleepDuration)
+        let inBed = HealthStateEngine.smoothedValue(for: date, values: engine.anchoredTimeInBed) ?? sleep
         guard hrv != nil || rhr != nil || sleep != nil else { return nil }
-
-        var score = 0.0
-        if let hrv, let baseline = engine.hrvBaseline7Day, baseline > 0 {
-            score += normalizedSignal(value: hrv, baseline: baseline, higherIsBetter: true) * 0.4
-        } else {
-            score += 20
-        }
-        if let rhr, let baseline = engine.rhrBaseline7Day, baseline > 0 {
-            score += normalizedSignal(value: rhr, baseline: baseline, higherIsBetter: false) * 0.25
-        } else {
-            score += 12.5
-        }
-        if let sleep {
-            let normalizedSleep = max(0, min(100, (sleep / 8.0) * 100))
-            score += normalizedSleep * 0.25
-        } else {
-            score += 12.5
-        }
-        score += 10
-        return min(100, max(0, score))
+        let inputs = HealthStateEngine.proRecoveryInputs(
+            latestHRV: hrv,
+            restingHeartRate: rhr,
+            sleepDurationHours: sleep,
+            timeInBedHours: inBed,
+            hrvBaseline60Day: engine.hrvBaseline60Day,
+            rhrBaseline60Day: engine.rhrBaseline60Day,
+            sleepBaseline60Day: engine.sleepBaseline60Day,
+            hrvBaseline7Day: engine.hrvBaseline7Day,
+            rhrBaseline7Day: engine.rhrBaseline7Day,
+            sleepBaseline7Day: engine.sleepBaseline7Day,
+            bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: engine.sleepStartHours, around: date)
+        )
+        return HealthStateEngine.proRecoveryScore(from: inputs)
     }
 }
 
@@ -1529,6 +1679,10 @@ private func derivedTrendDirection(for data: [(Date, Double)]) -> CoachTrendDire
         return .down
     }
     return .flat
+}
+
+private func rangesOverlap(_ lhs: ClosedRange<Date>, _ rhs: ClosedRange<Date>) -> Bool {
+    lhs.lowerBound <= rhs.upperBound && rhs.lowerBound <= lhs.upperBound
 }
 
 private extension CoachMetricKey {
@@ -1701,37 +1855,31 @@ private func derivedLoadSnapshots(
     var loadByDay: [Date: Double] = [:]
     for pair in workouts {
         let day = calendar.startOfDay(for: pair.workout.startDate)
-        loadByDay[day, default: 0] += max(0, comparisonWorkoutSessionLoad(for: pair.workout, analytics: pair.analytics))
+        let load = HealthStateEngine.proWorkoutLoad(
+            for: pair.workout,
+            analytics: pair.analytics,
+            estimatedMaxHeartRate: engine.estimatedMaxHeartRate
+        )
+        loadByDay[day, default: 0] += max(0, load)
     }
 
     let dates = comparisonDateSequence(
         from: calendar.date(byAdding: .day, value: -27, to: window.start) ?? window.start,
         to: window.end
     )
-    let loads = dates.map { loadByDay[$0, default: 0] }
-
-    func ewma(_ values: ArraySlice<Double>, lambda: Double) -> Double {
-        var avg = 0.0
-        for value in values {
-            avg = lambda * value + (1 - lambda) * avg
-        }
-        return avg
-    }
+    let loads = dates.map { loadByDay[$0, default: 0] + HealthStateEngine.passiveDailyBaseLoad() }
 
     var derived: [DerivedLoadPoint] = []
     for index in dates.indices {
         let date = dates[index]
-        let sevenStart = max(0, index - 6)
-        let acute = ewma(loads[sevenStart...index], lambda: 2.0 / 8.0)
-        let chronic = ewma(loads[0...index], lambda: 2.0 / 29.0)
-        let acwr = chronic > 0 ? acute / chronic : 0
-        let strainScore: Double
-        switch acwr {
-        case ..<0.8: strainScore = 30
-        case 0.8..<1.3: strainScore = 50
-        case 1.3..<1.5: strainScore = 75
-        default: strainScore = 95
-        }
+        let state = HealthStateEngine.proTrainingLoadState(loads: loads, index: index)
+        let acute = state.acuteLoad
+        let chronic = state.chronicLoad
+        let acwr = state.acwr
+        let strainScore = HealthStateEngine.proStrainScore(
+            acuteLoad: acute,
+            chronicLoad: chronic
+        )
         if date >= window.start && date <= window.end {
             derived.append(
                 DerivedLoadPoint(

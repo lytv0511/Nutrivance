@@ -28,6 +28,20 @@ final class HealthStateEngine: ObservableObject {
     @Published var sleepStartHours: [Date: Double] = [:] // [date: bedtime hour]
     @Published var sleepMidpointHours: [Date: Double] = [:] // [date: midpoint hour, wrapped across midnight]
     @Published var dailySleepHeartRate: [Date: Double] = [:] // [date: avg sleep HR bpm]
+    @Published var nightlyAnchoredHRV: [Date: Double] = [:] // [date: special "Effect HRV" for recovery from last 3h of main sleep block]
+    @Published var effectHRV: [Date: Double] = [:] // [date: recovery-specific sleep-anchored HRV shown separately from raw HRV]
+    @Published var basalSleepingHeartRate: [Date: Double] = [:] // [date: 5th percentile HR during main sleep block]
+    @Published var anchoredSleepDuration: [Date: Double] = [:] // [date: hours asleep in main sleep block]
+    @Published var anchoredTimeInBed: [Date: Double] = [:] // [date: hours in bed overlapping main sleep block]
+    @Published var readinessHRV: Double?
+    @Published var readinessEffectHRV: Double?
+    @Published var readinessBasalHeartRate: Double?
+    @Published var readinessSleepDuration: Double?
+    @Published var readinessTimeInBed: Double?
+    @Published var readinessSleepEfficiency: Double?
+    @Published var readinessSleepRatio: Double?
+    @Published var workoutHRVDecay: [Date: Double] = [:] // [date: effect HRV minus mean workout HRV]
+    @Published var recoverySuppressedFlag: Bool = false
     @Published var respiratoryRate: [Date: Double] = [:] // [date: breaths/min]
     @Published var wristTemperature: [Date: Double] = [:] // [date: deg C]
     @Published var spO2: [Date: Double] = [:] // [date: %]
@@ -384,6 +398,12 @@ final class HealthStateEngine: ObservableObject {
                     queryStart: startDate,
                     queryEnd: endDate
                 )
+                self.fetchSleepAnchoredRecoveryHistory(
+                    stageSleepWindows: mergedStageWindows,
+                    inBedSleepWindows: mergedInBedWindows,
+                    queryStart: startDate,
+                    queryEnd: endDate
+                )
             }
         }
         healthStore.execute(query)
@@ -483,6 +503,210 @@ final class HealthStateEngine: ObservableObject {
             }
         }
         
+        return result
+    }
+
+    private struct SleepAnchoredRecoveryDay {
+        let anchoredHRV: Double?
+        let basalHeartRate: Double?
+        let asleepHours: Double
+        let timeInBedHours: Double
+        let sleepEfficiency: Double
+    }
+
+    private func isPlausibleHRV(_ value: Double) -> Bool {
+        value > 0 && value <= 250
+    }
+
+    private func percentile(_ values: [Double], percentile: Double) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let index = max(0, min(sorted.count - 1, Int(Double(sorted.count - 1) * percentile)))
+        return sorted[index]
+    }
+
+    private func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let middle = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[middle - 1] + sorted[middle]) / 2
+        }
+        return sorted[middle]
+    }
+
+    private func lowestFiveMinuteAverageHeartRate(from samples: [HKQuantitySample]) -> Double? {
+        guard !samples.isEmpty else { return nil }
+        let sortedSamples = samples.sorted { $0.startDate < $1.startDate }
+        var bestAverage: Double?
+
+        for sample in sortedSamples {
+            let windowEnd = sample.startDate.addingTimeInterval(5 * 60)
+            let values = sortedSamples.compactMap { candidate -> Double? in
+                guard candidate.startDate >= sample.startDate && candidate.startDate <= windowEnd else { return nil }
+                return candidate.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+            }
+            guard !values.isEmpty else { continue }
+            let average = values.reduce(0, +) / Double(values.count)
+            if bestAverage == nil || average < (bestAverage ?? .infinity) {
+                bestAverage = average
+            }
+        }
+
+        return bestAverage
+    }
+
+    private func fetchSleepAnchoredRecoveryHistory(
+        stageSleepWindows: [Date: [(start: Date, end: Date)]],
+        inBedSleepWindows: [Date: [(start: Date, end: Date)]],
+        queryStart: Date,
+        queryEnd: Date
+    ) {
+        guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN),
+              let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+
+        Task {
+            let result = await self.computeSleepAnchoredRecoveryHistory(
+                stageSleepWindows: stageSleepWindows,
+                inBedSleepWindows: inBedSleepWindows,
+                queryStart: queryStart,
+                queryEnd: queryEnd,
+                hrvType: hrvType,
+                heartRateType: heartRateType
+            )
+
+            await MainActor.run {
+                self.nightlyAnchoredHRV = result.reduce(into: [:]) { $0[$1.key] = $1.value.anchoredHRV }
+                let sortedDays = self.nightlyAnchoredHRV.keys.sorted()
+                var smoothedEffectHRV: [Date: Double] = [:]
+                var previousEffectiveHRV: Double?
+                for day in sortedDays {
+                    guard let nightlyHRV = self.nightlyAnchoredHRV[day] else { continue }
+                    let effectiveHRV = previousEffectiveHRV.map { (nightlyHRV * 0.4) + ($0 * 0.6) } ?? nightlyHRV
+                    smoothedEffectHRV[day] = effectiveHRV
+                    previousEffectiveHRV = effectiveHRV
+                }
+                self.effectHRV = smoothedEffectHRV
+                self.basalSleepingHeartRate = result.reduce(into: [:]) { $0[$1.key] = $1.value.basalHeartRate }
+                self.anchoredSleepDuration = result.reduce(into: [:]) { $0[$1.key] = $1.value.asleepHours }
+                self.anchoredTimeInBed = result.reduce(into: [:]) { $0[$1.key] = $1.value.timeInBedHours }
+
+                if let latestDay = result.keys.max(), let latest = result[latestDay] {
+                    self.readinessHRV = latest.anchoredHRV
+                    self.readinessEffectHRV = self.effectHRV[latestDay] ?? latest.anchoredHRV
+                    self.readinessBasalHeartRate = latest.basalHeartRate
+                    self.readinessSleepDuration = latest.asleepHours
+                    self.readinessTimeInBed = latest.timeInBedHours
+                    self.readinessSleepEfficiency = latest.sleepEfficiency
+                    let sleepGoal = Self.personalizedSleepGoalHours(
+                        sleepBaseline60Day: self.sleepBaseline60Day,
+                        sleepBaseline7Day: self.sleepBaseline7Day,
+                        currentSleep: latest.asleepHours
+                    )
+                    self.readinessSleepRatio = min(1.0, max(0.0, latest.asleepHours / max(sleepGoal, 0.1)))
+                    self.latestHRV = latest.anchoredHRV ?? self.latestHRV
+                    self.restingHeartRate = latest.basalHeartRate ?? self.restingHeartRate
+                    self.sleepHours = latest.asleepHours
+                }
+                if let latestRecentWindow = result
+                    .filter({ $0.key >= Calendar.current.startOfDay(for: Date().addingTimeInterval(-(15 * 60 * 60))) })
+                    .max(by: { $0.value.asleepHours < $1.value.asleepHours }) {
+                    self.lastSleepStart = latestRecentWindow.key
+                    self.lastSleepEnd = latestRecentWindow.key.addingTimeInterval(latestRecentWindow.value.asleepHours * 3600)
+                }
+                self.scheduleScoresRefresh()
+            }
+        }
+    }
+
+    private func computeSleepAnchoredRecoveryHistory(
+        stageSleepWindows: [Date: [(start: Date, end: Date)]],
+        inBedSleepWindows: [Date: [(start: Date, end: Date)]],
+        queryStart: Date,
+        queryEnd: Date,
+        hrvType: HKQuantityType,
+        heartRateType: HKQuantityType
+    ) async -> [Date: SleepAnchoredRecoveryDay] {
+        let allWindows = stageSleepWindows.values.flatMap { $0 }
+        guard !allWindows.isEmpty else { return [:] }
+
+        let batchStart = allWindows.map(\.start).min() ?? queryStart
+        let batchEnd = allWindows.map(\.end).max() ?? queryEnd
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        async let hrvSamplesTask: [HKQuantitySample] = withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: hrvType,
+                predicate: HKQuery.predicateForSamples(withStart: batchStart, end: batchEnd),
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+
+        async let hrSamplesTask: [HKQuantitySample] = withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: heartRateType,
+                predicate: HKQuery.predicateForSamples(withStart: batchStart, end: batchEnd),
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+
+        let hrvSamples = await hrvSamplesTask
+        let hrSamples = await hrSamplesTask
+
+        var result: [Date: SleepAnchoredRecoveryDay] = [:]
+
+        for (day, windows) in stageSleepWindows {
+            guard let longestWindow = windows.max(by: { $0.end.timeIntervalSince($0.start) < $1.end.timeIntervalSince($1.start) }) else { continue }
+
+            let finalThreeHourStart = max(longestWindow.start, longestWindow.end.addingTimeInterval(-(3 * 60 * 60)))
+            let finalThreeHours = hrvSamples.filter { sample in
+                sample.endDate > finalThreeHourStart && sample.startDate < longestWindow.end
+            }
+            let sedentaryFinalThreeHours = finalThreeHours.filter { sample in
+                guard let raw = sample.metadata?[HKMetadataKeyHeartRateMotionContext] as? NSNumber else { return false }
+                return raw.intValue == HKHeartRateMotionContext.sedentary.rawValue
+            }
+            let wholeWindowHRVSamples = hrvSamples.filter { sample in
+                sample.endDate > longestWindow.start && sample.startDate < longestWindow.end
+            }
+            let anchoredHRVSamples = !sedentaryFinalThreeHours.isEmpty ? sedentaryFinalThreeHours : (!finalThreeHours.isEmpty ? finalThreeHours : wholeWindowHRVSamples)
+            let anchoredHRVValues = anchoredHRVSamples.map {
+                $0.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli))
+            }.filter { isPlausibleHRV($0) }
+            let anchoredHRV = median(anchoredHRVValues)
+
+            let sleepHeartRateSamples = hrSamples.filter { sample in
+                sample.endDate > longestWindow.start && sample.startDate < longestWindow.end
+            }
+            let basalHeartRate = lowestFiveMinuteAverageHeartRate(from: sleepHeartRateSamples)
+
+            let asleepHours = longestWindow.end.timeIntervalSince(longestWindow.start) / 3600
+            let inBedOverlapHours: Double = (inBedSleepWindows[day] ?? []).reduce(0) { partial, window in
+                let overlapStart = max(window.start, longestWindow.start)
+                let overlapEnd = min(window.end, longestWindow.end)
+                let overlap = max(0, overlapEnd.timeIntervalSince(overlapStart))
+                return partial + (overlap / 3600)
+            }
+            let timeInBedHours = max(asleepHours, inBedOverlapHours)
+            let sleepEfficiency = timeInBedHours > 0 ? min(1.0, max(0.0, asleepHours / timeInBedHours)) : 1.0
+
+            result[day] = SleepAnchoredRecoveryDay(
+                anchoredHRV: anchoredHRV,
+                basalHeartRate: basalHeartRate,
+                asleepHours: asleepHours,
+                timeInBedHours: timeInBedHours,
+                sleepEfficiency: sleepEfficiency
+            )
+        }
+
         return result
     }
 
@@ -734,6 +958,12 @@ final class HealthStateEngine: ObservableObject {
     @Published var hrvBaseline60Day: RollingBaselineStats?
     @Published var rhrBaseline60Day: RollingBaselineStats?
     @Published var sleepBaseline60Day: RollingBaselineStats?
+    @Published var estimatedMaxHeartRate: Double = 190
+    @Published var userAge: Double?
+    @Published var acuteTrainingLoad: Double = 0
+    @Published var chronicTrainingLoad: Double = 0
+    @Published var trainingLoadRatio: Double = 0
+    @Published var functionalOverreachingFlag: Bool = false
     
     @Published var recoveryBaseline7Day: Double?      // 7-day recovery score average
     @Published var strainBaseline7Day: Double?        // 7-day strain score average
@@ -821,6 +1051,413 @@ final class HealthStateEngine: ObservableObject {
         let baseline: Double?
         let direction: PhysiologySignal.Direction
         let weight: Double // importance weighting in composite scores
+    }
+
+    struct ProRecoveryInputs {
+        let hrvZScore: Double?
+        let restingHeartRateZScore: Double?
+        let restingHeartRatePenaltyZScore: Double?
+        let sleepRatio: Double?
+        let sleepScalar: Double?
+        let sleepGoalHours: Double
+        let sleepDurationHours: Double?
+        let timeInBedHours: Double?
+        let sleepEfficiency: Double?
+        let composite: Double
+        let baseRecoveryScore: Double
+        let finalRecoveryScore: Double
+        let sleepDebtPenalty: Double
+        let circadianPenalty: Double
+        let efficiencyCap: Double?
+        let bedtimeVarianceMinutes: Double?
+        let isInconclusive: Bool
+    }
+
+    struct RecoveryDebugSnapshot {
+        let label: String
+        let hrvZScore: Double
+        let rhrPenaltyZScore: Double
+        let sleepRatio: Double
+        let sleepEfficiency: Double
+        let bedtimeVarianceMinutes: Double
+        let composite: Double
+        let baseRecoveryScore: Double
+        let circadianPenalty: Double
+        let gatedRecoveryScore: Double
+        let efficiencyCap: Double?
+        let finalRecoveryScore: Double
+    }
+
+    nonisolated static func estimateMaxHeartRateNes(age: Double?) -> Double {
+        guard let age else { return 190 }
+        return max(150, 211.0 - (0.64 * age))
+    }
+
+    nonisolated static func strainScoreUnitMaximum() -> Double { 21 }
+    nonisolated static func passiveDailyBaseLoad(activeMinutes: Double? = nil) -> Double {
+        0.1 * max(0, activeMinutes ?? 20)
+    }
+
+    nonisolated static func normalizedStrainPercent(from strainScore: Double) -> Double {
+        let maxScore = strainScoreUnitMaximum()
+        guard maxScore > 0 else { return 0 }
+        return max(0, min(100, (strainScore / maxScore) * 100))
+    }
+
+    nonisolated static func proZoneWeight(for zoneNumber: Int) -> Double {
+        switch zoneNumber {
+        case 1: return 1.0
+        case 2: return 2.0
+        case 3: return 3.5
+        case 4: return 5.0
+        default: return 6.0
+        }
+    }
+
+    nonisolated static func derivedZoneNumber(for heartRate: Double, maxHeartRate: Double) -> Int {
+        let safeMax = max(maxHeartRate, 1)
+        let percentMax = heartRate / safeMax
+        switch percentMax {
+        case ..<0.60: return 1
+        case ..<0.70: return 2
+        case ..<0.80: return 3
+        case ..<0.90: return 4
+        default: return 5
+        }
+    }
+
+    nonisolated static func fallbackWorkoutEffortScore(from workout: HKWorkout) -> Double? {
+        guard let metadata = workout.metadata else { return nil }
+
+        let preferredKeys = [
+            "HKMetadataKeyWorkloadEffortScore",
+            "HKMetadataKeyWorkoutEffortScore"
+        ]
+
+        for key in preferredKeys {
+            if let value = metadata[key] as? NSNumber {
+                return value.doubleValue
+            }
+            if let value = metadata[key] as? Double {
+                return value
+            }
+        }
+
+        for (key, value) in metadata where key.localizedCaseInsensitiveContains("effort") {
+            if let number = value as? NSNumber {
+                return number.doubleValue
+            }
+            if let doubleValue = value as? Double {
+                return doubleValue
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated static func proWorkoutLoad(
+        for workout: HKWorkout,
+        analytics: WorkoutAnalytics,
+        estimatedMaxHeartRate: Double
+    ) -> Double {
+        let zoneWeightedLoad = analytics.hrZoneBreakdown.reduce(0.0) { partial, entry in
+            let zoneMinutes = entry.timeInZone / 60.0
+            return partial + (zoneMinutes * proZoneWeight(for: entry.zone.zoneNumber))
+        }
+
+        if zoneWeightedLoad > 0 {
+            return zoneWeightedLoad
+        }
+
+        let sortedHeartRates = analytics.heartRates.sorted { $0.0 < $1.0 }
+        if !sortedHeartRates.isEmpty {
+            var load = 0.0
+            for index in sortedHeartRates.indices {
+                let sample = sortedHeartRates[index]
+                let nextDate = index < sortedHeartRates.count - 1
+                    ? sortedHeartRates[index + 1].0
+                    : min(workout.endDate, sample.0.addingTimeInterval(5))
+                let seconds = max(0, min(nextDate.timeIntervalSince(sample.0), 30))
+                let zoneNumber = derivedZoneNumber(for: sample.1, maxHeartRate: estimatedMaxHeartRate)
+                load += (seconds / 60.0) * proZoneWeight(for: zoneNumber)
+            }
+            if load > 0 {
+                return load
+            }
+        }
+
+        let durationMinutes = workout.duration / 60.0
+        if let effortScore = fallbackWorkoutEffortScore(from: workout) {
+            return durationMinutes * max(1, effortScore)
+        }
+
+        if let energy = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()), durationMinutes > 0 {
+            let intensity = energy / durationMinutes
+            return durationMinutes * min(10, max(1, intensity / 8))
+        }
+
+        return 0
+    }
+
+    nonisolated static func ewmaLoad(_ values: ArraySlice<Double>, lambda: Double) -> Double {
+        var average = 0.0
+        for value in values {
+            average = lambda * value + (1 - lambda) * average
+        }
+        return average
+    }
+
+    nonisolated static func proTrainingLoadState(
+        loads: [Double],
+        index: Int
+    ) -> TrainingLoad {
+        let sevenDayStart = max(0, index - 6)
+        let acute = ewmaLoad(loads[sevenDayStart...index], lambda: 2.0 / 8.0)
+        let chronic = ewmaLoad(loads[0...index], lambda: 2.0 / 29.0)
+        let acwr = chronic > 0 ? acute / chronic : 0
+        return TrainingLoad(acuteLoad: acute, chronicLoad: chronic, acwr: acwr)
+    }
+
+    nonisolated static func proStrainScore(
+        acuteLoad: Double,
+        chronicLoad: Double
+    ) -> Double {
+        guard acuteLoad > 0 else { return 0 }
+
+        let logarithmicLoad = 5.0 * log10(acuteLoad + 1)
+        let loadRatio = chronicLoad > 0 ? acuteLoad / chronicLoad : 1
+        let ratioAdjustment: Double
+        if loadRatio > 1.5 {
+            ratioAdjustment = 2.0
+        } else if loadRatio < 0.8 {
+            ratioAdjustment = -1.5
+        } else {
+            ratioAdjustment = 0
+        }
+
+        return max(0, min(strainScoreUnitMaximum(), logarithmicLoad + ratioAdjustment))
+    }
+
+    nonisolated static func fallbackStats(
+        mean: Double?,
+        coefficientOfVariation: Double,
+        minimumStandardDeviation: Double
+    ) -> RollingBaselineStats? {
+        guard let mean else { return nil }
+        let standardDeviation = max(abs(mean) * coefficientOfVariation, minimumStandardDeviation)
+        return RollingBaselineStats(mean: mean, standardDeviation: standardDeviation, sampleCount: 7)
+    }
+
+    nonisolated static func clampedStats(
+        _ stats: RollingBaselineStats?,
+        minimumStandardDeviation: Double
+    ) -> RollingBaselineStats? {
+        guard let stats else { return nil }
+        return RollingBaselineStats(
+            mean: stats.mean,
+            standardDeviation: max(stats.standardDeviation, minimumStandardDeviation),
+            sampleCount: stats.sampleCount
+        )
+    }
+
+    nonisolated static func zScore(
+        current: Double,
+        stats: RollingBaselineStats?
+    ) -> Double? {
+        guard let stats else { return nil }
+        let denominator = stats.standardDeviation > 0.0001 ? stats.standardDeviation : max(abs(stats.mean) * 0.05, 0.1)
+        return (current - stats.mean) / denominator
+    }
+
+    nonisolated static func personalizedSleepGoalHours(
+        sleepBaseline60Day: RollingBaselineStats?,
+        sleepBaseline7Day: Double?,
+        currentSleep: Double?
+    ) -> Double {
+        let fallback = currentSleep ?? 8
+        return min(9.5, max(7.0, sleepBaseline60Day?.mean ?? sleepBaseline7Day ?? fallback))
+    }
+
+    nonisolated static func circularStandardDeviationMinutes(from sleepStartHours: [Date: Double], around day: Date, windowDays: Int = 7) -> Double? {
+        let calendar = Calendar.current
+        let hours = (0..<windowDays).compactMap { offset -> Double? in
+            guard let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) else { return nil }
+            let normalizedDay = calendar.startOfDay(for: sourceDay)
+            return sleepStartHours[normalizedDay]
+        }
+        guard !hours.isEmpty else { return nil }
+        let radians = hours.map { (($0.truncatingRemainder(dividingBy: 24) + 24).truncatingRemainder(dividingBy: 24)) / 24.0 * (2.0 * Double.pi) }
+        let sinMean = radians.map { Foundation.sin($0) }.reduce(0, +) / Double(radians.count)
+        let cosMean = radians.map { Foundation.cos($0) }.reduce(0, +) / Double(radians.count)
+        let resultantLength = sqrt((sinMean * sinMean) + (cosMean * cosMean))
+
+        guard resultantLength > 0 else { return 12 * 60 }
+
+        let circularStandardDeviationRadians = sqrt(max(0, -2.0 * log(resultantLength)))
+        return circularStandardDeviationRadians * (24.0 / (2.0 * Double.pi)) * 60.0
+    }
+
+    nonisolated static func smoothedValue(
+        for day: Date,
+        values: [Date: Double],
+        weights: [Double] = [0.6, 0.3, 0.1]
+    ) -> Double? {
+        let calendar = Calendar.current
+        var weightedSum = 0.0
+        var totalWeight = 0.0
+
+        for (offset, weight) in weights.enumerated() {
+            guard let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) else { continue }
+            let normalizedSourceDay = calendar.startOfDay(for: sourceDay)
+            guard let value = values[normalizedSourceDay] else { continue }
+            weightedSum += value * weight
+            totalWeight += weight
+        }
+
+        guard totalWeight > 0 else { return nil }
+        return weightedSum / totalWeight
+    }
+
+    nonisolated static func proRecoveryInputs(
+        latestHRV: Double?,
+        restingHeartRate: Double?,
+        sleepDurationHours: Double?,
+        timeInBedHours: Double?,
+        hrvBaseline60Day: RollingBaselineStats?,
+        rhrBaseline60Day: RollingBaselineStats?,
+        sleepBaseline60Day: RollingBaselineStats?,
+        hrvBaseline7Day: Double?,
+        rhrBaseline7Day: Double?,
+        sleepBaseline7Day: Double?,
+        bedtimeVarianceMinutes: Double? = nil
+    ) -> ProRecoveryInputs {
+        let validatedHRV: Double? = {
+            guard let latestHRV else { return nil }
+            return (latestHRV > 0 && latestHRV <= 250) ? latestHRV : nil
+        }()
+        let transformedHRVMean = (hrvBaseline60Day?.mean ?? hrvBaseline7Day).map { log(max($0, 1)) }
+        let transformedHRVSD: Double? = {
+            let baseMean = hrvBaseline60Day?.mean ?? hrvBaseline7Day
+            let baseSD = hrvBaseline60Day?.standardDeviation
+            guard let baseMean else { return nil }
+            let softFloor = max(baseMean * 0.12, 1.0)
+            if let baseSD, baseMean > 0 {
+                return max(baseSD / baseMean, softFloor / baseMean)
+            }
+            return softFloor / max(baseMean, 1.0)
+        }()
+        let hrvStats = transformedHRVMean.flatMap { mean in
+            transformedHRVSD.map { RollingBaselineStats(mean: mean, standardDeviation: $0, sampleCount: hrvBaseline60Day?.sampleCount ?? 7) }
+        }
+        let rhrStats = clampedStats(
+            rhrBaseline60Day ?? fallbackStats(mean: rhrBaseline7Day, coefficientOfVariation: 0.06, minimumStandardDeviation: 3),
+            minimumStandardDeviation: 3
+        )
+        let sleepGoalHours = personalizedSleepGoalHours(
+            sleepBaseline60Day: sleepBaseline60Day,
+            sleepBaseline7Day: sleepBaseline7Day,
+            currentSleep: sleepDurationHours
+        )
+
+        let hrvZ = validatedHRV.flatMap { value in
+            let logValue = log(max(value, 1))
+            return zScore(current: logValue, stats: hrvStats)
+        }
+        let rhrZ = restingHeartRate.flatMap { zScore(current: $0, stats: rhrStats) }
+        let rhrPenaltyZ: Double? = { () -> Double? in
+            guard
+                let restingHeartRate,
+                let rhrStats
+            else { return nil }
+            guard restingHeartRate > rhrStats.mean else { return 0 }
+            return zScore(current: restingHeartRate, stats: rhrStats)
+        }()
+        let sleepEfficiency: Double? = { () -> Double? in
+            guard let sleepDurationHours, let timeInBedHours, timeInBedHours > 0 else { return nil }
+            return min(1.0, max(0.0, sleepDurationHours / timeInBedHours))
+        }()
+        let sleepRatio = sleepDurationHours.map { min(1.0, max(0.0, $0 / max(sleepGoalHours, 0.1))) }
+        let sleepScalar = sleepRatio.map { 0.85 + (0.15 * $0) }
+        let composite = ((hrvZ ?? 0) * 0.85) - ((rhrPenaltyZ ?? 0) * 0.25)
+        let baseRecoveryScore = normalizedCompositeScore(from: composite)
+        let sleepDebtPenalty = 0.0
+        let circadianPenalty: Double = {
+            let variance = bedtimeVarianceMinutes ?? 0
+            guard variance > 90 else { return 0 }
+            return min(10.0, (variance - 90.0) * 0.1)
+        }()
+        let afterPenalties = max(0, baseRecoveryScore - sleepDebtPenalty - circadianPenalty)
+        let gatedRecovery = max(0, min(100, afterPenalties * (sleepScalar ?? 1.0)))
+        let efficiencyCap = ((sleepEfficiency ?? 1.0) < 0.85) ? 70.0 : nil
+        let finalRecoveryScore = min(gatedRecovery, efficiencyCap ?? gatedRecovery)
+        let isInconclusive = latestHRV != nil && validatedHRV == nil
+
+        return ProRecoveryInputs(
+            hrvZScore: hrvZ,
+            restingHeartRateZScore: rhrZ,
+            restingHeartRatePenaltyZScore: rhrPenaltyZ,
+            sleepRatio: sleepRatio,
+            sleepScalar: sleepScalar,
+            sleepGoalHours: sleepGoalHours,
+            sleepDurationHours: sleepDurationHours,
+            timeInBedHours: timeInBedHours,
+            sleepEfficiency: sleepEfficiency,
+            composite: composite,
+            baseRecoveryScore: baseRecoveryScore,
+            finalRecoveryScore: finalRecoveryScore,
+            sleepDebtPenalty: sleepDebtPenalty,
+            circadianPenalty: circadianPenalty,
+            efficiencyCap: efficiencyCap,
+            bedtimeVarianceMinutes: bedtimeVarianceMinutes,
+            isInconclusive: isInconclusive
+        )
+    }
+
+    nonisolated static func normalizedCompositeScore(from composite: Double) -> Double {
+        let calibrationOffset = 1.6
+        let normalized = (1.0 / (1.0 + exp(-0.6 * (composite + calibrationOffset)))) * 100
+        return max(0, min(100, normalized))
+    }
+
+    nonisolated static func debugRecoverySnapshot(
+        label: String,
+        hrvZScore: Double,
+        rhrPenaltyZScore: Double,
+        sleepRatio: Double = 1.0,
+        sleepEfficiency: Double = 1.0,
+        bedtimeVarianceMinutes: Double = 0
+    ) -> RecoveryDebugSnapshot {
+        let normalizedSleepRatio = max(0, min(1, sleepRatio))
+        let normalizedSleepEfficiency = max(0, min(1, sleepEfficiency))
+        let sleepScalar = 0.85 + (0.15 * normalizedSleepRatio)
+        let composite = (hrvZScore * 0.85) - (rhrPenaltyZScore * 0.25)
+        let baseRecoveryScore = normalizedCompositeScore(from: composite)
+        let circadianPenalty = bedtimeVarianceMinutes > 90
+            ? min(10.0, (bedtimeVarianceMinutes - 90.0) * 0.1)
+            : 0.0
+        let afterPenalties = max(0, baseRecoveryScore - circadianPenalty)
+        let gatedRecoveryScore = max(0, min(100, afterPenalties * sleepScalar))
+        let efficiencyCap = normalizedSleepEfficiency < 0.85 ? 70.0 : nil
+        let finalRecoveryScore = min(gatedRecoveryScore, efficiencyCap ?? gatedRecoveryScore)
+
+        return RecoveryDebugSnapshot(
+            label: label,
+            hrvZScore: hrvZScore,
+            rhrPenaltyZScore: rhrPenaltyZScore,
+            sleepRatio: normalizedSleepRatio,
+            sleepEfficiency: normalizedSleepEfficiency,
+            bedtimeVarianceMinutes: bedtimeVarianceMinutes,
+            composite: composite,
+            baseRecoveryScore: baseRecoveryScore,
+            circadianPenalty: circadianPenalty,
+            gatedRecoveryScore: gatedRecoveryScore,
+            efficiencyCap: efficiencyCap,
+            finalRecoveryScore: finalRecoveryScore
+        )
+    }
+
+    nonisolated static func proRecoveryScore(from inputs: ProRecoveryInputs) -> Double {
+        max(0, min(100, inputs.finalRecoveryScore))
     }
 
     // Example usage for future expansion:
@@ -913,6 +1550,13 @@ final class HealthStateEngine: ObservableObject {
         self.fetchVitals(days: longTermLookbackDays)
         self.fetchIntensityMetrics(days: longTermLookbackDays)
         self.inferFavoriteSportAndFrequency()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let age = await self.hkManager.fetchAgeAsync()
+            self.userAge = age
+            self.estimatedMaxHeartRate = Self.estimateMaxHeartRateNes(age: age)
+            self.scheduleScoresRefresh()
+        }
         self.updateScores()
     }
     
@@ -1861,24 +2505,9 @@ final class HealthStateEngine: ObservableObject {
             let chronicLoad = ewma(dailyLoads, lambda: chronicLambda)
             DispatchQueue.main.async {
                 self.activityLoad = acuteLoad
-                // Avoid divide by zero
-                let acwr = chronicLoad > 0 ? acuteLoad / chronicLoad : 0
-                // Strain score: optimal 0.8-1.3, high 1.3-1.5, overload >1.5, low <0.8
-                let strain: Double
-                switch acwr {
-                case ..<0.8: strain = 30
-                case 0.8..<1.3: strain = 50
-                case 1.3..<1.5: strain = 75
-                default: strain = 95
-                }
-                // Decay strain if no recent load
-                let daysSinceLast = dailyLoads.lastIndex(where: { $0 > 0 })
-                var decayFactor = 1.0
-                if let lastDay = daysSinceLast, lastDay < 27 {
-                    let daysNoLoad = 27 - lastDay
-                    decayFactor = pow(0.85, Double(daysNoLoad)) // 15% decay per day without load
-                }
-                self.strainScore = min(100, strain * decayFactor)
+                self.acuteTrainingLoad = acuteLoad
+                self.chronicTrainingLoad = chronicLoad
+                self.trainingLoadRatio = chronicLoad > 0 ? acuteLoad / chronicLoad : 0
                 self.scheduleScoresRefresh()
             }
         }
@@ -2009,7 +2638,7 @@ final class HealthStateEngine: ObservableObject {
             abs(zScore(current: sleep, stats: sleepBaseline60Day) ?? 0) * 8,
             10
         )
-        let balanceDelta = strainScore - recoveryAnchor
+        let balanceDelta = Self.normalizedStrainPercent(from: strainScore) - recoveryAnchor
         var balanceComponent = clamped(1 - (balanceDelta / 100.0), min: 0, max: 1.2)
         if balanceDelta > (1.5 * balanceSigma) {
             let excess = balanceDelta - (1.5 * balanceSigma)
@@ -2073,7 +2702,7 @@ final class HealthStateEngine: ObservableObject {
                       + (hrvTrendScore * 0.15)
                       + (circadianHRVScore * 0.10)
                       + (sleepHRVScore * 0.20)
-                      - (strainScore * 0.30)
+                      - (Self.normalizedStrainPercent(from: strainScore) * 0.30)
 
         readinessScore = max(0, min(100, readiness))
         
@@ -2082,6 +2711,9 @@ final class HealthStateEngine: ObservableObject {
 
         // Update Feel-Good Score
         updateFeelGoodScore()
+        workoutHRVDecay = calculateWorkoutHRVDecay()
+        recoverySuppressedFlag = isRecoverySuppressedComparedToSevenDayAverage(currentRecovery: recoveryScore)
+        functionalOverreachingFlag = evaluateFunctionalOverreaching()
     }
     
     private func updateScoreBaselines() {
@@ -2120,29 +2752,53 @@ final class HealthStateEngine: ObservableObject {
     // MARK: - Recovery
 
     private func calculateRecoveryScore() -> Double {
+        let today = Calendar.current.startOfDay(for: Date())
+        let hrvLookup = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) })
+        let inputs = Self.proRecoveryInputs(
+            latestHRV: Self.smoothedValue(for: today, values: effectHRV) ?? readinessEffectHRV ?? readinessHRV ?? latestHRV ?? Self.smoothedValue(for: today, values: hrvLookup),
+            restingHeartRate: Self.smoothedValue(for: today, values: basalSleepingHeartRate) ?? readinessBasalHeartRate ?? restingHeartRate,
+            sleepDurationHours: Self.smoothedValue(for: today, values: anchoredSleepDuration) ?? readinessSleepDuration ?? sleepHours,
+            timeInBedHours: Self.smoothedValue(for: today, values: anchoredTimeInBed) ?? readinessTimeInBed ?? readinessSleepDuration ?? sleepHours,
+            hrvBaseline60Day: hrvBaseline60Day,
+            rhrBaseline60Day: rhrBaseline60Day,
+            sleepBaseline60Day: sleepBaseline60Day,
+            hrvBaseline7Day: hrvBaseline7Day,
+            rhrBaseline7Day: rhrBaseline7Day,
+            sleepBaseline7Day: sleepBaseline7Day,
+            bedtimeVarianceMinutes: Self.circularStandardDeviationMinutes(from: sleepStartHours, around: today)
+        )
+        guard !inputs.isInconclusive else { return recoveryScore }
+        return Self.proRecoveryScore(from: inputs)
+    }
 
-        var score: Double = 0
+    private func calculateWorkoutHRVDecay() -> [Date: Double] {
+        let calendar = Calendar.current
+        guard !hrvSampleHistory.isEmpty, !workoutAnalytics.isEmpty else { return [:] }
 
-        if let hrv = latestHRV {
-            score += normalizeHRV(hrv) * 0.4
+        let hrvSamplesByDay = Dictionary(grouping: hrvSampleHistory) { sample in
+            calendar.startOfDay(for: sample.date)
         }
 
-        if let rhr = restingHeartRate {
-            score += normalizeRHR(rhr) * 0.25
+        var decayByDay: [Date: Double] = [:]
+        for (workout, _) in workoutAnalytics {
+            let day = calendar.startOfDay(for: workout.startDate)
+            guard let nightlyHRV = effectHRV[day] else { continue }
+            let workoutSamples = (hrvSamplesByDay[day] ?? []).filter { sample in
+                sample.date >= workout.startDate && sample.date <= workout.endDate && isPlausibleHRV(sample.value)
+            }
+            guard !workoutSamples.isEmpty else { continue }
+            let workoutAverage = workoutSamples.map(\.value).reduce(0, +) / Double(workoutSamples.count)
+            decayByDay[day] = nightlyHRV - workoutAverage
         }
+        return decayByDay
+    }
 
-        if let sleep = sleepHours {
-            score += normalizeSleep(sleep) * 0.25
-        }
-
-        let sleepHRV = analyzeSleepWeightedHRV()
-        score += sleepHRV * 0.10
-
-        // HRV trend contributes slightly to recovery
-        let trend = analyzeHRVTrend()
-        score += trend * 0.10
-
-        return max(0, min(100, score))
+    private func isRecoverySuppressedComparedToSevenDayAverage(currentRecovery: Double) -> Bool {
+        let trailing = Array(recoveryScoreHistory.suffix(7))
+        guard !trailing.isEmpty else { return false }
+        let average = trailing.reduce(0, +) / Double(trailing.count)
+        guard average > 0 else { return false }
+        return currentRecovery < (average * 0.8)
     }
 
     // MARK: - Sleep-Weighted HRV
@@ -2247,33 +2903,119 @@ final class HealthStateEngine: ObservableObject {
             stress += (100 - sleepScore) * 0.20
         }
 
-        let strain = calculateStrainScore()
+        let strain = Self.normalizedStrainPercent(from: calculateStrainScore())
         stress += strain * 0.20
 
         return max(0, min(100, stress))
     }
 
     private func calculateStrainScore() -> Double {
+        let calendar = Calendar.current
+        let endDate = calendar.startOfDay(for: Date())
+        let startDate = calendar.date(byAdding: .day, value: -27, to: endDate) ?? endDate
+        let recentAnalytics = workoutAnalytics
+            .filter { pair in
+                let day = calendar.startOfDay(for: pair.workout.startDate)
+                return day >= startDate && day <= endDate
+            }
 
-        let acute = activityLoad
-        let chronic = max(activityLoad / 4, 1) // placeholder if chronic not available
-        let acwr = acute / chronic
-
-        // Map ACWR to strain score
-        // 0.8-1.3 optimal, 1.3-1.5 high, >1.5 overload
-        let strainScore: Double
-        switch acwr {
-        case ..<0.8:
-            strainScore = 30 // low load
-        case 0.8..<1.3:
-            strainScore = 50 // optimal
-        case 1.3..<1.5:
-            strainScore = 75 // high load
-        default:
-            strainScore = 95 // overload
+        if !recentAnalytics.isEmpty {
+            var dailyLoads: [Date: Double] = [:]
+            var observedPeakHeartRate: Double = estimatedMaxHeartRate
+            for pair in recentAnalytics {
+                let day = calendar.startOfDay(for: pair.workout.startDate)
+                if let peak = pair.analytics.peakHR, peak > observedPeakHeartRate {
+                    observedPeakHeartRate = peak
+                }
+                let load = Self.proWorkoutLoad(
+                    for: pair.workout,
+                    analytics: pair.analytics,
+                    estimatedMaxHeartRate: observedPeakHeartRate
+                )
+                dailyLoads[day, default: 0] += load
+            }
+            if observedPeakHeartRate > estimatedMaxHeartRate {
+                estimatedMaxHeartRate = observedPeakHeartRate
+            }
+            let dates = (0..<28).compactMap { calendar.date(byAdding: .day, value: $0, to: startDate) }
+            let orderedLoads = dates.map { dailyLoads[$0, default: 0] + Self.passiveDailyBaseLoad() }
+            if let latestIndex = orderedLoads.indices.last {
+                let state = Self.proTrainingLoadState(loads: orderedLoads, index: latestIndex)
+                activityLoad = state.acuteLoad
+                acuteTrainingLoad = state.acuteLoad
+                chronicTrainingLoad = state.chronicLoad
+                trainingLoadRatio = state.acwr
+                return Self.proStrainScore(
+                    acuteLoad: state.acuteLoad,
+                    chronicLoad: state.chronicLoad
+                )
+            }
         }
 
-        return min(100, strainScore)
+        let acute = acuteTrainingLoad > 0 ? acuteTrainingLoad : (activityLoad + Self.passiveDailyBaseLoad())
+        let chronic = chronicTrainingLoad > 0 ? chronicTrainingLoad : max(acute * 0.85, 1)
+        return Self.proStrainScore(acuteLoad: acute, chronicLoad: chronic)
+    }
+
+    private func evaluateFunctionalOverreaching() -> Bool {
+        let calendar = Calendar.current
+        let endDate = calendar.startOfDay(for: Date())
+        let startDate = calendar.date(byAdding: .day, value: -6, to: endDate) ?? endDate
+        let hrvLookup = effectHRV
+        let rhrLookup = basalSleepingHeartRate
+        let sleepDurationLookup = anchoredSleepDuration
+        let timeInBedLookup = anchoredTimeInBed
+
+        let dates = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: startDate) }
+        let loads = dates.map { date -> Double in
+            let workoutLoad = workoutAnalytics
+                .filter { calendar.isDate($0.workout.startDate, inSameDayAs: date) }
+                .reduce(0.0) { partial, pair in
+                    partial + Self.proWorkoutLoad(
+                        for: pair.workout,
+                        analytics: pair.analytics,
+                        estimatedMaxHeartRate: estimatedMaxHeartRate
+                    )
+                }
+            return workoutLoad + Self.passiveDailyBaseLoad()
+        }
+
+        let strainSeries = dates.indices.map { index in
+            Self.proStrainScore(
+                acuteLoad: Self.proTrainingLoadState(loads: loads, index: index).acuteLoad,
+                chronicLoad: Self.proTrainingLoadState(loads: loads, index: index).chronicLoad
+            )
+        }
+        let recoverySeries = dates.map { day -> Double? in
+            let inputs = Self.proRecoveryInputs(
+                latestHRV: hrvLookup[day],
+                restingHeartRate: rhrLookup[day],
+                sleepDurationHours: sleepDurationLookup[day],
+                timeInBedHours: timeInBedLookup[day],
+                hrvBaseline60Day: hrvBaseline60Day,
+                rhrBaseline60Day: rhrBaseline60Day,
+                sleepBaseline60Day: sleepBaseline60Day,
+                hrvBaseline7Day: hrvBaseline7Day,
+                rhrBaseline7Day: rhrBaseline7Day,
+                sleepBaseline7Day: sleepBaseline7Day,
+                bedtimeVarianceMinutes: Self.circularStandardDeviationMinutes(from: sleepStartHours, around: day)
+            )
+            guard inputs.hrvZScore != nil || inputs.restingHeartRateZScore != nil || inputs.sleepRatio != nil else {
+                return nil
+            }
+            return Self.proRecoveryScore(from: inputs)
+        }
+
+        guard strainSeries.count >= 4, recoverySeries.count >= 4 else { return false }
+        let recentStrain = Array(strainSeries.suffix(4))
+        let recentRecovery = Array(recoverySeries.suffix(4))
+        guard recentRecovery.allSatisfy({ $0 != nil }) else { return false }
+
+        for index in 1..<recentStrain.count {
+            if recentStrain[index] <= recentStrain[index - 1] { return false }
+            if (recentRecovery[index] ?? 0) >= (recentRecovery[index - 1] ?? 0) { return false }
+        }
+        return true
     }
 
     // MARK: - Normalization Helpers

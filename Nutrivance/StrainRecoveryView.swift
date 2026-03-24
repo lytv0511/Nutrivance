@@ -174,6 +174,11 @@ struct StrainRecoveryView: View {
                     }
 
                     MetricSectionGroup(title: "Recovery") {
+                        RecoveryScoreSection(
+                            engine: engine,
+                            timeFilter: timeFilter,
+                            anchorDate: selectedDate
+                        )
                         HRVSection(
                             engine: engine,
                             timeFilter: timeFilter,
@@ -924,10 +929,32 @@ Treat each report type like a distinct coaching mode with its own reasoning styl
 Respect explicit ignore lists as hard constraints unless a forbidden topic is truly required for causal explanation.
 Do not reuse the same generic paragraph structure across different report types.
 Strain is a training-load/stress score, where higher usually means more accumulated recent load. Recovery is a recovery-readiness score, where higher is better.
-Never describe strain near 20/100 as high. That is low strain in this app's logic.
+Never describe strain near 6/21 as high. That is still on the low side in this app's logic.
 Never describe recovery near 80/100 as a problem by itself. That is strong recovery in this app's logic.
 A low strain score paired with a high recovery score is usually a positive fresh-state pattern unless the selected focus specifically suggests undertraining.
+\(strainRecoveryScorePromptReference)
 Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
+"""
+
+private let strainRecoveryScorePromptReference = """
+Score construction reference for this app:
+- Recovery is an app-defined 0 to 100 coaching score, not a raw medical lab value.
+- Recovery formula in this app uses Effect HRV, a special sleep-anchored HRV signal from the main sleep block rather than raw daytime HRV. Effect HRV uses the sleep-window median and temporal momentum smoothing. Composite X = (Effect HRV z-score x 0.85) - (RHR penalty z-score x 0.25), then Recovery base = sigmoid(0.6 x (X + 1.6)) x 100.
+- Recovery is strongly baseline-aware. HRV and resting heart rate are judged against the athlete's own rolling 60-day baseline when available, with 7-day fallback logic if long baseline data is missing.
+- Effect HRV is anchored to the main sleep block and taken from the median of valid HRV samples in the final 3 hours of sleep when possible, with a full-sleep-window fallback if those samples are missing. Resting heart rate is estimated from the lowest 5-minute heart-rate average during sleep instead of a daytime average.
+- Resting heart rate only penalizes recovery when it is above the athlete's own baseline. A lower-than-baseline resting heart rate does not artificially inflate recovery by itself.
+- Recovery baseline stability is protected with log-normal HRV handling and a soft HRV SD floor of at least 12 percent of the 60-day mean, plus a resting-heart-rate SD floor of at least 3 bpm.
+- Final recovery uses a softened sleep scalar, a tapered circadian penalty only when bedtime variability exceeds 90 minutes, and an efficiency cap of 70 when sleep efficiency is below 85 percent.
+- Strain is an app-defined 0 to 21 load score. It is built from heart-rate-zone session load using weighted zone minutes plus a small base-load term, then log-scaled so the score rises quickly early and plateaus at higher loads.
+- Zone weighting in this app is exponential in feel: Zone 1 is 1x, Zone 2 is 2x, Zone 3 is 3.5x, Zone 4 is 5x, and Zone 5 is 6x.
+- Max heart rate is estimated as 211 minus 0.64 times age when a measured ceiling is unavailable, and the app updates upward if a workout exceeds that estimate.
+- A daily base load is added to strain at about 0.1 times active minutes, with a fallback baseline when dedicated active-minute data is not available.
+- Practical strain reading guide for this app: 0 to 5 low, 6 to 10 building, 11 to 14 productive, 15 to 17 high, and 18 to 21 overreaching territory. Recovery 90 to 100 is Full Send, 70 to 89 is Perform, 40 to 69 is Adapt, and 0 to 39 is Recover.
+- Interpret the scores as coaching signals, not diagnoses or disease severity scales.
+- Low strain plus high recovery usually means the athlete is fresh, recovered, or under-loaded, not automatically a problem.
+- High strain plus high recovery can be a positive match when recovery is keeping pace with load.
+- High strain plus low recovery is the clearest mismatch or overreach pattern.
+- Treat match versus mismatch as central. Either score by itself is incomplete. The main question is whether recovery is supporting the current level of strain, lagging behind it, or comfortably exceeding it.
 """
 
 @MainActor
@@ -2143,9 +2170,10 @@ private struct StrainRecoveryAISummarySection: View {
                     Respect explicit ignore lists as hard constraints unless a forbidden topic is truly required for causal explanation.
                     Do not reuse the same generic paragraph structure across different report types.
                     Strain is a training-load/stress score, where higher usually means more accumulated recent load. Recovery is a recovery-readiness score, where higher is better.
-                    Never describe strain near 20/100 as high. That is low strain in this app's logic.
+                    Never describe strain near 6/21 as high. That is still on the low side in this app's logic.
                     Never describe recovery near 80/100 as a problem by itself. That is strong recovery in this app's logic.
                     A low strain score paired with a high recovery score is usually a positive fresh-state pattern unless the selected focus specifically suggests undertraining.
+                    \(strainRecoveryScorePromptReference)
                     Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
                     """
                 )
@@ -2153,7 +2181,8 @@ private struct StrainRecoveryAISummarySection: View {
                 let cleaned = try await generateValidatedModelSummary(
                     session: session,
                     prompt: generationPrompt,
-                    refreshVersion: request.refreshVersion
+                    refreshVersion: request.refreshVersion,
+                    previousSummary: forceRefresh ? persistedEntry?.summaryText ?? summaryText : nil
                 )
 
                 let resolvedSummary: String
@@ -2264,23 +2293,29 @@ private struct StrainRecoveryAISummarySection: View {
     private func generateValidatedModelSummary(
         session: LanguageModelSession,
         prompt: String,
-        refreshVersion: Int
+        refreshVersion: Int,
+        previousSummary: String? = nil
     ) async throws -> String {
-        let maxAttempts = 3
+        let maxAttempts = refreshVersion > 0 ? 5 : 3
 
         for attempt in 0..<maxAttempts {
             let retrySeedOffset = refreshVersion + attempt
             let response = try await session.respond(
-                to: prompt + coachRetryInstruction(forAttempt: attempt),
+                to: prompt + coachRetryInstruction(
+                    forAttempt: attempt,
+                    refreshVersion: refreshVersion,
+                    previousSummary: previousSummary
+                ),
                 options: GenerationOptions(
                     sampling: retrySeedOffset == 0 ? .greedy : .random(top: 6, seed: UInt64(retrySeedOffset)),
-                    temperature: retrySeedOffset == 0 ? 0 : min(0.6, 0.35 + (Double(attempt) * 0.08)),
+                    temperature: retrySeedOffset == 0 ? 0 : min(0.9, 0.42 + (Double(attempt) * 0.12)),
                     maximumResponseTokens: 420
                 )
             )
 
             let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !isJunkCoachOutput(cleaned) {
+            if !isJunkCoachOutput(cleaned),
+               !isEffectivelySameSummary(cleaned, as: previousSummary, isRefresh: refreshVersion > 0) {
                 return cleaned
             }
         }
@@ -2288,15 +2323,67 @@ private struct StrainRecoveryAISummarySection: View {
         return ""
     }
 
-    private func coachRetryInstruction(forAttempt attempt: Int) -> String {
-        guard attempt > 0 else { return "" }
+    private func coachRetryInstruction(
+        forAttempt attempt: Int,
+        refreshVersion: Int,
+        previousSummary: String?
+    ) -> String {
+        guard attempt > 0 || refreshVersion > 0 else { return "" }
+        let previousExcerpt: String
+        if let previousSummary, !previousSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            previousExcerpt = String(previousSummary.prefix(220))
+        } else {
+            previousExcerpt = ""
+        }
         return """
 
         Retry guidance:
         - The previous draft was rejected because it was repetitive, low-quality, or looped awkwardly.
         - Write one clean coaching paragraph with no repeated phrases, no filler, and no looping wording.
         - If evidence is thin, say that briefly instead of guessing.
+        \(refreshVersion > 0 ? "- This is a refresh. Do not reuse the same opening, same thesis sentence, or same evidence ordering as the prior summary." : "")
+        \(refreshVersion > 0 ? "- Keep the same facts if they are true, but choose a materially different coaching angle, framing, and sentence structure." : "")
+        \(!previousExcerpt.isEmpty ? "- Prior summary excerpt to avoid echoing: \(previousExcerpt)" : "")
         """
+    }
+
+    private func isEffectivelySameSummary(
+        _ newSummary: String,
+        as previousSummary: String?,
+        isRefresh: Bool
+    ) -> Bool {
+        guard isRefresh,
+              let previousSummary,
+              !previousSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let normalizedNew = normalizedCoachComparisonText(newSummary)
+        let normalizedPrevious = normalizedCoachComparisonText(previousSummary)
+        guard !normalizedNew.isEmpty, !normalizedPrevious.isEmpty else { return false }
+
+        if normalizedNew == normalizedPrevious {
+            return true
+        }
+
+        let newWords = Set(normalizedNew.components(separatedBy: " ").filter { !$0.isEmpty })
+        let previousWords = Set(normalizedPrevious.components(separatedBy: " ").filter { !$0.isEmpty })
+        guard !newWords.isEmpty, !previousWords.isEmpty else { return false }
+
+        let intersectionCount = newWords.intersection(previousWords).count
+        let unionCount = newWords.union(previousWords).count
+        guard unionCount > 0 else { return false }
+
+        let overlapRatio = Double(intersectionCount) / Double(unionCount)
+        return overlapRatio > 0.82
+    }
+
+    private func normalizedCoachComparisonText(_ text: String) -> String {
+        text
+            .lowercased()
+            .replacingOccurrences(of: #"[^\p{L}\p{N}\s]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func isJunkCoachOutput(_ text: String) -> Bool {
@@ -2486,6 +2573,7 @@ private struct StrainRecoverySummaryRequest {
 
         let loadSnapshots = dailyLoadSnapshots(
             workouts: workouts,
+            estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
             displayWindow: window
         )
         let selectedSnapshot = loadSnapshots.last(where: { calendar.isDate($0.date, inSameDayAs: selectedDay) }) ?? loadSnapshots.last
@@ -2506,7 +2594,18 @@ private struct StrainRecoverySummaryRequest {
             midpointSeries: midpointSeries
         )
 
-        let displayedStrain = min(100, (average(effortData.map(\.1)) ?? 0) * 10)
+        let displayedStrain = selectedSnapshot?.strainScore ?? engine.strainScore
+        let selectedRecoveryScore = recoveryScore(
+            for: selectedDay,
+            engine: engine
+        ) ?? engine.recoveryScore
+        let selectedRecoveryState = recoveryClassification(for: selectedRecoveryScore)
+        let selectedReadinessScore = readinessScore(
+            for: selectedDay,
+            recoveryScore: selectedRecoveryScore,
+            strainScore: displayedStrain,
+            engine: engine
+        ) ?? engine.readinessScore
         let totalLoad = effortData.map(\.1).reduce(0, +)
         let insufficiencyReason = summaryInsufficiencyReason(
             focusMode: focusMode,
@@ -2650,9 +2749,11 @@ private struct StrainRecoverySummaryRequest {
         \(focusedEvidence)
 
         Scores
-        - Displayed strain score: \(formatted(displayedStrain, digits: 0))/100
-        - Recovery score: \(formatted(engine.recoveryScore, digits: 0))/100
-        - Readiness score: \(formatted(engine.readinessScore, digits: 0))/100
+        - Displayed strain score: \(formatted(displayedStrain, digits: 0))/21
+        - Recovery score for the selected anchor date: \(formatted(selectedRecoveryScore, digits: 0))/100
+        - Recovery classification for the selected anchor date: \(selectedRecoveryState.title)
+        - Recovery classification meaning: \(selectedRecoveryState.detail)
+        - Readiness score for the selected anchor date: \(formatted(selectedReadinessScore, digits: 0))/100
         - Window total effort load: \(formatted(totalLoad, digits: 1))
 
         Training load and workouts
@@ -2665,8 +2766,17 @@ private struct StrainRecoverySummaryRequest {
         Interpretation rules
         - Strain is load/stress. Higher means more accumulated recent load.
         - Recovery is readiness/recovery reserve. Higher is better.
-        - Approximate strain reading guide for this app: 0-30 low, 31-60 moderate, 61-80 high, 81-100 very high.
-        - Approximate recovery reading guide for this app: 0-30 suppressed, 31-60 mixed, 61-100 strong.
+        - Approximate strain reading guide for this app: 0-5 low, 6-10 building, 11-14 productive, 15-17 high, 18-21 overreaching.
+        - Approximate recovery reading guide for this app: 90-100 Full Send, 70-89 Perform, 40-69 Adapt, 0-39 Recover.
+        - Strain is an app-defined 0 to 21 coaching score. Recovery is an app-defined 0 to 100 coaching score.
+        - Recovery formula in this app: composite X = (Effect HRV z-score x 0.85) - (RHR penalty z-score x 0.25), base recovery = sigmoid(0.6 x (X + 1.6)) x 100, then softened sleep and efficiency gates are applied.
+        - Recovery uses Effect HRV, a special sleep-anchored HRV signal. It uses the median of valid HRV samples in the final 3 hours of the main sleep block when possible, with a full-sleep-window fallback, and resting heart rate is estimated from the lowest 5-minute heart-rate average during sleep.
+        - Recovery is baseline-aware against the athlete's own 60-day norm when available, with 7-day fallback handling and standard-deviation clamping for stability.
+        - Resting heart rate only penalizes recovery when it is above baseline. Lower-than-baseline resting heart rate does not automatically create a high recovery score.
+        - Effect HRV is smoothed with temporal momentum so one sparse night does not fully rewrite the signal.
+        - HRV is handled on a log scale with a soft standard-deviation floor of at least 12 percent of the 60-day mean, and resting heart rate standard deviation is clamped to at least 3 bpm for stability.
+        - Recovery gating in this app: no direct sleep debt subtraction, a softened sleep scalar based on sleep ratio, a tapered circadian penalty after 90 minutes of bedtime variance, and a cap of 70 if sleep efficiency is below 85 percent.
+        - Strain formula in this app uses weighted heart-rate-zone load with log scaling, a daily base load term, and an age-based max-HR estimate of 211 minus 0.64 times age that can update upward from observed peak heart rate.
         - Higher HRV is generally favorable for recovery.
         - Lower resting heart rate and lower sleep heart rate are generally favorable for recovery.
         - If strain and recovery both rise, recognize that synergy.
@@ -2674,6 +2784,8 @@ private struct StrainRecoverySummaryRequest {
         - If sleep debt is elevated or sleep consistency is poor, connect that to readiness and recovery quality.
         - Keep vitals as Stable or Baseline unless there is a meaningful outlier.
         - A low strain score with a high recovery score is usually a fresh or well-recovered state, not a mismatch problem.
+        - Do not judge strain or recovery in isolation. Treat the match or mismatch between them as a major part of the coaching call.
+        - High strain with high recovery can be a productive match. High strain with low recovery is the clearest mismatch. Low strain with high recovery usually means freshness or under-loading depending on the training goal.
         - Prioritize coaching based on this intent: \(intent.promptInstruction)
         - Distinguish this report from other filters through both content selection and vocabulary.
         - Avoid repeating the same stock explanation patterns across different filters.
@@ -2683,8 +2795,8 @@ private struct StrainRecoverySummaryRequest {
         let fallbackSummary = insufficiencyReason
             ?? localFallbackSummary(
                 displayedStrain: displayedStrain,
-                recoveryScore: engine.recoveryScore,
-                readinessScore: engine.readinessScore,
+                recoveryScore: selectedRecoveryScore,
+                readinessScore: selectedReadinessScore,
                 workoutHighlights: workoutHighlights,
                 selectedSnapshot: selectedSnapshot,
                 scenario: scenario,
@@ -3641,9 +3753,11 @@ private func vitalLabel(for series: [(Date, Double)], higherIsWorse: Bool) -> St
 private struct WorkoutSummarySnapshot {
     let date: Date
     let sessionLoad: Double
+    let totalDailyLoad: Double
     let acuteLoad: Double
     let chronicLoad: Double
     let acwr: Double
+    let strainScore: Double
     let workoutCount: Int
     let activeDaysLast28: Int
     let daysSinceLastWorkout: Int?
@@ -3675,81 +3789,115 @@ private func filteredWindowSeries(
         .sorted { $0.0 < $1.0 }
 }
 
-private func workoutEffortScore(from workout: HKWorkout) -> Double? {
-    guard let metadata = workout.metadata else { return nil }
-
-    let preferredKeys = [
-        "HKMetadataKeyWorkloadEffortScore",
-        "HKMetadataKeyWorkoutEffortScore"
-    ]
-
-    for key in preferredKeys {
-        if let value = metadata[key] as? NSNumber {
-            return value.doubleValue
-        }
-        if let value = metadata[key] as? Double {
-            return value
-        }
-    }
-
-    for (key, value) in metadata where key.localizedCaseInsensitiveContains("effort") {
-        if let number = value as? NSNumber {
-            return number.doubleValue
-        }
-        if let doubleValue = value as? Double {
-            return doubleValue
-        }
-    }
-
-    return nil
+private func workoutSessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
+    HealthStateEngine.proWorkoutLoad(
+        for: workout,
+        analytics: analytics,
+        estimatedMaxHeartRate: HealthStateEngine.estimateMaxHeartRateNes(age: nil)
+    )
 }
 
-private func workoutSessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
-    let zoneWeightedLoad = analytics.hrZoneBreakdown.reduce(0.0) { partial, entry in
-        let zoneWeight = Double(min(max(entry.zone.zoneNumber, 1), 5))
-        let zoneMinutes = entry.timeInZone / 60.0
-        return partial + (zoneMinutes * zoneWeight)
+@MainActor
+private func recoveryScore(
+    for day: Date,
+    engine: HealthStateEngine
+) -> Double? {
+    let normalizedDay = Calendar.current.startOfDay(for: day)
+    let hrvLookup = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
+    let inputs = HealthStateEngine.proRecoveryInputs(
+        latestHRV: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.effectHRV) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: hrvLookup),
+        restingHeartRate: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailyRestingHeartRate),
+        sleepDurationHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration),
+        timeInBedHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration),
+        hrvBaseline60Day: engine.hrvBaseline60Day,
+        rhrBaseline60Day: engine.rhrBaseline60Day,
+        sleepBaseline60Day: engine.sleepBaseline60Day,
+        hrvBaseline7Day: engine.hrvBaseline7Day,
+        rhrBaseline7Day: engine.rhrBaseline7Day,
+        sleepBaseline7Day: engine.sleepBaseline7Day,
+        bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: engine.sleepStartHours, around: normalizedDay)
+    )
+
+    guard !inputs.isInconclusive else { return nil }
+    guard inputs.hrvZScore != nil || inputs.restingHeartRateZScore != nil || inputs.sleepRatio != nil else {
+        return nil
+    }
+    return HealthStateEngine.proRecoveryScore(from: inputs)
+}
+
+private struct RecoveryClassification {
+    let title: String
+    let detail: String
+    let color: Color
+}
+
+private func recoveryClassification(for score: Double) -> RecoveryClassification {
+    switch score {
+    case 90...100:
+        return RecoveryClassification(title: "Full Send", detail: "Green light for maximum intensity.", color: .green)
+    case 70..<90:
+        return RecoveryClassification(title: "Perform", detail: "Solid state for quality work.", color: .green)
+    case 40..<70:
+        return RecoveryClassification(title: "Adapt", detail: "Body is processing stress; keep it moderate.", color: .orange)
+    default:
+        return RecoveryClassification(title: "Recover", detail: "Physiological red flag; prioritize sleep and mobility.", color: .red)
+    }
+}
+
+@MainActor
+private func readinessScore(
+    for day: Date,
+    recoveryScore: Double,
+    strainScore: Double,
+    engine: HealthStateEngine
+) -> Double? {
+    let normalizedDay = Calendar.current.startOfDay(for: day)
+    let hrvLookup = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
+    let hrvValue = hrvLookup[normalizedDay]
+    let hrvTrendComponent: Double
+    if let hrvValue, let baseline = engine.hrvBaseline7Day, baseline > 0 {
+        let deviation = (hrvValue - baseline) / baseline
+        hrvTrendComponent = max(0, min(100, (deviation * 200) + 50))
+    } else {
+        hrvTrendComponent = engine.hrvTrendScore
     }
 
-    if zoneWeightedLoad > 0 {
-        return zoneWeightedLoad.rounded()
-    }
-
-    let durationMinutes = workout.duration / 60.0
-    if let effortScore = workoutEffortScore(from: workout) {
-        return (durationMinutes * max(1, effortScore)).rounded()
-    }
-
-    return 0
+    let normalizedStrain = HealthStateEngine.normalizedStrainPercent(from: strainScore)
+    let readiness = (recoveryScore * 0.70) + (hrvTrendComponent * 0.10) - (normalizedStrain * 0.25) + 25
+    return max(0, min(100, readiness))
 }
 
 private func dailyLoadSnapshots(
     workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    estimatedMaxHeartRate: Double,
     displayWindow: (start: Date, end: Date, endExclusive: Date)
 ) -> [WorkoutSummarySnapshot] {
     let calendar = Calendar.current
     var sessionLoadByDay: [Date: Double] = [:]
     var workoutCountByDay: [Date: Int] = [:]
+    let loadWindowStart = calendar.date(byAdding: .day, value: -27, to: displayWindow.start) ?? displayWindow.start
 
     for (workout, analytics) in workouts {
         let day = calendar.startOfDay(for: workout.startDate)
-        sessionLoadByDay[day, default: 0] += workoutSessionLoad(for: workout, analytics: analytics)
+        let load = HealthStateEngine.proWorkoutLoad(
+            for: workout,
+            analytics: analytics,
+            estimatedMaxHeartRate: estimatedMaxHeartRate
+        )
+        sessionLoadByDay[day, default: 0] += load
         workoutCountByDay[day, default: 0] += 1
     }
 
+    let loadDates = dateSequence(from: loadWindowStart, to: displayWindow.end)
+    let orderedLoads = loadDates.map { day in
+        let sessionLoad = sessionLoadByDay[day, default: 0]
+        let activeMinutes = workouts
+            .filter { calendar.isDate($0.workout.startDate, inSameDayAs: day) }
+            .reduce(0.0) { $0 + ($1.workout.duration / 60.0) }
+        return sessionLoad + HealthStateEngine.passiveDailyBaseLoad(activeMinutes: activeMinutes)
+    }
+
     return dateSequence(from: displayWindow.start, to: displayWindow.end).map { day in
-        let acuteTotal = (0..<7).reduce(0.0) { partial, offset in
-            let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
-            return partial + (sessionLoadByDay[sourceDay] ?? 0)
-        }
-
-        let chronicTotal = (0..<28).reduce(0.0) { partial, offset in
-            let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
-            return partial + (sessionLoadByDay[sourceDay] ?? 0)
-        }
-
-        let chronicLoad = chronicTotal / 28.0
-        let acuteLoad = acuteTotal / 7.0
         let activeDaysLast28 = (0..<28).reduce(0) { partial, offset in
             let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
             return partial + ((sessionLoadByDay[sourceDay] ?? 0) > 0 ? 1 : 0)
@@ -3758,13 +3906,20 @@ private func dailyLoadSnapshots(
             let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
             return (sessionLoadByDay[sourceDay] ?? 0) > 0
         })
+        let stateIndex = loadDates.firstIndex(of: day) ?? (orderedLoads.indices.last ?? 0)
+        let state = HealthStateEngine.proTrainingLoadState(loads: orderedLoads, index: stateIndex)
 
         return WorkoutSummarySnapshot(
             date: day,
             sessionLoad: sessionLoadByDay[day] ?? 0,
-            acuteLoad: acuteLoad,
-            chronicLoad: chronicLoad,
-            acwr: chronicLoad > 0 ? acuteLoad / chronicLoad : 0,
+            totalDailyLoad: orderedLoads[stateIndex],
+            acuteLoad: state.acuteLoad,
+            chronicLoad: state.chronicLoad,
+            acwr: state.acwr,
+            strainScore: HealthStateEngine.proStrainScore(
+                acuteLoad: state.acuteLoad,
+                chronicLoad: state.chronicLoad
+            ),
             workoutCount: workoutCountByDay[day] ?? 0,
             activeDaysLast28: activeDaysLast28,
             daysSinceLastWorkout: daysSinceLastWorkout
@@ -4064,6 +4219,7 @@ private func localFallbackSummary(
     spo2Data: [(Date, Double)]
 ) -> String {
     let loadStatus = workoutLoadStatus(for: selectedSnapshot)
+    let recoveryState = recoveryClassification(for: recoveryScore)
     let latestSleep = sleepData.last?.1 ?? 0
     let averageSleep = average(sleepData.map(\.1)) ?? 0
     let hrvTrend = trendSummary(for: hrvData, digits: 0)
@@ -4075,7 +4231,7 @@ private func localFallbackSummary(
         spo2Data: spo2Data
     )
     let equalizerSignal: String = {
-        if recoveryScore >= 70 && displayedStrain >= 60 {
+        if recoveryScore >= 70 && displayedStrain >= 11 {
             return "Your Equalizer is working. You are asking more from training and your recovery is rising with it."
         }
 
@@ -4101,7 +4257,7 @@ private func localFallbackSummary(
     }()
 
     return """
-    \(scenario) \(equalizerSignal)\(overreachSignal) Your current strain is \(formatted(displayedStrain, digits: 0))/100, recovery is \(formatted(recoveryScore, digits: 0))/100, and readiness is \(formatted(readinessScore, digits: 0))/100. Your load status is \(loadStatus.title.lowercased()), with \(formatted(workoutHighlights.totalMinutes, digits: 0)) total training minutes and \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions per week in this window. Your standout work came from \(workoutHighlights.longestWorkout.lowercased()) and \(workoutHighlights.highestLoadWorkout.lowercased()). You also spent \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) minutes in Zone 4 and \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) minutes in Zone 5, so intensity is a real part of the story.
+    \(scenario) \(equalizerSignal)\(overreachSignal) Your current strain is \(formatted(displayedStrain, digits: 0))/21, recovery is \(formatted(recoveryScore, digits: 0))/100, classified as \(recoveryState.title.lowercased()), and readiness is \(formatted(readinessScore, digits: 0))/100. Recovery state meaning: \(recoveryState.detail) Your load status is \(loadStatus.title.lowercased()), with \(formatted(workoutHighlights.totalMinutes, digits: 0)) total training minutes and \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions per week in this window. Your standout work came from \(workoutHighlights.longestWorkout.lowercased()) and \(workoutHighlights.highestLoadWorkout.lowercased()). You also spent \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) minutes in Zone 4 and \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) minutes in Zone 5, so intensity is a real part of the story.
 
     Your sleep is averaging \(formatted(averageSleep, digits: 1)) hours, with \(formatted(latestSleep, digits: 1)) hours most recently. Sleep consistency is \(formatted(consistencyScore, digits: 0))%, and sleep debt is \(formatted(sleepDebtHours, digits: 1)) hours. HRV is \(hrvTrend), resting heart rate is \(rhrTrend), and sleep heart rate is \(sleepHRTrend). \(vitalsState) A recovery-day sleep gap of \(signedFormatted(activityRecoveryGap, digits: 1)) hours is worth keeping if you want better absorption of training. Coaching focus right now: \(intent.promptInstruction)
     """
@@ -4111,21 +4267,55 @@ struct StrainRecoveryMathSection: View {
     @ObservedObject var engine: HealthStateEngine
     let timeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
-    
-    private var effortData: [(Date, Double)] {
-        filteredDailyValues(engine.effortRating, timeFilter: timeFilter, anchorDate: anchorDate)
-    }
+    @State private var showTechnicalSheet = false
     
     private var totalLoad: Double {
-        effortData.map(\.1).reduce(0, +)
+        loadSnapshots.map(\.totalDailyLoad).reduce(0, +)
     }
     
     private var averageLoad: Double {
-        average(effortData.map(\.1)) ?? 0
+        average(loadSnapshots.map(\.totalDailyLoad)) ?? 0
     }
     
     private var strainValue: Double {
-        min(100, averageLoad * 10)
+        selectedSnapshot?.strainScore ?? engine.strainScore
+    }
+
+    private var selectedDay: Date {
+        Calendar.current.startOfDay(for: anchorDate)
+    }
+
+    private var loadSnapshots: [WorkoutSummarySnapshot] {
+        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
+        return dailyLoadSnapshots(
+            workouts: engine.workoutAnalytics,
+            estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+            displayWindow: window
+        )
+    }
+
+    private var selectedSnapshot: WorkoutSummarySnapshot? {
+        loadSnapshots.last(where: { Calendar.current.isDate($0.date, inSameDayAs: selectedDay) }) ?? loadSnapshots.last
+    }
+
+    private var estimatedMaxHR: Double {
+        HealthStateEngine.estimateMaxHeartRateNes(age: engine.userAge)
+    }
+
+    private var loadRatioAdjustment: Double {
+        guard let snapshot = selectedSnapshot else { return 0 }
+        if snapshot.acwr > 1.5 { return 2.0 }
+        if snapshot.acwr < 0.8 { return -1.5 }
+        return 0
+    }
+
+    private var logarithmicLoad: Double {
+        guard let snapshot = selectedSnapshot else { return 0 }
+        return 5.0 * log10(snapshot.totalDailyLoad + 1)
+    }
+
+    private var strainChartData: [(Date, Double)] {
+        loadSnapshots.map { ($0.date, $0.strainScore) }
     }
     
     var body: some View {
@@ -4133,26 +4323,403 @@ struct StrainRecoveryMathSection: View {
             symbol: "flame.fill",
             title: "Strain",
             value: String(Int(strainValue)),
-            unit: "/100",
+            unit: "/21",
             trend: "\(timeFilter.rawValue) load: " + String(format: "%.1f", totalLoad),
             color: Color.orange,
-            chartData: effortData,
-            chartLabel: "Effort",
-            chartUnit: "pts",
+            chartData: strainChartData,
+            chartLabel: "Strain",
+            chartUnit: "/21",
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("\(timeFilter.rawValue) average effort: " + String(format: "%.1f", averageLoad))
+                    Text("Strain uses weighted heart-rate-zone load plus a small base-load term, then log-scales that day and nudges it up only when acute load clearly outruns chronic load.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("Recovery Score: \(Int(engine.recoveryScore))")
+                    if let snapshot = selectedSnapshot {
+                        Text("For \(selectedDay.formatted(date: .abbreviated, time: .omitted)), daily load is \(formatted(snapshot.totalDailyLoad, digits: 2)), acute/chronic ratio is \(formatted(snapshot.acwr, digits: 2)), and the final score lands at \(formatted(snapshot.strainScore, digits: 1))/21.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    Text("Low strain is roughly 0-5, building is 6-10, productive is 11-14, and 15+ is where load starts to get aggressive.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("Readiness Score: \(Int(engine.readinessScore))")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    Button("View more") {
+                        showTechnicalSheet = true
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
                 }
             }
         )
+        .fullScreenCover(isPresented: $showTechnicalSheet) {
+            StrainScoreTechnicalSheet(
+                snapshot: selectedSnapshot,
+                selectedDay: selectedDay,
+                estimatedMaxHR: estimatedMaxHR,
+                logarithmicLoad: logarithmicLoad,
+                loadRatioAdjustment: loadRatioAdjustment,
+                averageLoad: averageLoad
+            )
+        }
+    }
+}
+
+struct RecoveryScoreSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let timeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+    @State private var showTechnicalSheet = false
+
+    private var selectedDay: Date {
+        Calendar.current.startOfDay(for: anchorDate)
+    }
+
+    private var recoveryData: [(Date, Double)] {
+        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
+        return dateSequence(from: window.start, to: window.end).compactMap { day in
+            recoveryScore(for: day, engine: engine).map { (day, $0) }
+        }
+    }
+
+    private var selectedRecoveryScore: Double {
+        recoveryScore(for: selectedDay, engine: engine) ?? engine.recoveryScore
+    }
+
+    private var selectedRecoveryInputsAreInconclusive: Bool {
+        selectedInputs.isInconclusive
+    }
+
+    private var isSuppressedRelativeToSevenDayAverage: Bool {
+        let calendar = Calendar.current
+        let priorScores = (1...7).compactMap { offset -> Double? in
+            guard let sourceDay = calendar.date(byAdding: .day, value: -offset, to: selectedDay) else { return nil }
+            return recoveryScore(for: sourceDay, engine: engine)
+        }
+        guard !priorScores.isEmpty else { return false }
+        let average = priorScores.reduce(0, +) / Double(priorScores.count)
+        guard average > 0 else { return false }
+        return selectedRecoveryScore < (average * 0.8)
+    }
+
+    private var selectedInputs: HealthStateEngine.ProRecoveryInputs {
+        let hrvLookup = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
+        return HealthStateEngine.proRecoveryInputs(
+            latestHRV: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.effectHRV) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: hrvLookup),
+            restingHeartRate: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.dailyRestingHeartRate),
+            sleepDurationHours: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.dailySleepDuration),
+            timeInBedHours: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.dailySleepDuration),
+            hrvBaseline60Day: engine.hrvBaseline60Day,
+            rhrBaseline60Day: engine.rhrBaseline60Day,
+            sleepBaseline60Day: engine.sleepBaseline60Day,
+            hrvBaseline7Day: engine.hrvBaseline7Day,
+            rhrBaseline7Day: engine.rhrBaseline7Day,
+            sleepBaseline7Day: engine.sleepBaseline7Day,
+            bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: engine.sleepStartHours, around: selectedDay)
+        )
+    }
+
+    private var hrvValue: Double? {
+        engine.effectHRV[selectedDay] ?? Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })[selectedDay]
+    }
+
+    private var rhrValue: Double? {
+        engine.basalSleepingHeartRate[selectedDay] ?? engine.dailyRestingHeartRate[selectedDay]
+    }
+
+    private var sleepValue: Double? {
+        engine.anchoredSleepDuration[selectedDay] ?? engine.dailySleepDuration[selectedDay]
+    }
+
+    private var timeInBedValue: Double? {
+        engine.anchoredTimeInBed[selectedDay] ?? sleepValue
+    }
+
+    var body: some View {
+        let averageRecovery = average(recoveryData.map(\.1)) ?? selectedRecoveryScore
+        let recoveryState = recoveryClassification(for: selectedRecoveryScore)
+        HealthCard(
+            symbol: "heart.circle.fill",
+            title: "Recovery Score",
+            value: selectedRecoveryInputsAreInconclusive ? "Inconclusive" : String(format: "%.0f", selectedRecoveryScore),
+            unit: "/100",
+            trend: "\(timeFilter.rawValue) avg: " + String(format: "%.0f", averageRecovery),
+            color: recoveryState.color,
+            chartData: recoveryData,
+            chartLabel: "Recovery",
+            chartUnit: "%",
+            badgeText: selectedRecoveryInputsAreInconclusive ? "Effect HRV Invalid" : recoveryState.title,
+            badgeColor: selectedRecoveryInputsAreInconclusive ? .red : recoveryState.color,
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Recovery starts from Effect HRV, a momentum-smoothed sleep-anchored HRV signal, plus basal sleeping heart rate against your own baseline.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("For \(selectedDay.formatted(date: .abbreviated, time: .omitted)), Effect HRV z is \(selectedInputs.hrvZScore.map { formatted($0, digits: 2) } ?? "nil"), RHR penalty z is \(selectedInputs.restingHeartRatePenaltyZScore.map { formatted($0, digits: 2) } ?? "nil"), circadian penalty is \(formatted(selectedInputs.circadianPenalty, digits: 1)) points, and sleep then gates the result before the final score of \(selectedRecoveryInputsAreInconclusive ? "inconclusive" : "\(formatted(selectedRecoveryScore, digits: 1))/100").")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("\(recoveryState.title) means \(recoveryState.detail) Recovery bands are 90-100 Full Send, 70-89 Perform, 40-69 Adapt, and 0-39 Recover.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Button("View more") {
+                        showTechnicalSheet = true
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                }
+            }
+        )
+        .fullScreenCover(isPresented: $showTechnicalSheet) {
+            RecoveryScoreTechnicalSheet(
+                selectedDay: selectedDay,
+                hrvValue: hrvValue,
+                rhrValue: rhrValue,
+                sleepValue: sleepValue,
+                timeInBedValue: timeInBedValue,
+                inputs: selectedInputs,
+                hrvBaseline: engine.hrvBaseline60Day ?? HealthStateEngine.fallbackStats(
+                    mean: engine.hrvBaseline7Day,
+                    coefficientOfVariation: 0.12,
+                    minimumStandardDeviation: 10
+                ),
+                rhrBaseline: engine.rhrBaseline60Day ?? HealthStateEngine.fallbackStats(
+                    mean: engine.rhrBaseline7Day,
+                    coefficientOfVariation: 0.06,
+                    minimumStandardDeviation: 3
+                )
+            )
+        }
+    }
+}
+
+private struct StrainScoreTechnicalSheet: View {
+    let snapshot: WorkoutSummarySnapshot?
+    let selectedDay: Date
+    let estimatedMaxHR: Double
+    let logarithmicLoad: Double
+    let loadRatioAdjustment: Double
+    let averageLoad: Double
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Strain uses heart-rate-zone weighted load, a small base-load term for normal daily stress, then a safety-valve adjustment if acute load is clearly outrunning or trailing chronic load.")
+                        .font(.body)
+                    Text("Max HR estimate")
+                        .font(.headline)
+                    Text("maxHR = max(150, 211 - 0.64 x age) = \(formatted(estimatedMaxHR, digits: 1)) bpm")
+                        .foregroundColor(.secondary)
+                    if let snapshot {
+                        Text("Selected day")
+                            .font(.headline)
+                        Text("\(selectedDay.formatted(date: .abbreviated, time: .omitted)) total session load = \(formatted(snapshot.sessionLoad, digits: 2))")
+                            .foregroundColor(.secondary)
+                        Text("Daily load = session load + base load = \(formatted(snapshot.totalDailyLoad, digits: 2))")
+                            .foregroundColor(.secondary)
+                        Text("Acute load = \(formatted(snapshot.acuteLoad, digits: 2)), chronic load = \(formatted(snapshot.chronicLoad, digits: 2)), ACWR = \(formatted(snapshot.acwr, digits: 2))")
+                            .foregroundColor(.secondary)
+                        Text("S_log = 5 x log10(L + 1) = 5 x log10(\(formatted(snapshot.totalDailyLoad + 1, digits: 2))) = \(formatted(logarithmicLoad, digits: 2))")
+                            .foregroundColor(.secondary)
+                        Text("Adjustment = \(signedFormatted(loadRatioAdjustment, digits: 1))")
+                            .foregroundColor(.secondary)
+                        Text("Final strain = clamp(\(formatted(logarithmicLoad, digits: 2)) \(loadRatioAdjustment >= 0 ? "+" : "-") \(formatted(abs(loadRatioAdjustment), digits: 2)), 0, 21) = \(formatted(snapshot.strainScore, digits: 2))/21")
+                            .foregroundColor(.secondary)
+                    }
+                    Text("Window context")
+                        .font(.headline)
+                    Text("Visible-chart average effort proxy = \(formatted(averageLoad, digits: 1))")
+                        .foregroundColor(.secondary)
+                    Text("Reading guide: 0-5 low, 6-10 building, 11-14 productive, 15-17 high, 18-21 overreaching.")
+                        .foregroundColor(.secondary)
+                }
+                .padding(20)
+            }
+            .navigationTitle("Strain Formula")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct RecoveryScoreTechnicalSheet: View {
+    let selectedDay: Date
+    let hrvValue: Double?
+    let rhrValue: Double?
+    let sleepValue: Double?
+    let timeInBedValue: Double?
+    let inputs: HealthStateEngine.ProRecoveryInputs
+    let hrvBaseline: HealthStateEngine.RollingBaselineStats?
+    let rhrBaseline: HealthStateEngine.RollingBaselineStats?
+    @Environment(\.dismiss) private var dismiss
+
+    private var currentDebugSnapshot: HealthStateEngine.RecoveryDebugSnapshot? {
+        guard let hrvZ = inputs.hrvZScore, let rhrPenaltyZ = inputs.restingHeartRatePenaltyZScore else {
+            return nil
+        }
+        return HealthStateEngine.debugRecoverySnapshot(
+            label: "Selected Day",
+            hrvZScore: hrvZ,
+            rhrPenaltyZScore: rhrPenaltyZ,
+            sleepRatio: inputs.sleepRatio ?? 1.0,
+            sleepEfficiency: inputs.sleepEfficiency ?? 1.0,
+            bedtimeVarianceMinutes: inputs.bedtimeVarianceMinutes ?? 0
+        )
+    }
+
+    private var scenarioSnapshots: [HealthStateEngine.RecoveryDebugSnapshot] {
+        [
+            HealthStateEngine.debugRecoverySnapshot(
+                label: "Standard",
+                hrvZScore: 0.0,
+                rhrPenaltyZScore: 0.0,
+                sleepRatio: 1.0,
+                sleepEfficiency: 0.92,
+                bedtimeVarianceMinutes: 30
+            ),
+            HealthStateEngine.debugRecoverySnapshot(
+                label: "Primed",
+                hrvZScore: 0.5,
+                rhrPenaltyZScore: 0.0,
+                sleepRatio: 1.0,
+                sleepEfficiency: 0.95,
+                bedtimeVarianceMinutes: 20
+            ),
+            HealthStateEngine.debugRecoverySnapshot(
+                label: "Tired",
+                hrvZScore: -0.5,
+                rhrPenaltyZScore: 0.5,
+                sleepRatio: 0.875,
+                sleepEfficiency: 0.88,
+                bedtimeVarianceMinutes: 60
+            ),
+            HealthStateEngine.debugRecoverySnapshot(
+                label: "Suppressed",
+                hrvZScore: -1.5,
+                rhrPenaltyZScore: 1.0,
+                sleepRatio: 0.625,
+                sleepEfficiency: 0.82,
+                bedtimeVarianceMinutes: 120
+            )
+        ]
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Recovery uses Effect HRV, a special sleep-anchored HRV signal rather than raw daytime HRV. It uses the sleep-window median from the last 3 hours when possible, then momentum-smooths that signal across nights. Basal sleeping heart rate comes from the lowest 5-minute heart-rate average during sleep.")
+                        .font(.body)
+                    Text("Selected day")
+                        .font(.headline)
+                    Text(selectedDay.formatted(date: .abbreviated, time: .omitted))
+                        .foregroundColor(.secondary)
+                    Text("Inputs")
+                        .font(.headline)
+                    Text("Effect HRV_day = \(hrvValue.map { formatted($0, digits: 1) } ?? "nil") ms")
+                        .foregroundColor(.secondary)
+                    Text("RHR_day = \(rhrValue.map { formatted($0, digits: 1) } ?? "nil") bpm")
+                        .foregroundColor(.secondary)
+                    Text("Sleep_duration = \(sleepValue.map { formatted($0, digits: 2) } ?? "nil") h, Time_in_bed = \(timeInBedValue.map { formatted($0, digits: 2) } ?? "nil") h")
+                        .foregroundColor(.secondary)
+                    Text("Baselines")
+                        .font(.headline)
+                    Text("Effect HRV baseline mean = \(hrvBaseline.map { formatted($0.mean, digits: 1) } ?? "nil"), soft SD floor = at least 12% of mean")
+                        .foregroundColor(.secondary)
+                    Text("RHR baseline mean = \(rhrBaseline.map { formatted($0.mean, digits: 1) } ?? "nil"), SD = \(rhrBaseline.map { formatted(max($0.standardDeviation, 3), digits: 2) } ?? "nil")")
+                        .foregroundColor(.secondary)
+                    Text("Math")
+                        .font(.headline)
+                    Text("Z_effectHRV is computed on ln(HRV) rather than raw HRV = \(inputs.hrvZScore.map { formatted($0, digits: 2) } ?? "nil")")
+                        .foregroundColor(.secondary)
+                    Text("RHR penalty z = max((RHR_day - mean_rhr) / SD_rhr, 0) = \(inputs.restingHeartRatePenaltyZScore.map { formatted($0, digits: 2) } ?? "nil")")
+                        .foregroundColor(.secondary)
+                    Text("Sleep ratio = sleep duration / sleep goal = \(inputs.sleepRatio.map { formatted($0, digits: 2) } ?? "nil") with goal \(formatted(inputs.sleepGoalHours, digits: 2)) h")
+                        .foregroundColor(.secondary)
+                    Text("Sleep scalar = 0.85 + (0.15 x sleep ratio) = \(inputs.sleepScalar.map { formatted($0, digits: 2) } ?? "nil")")
+                        .foregroundColor(.secondary)
+                    Text("Composite X = (Z_effectHRV x 0.85) - (RHR penalty z x 0.25) = \(formatted(inputs.composite, digits: 2))")
+                        .foregroundColor(.secondary)
+                    Text("Base recovery = 1 / (1 + e^(-0.6 x (X + 1.6))) x 100 = \(formatted(inputs.baseRecoveryScore, digits: 2))")
+                        .foregroundColor(.secondary)
+                    Text("Sleep debt penalty = removed, circadian penalty = \(formatted(inputs.circadianPenalty, digits: 1)), bedtime variance = \(inputs.bedtimeVarianceMinutes.map { formatted($0, digits: 0) } ?? "nil") min")
+                        .foregroundColor(.secondary)
+                    Text("Sleep efficiency = \(inputs.sleepEfficiency.map { formatted($0 * 100, digits: 0) } ?? "nil")%, efficiency cap = \(inputs.efficiencyCap.map { formatted($0, digits: 0) } ?? "none")")
+                        .foregroundColor(.secondary)
+                    Text("Final recovery after circadian penalty, softened sleep gate, and efficiency cap = \(formatted(inputs.finalRecoveryScore, digits: 2))/100")
+                        .foregroundColor(.secondary)
+                    Text("Debug helper")
+                        .font(.headline)
+                    Button("Print Debug Snapshots") {
+                        printRecoveryDebugSnapshots()
+                    }
+                    .buttonStyle(.bordered)
+                    if let currentDebugSnapshot {
+                        debugSnapshotView(
+                            currentDebugSnapshot,
+                            subtitle: "Selected-day normalized inputs and score"
+                        )
+                    } else {
+                        Text("Selected-day debug snapshot is unavailable until both Effect HRV z and RHR penalty z can be computed.")
+                            .foregroundColor(.secondary)
+                    }
+                    ForEach(Array(scenarioSnapshots.enumerated()), id: \.offset) { _, snapshot in
+                        debugSnapshotView(
+                            snapshot,
+                            subtitle: "Reference scenario"
+                        )
+                    }
+                    Text("Interpretation")
+                        .font(.headline)
+                    Text("Recovery bands are 90-100 Full Send, 70-89 Perform, 40-69 Adapt, and 0-39 Recover. The main coaching read is whether recovery and strain are matching or mismatching, not whether one number alone is high or low.")
+                        .foregroundColor(.secondary)
+                }
+                .padding(20)
+            }
+            .navigationTitle("Recovery Formula")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func debugSnapshotView(
+        _ snapshot: HealthStateEngine.RecoveryDebugSnapshot,
+        subtitle: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(snapshot.label): \(subtitle)")
+                .font(.subheadline.weight(.semibold))
+            Text("Inputs -> HRV z \(formatted(snapshot.hrvZScore, digits: 2)), RHR penalty z \(formatted(snapshot.rhrPenaltyZScore, digits: 2)), sleep ratio \(formatted(snapshot.sleepRatio, digits: 2)), sleep efficiency \(formatted(snapshot.sleepEfficiency * 100, digits: 0))%, bedtime variance \(formatted(snapshot.bedtimeVarianceMinutes, digits: 0)) min")
+                .foregroundColor(.secondary)
+            Text("Outputs -> composite \(formatted(snapshot.composite, digits: 2)), base \(formatted(snapshot.baseRecoveryScore, digits: 1)), circadian penalty \(formatted(snapshot.circadianPenalty, digits: 1)), gated \(formatted(snapshot.gatedRecoveryScore, digits: 1)), cap \(snapshot.efficiencyCap.map { formatted($0, digits: 0) } ?? "none"), final \(formatted(snapshot.finalRecoveryScore, digits: 1))/100, class \(recoveryClassification(for: snapshot.finalRecoveryScore).title)")
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func printRecoveryDebugSnapshots() {
+        if let currentDebugSnapshot {
+            printRecoveryDebugSnapshot(currentDebugSnapshot)
+        } else {
+            print("[RecoveryDebug] Selected Day snapshot unavailable: missing Effect HRV z and/or RHR penalty z.")
+        }
+
+        scenarioSnapshots.forEach(printRecoveryDebugSnapshot)
+    }
+
+    private func printRecoveryDebugSnapshot(_ snapshot: HealthStateEngine.RecoveryDebugSnapshot) {
+        print("""
+        [RecoveryDebug] \(snapshot.label)
+          Inputs: HRV z=\(formatted(snapshot.hrvZScore, digits: 2)), RHR penalty z=\(formatted(snapshot.rhrPenaltyZScore, digits: 2)), sleep ratio=\(formatted(snapshot.sleepRatio, digits: 2)), sleep efficiency=\(formatted(snapshot.sleepEfficiency * 100, digits: 0))%, bedtime variance=\(formatted(snapshot.bedtimeVarianceMinutes, digits: 0)) min
+          Outputs: composite=\(formatted(snapshot.composite, digits: 2)), base=\(formatted(snapshot.baseRecoveryScore, digits: 1)), circadian penalty=\(formatted(snapshot.circadianPenalty, digits: 1)), gated=\(formatted(snapshot.gatedRecoveryScore, digits: 1)), cap=\(snapshot.efficiencyCap.map { formatted($0, digits: 0) } ?? "none"), final=\(formatted(snapshot.finalRecoveryScore, digits: 1))/100, class=\(recoveryClassification(for: snapshot.finalRecoveryScore).title)
+        """)
     }
 }
 
@@ -4417,9 +4984,11 @@ struct HRVSection: View {
             chartData: hrvData,
             chartLabel: "HRV",
             chartUnit: "ms",
+            badgeText: "Raw",
+            badgeColor: .purple,
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("HRV reflects the latest value within the selected window ending on \(anchorDate.formatted(date: .abbreviated, time: .omitted)).")
+                    Text("This is raw HRV within the selected window, not the special Effect HRV signal used for recovery scoring.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Text("Higher HRV generally suggests better recovery capacity and autonomic readiness.")
