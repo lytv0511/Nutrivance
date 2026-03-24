@@ -2655,6 +2655,48 @@ extension HealthKitManager {
         }
         return result
     }
+
+    func fetchDailyOxygenSaturation(
+        from startDate: Date,
+        to endDate: Date
+    ) async -> [Date: Double] {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation) else {
+            return [:]
+        }
+
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                guard let quantitySamples = samples as? [HKQuantitySample] else {
+                    continuation.resume(returning: [:])
+                    return
+                }
+
+                let calendar = Calendar.current
+                let grouped = Dictionary(grouping: quantitySamples) {
+                    calendar.startOfDay(for: $0.endDate)
+                }
+
+                var daily: [Date: Double] = [:]
+                for (day, samples) in grouped {
+                    let values = samples.map { $0.quantity.doubleValue(for: HKUnit.percent()) }
+                    guard !values.isEmpty else { continue }
+                    daily[day] = (values.reduce(0, +) / Double(values.count)) * 100.0
+                }
+
+                continuation.resume(returning: daily)
+            }
+
+            self.healthStore.execute(query)
+        }
+    }
 }
 
 // MARK: - Heart Rate Zone Calculations

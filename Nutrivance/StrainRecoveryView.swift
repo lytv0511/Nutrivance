@@ -47,7 +47,7 @@ struct StrainRecoveryView: View {
         case month = "1M"
     }
 
-    @State private var timeFilter: TimeFilter = .week
+    @State private var timeFilter: TimeFilter = .day
     @State private var sportFilter: String? = nil // nil means all sports
     @State private var selectedDate = Date()
     @State private var showingSummarySettings = false
@@ -92,6 +92,10 @@ struct StrainRecoveryView: View {
         selectedDate = Date()
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
+    }
+
+    private var coachSummaryAnchorDate: Date {
+        summaryReportPeriod(for: timeFilter, requestedDate: selectedDate).canonicalAnchorDate
     }
 
     var body: some View {
@@ -140,9 +144,10 @@ struct StrainRecoveryView: View {
                             engine: engine,
                             timeFilter: timeFilter,
                             sportFilter: sportFilter,
-                            anchorDate: selectedDate,
+                            anchorDate: coachSummaryAnchorDate,
                             aggressiveCachingController: aggressiveCachingController
                         )
+                        .id("ai-summary-\(timeFilter.rawValue)-\(sportFilter ?? "all")-\(coachSummaryAnchorDate.timeIntervalSinceReferenceDate)")
 
                     MetricSectionGroup(title: "Training Load") {
                         StrainRecoveryMathSection(
@@ -339,17 +344,31 @@ struct StrainRecoveryView: View {
     private func ensureHistoricalCoverageIfNeeded() async {
         historicalCoverageTask?.cancel()
         let task = Task { @MainActor in
+            let calendar = Calendar.current
             let window = chartWindow(for: timeFilter, anchorDate: selectedDate)
-            let historicalWindowStart = Calendar.current.date(byAdding: .day, value: -27, to: window.start) ?? window.start
-            guard engine.needsWorkoutAnalyticsCoverage(from: historicalWindowStart, to: window.endExclusive) else { return }
+            let historicalWindowStart = calendar.date(byAdding: .day, value: -27, to: window.start) ?? window.start
+            let interactiveThreshold = calendar.date(byAdding: .day, value: -engine.interactiveWorkoutLookbackDaysForUI, to: Date()) ?? Date()
+            let selectedYearStart = calendar.dateInterval(of: .year, for: selectedDate)?.start ?? window.start
+            let yearPrefetchStart = calendar.date(byAdding: .day, value: -27, to: selectedYearStart) ?? selectedYearStart
+            let workoutCoverageStart = selectedDate < interactiveThreshold
+                ? min(yearPrefetchStart, historicalWindowStart)
+                : historicalWindowStart
+            let needsWorkoutCoverage = engine.needsWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
+            let needsSpO2Coverage = engine.needsSpO2Coverage(from: window.start, to: window.endExclusive)
+            guard needsWorkoutCoverage || needsSpO2Coverage else { return }
 
-            historicalCoverageMessage = selectedDate < (Calendar.current.date(byAdding: .day, value: -engine.interactiveWorkoutLookbackDaysForUI, to: Date()) ?? Date())
-                ? "Loading older strain and recovery history for \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
+            historicalCoverageMessage = selectedDate < interactiveThreshold
+                ? "Loading \(calendar.component(.year, from: selectedDate)) training history through \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
                 : "Refreshing workout history..."
             isLoadingHistoricalCoverage = true
             defer { isLoadingHistoricalCoverage = false }
 
-            await engine.ensureWorkoutAnalyticsCoverage(from: historicalWindowStart, to: window.endExclusive)
+            if needsWorkoutCoverage {
+                await engine.ensureWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
+            }
+            if needsSpO2Coverage {
+                await engine.ensureSpO2Coverage(from: window.start, to: window.endExclusive)
+            }
         }
         historicalCoverageTask = task
         await task.value
@@ -440,6 +459,74 @@ private extension StrainRecoveryView.TimeFilter {
         case .month:
             return .weekOfYear
         }
+    }
+
+    var summaryPeriodTitle: String {
+        switch self {
+        case .day:
+            return "day"
+        case .week:
+            return "week"
+        case .month:
+            return "month"
+        }
+    }
+}
+
+private struct SummaryReportPeriod {
+    let canonicalAnchorDate: Date
+    let start: Date
+    let end: Date
+    let endExclusive: Date
+    let description: String
+}
+
+private func summaryReportPeriod(
+    for timeFilter: StrainRecoveryView.TimeFilter,
+    requestedDate: Date
+) -> SummaryReportPeriod {
+    let calendar = Calendar.current
+    let safeRequestedDate = calendar.startOfDay(for: requestedDate)
+    let today = calendar.startOfDay(for: Date())
+
+    switch timeFilter {
+    case .day:
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: safeRequestedDate) ?? safeRequestedDate
+        return SummaryReportPeriod(
+            canonicalAnchorDate: safeRequestedDate,
+            start: safeRequestedDate,
+            end: safeRequestedDate,
+            endExclusive: endExclusive,
+            description: safeRequestedDate.formatted(date: .abbreviated, time: .omitted)
+        )
+    case .week:
+        let interval = calendar.dateInterval(of: .weekOfYear, for: safeRequestedDate)
+        let start = interval.map { calendar.startOfDay(for: $0.start) } ?? safeRequestedDate
+        let rawEndExclusive = interval?.end ?? (calendar.date(byAdding: .day, value: 7, to: start) ?? start)
+        let rawEnd = calendar.date(byAdding: .day, value: -1, to: rawEndExclusive) ?? start
+        let end = min(calendar.startOfDay(for: rawEnd), today)
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        return SummaryReportPeriod(
+            canonicalAnchorDate: start,
+            start: start,
+            end: end,
+            endExclusive: endExclusive,
+            description: "\(start.formatted(date: .abbreviated, time: .omitted)) to \(end.formatted(date: .abbreviated, time: .omitted))"
+        )
+    case .month:
+        let interval = calendar.dateInterval(of: .month, for: safeRequestedDate)
+        let start = interval.map { calendar.startOfDay(for: $0.start) } ?? safeRequestedDate
+        let rawEndExclusive = interval?.end ?? (calendar.date(byAdding: .month, value: 1, to: start) ?? start)
+        let rawEnd = calendar.date(byAdding: .day, value: -1, to: rawEndExclusive) ?? start
+        let end = min(calendar.startOfDay(for: rawEnd), today)
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        return SummaryReportPeriod(
+            canonicalAnchorDate: start,
+            start: start,
+            end: end,
+            endExclusive: endExclusive,
+            description: start.formatted(.dateTime.month(.wide).year())
+        )
     }
 }
 
@@ -755,28 +842,138 @@ private struct StrainRecoveryAggressiveCachingDayBatch {
 }
 
 enum AggressiveSyncSelectionMode: String, Codable, CaseIterable, Identifiable {
-    case fullMonth
-    case selectedDate
-    case reportType
+    case expectedCache = "fullMonth"
+    case selectedTimeRange = "selectedDate"
+    case selectedReportType = "reportType"
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .fullMonth:
-            return "Past Month"
-        case .selectedDate:
-            return "Single Date"
-        case .reportType:
-            return "Single Report Type"
+        case .expectedCache:
+            return "Expected Cache"
+        case .selectedTimeRange:
+            return "Selected Time Range"
+        case .selectedReportType:
+            return "Selected Report Type"
+        }
+    }
+}
+
+enum AggressiveSyncTimeRangeType: String, Codable, CaseIterable, Identifiable {
+    case weekOfDays
+    case monthOfWeeks
+    case yearOfMonths
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .weekOfDays:
+            return "Week Of Day Reports"
+        case .monthOfWeeks:
+            return "Month Of Week Reports"
+        case .yearOfMonths:
+            return "Year Of Month Reports"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .weekOfDays:
+            return "Fetch all 1D reports for the calendar week containing the selected date."
+        case .monthOfWeeks:
+            return "Fetch all shared 1W reports that intersect the calendar month containing the selected date."
+        case .yearOfMonths:
+            return "Fetch all shared 1M reports for the calendar year containing the selected date."
         }
     }
 }
 
 private struct AggressiveSyncSelection {
     let mode: AggressiveSyncSelectionMode
+    let timeRangeType: AggressiveSyncTimeRangeType
     let selectedDate: Date
     let selectedSuggestionID: String?
+}
+
+@MainActor
+private func aggressiveCachingAnchorDates(
+    for timeFilter: StrainRecoveryView.TimeFilter,
+    relativeTo today: Date
+) -> [Date] {
+    let calendar = Calendar.current
+    let safeToday = calendar.startOfDay(for: today)
+
+    switch timeFilter {
+    case .day:
+        return (0..<28).compactMap {
+            calendar.date(byAdding: .day, value: -$0, to: safeToday)
+        }
+    case .week:
+        return (0..<5).compactMap {
+            guard let date = calendar.date(byAdding: .weekOfYear, value: -$0, to: safeToday) else { return nil }
+            return summaryReportPeriod(for: .week, requestedDate: date).canonicalAnchorDate
+        }
+    case .month:
+        return (0..<60).compactMap {
+            guard let date = calendar.date(byAdding: .month, value: -$0, to: safeToday) else { return nil }
+            return summaryReportPeriod(for: .month, requestedDate: date).canonicalAnchorDate
+        }
+    }
+}
+
+@MainActor
+private func aggressiveCachingScopes(
+    for selection: AggressiveSyncSelection,
+    relativeTo today: Date
+) -> [(filter: StrainRecoveryView.TimeFilter, anchors: [Date])] {
+    let calendar = Calendar.current
+    let safeToday = calendar.startOfDay(for: today)
+
+    switch selection.mode {
+    case .expectedCache:
+        return [
+            (.day, aggressiveCachingAnchorDates(for: .day, relativeTo: safeToday)),
+            (.week, aggressiveCachingAnchorDates(for: .week, relativeTo: safeToday)),
+            (.month, aggressiveCachingAnchorDates(for: .month, relativeTo: safeToday))
+        ]
+    case .selectedTimeRange, .selectedReportType:
+        switch selection.timeRangeType {
+        case .weekOfDays:
+            let weekPeriod = summaryReportPeriod(for: .week, requestedDate: selection.selectedDate)
+            let dayAnchors = dateSequence(from: weekPeriod.start, to: weekPeriod.end)
+            return [(.day, dayAnchors)]
+        case .monthOfWeeks:
+            let monthPeriod = summaryReportPeriod(for: .month, requestedDate: selection.selectedDate)
+            var weekAnchors: [Date] = []
+            var seenWeekAnchors = Set<Date>()
+            for date in dateSequence(from: monthPeriod.start, to: monthPeriod.end) {
+                let weekAnchor = summaryReportPeriod(for: .week, requestedDate: date).canonicalAnchorDate
+                if seenWeekAnchors.insert(weekAnchor).inserted {
+                    weekAnchors.append(weekAnchor)
+                }
+            }
+            return [(.week, weekAnchors.sorted())]
+        case .yearOfMonths:
+            guard let yearInterval = calendar.dateInterval(of: .year, for: selection.selectedDate) else {
+                return []
+            }
+            let yearStart = calendar.startOfDay(for: yearInterval.start)
+            let rawYearEnd = calendar.date(byAdding: .day, value: -1, to: yearInterval.end) ?? yearStart
+            let yearEnd = min(calendar.startOfDay(for: rawYearEnd), safeToday)
+            guard yearStart <= yearEnd else { return [] }
+
+            var monthAnchors: [Date] = []
+            var cursor = yearStart
+            while cursor <= yearEnd {
+                monthAnchors.append(summaryReportPeriod(for: .month, requestedDate: cursor).canonicalAnchorDate)
+                guard let nextMonth = calendar.date(byAdding: .month, value: 1, to: cursor) else { break }
+                cursor = nextMonth
+            }
+            return [(.month, monthAnchors)]
+        }
+    }
 }
 
 private struct StrainRecoveryAggressiveCachingPlan {
@@ -803,40 +1000,37 @@ private func aggressiveCachingPlan() -> StrainRecoveryAggressiveCachingPlan {
 
     let today = Date()
     let cache = StrainRecoverySummaryPersistence.load()
-    let calendar = Calendar.current
     let selection = AggressiveSyncSelection(
         mode: settings.aggressiveSyncSelectionMode,
+        timeRangeType: settings.aggressiveSyncTimeRangeType,
         selectedDate: settings.aggressiveSyncSelectedDate,
         selectedSuggestionID: settings.aggressiveSyncSelectedSuggestionID
     )
     var batches: [StrainRecoveryAggressiveCachingDayBatch] = []
     var completedBatchCount = 0
 
-    for dayOffset in 0..<28 {
-        guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
-        if selection.mode == .selectedDate,
-           calendar.startOfDay(for: selection.selectedDate) != calendar.startOfDay(for: date) {
-            continue
-        }
-        var pendingRequests: [StrainRecoverySummaryRequest] = []
-        var seen = Set<String>()
+    let filterScopes = aggressiveCachingScopes(for: selection, relativeTo: today)
 
-        for filter in StrainRecoveryView.TimeFilter.allCases {
+    for scope in filterScopes {
+        for date in scope.anchors {
+            var pendingRequests: [StrainRecoverySummaryRequest] = []
+            var seen = Set<String>()
             let suggestions = SummarySuggestion.buildSuggestions(
                 engine: HealthStateEngine.shared,
-                timeFilter: filter,
+                timeFilter: scope.filter,
                 sportFilter: nil,
                 anchorDate: date
             )
 
             for suggestion in suggestions {
-                if selection.mode == .reportType,
+                if selection.mode == .selectedReportType,
                    suggestion.id != selection.selectedSuggestionID {
                     continue
                 }
+
                 let request = StrainRecoverySummaryRequest.build(
                     engine: HealthStateEngine.shared,
-                    timeFilter: filter,
+                    timeFilter: scope.filter,
                     sportFilter: nil,
                     anchorDate: date,
                     intentText: suggestion.queryText,
@@ -844,24 +1038,23 @@ private func aggressiveCachingPlan() -> StrainRecoveryAggressiveCachingPlan {
                     refreshVersion: 0
                 )
                 guard seen.insert(request.requestID).inserted else { continue }
-
                 if let existing = cache[request.requestID], existing.source == .appleIntelligence {
                     continue
                 }
                 pendingRequests.append(request)
             }
-        }
 
-        if pendingRequests.isEmpty {
-            completedBatchCount += 1
-        }
+            if pendingRequests.isEmpty {
+                completedBatchCount += 1
+            }
 
-        batches.append(
-            StrainRecoveryAggressiveCachingDayBatch(
-                anchorDate: date,
-                pendingRequests: pendingRequests
+            batches.append(
+                StrainRecoveryAggressiveCachingDayBatch(
+                    anchorDate: date,
+                    pendingRequests: pendingRequests
+                )
             )
-        )
+        }
     }
 
     return StrainRecoveryAggressiveCachingPlan(
@@ -979,6 +1172,9 @@ You are an AI Athletic Coach. Analyze the provided health data through the Equal
 Your tone is direct, motivating, and professional.
 Never refer to the athlete in the third person. Use You and Your.
 Focus on actionable coaching, not generic explanation.
+Vary sentence openings. Do not start every sentence with You.
+When mentioning a trend, comparison, peak, drop, or streak, anchor it to explicit dates or date ranges whenever the prompt provides them.
+Prefer concrete date phrasing like Jan 12, Mar 3 to Mar 9, or April 2025 instead of vague phrases like recently or lately when evidence is date-specific.
 If strain and recovery rise together, recognize the athlete for matching recovery to load.
 If heart rate recovery falls while strain or training load are above optimal, flag a possible overreach pattern.
 Follow the selected report type strictly and do not drift into unrelated categories.
@@ -990,6 +1186,39 @@ Strain is a training-load/stress score, where higher usually means more accumula
 Never describe strain near 6/21 as high. That is still on the low side in this app's logic.
 Never describe recovery near 80/100 as a problem by itself. That is strong recovery in this app's logic.
 A low strain score paired with a high recovery score is usually a positive fresh-state pattern unless the selected focus specifically suggests undertraining.
+Do not treat recovery as needing to perfectly match strain on every day. A good, workable match is often enough.
+When strain is in the productive or high range and recovery is still in Perform or Full Send, frame that as a positive or solidly supported load unless other evidence clearly shows breakdown.
+Specifically, strain around 11 to 17 with recovery around 70 to 89 is often a healthy, trainable state rather than a recovery problem.
+Be more critical only when there is a meaningful mismatch pattern, such as high strain with Adapt or Recover recovery, recovery drifting down across several dated windows while strain stays elevated, or multiple supporting signs like sleep debt, rising resting heart rate, suppressed HRV, poor HRR, or unstable vitals.
+If the scores are reasonably aligned, give credit. Compliment strong or solid matching of strain and recovery rather than searching for a negative angle.
+\(strainRecoveryScorePromptReference)
+Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
+"""
+
+private let strainRecoverySessionInstructions = """
+You are an AI Athletic Coach. Analyze the provided health data through the Equalizer Framework. Your goal is to identify how Strain and Recovery are balancing. Look for trends where metrics move in tandem or diverge. If vitals are within normal range, simply state they are Stable. Only call out specific vitals if they deviate from the athlete's norm. Speak directly to the athlete. Do not summarize, coach.
+Your tone is direct, motivating, and professional.
+Never refer to the athlete in the third person. Use You and Your.
+Focus on actionable coaching, not generic explanation.
+Vary sentence openings. Do not start every sentence with You.
+When mentioning a trend, comparison, peak, drop, or streak, anchor it to explicit dates or date ranges whenever the prompt provides them.
+Prefer concrete date phrasing like Jan 12, Mar 3 to Mar 9, or April 2025 instead of vague phrases like recently or lately when evidence is date-specific.
+If strain and recovery rise together, recognize the athlete for matching recovery to load.
+If heart rate recovery falls while strain or training load are above optimal, flag a possible overreach pattern.
+Follow the selected report type strictly and do not drift into unrelated categories.
+Use supporting metrics only when they directly strengthen the chosen focus.
+Treat each report type like a distinct coaching mode with its own reasoning style and vocabulary.
+Respect explicit ignore lists as hard constraints unless a forbidden topic is truly required for causal explanation.
+Do not reuse the same generic paragraph structure across different report types.
+Strain is a training-load/stress score, where higher usually means more accumulated recent load. Recovery is a recovery-readiness score, where higher is better.
+Never describe strain near 6/21 as high. That is still on the low side in this app's logic.
+Never describe recovery near 80/100 as a problem by itself. That is strong recovery in this app's logic.
+A low strain score paired with a high recovery score is usually a positive fresh-state pattern unless the selected focus specifically suggests undertraining.
+Do not treat recovery as needing to perfectly match strain on every day. A good, workable match is often enough.
+When strain is in the productive or high range and recovery is still in Perform or Full Send, frame that as a positive or solidly supported load unless other evidence clearly shows breakdown.
+Specifically, strain around 11 to 17 with recovery around 70 to 89 is often a healthy, trainable state rather than a recovery problem.
+Be more critical only when there is a meaningful mismatch pattern, such as high strain with Adapt or Recover recovery, recovery drifting down across several dated windows while strain stays elevated, or multiple supporting signs like sleep debt, rising resting heart rate, suppressed HRV, poor HRR, or unstable vitals.
+If the scores are reasonably aligned, give credit. Compliment strong or solid matching of strain and recovery rather than searching for a negative angle.
 \(strainRecoveryScorePromptReference)
 Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
 """
@@ -1066,18 +1295,20 @@ private struct CrossFilterSummaryContext {
     let summaryText: String
 }
 
+private let strainRecoverySummaryRequestVersion = "strain-recovery-ai-v9"
+
 private func summaryRequestID(
     timeFilter: StrainRecoveryView.TimeFilter,
     scopedSport: String?,
     anchorDate: Date,
     suggestionID: String
 ) -> String {
-    let selectedDay = Calendar.current.startOfDay(for: anchorDate)
+    let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
     return [
-        "strain-recovery-ai-v7",
+        strainRecoverySummaryRequestVersion,
         timeFilter.rawValue,
         scopedSport ?? "all",
-        String(selectedDay.timeIntervalSince1970),
+        String(period.canonicalAnchorDate.timeIntervalSince1970),
         suggestionID
     ].joined(separator: "|")
 }
@@ -1086,7 +1317,8 @@ private func siblingTimeFilterContexts(
     for request: StrainRecoverySummaryRequest,
     cache: [String: StrainRecoverySummaryCacheEntry]
 ) -> [CrossFilterSummaryContext] {
-    StrainRecoveryView.TimeFilter.allCases.compactMap { filter in
+    guard request.timeFilter == .day else { return [] }
+    return StrainRecoveryView.TimeFilter.allCases.compactMap { filter in
         guard filter != request.timeFilter else { return nil }
         let requestID = summaryRequestID(
             timeFilter: filter,
@@ -1132,6 +1364,31 @@ private func promptWithSiblingTimeFilterContext(
     - Treat the day, week, and month as one connected training story around the same anchor date.
     - If the horizons point in different directions, explain why that can still be true at the same time.
     """
+}
+
+private func compactCoachGenerationPrompt(_ prompt: String) -> String {
+    let lines = prompt
+        .components(separatedBy: .newlines)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+
+    var compacted: [String] = []
+    var include = true
+
+    for line in lines {
+        if line.isEmpty {
+            continue
+        }
+        if line == "Interpretation rules" {
+            include = false
+            continue
+        }
+        if !include {
+            continue
+        }
+        compacted.append(line)
+    }
+
+    return compacted.joined(separator: "\n")
 }
 
 private struct StrainRecoverySummarySettingsView: View {
@@ -1257,7 +1514,7 @@ private struct StrainRecoverySummarySettingsView: View {
                         get: { settings.aggressiveSyncSelectionMode },
                         set: { newValue in
                             settings.aggressiveSyncSelectionMode = newValue
-                            if newValue == .reportType, settings.aggressiveSyncSelectedSuggestionID == nil {
+                            if newValue == .selectedReportType, settings.aggressiveSyncSelectedSuggestionID == nil {
                                 settings.aggressiveSyncSelectedSuggestionID = SummarySuggestion.defaultSuggestion.id
                             }
                             StrainRecoverySummaryPersistence.saveSyncSettings(settings)
@@ -1268,7 +1525,21 @@ private struct StrainRecoverySummarySettingsView: View {
                         }
                     }
 
-                    if settings.aggressiveSyncSelectionMode == .selectedDate {
+                    if settings.aggressiveSyncSelectionMode != .expectedCache {
+                        Picker("Time Range Type", selection: Binding(
+                            get: { settings.aggressiveSyncTimeRangeType },
+                            set: { newValue in
+                                settings.aggressiveSyncTimeRangeType = newValue
+                                StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                            }
+                        )) {
+                            ForEach(AggressiveSyncTimeRangeType.allCases) { rangeType in
+                                Text(rangeType.title).tag(rangeType)
+                            }
+                        }
+                    }
+
+                    if settings.aggressiveSyncSelectionMode != .expectedCache {
                         DatePicker(
                             "Sync Date",
                             selection: syncSelectionDateBinding,
@@ -1277,7 +1548,7 @@ private struct StrainRecoverySummarySettingsView: View {
                         )
                     }
 
-                    if settings.aggressiveSyncSelectionMode == .reportType {
+                    if settings.aggressiveSyncSelectionMode == .selectedReportType {
                         Picker("Report Type", selection: Binding(
                             get: { settings.aggressiveSyncSelectedSuggestionID ?? SummarySuggestion.defaultSuggestion.id },
                             set: { newValue in
@@ -1309,16 +1580,20 @@ private struct StrainRecoverySummarySettingsView: View {
                     }
                     .disabled(!aggressiveCachingController.isActive && (!isCurrentDevicePrimary || !deviceSupportsAppleIntelligence()))
 
-                    Text("Runs immediately on the current primary Apple Intelligence device. Progress advances one day-batch at a time, and each generated summary is stored and synced before the next one begins so the run can resume later without losing completed work.")
+                    Text("Runs immediately on the current primary Apple Intelligence device. Progress advances one shared period at a time, and each generated summary is stored and synced before the next one begins so the run can resume later without losing completed work.")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
-                    if settings.aggressiveSyncSelectionMode == .selectedDate {
-                        Text("This scope syncs every report across 1D, 1W, and 1M for \(settings.aggressiveSyncSelectedDate.formatted(date: .abbreviated, time: .omitted)).")
+                    if settings.aggressiveSyncSelectionMode == .selectedTimeRange {
+                        Text("\(settings.aggressiveSyncTimeRangeType.detail) The selected date is \(settings.aggressiveSyncSelectedDate.formatted(date: .abbreviated, time: .omitted)).")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    } else if settings.aggressiveSyncSelectionMode == .reportType {
-                        Text("This scope syncs \(selectedAggressiveSuggestion.title) across the past month, including all 1D, 1W, and 1M versions for each day.")
+                    } else if settings.aggressiveSyncSelectionMode == .selectedReportType {
+                        Text("This scope syncs only \(selectedAggressiveSuggestion.title) for the chosen time range type. \(settings.aggressiveSyncTimeRangeType.detail)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("This scope fills the expected cache tiers for all report types: all day reports for the last 28 days, 5 shared week reports for the last month, and 60 shared month reports for the last 5 years.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -1627,11 +1902,30 @@ private struct StrainRecoveryAISummarySection: View {
 
     private var currentRequestDescriptor: String {
         let title = selectedSuggestion?.title ?? detectedIntent.displayName
-        let dateText = anchorDate.formatted(date: .abbreviated, time: .omitted)
-        return "\(title) for \(dateText) for \(timeFilter.rawValue)"
+        let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
+        let dateText = timeFilter == .day
+            ? period.description
+            : "\(period.description) (\(timeFilter.rawValue))"
+        return "\(title) for \(dateText)"
+    }
+
+    private var summaryPeriodFooterText: String {
+        let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
+
+        switch timeFilter {
+        case .day:
+            return period.start.formatted(date: .abbreviated, time: .omitted)
+        case .week:
+            return "\(period.start.formatted(date: .abbreviated, time: .omitted)) - \(period.end.formatted(date: .abbreviated, time: .omitted))"
+        case .month:
+            return period.start.formatted(.dateTime.month(.wide).year())
+        }
     }
 
     private var liveOperationStatusText: String? {
+        if summaryText.isEmpty && isLoading {
+            return nil
+        }
         if isLoading {
             return "Loading requested report of \(currentRequestDescriptor)"
         }
@@ -1684,12 +1978,15 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var generationTaskID: String {
-        [selectedSuggestionRequestID, summaryGenerationReadiness.triggerToken].joined(separator: "|")
+        [
+            selectedSuggestionRequestID,
+            summaryGenerationReadiness.triggerToken,
+            String(suggestions.count)
+        ].joined(separator: "|")
     }
 
     private var displayedSummaryBody: String {
-        if displayedRequestID == selectedSuggestionRequestID,
-           !summaryText.isEmpty {
+        if !summaryText.isEmpty {
             return summaryText
         }
         if !summaryGenerationReadiness.canGenerate {
@@ -1698,7 +1995,19 @@ private struct StrainRecoveryAISummarySection: View {
         if isLoading && requestedRequestID == selectedSuggestionRequestID {
             return "This coach report is still being prepared for \(selectedSuggestion?.title ?? detectedIntent.displayName). The current filter does not have a finished summary yet."
         }
-        return "AI summaries are on-demand while you browse. Tap a suggestion to load \(selectedSuggestion?.title ?? detectedIntent.displayName) for this date and filter."
+        let normalizedStatus = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalizedStatus.isEmpty && (
+            normalizedStatus.localizedCaseInsensitiveContains("failed")
+            || normalizedStatus.localizedCaseInsensitiveContains("unavailable")
+            || normalizedStatus.localizedCaseInsensitiveContains("did not return")
+            || normalizedStatus.localizedCaseInsensitiveContains("waiting for enough health data")
+        ) {
+            return normalizedStatus
+        }
+        if suggestions.isEmpty {
+            return "Preparing coaching suggestions for this date and filter before generating the first AI summary."
+        }
+        return "Preparing the \(selectedSuggestion?.title ?? detectedIntent.displayName) AI summary for this date and filter."
     }
 
     private var comparisonInsights: [CoachSummaryInsight] {
@@ -1734,10 +2043,11 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var suggestionsContextID: String {
-        [
+        let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
+        return [
             timeFilter.rawValue,
             sportFilter ?? "all",
-            Calendar.current.startOfDay(for: anchorDate).formatted(date: .numeric, time: .omitted),
+            Calendar.current.startOfDay(for: period.canonicalAnchorDate).formatted(date: .numeric, time: .omitted),
             String(engine.workoutAnalytics.count)
         ].joined(separator: "|")
     }
@@ -1753,12 +2063,19 @@ private struct StrainRecoveryAISummarySection: View {
 
     @MainActor
     private func refreshSuggestionsSnapshot() {
+        let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
         suggestionsSnapshot = SummarySuggestion.buildSuggestions(
             engine: engine,
             timeFilter: timeFilter,
             sportFilter: sportFilter,
-            anchorDate: anchorDate
+            anchorDate: period.canonicalAnchorDate
         )
+        if selectedSuggestionID == nil || suggestionsSnapshot.contains(where: { $0.id == selectedSuggestionID }) == false {
+            selectedSuggestionID = suggestionsSnapshot.first?.id
+        }
+        if intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            intentText = suggestionsSnapshot.first?.queryText ?? ""
+        }
     }
 
     @MainActor
@@ -1771,7 +2088,68 @@ private struct StrainRecoveryAISummarySection: View {
         persistedEntry = nil
         summaryText = ""
         isLoading = false
-        statusText = "AI summaries are paused while browsing. Tap a suggestion to load one for this date and filter."
+        statusText = "Preparing the next AI coach summary for this date and filter."
+    }
+
+    @MainActor
+    private func triggerAutoSummaryLoadIfNeeded() {
+        guard summaryGenerationReadiness.canGenerate else { return }
+        guard !isLoading else { return }
+        guard !suggestions.isEmpty else { return }
+        guard let selectedSuggestion else { return }
+        guard summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if displayedRequestID == selectedSuggestionRequestID,
+           !statusText.localizedCaseInsensitiveContains("failed"),
+           !statusText.localizedCaseInsensitiveContains("unavailable"),
+           !statusText.localizedCaseInsensitiveContains("did not return") {
+            return
+        }
+
+        let request = StrainRecoverySummaryRequest.build(
+            engine: engine,
+            timeFilter: timeFilter,
+            sportFilter: sportFilter,
+            anchorDate: anchorDate,
+            intentText: intentText.isEmpty ? selectedSuggestion.queryText : intentText,
+            selectedSuggestion: selectedSuggestion,
+            refreshVersion: refreshVersions[selectedSuggestion.id, default: 0]
+        )
+
+        Task {
+            statusText = "Generating \(selectedSuggestion.title) with Apple Intelligence for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
+            await generateSummary(
+                for: request,
+                requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
+                allowLocalRefreshFallback: !shouldRequireAppleIntelligenceByDefault
+            )
+        }
+    }
+
+    @MainActor
+    private func scheduleAutoSummaryLoad() {
+        deferredSummaryLoadingTask?.cancel()
+        deferredSummaryLoadingTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            triggerAutoSummaryLoadIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func ensureSummaryPrerequisitesIfNeeded() {
+        let isMissingCoreRecoveryInputs = !engine.feelGoodScoreInputsAvailable
+        let isMissingRecoveryTrendSeries = engine.dailyHRV.isEmpty || engine.dailyRestingHeartRate.isEmpty
+        let isMissingSleepContext = engine.sleepStages.isEmpty && engine.sleepHours == nil
+
+        guard isMissingCoreRecoveryInputs || isMissingRecoveryTrendSeries || isMissingSleepContext else {
+            return
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            engine.refreshAllMetrics(force: true)
+        }
     }
 
     @MainActor
@@ -1924,7 +2302,7 @@ private struct StrainRecoveryAISummarySection: View {
                             requestedRequestID = cachedEntry.requestID
                         } else {
                             Task {
-                                statusText = "Loading requested report of \(suggestion.title) for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) for \(timeFilter.rawValue)"
+                                statusText = "Generating \(suggestion.title) with Apple Intelligence for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
                                 await generateSummary(
                                     for: request,
                                     requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
@@ -1974,9 +2352,10 @@ private struct StrainRecoveryAISummarySection: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 if summaryText.isEmpty && isLoading {
-                    Text("Generating new tailored response... focusing on \(selectedSuggestion?.title ?? detectedIntent.displayName).")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    SummaryPreparationAnimationView(
+                        title: "Generating \(selectedSuggestion?.title ?? detectedIntent.displayName)",
+                        subtitle: statusText
+                    )
                 } else {
                     CoachSummaryInteractiveText(
                         text: displayedSummaryBody,
@@ -1988,14 +2367,23 @@ private struct StrainRecoveryAISummarySection: View {
                     .foregroundColor(.primary)
                 }
 
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if !(summaryText.isEmpty && isLoading) {
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
 
                 if !comparisonInsights.isEmpty {
                     Text("Tap the highlighted coach cues to compare the linked metrics on a shared whiteboard.")
                         .font(.caption)
                         .foregroundColor(.orange)
+                }
+
+                HStack {
+                    Spacer()
+                    Text(summaryPeriodFooterText)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.secondary)
                 }
             }
             .padding(16)
@@ -2018,6 +2406,7 @@ private struct StrainRecoveryAISummarySection: View {
         }
         .task(id: generationTaskID) {
             refreshLocalSnapshots()
+            refreshSuggestionsSnapshot()
             if selectedSuggestionID == nil {
                 selectedSuggestionID = suggestions.first?.id
                 if intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2042,6 +2431,8 @@ private struct StrainRecoveryAISummarySection: View {
                         requireAppleIntelligence: true,
                         allowLocalRefreshFallback: false
                     )
+                } else {
+                    triggerAutoSummaryLoadIfNeeded()
                 }
             }
         }
@@ -2051,13 +2442,36 @@ private struct StrainRecoveryAISummarySection: View {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
                 refreshSuggestionsSnapshot()
-                if selectedSuggestionID == nil || suggestions.contains(where: { $0.id == selectedSuggestionID }) == false {
-                    selectedSuggestionID = suggestions.first?.id
-                }
+                scheduleAutoSummaryLoad()
+            }
+        }
+        .onAppear {
+            AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(true)
+            refreshLocalSnapshots()
+            refreshSuggestionsSnapshot()
+            ensureSummaryPrerequisitesIfNeeded()
+            scheduleAutoSummaryLoad()
+        }
+        .onChange(of: summaryGenerationReadiness.triggerToken) { _, _ in
+            scheduleAutoSummaryLoad()
+        }
+        .onChange(of: selectedSuggestionRequestID) { _, _ in
+            scheduleAutoSummaryLoad()
+        }
+        .onChange(of: suggestions.count) { _, _ in
+            scheduleAutoSummaryLoad()
+        }
+        .onChange(of: aggressiveCachingController.isActive) { _, isActive in
+            guard !isActive else { return }
+            refreshLocalSnapshots(forceReload: true)
+            refreshSuggestionsSnapshot()
+            if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
+                scheduleAutoSummaryLoad()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
             refreshLocalSnapshots(forceReload: true)
+            scheduleAutoSummaryLoad()
         }
         .onChange(of: aggressiveCachingController.pendingAction) { _, action in
             guard let action else { return }
@@ -2069,10 +2483,6 @@ private struct StrainRecoveryAISummarySection: View {
             case .cancel:
                 aggressiveCachingController.cancelByUser()
             }
-        }
-        .onAppear {
-            AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(true)
-            refreshLocalSnapshots()
         }
         .onDisappear {
             AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(false)
@@ -2137,8 +2547,32 @@ private struct StrainRecoveryAISummarySection: View {
         cacheSnapshot[entry.requestID] = entry
         if updateDisplayed {
             persistedEntry = entry
+            summaryText = entry.summaryText
             displayedRequestID = entry.requestID
+            requestedRequestID = entry.requestID
         }
+    }
+
+    @MainActor
+    private func markUnresolvedAppleIntelligenceState(_ message: String, for request: StrainRecoverySummaryRequest) {
+        summaryText = ""
+        statusText = message
+        requestedRequestID = request.requestID
+        displayedRequestID = nil
+    }
+
+    @MainActor
+    private func appleIntelligenceFailureMessage(
+        base: String,
+        error: Error?,
+        prompt: String
+    ) -> String {
+        let promptCount = prompt.count
+        let detail = error.map { String(describing: $0).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        if detail.isEmpty {
+            return "\(base) Prompt size: \(promptCount) chars."
+        }
+        return "\(base) \(detail) Prompt size: \(promptCount) chars."
     }
 
     @MainActor
@@ -2209,6 +2643,7 @@ private struct StrainRecoveryAISummarySection: View {
         if updateDisplayed {
             cancelBackgroundGeneration()
             requestedRequestID = request.requestID
+            displayedRequestID = request.requestID
         }
         guard summaryGenerationReadiness.canGenerate else {
             if updateDisplayed {
@@ -2230,6 +2665,7 @@ private struct StrainRecoveryAISummarySection: View {
                 summaryText = persistedEntry.summaryText
                 statusText = persistedEntry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
                 displayedRequestID = request.requestID
+                requestedRequestID = request.requestID
             }
             return
         }
@@ -2252,20 +2688,31 @@ private struct StrainRecoveryAISummarySection: View {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             let model = SystemLanguageModel(useCase: .general)
-            let generationPrompt = promptWithSiblingTimeFilterContext(
+            let generationPrompt = compactCoachGenerationPrompt(promptWithSiblingTimeFilterContext(
                 for: request,
                 cache: StrainRecoverySummaryPersistence.load()
-            )
+            ))
 
             guard model.isAvailable else {
                 if requireAppleIntelligence {
                     guard updateDisplayed else { return }
                     if updateDisplayed {
+                        let fallbackMessage = "Apple Intelligence is unavailable on this device, and no synced AI summary is available yet."
                         let restoredAI = restorePreferredCachedSummary(
                             for: request,
-                            fallbackStatus: "Apple Intelligence is unavailable on this device, and no synced AI summary is available yet."
+                            fallbackStatus: fallbackMessage
                         )
                         if restoredAI || !allowLocalRefreshFallback {
+                            if !restoredAI {
+                                markUnresolvedAppleIntelligenceState(
+                                    appleIntelligenceFailureMessage(
+                                        base: fallbackMessage,
+                                        error: nil,
+                                        prompt: generationPrompt
+                                    ),
+                                    for: request
+                                )
+                            }
                             return
                         }
                     }
@@ -2293,25 +2740,7 @@ private struct StrainRecoveryAISummarySection: View {
             do {
                 let session = LanguageModelSession(
                     model: model,
-                    instructions: """
-                    You are an AI Athletic Coach. Analyze the provided health data through the Equalizer Framework. Your goal is to identify how Strain and Recovery are balancing. Look for trends where metrics move in tandem or diverge. If vitals are within normal range, simply state they are Stable. Only call out specific vitals if they deviate from the athlete's norm. Speak directly to the athlete. Do not summarize, coach.
-                    Your tone is direct, motivating, and professional.
-                    Never refer to the athlete in the third person. Use You and Your.
-                    Focus on actionable coaching, not generic explanation.
-                    If strain and recovery rise together, recognize the athlete for matching recovery to load.
-                    If heart rate recovery falls while strain or training load are above optimal, flag a possible overreach pattern.
-                    Follow the selected report type strictly and do not drift into unrelated categories.
-                    Use supporting metrics only when they directly strengthen the chosen focus.
-                    Treat each report type like a distinct coaching mode with its own reasoning style and vocabulary.
-                    Respect explicit ignore lists as hard constraints unless a forbidden topic is truly required for causal explanation.
-                    Do not reuse the same generic paragraph structure across different report types.
-                    Strain is a training-load/stress score, where higher usually means more accumulated recent load. Recovery is a recovery-readiness score, where higher is better.
-                    Never describe strain near 6/21 as high. That is still on the low side in this app's logic.
-                    Never describe recovery near 80/100 as a problem by itself. That is strong recovery in this app's logic.
-                    A low strain score paired with a high recovery score is usually a positive fresh-state pattern unless the selected focus specifically suggests undertraining.
-                    \(strainRecoveryScorePromptReference)
-                    Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
-                    """
+                    instructions: strainRecoverySessionInstructions
                 )
 
                 let cleaned = try await generateValidatedModelSummary(
@@ -2327,11 +2756,22 @@ private struct StrainRecoveryAISummarySection: View {
                     if requireAppleIntelligence {
                         guard updateDisplayed else { return }
                         if updateDisplayed {
+                            let fallbackMessage = "Apple Intelligence did not return a usable summary, and no synced AI summary is available yet."
                             let restoredAI = restorePreferredCachedSummary(
                                 for: request,
-                                fallbackStatus: "Apple Intelligence did not return a usable summary, and no synced AI summary is available yet."
+                                fallbackStatus: fallbackMessage
                             )
                             if restoredAI || !allowLocalRefreshFallback {
+                                if !restoredAI {
+                                    markUnresolvedAppleIntelligenceState(
+                                        appleIntelligenceFailureMessage(
+                                            base: fallbackMessage,
+                                            error: nil,
+                                            prompt: generationPrompt
+                                        ),
+                                        for: request
+                                    )
+                                }
                                 return
                             }
                         }
@@ -2359,14 +2799,28 @@ private struct StrainRecoveryAISummarySection: View {
                 )
                 return
             } catch {
+                print("[CoachAI] Apple Intelligence generation failed",
+                      "requestID=\(request.requestID)",
+                      "filter=\(request.timeFilter.rawValue)",
+                      "suggestion=\(request.selectedSuggestionTitle)",
+                      "promptChars=\(generationPrompt.count)",
+                      "error=\(String(describing: error))")
                 if requireAppleIntelligence {
                     guard updateDisplayed else { return }
                     if updateDisplayed {
+                        let fallbackMessage = appleIntelligenceFailureMessage(
+                            base: "Apple Intelligence summary generation failed, and no synced AI summary is available yet.",
+                            error: error,
+                            prompt: generationPrompt
+                        )
                         let restoredAI = restorePreferredCachedSummary(
                             for: request,
-                            fallbackStatus: "Apple Intelligence summary generation failed, and no synced AI summary is available yet."
+                            fallbackStatus: fallbackMessage
                         )
                         if restoredAI || !allowLocalRefreshFallback {
+                            if !restoredAI {
+                                markUnresolvedAppleIntelligenceState(fallbackMessage, for: request)
+                            }
                             return
                         }
                     }
@@ -2396,11 +2850,22 @@ private struct StrainRecoveryAISummarySection: View {
         if requireAppleIntelligence {
             guard updateDisplayed else { return }
             if updateDisplayed {
+                let fallbackMessage = "Apple Intelligence is unavailable here, and no synced AI summary is available yet."
                 let restoredAI = restorePreferredCachedSummary(
                     for: request,
-                    fallbackStatus: "Apple Intelligence is unavailable here, and no synced AI summary is available yet."
+                    fallbackStatus: fallbackMessage
                 )
                 if restoredAI || !allowLocalRefreshFallback {
+                    if !restoredAI {
+                        markUnresolvedAppleIntelligenceState(
+                            appleIntelligenceFailureMessage(
+                                base: fallbackMessage,
+                                error: nil,
+                                prompt: ""
+                            ),
+                            for: request
+                        )
+                    }
                     return
                 }
             }
@@ -2630,6 +3095,79 @@ private struct StrainRecoveryAISummarySection: View {
     }
 }
 
+private struct SummaryPreparationAnimationView: View {
+    let title: String
+    let subtitle: String
+    @State private var travel: CGFloat = -160
+    @State private var pulse = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ZStack(alignment: .leading) {
+                let capsuleShape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
+                capsuleShape
+                    .fill(Color.orange.opacity(0.08))
+                    .frame(height: 58)
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.clear,
+                                        Color.orange.opacity(0.12),
+                                        Color.blue.opacity(0.18),
+                                        Color.clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 170, height: 58)
+                            .offset(x: travel)
+                            .blur(radius: 1.2)
+                    }
+                    .clipShape(capsuleShape)
+
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.orange.opacity(0.18))
+                            .frame(width: 28, height: 28)
+                            .scaleEffect(pulse ? 1.08 : 0.92)
+                        Image(systemName: "sparkles")
+                            .font(.caption.bold())
+                            .foregroundColor(.orange)
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.primary)
+                        Text("Apple Intelligence is preparing a fresh coaching read.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 14)
+            }
+
+            Text(subtitle)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .onAppear {
+            travel = -160
+            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                travel = 320
+            }
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+    }
+}
+
 private struct StrainRecoverySummaryRequest {
     let prompt: String
     let fallbackSummary: String
@@ -2657,8 +3195,10 @@ private struct StrainRecoverySummaryRequest {
         refreshVersion: Int
     ) -> Self {
         let calendar = Calendar.current
-        let window = chartWindow(for: timeFilter, anchorDate: anchorDate)
-        let selectedDay = calendar.startOfDay(for: anchorDate)
+        let requestedDay = calendar.startOfDay(for: anchorDate)
+        let reportPeriod = summaryReportPeriod(for: timeFilter, requestedDate: requestedDay)
+        let window = (start: reportPeriod.start, end: reportPeriod.end, endExclusive: reportPeriod.endExclusive)
+        let selectedDay = reportPeriod.canonicalAnchorDate
         let effectiveSuggestion = selectedSuggestion ?? SummarySuggestion.defaultSuggestion
         let intent = effectiveSuggestion.intent
         let focusMode = effectiveSuggestion.focusMode
@@ -2668,22 +3208,22 @@ private struct StrainRecoverySummaryRequest {
             ["core", "deep", "rem", "unspecified"].compactMap { stages[$0] }.reduce(0, +)
         }
 
-        let sleepData = filteredDailyValues(sleepTotals, timeFilter: timeFilter, anchorDate: anchorDate)
+        let sleepData = filteredWindowSeries(values: sleepTotals, in: window)
         let midpointSeries = filteredWindowSeries(
             values: engine.sleepMidpointHours,
             in: window
         )
         let sleepHRData = filteredWindowSeries(values: engine.dailySleepHeartRate, in: window)
-        let rhrData = filteredDailyValues(engine.dailyRestingHeartRate, timeFilter: timeFilter, anchorDate: anchorDate)
+        let rhrData = filteredWindowSeries(values: engine.dailyRestingHeartRate, in: window)
         let hrvValues = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
-        let hrvData = filteredDailyValues(hrvValues, timeFilter: timeFilter, anchorDate: anchorDate)
-        let respiratoryData = filteredDailyValues(engine.respiratoryRate, timeFilter: timeFilter, anchorDate: anchorDate)
-        let wristTempData = filteredDailyValues(engine.wristTemperature, timeFilter: timeFilter, anchorDate: anchorDate)
-        let spo2Data = filteredDailyValues(engine.spO2, timeFilter: timeFilter, anchorDate: anchorDate)
-        let effortData = filteredDailyValues(engine.effortRating, timeFilter: timeFilter, anchorDate: anchorDate)
-        let metData = filteredDailyValues(engine.dailyMETAggregates, timeFilter: timeFilter, anchorDate: anchorDate)
-        let vo2Data = filteredDailyValues(engine.dailyVO2Aggregates, timeFilter: timeFilter, anchorDate: anchorDate)
-        let hrrData = filteredDailyValues(engine.dailyHRRAggregates, timeFilter: timeFilter, anchorDate: anchorDate)
+        let hrvData = filteredWindowSeries(values: hrvValues, in: window)
+        let respiratoryData = filteredWindowSeries(values: engine.respiratoryRate, in: window)
+        let wristTempData = filteredWindowSeries(values: engine.wristTemperature, in: window)
+        let spo2Data = filteredWindowSeries(values: engine.spO2, in: window)
+        let effortData = filteredWindowSeries(values: engine.effortRating, in: window)
+        let metData = filteredWindowSeries(values: engine.dailyMETAggregates, in: window)
+        let vo2Data = filteredWindowSeries(values: engine.dailyVO2Aggregates, in: window)
+        let hrrData = filteredWindowSeries(values: engine.dailyHRRAggregates, in: window)
 
         let historicalWindowStart = calendar.date(byAdding: .day, value: -27, to: window.start) ?? window.start
         let workouts = engine.workoutAnalytics.filter { workout, _ in
@@ -2711,11 +3251,12 @@ private struct StrainRecoverySummaryRequest {
             estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
             displayWindow: window
         )
-        let selectedSnapshot = loadSnapshots.last(where: { calendar.isDate($0.date, inSameDayAs: selectedDay) }) ?? loadSnapshots.last
+        let selectedSnapshot = loadSnapshots.last(where: { calendar.isDate($0.date, inSameDayAs: reportPeriod.end) }) ?? loadSnapshots.last
+        let reportDayCount = max(1, calendar.dateComponents([.day], from: window.start, to: window.endExclusive).day ?? timeFilter.dayCount)
 
         let workoutHighlights = workoutHighlights(
             displayWorkouts: displayWorkouts,
-            dayCount: timeFilter.dayCount
+            dayCount: reportDayCount
         )
 
         let consistencyScore = sleepConsistencyScore(midpointSeries: midpointSeries, fallback: engine.sleepConsistency ?? 0)
@@ -2731,12 +3272,12 @@ private struct StrainRecoverySummaryRequest {
 
         let displayedStrain = selectedSnapshot?.strainScore ?? engine.strainScore
         let selectedRecoveryScore = recoveryScore(
-            for: selectedDay,
+            for: reportPeriod.end,
             engine: engine
         ) ?? engine.recoveryScore
         let selectedRecoveryState = recoveryClassification(for: selectedRecoveryScore)
         let selectedReadinessScore = readinessScore(
-            for: selectedDay,
+            for: reportPeriod.end,
             recoveryScore: selectedRecoveryScore,
             strainScore: displayedStrain,
             engine: engine
@@ -2776,6 +3317,25 @@ private struct StrainRecoverySummaryRequest {
             sleepHRData: sleepHRData,
             vitalsSummary: vitalsSummary
         )
+        let windowIdentityLines: String = {
+            switch timeFilter {
+            case .day:
+                return """
+                - Requested date: \(requestedDay.formatted(date: .abbreviated, time: .omitted))
+                - Shared day summary period: \(reportPeriod.description)
+                """
+            case .week:
+                return """
+                - Calendar week anchor: \(reportPeriod.canonicalAnchorDate.formatted(date: .abbreviated, time: .omitted))
+                - Shared week summary period: \(reportPeriod.description)
+                """
+            case .month:
+                return """
+                - Calendar month anchor: \(reportPeriod.canonicalAnchorDate.formatted(date: .abbreviated, time: .omitted))
+                - Shared month summary period: \(reportPeriod.description)
+                """
+            }
+        }()
 
         let sportIdentityLine: String
         if let scopedSport, focusMode == .sportDeepDive {
@@ -2862,7 +3422,7 @@ private struct StrainRecoverySummaryRequest {
 
         Window
         - Filter: \(timeFilter.rawValue) view
-        - Anchor date: \(anchorDate.formatted(date: .abbreviated, time: .omitted))
+        \(windowIdentityLines)
         - Sport filter: \(scopedSport ?? "All Sports")
         - Report title: \(effectiveSuggestion.title)
         - Intent focus: \(intent.promptFocus)
@@ -2878,6 +3438,12 @@ private struct StrainRecoverySummaryRequest {
         - Treat this selected report as its own mini-app. Stay in its lane and do not collapse back into a general summary.
         - If a topic appears on the ignore list, do not mention it unless it is strictly necessary to explain the selected focus.
         - Pick a reasoning frame that matches the selected report and keep the entire answer inside that frame.
+        - Vary sentence openings and cadence. Do not begin every sentence with You.
+        - When describing a trend, comparison, best day, worst day, rise, drop, or streak, name the date or date range directly if the evidence block includes it.
+        - Prefer concrete dates such as Mar 14, Mar 10 to Mar 16, or April 2025 over vague words like recently or lately when a date anchor exists.
+        - For 1D reports, make the daily coaching call while using the last week and last month as supporting context.
+        - For 1W reports, write one shared week summary for the entire calendar week that contains the requested date. Do not tailor the answer to a single day inside that week.
+        - For 1M reports, write one shared month summary for the entire calendar month that contains the requested date. Do not tailor the answer to a single day inside that month.
         \(sportIdentityLine)
 
         Focused evidence
@@ -2921,6 +3487,11 @@ private struct StrainRecoverySummaryRequest {
         - A low strain score with a high recovery score is usually a fresh or well-recovered state, not a mismatch problem.
         - Do not judge strain or recovery in isolation. Treat the match or mismatch between them as a major part of the coaching call.
         - High strain with high recovery can be a productive match. High strain with low recovery is the clearest mismatch. Low strain with high recovery usually means freshness or under-loading depending on the training goal.
+        - Do not demand a perfect score match. Recovery does not need to be near 100 to support a good training day.
+        - Treat strain in the productive or high range together with Perform recovery as a solid, coachable state unless other dated evidence clearly points to breakdown.
+        - Example calibration for this app: a strain near 15/21 with recovery near 77/100 Perform is generally a good match, not an automatic warning.
+        - Save stronger criticism for serious mismatch patterns: high strain with Adapt or Recover recovery, several dated check-ins showing recovery slipping while strain stays elevated, or multiple supporting negatives like sleep debt, rising RHR, suppressed HRV, poor HRR, or unstable vitals.
+        - When strain and recovery are supporting each other well enough, acknowledge that explicitly and reinforce what is working.
         - Prioritize coaching based on this intent: \(intent.promptInstruction)
         - Distinguish this report from other filters through both content selection and vocabulary.
         - Avoid repeating the same stock explanation patterns across different filters.
@@ -2950,15 +3521,15 @@ private struct StrainRecoverySummaryRequest {
             )
 
         let requestID = [
-            "strain-recovery-ai-v7",
+            strainRecoverySummaryRequestVersion,
             timeFilter.rawValue,
             scopedSport ?? "all",
-            String(selectedDay.timeIntervalSince1970),
+            String(reportPeriod.canonicalAnchorDate.timeIntervalSince1970),
             effectiveSuggestion.id
         ].joined(separator: "|")
 
         let expiresAt = summaryExpirationDate(
-            anchorDate: selectedDay,
+            anchorDate: reportPeriod.canonicalAnchorDate,
             generatedAt: Date()
         )
 
@@ -2970,7 +3541,7 @@ private struct StrainRecoverySummaryRequest {
             intent: intent,
             focusMode: focusMode,
             refreshVersion: refreshVersion,
-            anchorDate: selectedDay,
+            anchorDate: reportPeriod.canonicalAnchorDate,
             timeFilter: timeFilter,
             suggestionID: effectiveSuggestion.id,
             selectedSuggestionTitle: effectiveSuggestion.title,
@@ -3407,6 +3978,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
     var intensiveFetchingEnabled: Bool
     var aggressiveCachingRequested: Bool
     var aggressiveSyncSelectionMode: AggressiveSyncSelectionMode
+    var aggressiveSyncTimeRangeType: AggressiveSyncTimeRangeType
     var aggressiveSyncSelectedDate: Date
     var aggressiveSyncSelectedSuggestionID: String?
     var passivePrioritySuggestionIDs: [String]
@@ -3418,6 +3990,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
         case intensiveFetchingEnabled
         case aggressiveCachingRequested
         case aggressiveSyncSelectionMode
+        case aggressiveSyncTimeRangeType
         case aggressiveSyncSelectedDate
         case aggressiveSyncSelectedSuggestionID
         case passivePrioritySuggestionIDs
@@ -3429,7 +4002,8 @@ private struct StrainRecoverySummarySyncSettings: Codable {
         temporaryPrimaryUntil: nil,
         intensiveFetchingEnabled: false,
         aggressiveCachingRequested: false,
-        aggressiveSyncSelectionMode: .fullMonth,
+        aggressiveSyncSelectionMode: .expectedCache,
+        aggressiveSyncTimeRangeType: .weekOfDays,
         aggressiveSyncSelectedDate: Calendar.current.startOfDay(for: Date()),
         aggressiveSyncSelectedSuggestionID: SummarySuggestion.defaultSuggestion.id,
         passivePrioritySuggestionIDs: []
@@ -3442,6 +4016,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
         intensiveFetchingEnabled: Bool,
         aggressiveCachingRequested: Bool,
         aggressiveSyncSelectionMode: AggressiveSyncSelectionMode,
+        aggressiveSyncTimeRangeType: AggressiveSyncTimeRangeType,
         aggressiveSyncSelectedDate: Date,
         aggressiveSyncSelectedSuggestionID: String?,
         passivePrioritySuggestionIDs: [String]
@@ -3452,6 +4027,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
         self.intensiveFetchingEnabled = intensiveFetchingEnabled
         self.aggressiveCachingRequested = aggressiveCachingRequested
         self.aggressiveSyncSelectionMode = aggressiveSyncSelectionMode
+        self.aggressiveSyncTimeRangeType = aggressiveSyncTimeRangeType
         self.aggressiveSyncSelectedDate = aggressiveSyncSelectedDate
         self.aggressiveSyncSelectedSuggestionID = aggressiveSyncSelectedSuggestionID
         self.passivePrioritySuggestionIDs = Array(passivePrioritySuggestionIDs.prefix(5))
@@ -3464,7 +4040,8 @@ private struct StrainRecoverySummarySyncSettings: Codable {
         temporaryPrimaryUntil = try container.decodeIfPresent(Date.self, forKey: .temporaryPrimaryUntil)
         intensiveFetchingEnabled = try container.decodeIfPresent(Bool.self, forKey: .intensiveFetchingEnabled) ?? false
         aggressiveCachingRequested = try container.decodeIfPresent(Bool.self, forKey: .aggressiveCachingRequested) ?? false
-        aggressiveSyncSelectionMode = try container.decodeIfPresent(AggressiveSyncSelectionMode.self, forKey: .aggressiveSyncSelectionMode) ?? .fullMonth
+        aggressiveSyncSelectionMode = try container.decodeIfPresent(AggressiveSyncSelectionMode.self, forKey: .aggressiveSyncSelectionMode) ?? .expectedCache
+        aggressiveSyncTimeRangeType = try container.decodeIfPresent(AggressiveSyncTimeRangeType.self, forKey: .aggressiveSyncTimeRangeType) ?? .weekOfDays
         aggressiveSyncSelectedDate = try container.decodeIfPresent(Date.self, forKey: .aggressiveSyncSelectedDate).map { Calendar.current.startOfDay(for: $0) } ?? Calendar.current.startOfDay(for: Date())
         aggressiveSyncSelectedSuggestionID = try container.decodeIfPresent(String.self, forKey: .aggressiveSyncSelectedSuggestionID) ?? SummarySuggestion.defaultSuggestion.id
         passivePrioritySuggestionIDs = Array((try container.decodeIfPresent([String].self, forKey: .passivePrioritySuggestionIDs) ?? []).prefix(5))
@@ -3478,6 +4055,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
         try container.encode(intensiveFetchingEnabled, forKey: .intensiveFetchingEnabled)
         try container.encode(aggressiveCachingRequested, forKey: .aggressiveCachingRequested)
         try container.encode(aggressiveSyncSelectionMode, forKey: .aggressiveSyncSelectionMode)
+        try container.encode(aggressiveSyncTimeRangeType, forKey: .aggressiveSyncTimeRangeType)
         try container.encode(Calendar.current.startOfDay(for: aggressiveSyncSelectedDate), forKey: .aggressiveSyncSelectedDate)
         try container.encodeIfPresent(aggressiveSyncSelectedSuggestionID, forKey: .aggressiveSyncSelectedSuggestionID)
         try container.encode(Array(passivePrioritySuggestionIDs.prefix(5)), forKey: .passivePrioritySuggestionIDs)
@@ -3497,6 +4075,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
                 intensiveFetchingEnabled: intensiveFetchingEnabled,
                 aggressiveCachingRequested: aggressiveCachingRequested,
                 aggressiveSyncSelectionMode: aggressiveSyncSelectionMode,
+                aggressiveSyncTimeRangeType: aggressiveSyncTimeRangeType,
                 aggressiveSyncSelectedDate: aggressiveSyncSelectedDate,
                 aggressiveSyncSelectedSuggestionID: aggressiveSyncSelectedSuggestionID,
                 passivePrioritySuggestionIDs: passivePrioritySuggestionIDs

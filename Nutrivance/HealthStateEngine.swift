@@ -1524,18 +1524,25 @@ final class HealthStateEngine: ObservableObject {
     init() {
         // Load persistent cache on startup (synchronously)
         loadPersistentCache()
-        
-        // Initialize with cached data IMMEDIATELY - starts loading before any view appears
-        // This ensures data loads as soon as app launches, for fastest possible display
-        initializeWithCachedData()
-        
-        // Request HealthKit authorization and refresh metrics (in parallel)
-        hkManager.requestAuthorization { [weak self] success, error in
-            DispatchQueue.main.async {
-                if success {
-                    self?.refreshAllMetrics()
-                } else {
-                    print("HealthKit authorization failed: \(error?.localizedDescription ?? "Unknown error")")
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            // Let the app render its first frame before we kick off heavier health bootstrap work.
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            self.initializeWithCachedData()
+
+            // Stagger authorization-driven metric refresh slightly so launch feels responsive.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            self.hkManager.requestAuthorization { [weak self] success, error in
+                DispatchQueue.main.async {
+                    if success {
+                        self?.refreshAllMetrics()
+                    } else {
+                        print("HealthKit authorization failed: \(error?.localizedDescription ?? "Unknown error")")
+                    }
                 }
             }
         }
@@ -1943,6 +1950,37 @@ final class HealthStateEngine: ObservableObject {
         let end = Date()
         let start = Calendar.current.date(byAdding: .day, value: -longTermLookbackDays, to: end) ?? end
         await ensureWorkoutAnalyticsCoverage(from: start, to: end)
+    }
+
+    func needsSpO2Coverage(from start: Date, to end: Date) -> Bool {
+        let normalizedStart = Calendar.current.startOfDay(for: start)
+        let normalizedEnd = Calendar.current.startOfDay(for: end)
+        let coveredDates = spO2.keys.sorted()
+
+        guard let earliest = coveredDates.first, let latest = coveredDates.last else {
+            return true
+        }
+
+        return normalizedStart < earliest || normalizedEnd > latest
+    }
+
+    func ensureSpO2Coverage(from start: Date, to end: Date) async {
+        let normalizedStart = Calendar.current.startOfDay(for: start)
+        let normalizedEnd = min(end, Date())
+        guard normalizedStart < normalizedEnd else { return }
+        guard needsSpO2Coverage(from: normalizedStart, to: normalizedEnd) else { return }
+
+        let fetched = await hkManager.fetchDailyOxygenSaturation(from: normalizedStart, to: normalizedEnd)
+        guard !fetched.isEmpty else { return }
+
+        var merged = spO2
+        for (day, value) in fetched {
+            merged[day] = value
+        }
+
+        await MainActor.run {
+            self.spO2 = merged
+        }
     }
 
     // MARK: - Fetch HRV

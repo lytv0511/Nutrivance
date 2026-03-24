@@ -253,7 +253,7 @@ struct DashboardView: View {
         case .fair:
             return processInfo.isLowPowerModeEnabled ? 1_800_000_000 : 1_200_000_000
         case .nominal:
-            return processInfo.isLowPowerModeEnabled ? 1_000_000_000 : 450_000_000
+            return processInfo.isLowPowerModeEnabled ? 1_250_000_000 : 900_000_000
         @unknown default:
             return 1_500_000_000
         }

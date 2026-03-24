@@ -9,26 +9,61 @@ class AppState: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var appState = AppState()
+    @StateObject private var engine = HealthStateEngine.shared
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @State private var showStartupCurtain = true
     
     var body: some View {
-        Group {
-            if UIDevice.current.userInterfaceIdiom == .pad {
-//                if horizontalSizeClass == .regular {
-//                    ContentView_iPad_alt()
-//                        .environmentObject(appState)
-                ContentView_iPad_alt()
-//                } else {
-//                    ContentView_iPad()
-//                        .environmentObject(appState)
-//                }
-            } else if UIDevice.current.userInterfaceIdiom == .phone {
-//                ContentView_iPhone_alt()
-                ContentView_iPhone_alt()
+        ZStack {
+            Group {
+                if UIDevice.current.userInterfaceIdiom == .pad {
+    //                if horizontalSizeClass == .regular {
+    //                    ContentView_iPad_alt()
+    //                        .environmentObject(appState)
+                    ContentView_iPad_alt()
+    //                } else {
+    //                    ContentView_iPad()
+    //                        .environmentObject(appState)
+    //                }
+                } else if UIDevice.current.userInterfaceIdiom == .phone {
+    //                ContentView_iPhone_alt()
+                    ContentView_iPhone_alt()
+                }
+            }
+
+            if showStartupCurtain {
+                StartupCurtainView()
+                    .transition(.opacity.combined(with: .scale(scale: 1.02)))
+                    .zIndex(10)
             }
         }
         .task {
             requestHealthDataPermissions()
+            let minimumCurtainDuration: UInt64 = 2_200_000_000
+            let maximumCurtainDuration: UInt64 = 5_000_000_000
+            let pollInterval: UInt64 = 200_000_000
+
+            let startedAt = Date()
+            try? await Task.sleep(nanoseconds: minimumCurtainDuration)
+
+            while Date().timeIntervalSince(startedAt) < Double(maximumCurtainDuration) / 1_000_000_000 {
+                let hasWorkoutBootstrap = engine.hasInitializedWorkoutAnalytics
+                let hasCoreHealthBootstrap =
+                    !engine.dailyHRV.isEmpty ||
+                    !engine.dailyRestingHeartRate.isEmpty ||
+                    !engine.sleepStages.isEmpty
+
+                if hasWorkoutBootstrap || hasCoreHealthBootstrap {
+                    break
+                }
+
+                try? await Task.sleep(nanoseconds: pollInterval)
+            }
+
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            withAnimation(.easeOut(duration: 0.35)) {
+                showStartupCurtain = false
+            }
         }
     }
     private func requestHealthDataPermissions() {
@@ -39,6 +74,51 @@ struct ContentView: View {
                 print("Health data permissions granted.")
             } else {
                 print("Health data permissions not granted.")
+            }
+        }
+    }
+}
+
+private struct StartupCurtainView: View {
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.black.opacity(0.94), Color.orange.opacity(0.24), Color.black.opacity(0.92)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 18) {
+                ZStack {
+                    Circle()
+                        .fill(Color.orange.opacity(0.18))
+                        .frame(width: 104, height: 104)
+                        .scaleEffect(pulse ? 1.08 : 0.94)
+                    Image(systemName: "waveform.path.ecg.rectangle")
+                        .font(.system(size: 42, weight: .bold))
+                        .foregroundColor(.orange)
+                }
+                Text("Preparing Nutrivance")
+                    .font(.system(.title2, design: .rounded, weight: .bold))
+                    .foregroundColor(.white)
+                Text("Loading health history and coaching context in the background.")
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.white.opacity(0.72))
+                    .padding(.horizontal, 32)
+                ProgressView()
+                    .tint(.orange)
+                    .scaleEffect(1.15)
+                    .padding(.top, 4)
+            }
+            .padding(28)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                pulse = true
             }
         }
     }
