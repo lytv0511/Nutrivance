@@ -98,6 +98,10 @@ struct StrainRecoveryView: View {
         summaryReportPeriod(for: timeFilter, requestedDate: selectedDate).canonicalAnchorDate
     }
 
+    private var graphTimeFilter: TimeFilter {
+        timeFilter == .day ? .week : timeFilter
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
@@ -152,30 +156,30 @@ struct StrainRecoveryView: View {
                     MetricSectionGroup(title: "Training Load") {
                         StrainRecoveryMathSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         WorkoutContributionsSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate,
                             sportFilter: nil
                         )
                         METAggregatesSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             sportFilter: sportFilter,
                             anchorDate: selectedDate
                         )
                         TrainingScheduleSection(
                             engine: engine,
                             sportFilter: sportFilter,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         VO2AggregatesSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             sportFilter: sportFilter,
                             anchorDate: selectedDate
                         )
@@ -184,38 +188,38 @@ struct StrainRecoveryView: View {
                     MetricSectionGroup(title: "Recovery") {
                         RecoveryScoreSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         HRVSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         RestingHeartRateSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         HRRAggregatesSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             sportFilter: sportFilter,
                             anchorDate: selectedDate
                         )
                         RespiratoryRateSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         WristTemperatureSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         SpO2Section(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                     }
@@ -223,17 +227,17 @@ struct StrainRecoveryView: View {
                     MetricSectionGroup(title: "Sleep") {
                         SleepRecoverySection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         SleepConsistencySection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                         SleepHeartRateSection(
                             engine: engine,
-                            timeFilter: timeFilter,
+                            timeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
                     }
@@ -1363,6 +1367,7 @@ private func promptWithSiblingTimeFilterContext(
     - Reconcile any tension with the sibling summaries by explicitly framing the different time horizons rather than contradicting them.
     - Treat the day, week, and month as one connected training story around the same anchor date.
     - If the horizons point in different directions, explain why that can still be true at the same time.
+    - Never attach a day-only metric to a week or month claim. If you mention a sibling time horizon, label it as week or month context explicitly.
     """
 }
 
@@ -1837,6 +1842,9 @@ private struct StrainRecoveryAISummarySection: View {
     @State private var cacheSnapshot = StrainRecoverySummaryPersistence.load()
     @State private var syncSettingsSnapshot = StrainRecoverySummaryPersistence.loadSyncSettings()
     @State private var suggestionsSnapshot: [SummarySuggestion] = []
+    @State private var isSavingToJournal = false
+    @State private var showJournalSavedPopup = false
+    @State private var journalSavedPopupTask: Task<Void, Never>? = nil
 
     private struct SummaryGenerationReadiness {
         let canGenerate: Bool
@@ -2171,6 +2179,64 @@ private struct StrainRecoveryAISummarySection: View {
         return true
     }
 
+    @MainActor
+    private func performRefresh() {
+        guard shouldShowRefresh else { return }
+
+        let key = selectedSuggestion?.id ?? "default"
+        refreshVersions[key, default: 0] += 1
+
+        Task {
+            let request = StrainRecoverySummaryRequest.build(
+                engine: engine,
+                timeFilter: timeFilter,
+                sportFilter: sportFilter,
+                anchorDate: anchorDate,
+                intentText: intentText,
+                selectedSuggestion: selectedSuggestion,
+                refreshVersion: refreshVersions[key, default: 0]
+            )
+            clearPersistedSummary(for: request)
+            await generateSummary(
+                for: request,
+                forceRefresh: true,
+                requireAppleIntelligence: true,
+                allowLocalRefreshFallback: false
+            )
+        }
+    }
+
+    @MainActor
+    private func performSaveToJournal() {
+        guard !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !isSavingToJournal else { return }
+
+        isSavingToJournal = true
+        NotificationCenter.default.post(
+            name: .saveWorkoutReportToJournal,
+            object: SavedWorkoutReportPayload(
+                title: selectedSuggestion?.title ?? "Workout Report",
+                content: summaryText,
+                date: anchorDate
+            )
+        )
+        statusText = "Saved as a workout report in Journal."
+
+        journalSavedPopupTask?.cancel()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+            showJournalSavedPopup = true
+        }
+
+        journalSavedPopupTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showJournalSavedPopup = false
+            }
+            isSavingToJournal = false
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -2179,45 +2245,21 @@ private struct StrainRecoveryAISummarySection: View {
                 Spacer()
                 if shouldShowRefresh {
                     Button("Refresh") {
-                        let key = selectedSuggestion?.id ?? "default"
-                        refreshVersions[key, default: 0] += 1
-                        Task {
-                            let request = StrainRecoverySummaryRequest.build(
-                                engine: engine,
-                                timeFilter: timeFilter,
-                                sportFilter: sportFilter,
-                                anchorDate: anchorDate,
-                                intentText: intentText,
-                                selectedSuggestion: selectedSuggestion,
-                                refreshVersion: refreshVersions[key, default: 0]
-                            )
-                            clearPersistedSummary(for: request)
-                            await generateSummary(
-                                for: request,
-                                forceRefresh: true,
-                                requireAppleIntelligence: true,
-                                allowLocalRefreshFallback: false
-                            )
-                        }
+                        performRefresh()
                     }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.borderedProminent)
                     .tint(.orange)
+                    .keyboardShortcut("r", modifiers: .command)
                 }
                 if !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button("Save To Journal") {
-                        NotificationCenter.default.post(
-                            name: .saveWorkoutReportToJournal,
-                            object: SavedWorkoutReportPayload(
-                                title: selectedSuggestion?.title ?? "Workout Report",
-                                content: summaryText,
-                                date: anchorDate
-                            )
-                        )
-                        statusText = "Saved as a workout report in Journal."
+                    Button(isSavingToJournal ? "Saved" : "Save To Journal") {
+                        performSaveToJournal()
                     }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.bordered)
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(isSavingToJournal)
                 }
                 if isLoading {
                     ProgressView()
@@ -2393,6 +2435,30 @@ private struct StrainRecoveryAISummarySection: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(Color.orange.opacity(0.16), lineWidth: 1.1)
             )
+            .overlay(alignment: .topTrailing) {
+                if showJournalSavedPopup {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Saved to Journal")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.primary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.green.opacity(0.35), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+                    .padding(14)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.88).combined(with: .opacity),
+                        removal: .opacity
+                    ))
+                }
+            }
         }
         .fullScreenCover(item: $selectedComparisonInsight) { insight in
             CoachComparisonView(
@@ -2403,6 +2469,12 @@ private struct StrainRecoveryAISummarySection: View {
                 sportFilter: sportFilter,
                 anchorDate: anchorDate
             )
+        }
+        .onDisappear {
+            journalSavedPopupTask?.cancel()
+            journalSavedPopupTask = nil
+            showJournalSavedPopup = false
+            isSavingToJournal = false
         }
         .task(id: generationTaskID) {
             refreshLocalSnapshots()
@@ -3344,19 +3416,30 @@ private struct StrainRecoverySummaryRequest {
             sportIdentityLine = ""
         }
 
+        let periodMetricLabel: String = {
+            switch timeFilter {
+            case .day:
+                return "selected day"
+            case .week:
+                return "selected week"
+            case .month:
+                return "selected month"
+            }
+        }()
+
         let trainingSection: String
         if focusMode == .sportDeepDive {
             trainingSection = """
             \(scopedSport.map { "- Selected sport: \($0.capitalized)" } ?? "- Selected sport: Unavailable")
-            - \(scopedSport?.capitalized ?? "Sport") session count in display window: \(displayWorkouts.count)
-            - \(scopedSport?.capitalized ?? "Sport") frequency normalized to weekly rate: \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions/week
-            - Total \(scopedSport ?? "sport") minutes: \(formatted(workoutHighlights.totalMinutes, digits: 0))
+            - \(scopedSport?.capitalized ?? "Sport") session count in the \(periodMetricLabel): \(displayWorkouts.count)
+            - \(scopedSport?.capitalized ?? "Sport") frequency normalized to weekly rate from the \(periodMetricLabel): \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions/week
+            - Total \(scopedSport ?? "sport") minutes in the \(periodMetricLabel): \(formatted(workoutHighlights.totalMinutes, digits: 0))
             - Longest \(scopedSport ?? "sport") workout: \(workoutHighlights.longestWorkout)
             - Highest \(scopedSport ?? "sport") session load workout: \(workoutHighlights.highestLoadWorkout)
             - Highest \(scopedSport ?? "sport") average power workout: \(workoutHighlights.highestPowerWorkout)
             - Highest \(scopedSport ?? "sport") peak HR workout: \(workoutHighlights.highestPeakHRWorkout)
-            - Total \(scopedSport ?? "sport") time in HR zone 4: \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) min
-            - Total \(scopedSport ?? "sport") time in HR zone 5: \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) min
+            - Total \(scopedSport ?? "sport") time in HR zone 4 in the \(periodMetricLabel): \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) min
+            - Total \(scopedSport ?? "sport") time in HR zone 5 in the \(periodMetricLabel): \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) min
             - Single-\(scopedSport ?? "sport") workout max zone 4 time: \(workoutHighlights.maxZone4Workout)
             - Single-\(scopedSport ?? "sport") workout max zone 5 time: \(workoutHighlights.maxZone5Workout)
             - Acute \(scopedSport ?? "sport") load selected day: \(formatted(selectedSnapshot?.acuteLoad ?? 0, digits: 1)) pts/day
@@ -3370,17 +3453,17 @@ private struct StrainRecoverySummaryRequest {
             """
         } else {
             trainingSection = """
-            - Workout count in display window: \(displayWorkouts.count)
-            - Workout frequency normalized to weekly rate: \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions/week
-            - Total training minutes: \(formatted(workoutHighlights.totalMinutes, digits: 0))
+            - Workout count in the \(periodMetricLabel): \(displayWorkouts.count)
+            - Workout frequency normalized to weekly rate from the \(periodMetricLabel): \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions/week
+            - Total training minutes in the \(periodMetricLabel): \(formatted(workoutHighlights.totalMinutes, digits: 0))
             - Most frequent sport: \(workoutHighlights.mostFrequentSport ?? "Unavailable")
             - Sport with the most total minutes: \(workoutHighlights.favoriteSport ?? "Unavailable")
             - Longest workout: \(workoutHighlights.longestWorkout)
             - Highest session load workout: \(workoutHighlights.highestLoadWorkout)
             - Highest average power workout: \(workoutHighlights.highestPowerWorkout)
             - Highest peak HR workout: \(workoutHighlights.highestPeakHRWorkout)
-            - Total time in HR zone 4: \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) min
-            - Total time in HR zone 5: \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) min
+            - Total time in HR zone 4 in the \(periodMetricLabel): \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) min
+            - Total time in HR zone 5 in the \(periodMetricLabel): \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) min
             - Single-workout max zone 4 time: \(workoutHighlights.maxZone4Workout)
             - Single-workout max zone 5 time: \(workoutHighlights.maxZone5Workout)
             - Acute load selected day: \(formatted(selectedSnapshot?.acuteLoad ?? 0, digits: 1)) pts/day
@@ -3507,6 +3590,7 @@ private struct StrainRecoverySummaryRequest {
                 selectedSnapshot: selectedSnapshot,
                 scenario: scenario,
                 intent: intent,
+                timeFilter: timeFilter,
                 sleepData: sleepData,
                 sleepDebtHours: sleepDebtHours,
                 consistencyScore: consistencyScore,
@@ -4956,6 +5040,7 @@ private func localFallbackSummary(
     selectedSnapshot: WorkoutSummarySnapshot?,
     scenario: String,
     intent: SummaryIntent,
+    timeFilter: StrainRecoveryView.TimeFilter,
     sleepData: [(Date, Double)],
     sleepDebtHours: Double,
     consistencyScore: Double,
@@ -4968,6 +5053,11 @@ private func localFallbackSummary(
     wristTempData: [(Date, Double)],
     spo2Data: [(Date, Double)]
 ) -> String {
+    let periodMetricLabel = switch timeFilter {
+    case .day: "selected day"
+    case .week: "selected week"
+    case .month: "selected month"
+    }
     let loadStatus = workoutLoadStatus(for: selectedSnapshot)
     let recoveryState = recoveryClassification(for: recoveryScore)
     let latestSleep = sleepData.last?.1 ?? 0
@@ -5007,7 +5097,7 @@ private func localFallbackSummary(
     }()
 
     return """
-    \(scenario) \(equalizerSignal)\(overreachSignal) Your current strain is \(formatted(displayedStrain, digits: 0))/21, recovery is \(formatted(recoveryScore, digits: 0))/100, classified as \(recoveryState.title.lowercased()), and readiness is \(formatted(readinessScore, digits: 0))/100. Recovery state meaning: \(recoveryState.detail) Your load status is \(loadStatus.title.lowercased()), with \(formatted(workoutHighlights.totalMinutes, digits: 0)) total training minutes and \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions per week in this window. Your standout work came from \(workoutHighlights.longestWorkout.lowercased()) and \(workoutHighlights.highestLoadWorkout.lowercased()). You also spent \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) minutes in Zone 4 and \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) minutes in Zone 5, so intensity is a real part of the story.
+    \(scenario) \(equalizerSignal)\(overreachSignal) Your current strain is \(formatted(displayedStrain, digits: 0))/21, recovery is \(formatted(recoveryScore, digits: 0))/100, classified as \(recoveryState.title.lowercased()), and readiness is \(formatted(readinessScore, digits: 0))/100. Recovery state meaning: \(recoveryState.detail) Your load status is \(loadStatus.title.lowercased()), with \(formatted(workoutHighlights.totalMinutes, digits: 0)) total training minutes in the \(periodMetricLabel) and \(formatted(workoutHighlights.sessionsPerWeek, digits: 1)) sessions per week normalized from the \(periodMetricLabel). Your standout work came from \(workoutHighlights.longestWorkout.lowercased()) and \(workoutHighlights.highestLoadWorkout.lowercased()). You also spent \(formatted(workoutHighlights.totalZone4Minutes, digits: 0)) minutes in Zone 4 and \(formatted(workoutHighlights.totalZone5Minutes, digits: 0)) minutes in Zone 5 during the \(periodMetricLabel), so intensity is a real part of the story.
 
     Your sleep is averaging \(formatted(averageSleep, digits: 1)) hours, with \(formatted(latestSleep, digits: 1)) hours most recently. Sleep consistency is \(formatted(consistencyScore, digits: 0))%, and sleep debt is \(formatted(sleepDebtHours, digits: 1)) hours. HRV is \(hrvTrend), resting heart rate is \(rhrTrend), and sleep heart rate is \(sleepHRTrend). \(vitalsState) A recovery-day sleep gap of \(signedFormatted(activityRecoveryGap, digits: 1)) hours is worth keeping if you want better absorption of training. Coaching focus right now: \(intent.promptInstruction)
     """
