@@ -121,6 +121,7 @@ struct WorkoutHistoryView: View {
     @State private var customZone4Upper: Double = 180
     @State private var customZone5Upper: Double = 200
     @State private var hasLoadedPersistedHRZoneSettings = false
+    @State private var isLoadingHistoricalCoverage = false
 
     init() {
         let persisted = HRZoneSettingsPersistence.load() ?? .fallback
@@ -306,8 +307,9 @@ struct WorkoutHistoryView: View {
                         }
                     }
                     Button("Jump to Workout") {
-                        scrollToClosestWorkout(to: selectedDate)
-                        showDatePicker = false
+                        Task {
+                            await loadCoverageForDatePickerSelection()
+                        }
                     }
                     .padding()
                     .foregroundColor(.orange)
@@ -342,6 +344,9 @@ struct WorkoutHistoryView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 reloadPersistedHRZoneSettings()
+            }
+            .task {
+                await ensureFullHistoryCoverageIfNeeded()
             }
         }
     }
@@ -387,6 +392,34 @@ struct WorkoutHistoryView: View {
                 scrollProxy?.scrollTo(closest.workout.startDate, anchor: .top)
             }
         }
+    }
+
+    @MainActor
+    private func ensureFullHistoryCoverageIfNeeded() async {
+        let start = Calendar.current.date(byAdding: .day, value: -3650, to: Date()) ?? Date()
+        guard engine.needsWorkoutAnalyticsCoverage(from: start, to: Date()) else { return }
+
+        isLoading = true
+        defer { isLoading = false }
+        await engine.ensureFullWorkoutHistoryCoverage()
+    }
+
+    @MainActor
+    private func loadCoverageForDatePickerSelection() async {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: selectedDate)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+
+        if engine.needsWorkoutAnalyticsCoverage(from: start, to: end) {
+            isLoadingHistoricalCoverage = true
+            isLoading = true
+            await engine.ensureWorkoutAnalyticsCoverage(from: start, to: end)
+            isLoading = false
+            isLoadingHistoricalCoverage = false
+        }
+
+        scrollToClosestWorkout(to: selectedDate)
+        showDatePicker = false
     }
 }
 

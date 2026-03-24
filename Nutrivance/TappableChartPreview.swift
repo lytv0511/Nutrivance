@@ -16,7 +16,7 @@ struct TappableChartPreview: View {
                 .frame(height: 60)
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showSheet) {
+        .fullScreenCover(isPresented: $showSheet) {
             HealthLineChartSheet(data: data, label: label, unit: unit, color: color)
         }
     }

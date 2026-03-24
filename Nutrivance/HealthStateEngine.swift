@@ -8,6 +8,7 @@ import Combine
 final class HealthStateEngine: ObservableObject {
     private let longTermLookbackDays = 3650
     private let interactiveWorkoutLookbackDays = 120
+    var interactiveWorkoutLookbackDaysForUI: Int { interactiveWorkoutLookbackDays }
     // Shared singleton instance - persists for entire app session
     static let shared = HealthStateEngine()
     
@@ -65,6 +66,7 @@ final class HealthStateEngine: ObservableObject {
     private let cacheValidityDuration: TimeInterval = 60 * 60 // 1 hour cache validity
     private let cacheFileName = "workoutAnalyticsCache.json"
     private var lastCachedWorkoutDate: Date? = nil // Tracks latest workout in persistent cache
+    private var earliestRequestedWorkoutDate: Date? = nil
     private var diskCacheLoaded: Bool = false
 
     // MARK: - Persistent Cache Management
@@ -1088,6 +1090,19 @@ final class HealthStateEngine: ObservableObject {
         let finalRecoveryScore: Double
     }
 
+    struct StrainDebugSnapshot {
+        let label: String
+        let acuteLoad: Double
+        let chronicLoad: Double
+        let loadRatio: Double
+        let logarithmicLoad: Double
+        let expandedLoad: Double
+        let ratioAdjustment: Double
+        let preSoftCapScore: Double
+        let softCappedScore: Double
+        let finalStrainScore: Double
+    }
+
     nonisolated static func estimateMaxHeartRateNes(age: Double?) -> Double {
         guard let age else { return 190 }
         return max(150, 211.0 - (0.64 * age))
@@ -1222,20 +1237,37 @@ final class HealthStateEngine: ObservableObject {
         acuteLoad: Double,
         chronicLoad: Double
     ) -> Double {
-        guard acuteLoad > 0 else { return 0 }
+        debugStrainSnapshot(label: "Live", acuteLoad: acuteLoad, chronicLoad: chronicLoad).finalStrainScore
+    }
 
-        let logarithmicLoad = 5.0 * log10(acuteLoad + 1)
-        let loadRatio = chronicLoad > 0 ? acuteLoad / chronicLoad : 1
-        let ratioAdjustment: Double
-        if loadRatio > 1.5 {
-            ratioAdjustment = 2.0
-        } else if loadRatio < 0.8 {
-            ratioAdjustment = -1.5
-        } else {
-            ratioAdjustment = 0
-        }
+    nonisolated static func debugStrainSnapshot(
+        label: String,
+        acuteLoad: Double,
+        chronicLoad: Double
+    ) -> StrainDebugSnapshot {
+        let safeAcuteLoad = max(0, acuteLoad)
+        let safeChronicLoad = max(0, chronicLoad)
+        let logarithmicLoad = safeAcuteLoad > 0 ? 6.2 * log10(safeAcuteLoad + 1) : 0
+        let expandedLoad = safeAcuteLoad > 0 ? pow(logarithmicLoad, 1.08) : 0
+        let loadRatio = safeChronicLoad > 0 ? safeAcuteLoad / safeChronicLoad : 1
+        let ratioAdjustment = max(-1.5, min(4.5, 8.0 * (loadRatio - 1.0)))
+        let preSoftCapScore = expandedLoad + ratioAdjustment
+        let safePreSoftCapScore = max(0, preSoftCapScore)
+        let softCappedScore = 21.0 * (1.0 - exp(-(safePreSoftCapScore / 18.0)))
+        let finalStrainScore = max(0, min(strainScoreUnitMaximum(), softCappedScore + 0.5))
 
-        return max(0, min(strainScoreUnitMaximum(), logarithmicLoad + ratioAdjustment))
+        return StrainDebugSnapshot(
+            label: label,
+            acuteLoad: safeAcuteLoad,
+            chronicLoad: safeChronicLoad,
+            loadRatio: loadRatio,
+            logarithmicLoad: logarithmicLoad,
+            expandedLoad: expandedLoad,
+            ratioAdjustment: ratioAdjustment,
+            preSoftCapScore: preSoftCapScore,
+            softCappedScore: softCappedScore,
+            finalStrainScore: finalStrainScore
+        )
     }
 
     nonisolated static func fallbackStats(
@@ -1594,11 +1626,18 @@ final class HealthStateEngine: ObservableObject {
 
         let end = Date()
         let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
-        let analytics = await hkManager.fetchWorkoutsWithAnalytics(from: start, to: end)
+        let analytics = await hkManager.fetchWorkoutsWithAnalytics(
+            from: start,
+            to: end,
+            allowDuringForegroundCritical: forceRefresh
+        )
         self.workoutAnalytics = analytics
         self.workoutAnalyticsCacheTimestamp = Date()
         self.lastCacheDaysRequested = days
+        self.earliestRequestedWorkoutDate = start
+        self.lastCachedWorkoutDate = analytics.map { $0.workout.startDate }.max()
         self.hasInitializedWorkoutAnalytics = true // Mark initial load complete
+        savePersistentCacheMetadata(analytics)
     }
     
     /// Check if the current cache is valid
@@ -1697,6 +1736,7 @@ final class HealthStateEngine: ObservableObject {
             self.workoutAnalytics = refreshedWorkouts
             self.workoutAnalyticsCacheTimestamp = Date()
             self.lastCachedWorkoutDate = refreshedWorkouts.map { $0.workout.startDate }.max()
+            self.earliestRequestedWorkoutDate = overlapStart
             self.hasNewDataAvailable = false // Reset since we just fetched fresh data
             savePersistentCacheMetadata(refreshedWorkouts)
             
@@ -1721,6 +1761,7 @@ final class HealthStateEngine: ObservableObject {
             self.workoutAnalyticsCacheTimestamp = Date()
             self.lastCacheDaysRequested = totalDays
             self.lastCachedWorkoutDate = recentWorkouts.map { $0.workout.startDate }.max()
+            self.earliestRequestedWorkoutDate = recentStart
             savePersistentCacheMetadata(recentWorkouts)
             
             print("[Cache] ✅ Initial load: \(recentWorkouts.count) recent workouts displayed")
@@ -1832,10 +1873,76 @@ final class HealthStateEngine: ObservableObject {
         self.workoutAnalyticsCacheTimestamp = Date()
         self.lastCacheDaysRequested = days
         self.lastCachedWorkoutDate = analytics.map { $0.workout.startDate }.max()
+        self.earliestRequestedWorkoutDate = start
         self.hasNewDataAvailable = false
         
         // Save fresh copy
         savePersistentCacheMetadata(analytics)
+    }
+
+    func clearWorkoutAnalyticsCache() {
+        historicalBatchLoadTask?.cancel()
+        smartDifferentialRefreshTask?.cancel()
+        allWorkoutHRCache = []
+        analyticsCache = []
+        stagedWorkoutAnalytics = []
+        workoutAnalytics = []
+        workoutAnalyticsCacheTimestamp = nil
+        lastCacheDaysRequested = 0
+        lastCachedWorkoutDate = nil
+        earliestRequestedWorkoutDate = nil
+        hasInitializedWorkoutAnalytics = false
+        hasNewDataAvailable = false
+
+        if let url = persistentCacheURL() {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    func needsWorkoutAnalyticsCoverage(from start: Date, to end: Date) -> Bool {
+        let normalizedStart = Calendar.current.startOfDay(for: start)
+        let normalizedEnd = end
+        let latestCoveredDate = lastCachedWorkoutDate ?? workoutAnalytics.map { $0.workout.startDate }.max()
+
+        if let earliestRequestedWorkoutDate, let latestCoveredDate {
+            return normalizedStart < earliestRequestedWorkoutDate || normalizedEnd > latestCoveredDate
+        }
+
+        return true
+    }
+
+    func ensureWorkoutAnalyticsCoverage(from start: Date, to end: Date) async {
+        let normalizedStart = Calendar.current.startOfDay(for: start)
+        let normalizedEnd = min(end, Date())
+        guard normalizedStart < normalizedEnd else { return }
+        guard needsWorkoutAnalyticsCoverage(from: normalizedStart, to: normalizedEnd) else { return }
+
+        let fetched = await hkManager.fetchWorkoutsWithAnalytics(
+            from: normalizedStart,
+            to: normalizedEnd,
+            allowDuringForegroundCritical: true
+        )
+        var mergedByID = Dictionary(uniqueKeysWithValues: workoutAnalytics.map { ($0.workout.uuid, $0) })
+        for workout in fetched {
+            mergedByID[workout.workout.uuid] = workout
+        }
+
+        let merged = mergedByID.values.sorted { lhs, rhs in
+            lhs.workout.startDate > rhs.workout.startDate
+        }
+
+        workoutAnalytics = merged
+        workoutAnalyticsCacheTimestamp = Date()
+        earliestRequestedWorkoutDate = min(earliestRequestedWorkoutDate ?? normalizedStart, normalizedStart)
+        lastCachedWorkoutDate = max(lastCachedWorkoutDate ?? normalizedEnd, merged.map { $0.workout.startDate }.max() ?? normalizedEnd)
+        hasInitializedWorkoutAnalytics = true
+        savePersistentCacheMetadata(merged)
+    }
+
+    func ensureFullWorkoutHistoryCoverage() async {
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -longTermLookbackDays, to: end) ?? end
+        await ensureWorkoutAnalyticsCoverage(from: start, to: end)
     }
 
     // MARK: - Fetch HRV

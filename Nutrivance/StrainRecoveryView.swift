@@ -25,7 +25,7 @@ struct TappableChartPreview: View {
 //                .frame(height: 60)
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showSheet) {
+        .fullScreenCover(isPresented: $showSheet) {
             HealthLineChartSheet(data: data, label: label, unit: unit, color: color)
         }
     }
@@ -37,6 +37,9 @@ struct StrainRecoveryView: View {
     @StateObject private var engine = HealthStateEngine.shared
     @StateObject private var aggressiveCachingController = StrainRecoveryAggressiveCachingController.shared
     @State private var animationPhase: Double = 0
+    @State private var isLoadingHistoricalCoverage = false
+    @State private var historicalCoverageMessage = "Loading older strain and recovery history..."
+    @State private var historicalCoverageTask: Task<Void, Never>?
 
     enum TimeFilter: String, CaseIterable {
         case day = "1D"
@@ -240,6 +243,8 @@ struct StrainRecoveryView: View {
 
                     if aggressiveCachingController.isActive {
                         aggressiveCachingOverlay
+                    } else if isLoadingHistoricalCoverage {
+                        historicalCoverageOverlay
                     }
                 }
             }
@@ -311,13 +316,66 @@ struct StrainRecoveryView: View {
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter3)) { _ in
                 handleFilterShortcut(2)
             }
+            .task(id: historicalCoverageKey) {
+                await ensureHistoricalCoverageIfNeeded()
+            }
             .sheet(isPresented: $showingSummarySettings) {
                 StrainRecoverySummarySettingsView(
                     engine: engine,
                     aggressiveCachingController: aggressiveCachingController
                 )
             }
+            .onDisappear {
+                historicalCoverageTask?.cancel()
+            }
         }
+    }
+
+    private var historicalCoverageKey: String {
+        "\(timeFilter.rawValue)-\(Calendar.current.startOfDay(for: selectedDate).timeIntervalSinceReferenceDate)"
+    }
+
+    @MainActor
+    private func ensureHistoricalCoverageIfNeeded() async {
+        historicalCoverageTask?.cancel()
+        let task = Task { @MainActor in
+            let window = chartWindow(for: timeFilter, anchorDate: selectedDate)
+            let historicalWindowStart = Calendar.current.date(byAdding: .day, value: -27, to: window.start) ?? window.start
+            guard engine.needsWorkoutAnalyticsCoverage(from: historicalWindowStart, to: window.endExclusive) else { return }
+
+            historicalCoverageMessage = selectedDate < (Calendar.current.date(byAdding: .day, value: -engine.interactiveWorkoutLookbackDaysForUI, to: Date()) ?? Date())
+                ? "Loading older strain and recovery history for \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
+                : "Refreshing workout history..."
+            isLoadingHistoricalCoverage = true
+            defer { isLoadingHistoricalCoverage = false }
+
+            await engine.ensureWorkoutAnalyticsCoverage(from: historicalWindowStart, to: window.endExclusive)
+        }
+        historicalCoverageTask = task
+        await task.value
+    }
+
+    private var historicalCoverageOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.18)
+                .ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                ProgressView()
+                    .scaleEffect(1.1)
+                Text(historicalCoverageMessage)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                Text("We are fetching older HealthKit workouts on demand and will reuse cached analytics when available.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .padding(.horizontal, 28)
+        }
+        .transition(.opacity)
     }
 
     private var aggressiveCachingOverlay: some View {
@@ -1081,6 +1139,7 @@ private struct StrainRecoverySummarySettingsView: View {
     @ObservedObject var engine: HealthStateEngine
     @State private var settings = StrainRecoverySummaryPersistence.loadSyncSettings()
     @State private var temporarySelection: TemporaryPrimarySelection = .off
+    @State private var isClearingCaches = false
     @ObservedObject var aggressiveCachingController: StrainRecoveryAggressiveCachingController
 
     private let currentDevice = StrainRecoverySummaryDevice.current
@@ -1293,6 +1352,32 @@ private struct StrainRecoverySummarySettingsView: View {
                             settings.passivePrioritySuggestionIDs.count >= 5
                         )
                     }
+                }
+
+                Section("Cache Maintenance") {
+                    Button(role: .destructive) {
+                        Task { @MainActor in
+                            isClearingCaches = true
+                            aggressiveCachingController.requestCancel()
+                            StrainRecoverySummaryPersistence.clearAll()
+                            engine.clearWorkoutAnalyticsCache()
+                            engine.initializeWithCachedData()
+                            isClearingCaches = false
+                            dismiss()
+                        }
+                    } label: {
+                        HStack {
+                            Text("Clear All Caches")
+                            Spacer()
+                            if isClearingCaches {
+                                ProgressView()
+                            }
+                        }
+                    }
+
+                    Text("Clears local and iCloud coach-summary cache plus the persisted workout analytics cache for this screen. Fresh data will be rebuilt on demand.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle("Coach Sync")
@@ -1644,6 +1729,10 @@ private struct StrainRecoveryAISummarySection: View {
         return latestWorkoutTimestamp > cachedWorkoutTimestamp + 1
     }
 
+    private var shouldRequireAppleIntelligenceByDefault: Bool {
+        deviceSupportsAppleIntelligence()
+    }
+
     private var suggestionsContextID: String {
         [
             timeFilter.rawValue,
@@ -1691,6 +1780,9 @@ private struct StrainRecoveryAISummarySection: View {
         guard let entry = cacheSnapshot[requestID] else {
             return false
         }
+        guard !shouldRequireAppleIntelligenceByDefault || entry.source == .appleIntelligence else {
+            return false
+        }
 
         persistedEntry = entry
         summaryText = entry.summaryText
@@ -1721,11 +1813,12 @@ private struct StrainRecoveryAISummarySection: View {
                                 selectedSuggestion: selectedSuggestion,
                                 refreshVersion: refreshVersions[key, default: 0]
                             )
+                            clearPersistedSummary(for: request)
                             await generateSummary(
                                 for: request,
                                 forceRefresh: true,
                                 requireAppleIntelligence: true,
-                                allowLocalRefreshFallback: true
+                                allowLocalRefreshFallback: false
                             )
                         }
                     }
@@ -1832,7 +1925,11 @@ private struct StrainRecoveryAISummarySection: View {
                         } else {
                             Task {
                                 statusText = "Loading requested report of \(suggestion.title) for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) for \(timeFilter.rawValue)"
-                                await generateSummary(for: request)
+                                await generateSummary(
+                                    for: request,
+                                    requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
+                                    allowLocalRefreshFallback: !shouldRequireAppleIntelligenceByDefault
+                                )
                             }
                         }
                     } label: {
@@ -1929,6 +2026,23 @@ private struct StrainRecoveryAISummarySection: View {
             }
             if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
                 resetSummaryForNavigation()
+                if shouldRequireAppleIntelligenceByDefault,
+                   let selectedSuggestion {
+                    let request = StrainRecoverySummaryRequest.build(
+                        engine: engine,
+                        timeFilter: timeFilter,
+                        sportFilter: sportFilter,
+                        anchorDate: anchorDate,
+                        intentText: intentText.isEmpty ? selectedSuggestion.queryText : intentText,
+                        selectedSuggestion: selectedSuggestion,
+                        refreshVersion: refreshVersions[selectedSuggestion.id, default: 0]
+                    )
+                    await generateSummary(
+                        for: request,
+                        requireAppleIntelligence: true,
+                        allowLocalRefreshFallback: false
+                    )
+                }
             }
         }
         .task(id: suggestionsContextID) {
@@ -1978,6 +2092,12 @@ private struct StrainRecoveryAISummarySection: View {
             }
             return
         }
+        guard !shouldRequireAppleIntelligenceByDefault || entry.source == .appleIntelligence else {
+            persistedEntry = nil
+            summaryText = ""
+            statusText = "Preparing Apple Intelligence summary..."
+            return
+        }
         persistedEntry = entry
         summaryText = entry.summaryText
         statusText = entry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
@@ -2018,6 +2138,20 @@ private struct StrainRecoveryAISummarySection: View {
         if updateDisplayed {
             persistedEntry = entry
             displayedRequestID = entry.requestID
+        }
+    }
+
+    @MainActor
+    private func clearPersistedSummary(for request: StrainRecoverySummaryRequest) {
+        StrainRecoverySummaryPersistence.removeEntry(requestID: request.requestID)
+        cacheSnapshot.removeValue(forKey: request.requestID)
+        if persistedEntry?.requestID == request.requestID {
+            persistedEntry = nil
+        }
+        if displayedRequestID == request.requestID {
+            summaryText = ""
+            statusText = "Refreshing with Apple Intelligence..."
+            displayedRequestID = nil
         }
     }
 
@@ -2070,6 +2204,8 @@ private struct StrainRecoveryAISummarySection: View {
         requireAppleIntelligence: Bool = false,
         allowLocalRefreshFallback: Bool = false
     ) async {
+        let requireAppleIntelligence = requireAppleIntelligence || shouldRequireAppleIntelligenceByDefault
+        let allowLocalRefreshFallback = shouldRequireAppleIntelligenceByDefault ? false : allowLocalRefreshFallback
         if updateDisplayed {
             cancelBackgroundGeneration()
             requestedRequestID = request.requestID
@@ -2127,7 +2263,7 @@ private struct StrainRecoveryAISummarySection: View {
                     if updateDisplayed {
                         let restoredAI = restorePreferredCachedSummary(
                             for: request,
-                            fallbackStatus: "Apple Intelligence is unavailable on this device, and no synced AI summary was found yet. Your existing summary was kept."
+                            fallbackStatus: "Apple Intelligence is unavailable on this device, and no synced AI summary is available yet."
                         )
                         if restoredAI || !allowLocalRefreshFallback {
                             return
@@ -2193,7 +2329,7 @@ private struct StrainRecoveryAISummarySection: View {
                         if updateDisplayed {
                             let restoredAI = restorePreferredCachedSummary(
                                 for: request,
-                                fallbackStatus: "Apple Intelligence did not return a usable summary, and no synced AI summary was found yet. Your existing summary was kept."
+                                fallbackStatus: "Apple Intelligence did not return a usable summary, and no synced AI summary is available yet."
                             )
                             if restoredAI || !allowLocalRefreshFallback {
                                 return
@@ -2228,7 +2364,7 @@ private struct StrainRecoveryAISummarySection: View {
                     if updateDisplayed {
                         let restoredAI = restorePreferredCachedSummary(
                             for: request,
-                            fallbackStatus: "Apple Intelligence refresh failed, and no synced AI summary was found yet. Your existing summary was kept."
+                            fallbackStatus: "Apple Intelligence summary generation failed, and no synced AI summary is available yet."
                         )
                         if restoredAI || !allowLocalRefreshFallback {
                             return
@@ -2262,7 +2398,7 @@ private struct StrainRecoveryAISummarySection: View {
             if updateDisplayed {
                 let restoredAI = restorePreferredCachedSummary(
                     for: request,
-                    fallbackStatus: "Apple Intelligence is unavailable here, and no synced AI summary was found yet. Your existing summary was kept."
+                    fallbackStatus: "Apple Intelligence is unavailable here, and no synced AI summary is available yet."
                 )
                 if restoredAI || !allowLocalRefreshFallback {
                     return
@@ -2314,8 +2450,7 @@ private struct StrainRecoveryAISummarySection: View {
             )
 
             let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !isJunkCoachOutput(cleaned),
-               !isEffectivelySameSummary(cleaned, as: previousSummary, isRefresh: refreshVersion > 0) {
+            if !cleaned.isEmpty {
                 return cleaned
             }
         }
@@ -3073,6 +3208,23 @@ private enum StrainRecoverySummaryPersistence {
             [entry.requestID: entry],
             forceOverwriteRequestID: forceOverwrite ? entry.requestID : nil
         )
+    }
+
+    static func removeEntry(requestID: String) {
+        var cache = load(forceReload: true)
+        cache.removeValue(forKey: requestID)
+        guard let encoded = try? JSONEncoder().encode(cache) else { return }
+        inMemoryCache = cache
+        UserDefaults.standard.set(encoded, forKey: storageKey)
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.set(encoded, forKey: storageKey)
+    }
+
+    static func clearAll() {
+        inMemoryCache = [:]
+        UserDefaults.standard.removeObject(forKey: storageKey)
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.removeObject(forKey: storageKey)
     }
 
     static func pruneExpiredEntries(from cache: [String: StrainRecoverySummaryCacheEntry]) -> [String: StrainRecoverySummaryCacheEntry] {
@@ -3844,6 +3996,25 @@ private func recoveryClassification(for score: Double) -> RecoveryClassification
     }
 }
 
+private struct StrainClassification {
+    let title: String
+    let detail: String
+    let color: Color
+}
+
+private func strainClassification(for score: Double) -> StrainClassification {
+    switch score {
+    case ..<6:
+        return StrainClassification(title: "Low", detail: "Light load day with minimal accumulated strain.", color: .blue)
+    case ..<11:
+        return StrainClassification(title: "Building", detail: "Moderate load that adds work without heavy fatigue cost.", color: .green)
+    case ..<15:
+        return StrainClassification(title: "Productive", detail: "Solid training stress with meaningful adaptation potential.", color: .orange)
+    default:
+        return StrainClassification(title: "High", detail: "Heavy load day that needs strong recovery support.", color: .red)
+    }
+}
+
 @MainActor
 private func readinessScore(
     for day: Date,
@@ -4319,16 +4490,27 @@ struct StrainRecoveryMathSection: View {
     }
     
     var body: some View {
+        let strainState = strainClassification(for: strainValue)
         HealthCard(
             symbol: "flame.fill",
             title: "Strain",
             value: String(Int(strainValue)),
             unit: "/21",
             trend: "\(timeFilter.rawValue) load: " + String(format: "%.1f", totalLoad),
-            color: Color.orange,
+            color: strainState.color,
             chartData: strainChartData,
             chartLabel: "Strain",
             chartUnit: "/21",
+            badgeText: strainState.title,
+            badgeColor: strainState.color,
+            chartStatusProvider: { value in
+                let state = strainClassification(for: value)
+                return HealthChartStatusDescriptor(
+                    title: state.title,
+                    color: state.color,
+                    detail: state.detail
+                )
+            },
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Strain uses weighted heart-rate-zone load plus a small base-load term, then log-scales that day and nudges it up only when acute load clearly outruns chronic load.")
@@ -4339,7 +4521,7 @@ struct StrainRecoveryMathSection: View {
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
-                    Text("Low strain is roughly 0-5, building is 6-10, productive is 11-14, and 15+ is where load starts to get aggressive.")
+                    Text("\(strainState.title) means \(strainState.detail) Strain bands are 0-5 Low, 6-10 Building, 11-14 Productive, and 15+ High.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     Button("View more") {
@@ -4448,6 +4630,14 @@ struct RecoveryScoreSection: View {
             chartUnit: "%",
             badgeText: selectedRecoveryInputsAreInconclusive ? "Effect HRV Invalid" : recoveryState.title,
             badgeColor: selectedRecoveryInputsAreInconclusive ? .red : recoveryState.color,
+            chartStatusProvider: { value in
+                let state = recoveryClassification(for: value)
+                return HealthChartStatusDescriptor(
+                    title: state.title,
+                    color: state.color,
+                    detail: state.detail
+                )
+            },
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Recovery starts from Effect HRV, a momentum-smoothed sleep-anchored HRV signal, plus basal sleeping heart rate against your own baseline.")
@@ -4499,6 +4689,40 @@ private struct StrainScoreTechnicalSheet: View {
     let averageLoad: Double
     @Environment(\.dismiss) private var dismiss
 
+    private var currentDebugSnapshot: HealthStateEngine.StrainDebugSnapshot? {
+        guard let snapshot else { return nil }
+        return HealthStateEngine.debugStrainSnapshot(
+            label: "Selected Day",
+            acuteLoad: snapshot.acuteLoad,
+            chronicLoad: snapshot.chronicLoad
+        )
+    }
+
+    private var scenarioSnapshots: [HealthStateEngine.StrainDebugSnapshot] {
+        [
+            HealthStateEngine.debugStrainSnapshot(
+                label: "Low Day",
+                acuteLoad: 8,
+                chronicLoad: 12
+            ),
+            HealthStateEngine.debugStrainSnapshot(
+                label: "Building",
+                acuteLoad: 24,
+                chronicLoad: 24
+            ),
+            HealthStateEngine.debugStrainSnapshot(
+                label: "Productive",
+                acuteLoad: 60,
+                chronicLoad: 50
+            ),
+            HealthStateEngine.debugStrainSnapshot(
+                label: "Spike",
+                acuteLoad: 120,
+                chronicLoad: 60
+            )
+        ]
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -4518,18 +4742,41 @@ private struct StrainScoreTechnicalSheet: View {
                             .foregroundColor(.secondary)
                         Text("Acute load = \(formatted(snapshot.acuteLoad, digits: 2)), chronic load = \(formatted(snapshot.chronicLoad, digits: 2)), ACWR = \(formatted(snapshot.acwr, digits: 2))")
                             .foregroundColor(.secondary)
-                        Text("S_log = 5 x log10(L + 1) = 5 x log10(\(formatted(snapshot.totalDailyLoad + 1, digits: 2))) = \(formatted(logarithmicLoad, digits: 2))")
+                        Text("L = 6.2 x log10(acute + 1) = 6.2 x log10(\(formatted(snapshot.acuteLoad + 1, digits: 2))) = \(formatted(logarithmicLoad, digits: 2))")
                             .foregroundColor(.secondary)
-                        Text("Adjustment = \(signedFormatted(loadRatioAdjustment, digits: 1))")
+                        Text("L' = L^1.08 = \(formatted(pow(max(logarithmicLoad, 0), 1.08), digits: 2))")
                             .foregroundColor(.secondary)
-                        Text("Final strain = clamp(\(formatted(logarithmicLoad, digits: 2)) \(loadRatioAdjustment >= 0 ? "+" : "-") \(formatted(abs(loadRatioAdjustment), digits: 2)), 0, 21) = \(formatted(snapshot.strainScore, digits: 2))/21")
+                        Text("Adjustment = clamp(8 x (ratio - 1.0), -1.5, 4.5) = \(signedFormatted(loadRatioAdjustment, digits: 2))")
+                            .foregroundColor(.secondary)
+                        Text("Final strain applies soft cap and a +0.5 baseline lift, landing at \(formatted(snapshot.strainScore, digits: 2))/21")
                             .foregroundColor(.secondary)
                     }
                     Text("Window context")
                         .font(.headline)
                     Text("Visible-chart average effort proxy = \(formatted(averageLoad, digits: 1))")
                         .foregroundColor(.secondary)
-                    Text("Reading guide: 0-5 low, 6-10 building, 11-14 productive, 15-17 high, 18-21 overreaching.")
+                    Text("Debug helper")
+                        .font(.headline)
+                    Button("Print Debug Snapshots") {
+                        printStrainDebugSnapshots()
+                    }
+                    .buttonStyle(.bordered)
+                    if let currentDebugSnapshot {
+                        debugSnapshotView(
+                            currentDebugSnapshot,
+                            subtitle: "Selected-day load inputs and score"
+                        )
+                    } else {
+                        Text("Selected-day debug snapshot is unavailable until a load snapshot exists for the selected date.")
+                            .foregroundColor(.secondary)
+                    }
+                    ForEach(Array(scenarioSnapshots.enumerated()), id: \.offset) { _, snapshot in
+                        debugSnapshotView(
+                            snapshot,
+                            subtitle: "Reference scenario"
+                        )
+                    }
+                    Text("Reading guide: 0-5 Low, 6-10 Building, 11-14 Productive, and 15+ High.")
                         .foregroundColor(.secondary)
                 }
                 .padding(20)
@@ -4542,6 +4789,39 @@ private struct StrainScoreTechnicalSheet: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func debugSnapshotView(
+        _ snapshot: HealthStateEngine.StrainDebugSnapshot,
+        subtitle: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(snapshot.label): \(subtitle)")
+                .font(.subheadline.weight(.semibold))
+            Text("Inputs -> acute load \(formatted(snapshot.acuteLoad, digits: 2)), chronic load \(formatted(snapshot.chronicLoad, digits: 2)), ACWR \(formatted(snapshot.loadRatio, digits: 2))")
+                .foregroundColor(.secondary)
+            Text("Outputs -> L \(formatted(snapshot.logarithmicLoad, digits: 2)), L' \(formatted(snapshot.expandedLoad, digits: 2)), adjustment \(signedFormatted(snapshot.ratioAdjustment, digits: 2)), pre-soft-cap \(formatted(snapshot.preSoftCapScore, digits: 2)), soft-cap \(formatted(snapshot.softCappedScore, digits: 2)), final \(formatted(snapshot.finalStrainScore, digits: 2))/21")
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func printStrainDebugSnapshots() {
+        if let currentDebugSnapshot {
+            printStrainDebugSnapshot(currentDebugSnapshot)
+        } else {
+            print("[StrainDebug] Selected Day snapshot unavailable: no load snapshot exists for the selected date.")
+        }
+
+        scenarioSnapshots.forEach(printStrainDebugSnapshot)
+    }
+
+    private func printStrainDebugSnapshot(_ snapshot: HealthStateEngine.StrainDebugSnapshot) {
+        print("""
+        [StrainDebug] \(snapshot.label)
+          Inputs: acute load=\(formatted(snapshot.acuteLoad, digits: 2)), chronic load=\(formatted(snapshot.chronicLoad, digits: 2)), ACWR=\(formatted(snapshot.loadRatio, digits: 2))
+          Outputs: L=\(formatted(snapshot.logarithmicLoad, digits: 2)), L'=\(formatted(snapshot.expandedLoad, digits: 2)), adjustment=\(signedFormatted(snapshot.ratioAdjustment, digits: 2)), pre-soft-cap=\(formatted(snapshot.preSoftCapScore, digits: 2)), soft-cap=\(formatted(snapshot.softCappedScore, digits: 2)), final=\(formatted(snapshot.finalStrainScore, digits: 2))/21
+        """)
     }
 }
 

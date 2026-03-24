@@ -8,6 +8,12 @@ extension Array where Element == Double {
 import SwiftUI
 import Charts
 
+struct HealthChartStatusDescriptor {
+    let title: String
+    let color: Color
+    let detail: String?
+}
+
 struct HealthCard<ExpandedContent: View>: View {
     let symbol: String
     let title: String
@@ -20,6 +26,7 @@ struct HealthCard<ExpandedContent: View>: View {
     let chartUnit: String
     let badgeText: String?
     let badgeColor: Color?
+    let chartStatusProvider: ((Double) -> HealthChartStatusDescriptor?)?
     let customChartPreview: AnyView?
     let customChartSheet: AnyView?
     let expandedContent: () -> ExpandedContent
@@ -46,6 +53,7 @@ struct HealthCard<ExpandedContent: View>: View {
         chartUnit: String,
         badgeText: String? = nil,
         badgeColor: Color? = nil,
+        chartStatusProvider: ((Double) -> HealthChartStatusDescriptor?)? = nil,
         customChartPreview: AnyView? = nil,
         customChartSheet: AnyView? = nil,
         @ViewBuilder expandedContent: @escaping () -> ExpandedContent
@@ -61,6 +69,7 @@ struct HealthCard<ExpandedContent: View>: View {
         self.chartUnit = chartUnit
         self.badgeText = badgeText
         self.badgeColor = badgeColor
+        self.chartStatusProvider = chartStatusProvider
         self.customChartPreview = customChartPreview
         self.customChartSheet = customChartSheet
         self.expandedContent = expandedContent
@@ -136,12 +145,18 @@ struct HealthCard<ExpandedContent: View>: View {
                 .padding(.trailing, 8)
             }
             .buttonStyle(.plain)
-            .sheet(isPresented: $showChartSheet) {
+            .fullScreenCover(isPresented: $showChartSheet) {
                 Group {
                     if let customChartSheet {
                         customChartSheet
                     } else {
-                        HealthLineChartSheet(data: chartData, label: chartLabel, unit: chartUnit, color: color)
+                        HealthLineChartSheet(
+                            data: chartData,
+                            label: chartLabel,
+                            unit: chartUnit,
+                            color: color,
+                            statusProvider: chartStatusProvider
+                        )
                             .id(chartIdentity)
                     }
                 }
@@ -299,7 +314,23 @@ struct HealthLineChartSheet: View {
     let label: String
     let unit: String
     let color: Color
+    let statusProvider: ((Double) -> HealthChartStatusDescriptor?)?
     @State private var selected: (Date, Double)? = nil
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        data: [(Date, Double)],
+        label: String,
+        unit: String,
+        color: Color,
+        statusProvider: ((Double) -> HealthChartStatusDescriptor?)? = nil
+    ) {
+        self.data = data
+        self.label = label
+        self.unit = unit
+        self.color = color
+        self.statusProvider = statusProvider
+    }
 
     private static let fullDateFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -311,19 +342,63 @@ struct HealthLineChartSheet: View {
         ["Strain", "Effort", "Acute Load", "Session Load"].contains(label)
     }
 
+    private struct SelectionCallout {
+        let title: String
+        let color: Color
+        let detail: String?
+    }
+
+    private func genericCallout(for selection: (Date, Double)) -> SelectionCallout? {
+        let minVal = data.map(\.1).min() ?? selection.1
+        let maxVal = data.map(\.1).max() ?? selection.1
+        let idx = data.firstIndex(where: { $0.0 == selection.0 && $0.1 == selection.1 }) ?? 0
+        let prev = idx > 0 ? data[idx - 1].1 : selection.1
+        let range = max(maxVal - minVal, 0.0001)
+
+        if selection.1 == minVal {
+            return SelectionCallout(title: "Minimum", color: .blue, detail: "Lowest value in the visible window.")
+        }
+        if selection.1 == maxVal {
+            return SelectionCallout(title: "Maximum", color: .red, detail: "Highest value in the visible window.")
+        }
+        if showsPerformanceNote && abs(selection.1 - prev) > 0.15 * range {
+            return SelectionCallout(title: "High Increase", color: .green, detail: "A sharp move versus the prior visible point.")
+        }
+        return nil
+    }
+
+    private func callout(for selection: (Date, Double)) -> SelectionCallout? {
+        if let status = statusProvider?(selection.1) {
+            return SelectionCallout(title: status.title, color: status.color, detail: status.detail)
+        }
+        return genericCallout(for: selection)
+    }
+
+    private func accentColor(for selection: (Date, Double)) -> Color {
+        callout(for: selection)?.color ?? color
+    }
+
     private func updateSelection(
         from location: CGPoint,
         proxy: ChartProxy,
         geometry: GeometryProxy
     ) {
         let plotFrame = geometry[proxy.plotAreaFrame]
-        guard let xPosition = ChartInteractionSmoothing.clampedXPosition(
-            for: location,
-            plotFrame: plotFrame
-        ) else {
+        guard !data.isEmpty else {
             selected = nil
             return
         }
+
+        let minX = plotFrame.minX - ChartInteractionSmoothing.horizontalTolerance
+        let maxX = plotFrame.maxX + ChartInteractionSmoothing.horizontalTolerance
+        guard location.x >= minX && location.x <= maxX else {
+            selected = nil
+            return
+        }
+
+        let safeMinX = plotFrame.minX + ChartInteractionSmoothing.horizontalInset
+        let safeMaxX = max(safeMinX, plotFrame.maxX - ChartInteractionSmoothing.horizontalInset)
+        let xPosition = min(max(location.x, safeMinX), safeMaxX) - plotFrame.minX
 
         let date = proxy.value(atX: xPosition) as Date?
             ?? ChartInteractionSmoothing.fallbackBoundaryDate(
@@ -345,154 +420,165 @@ struct HealthLineChartSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Text(label)
-                .font(.title.bold())
-                .foregroundColor(color)
-            Chart {
-                ForEach(data, id: \ .0) { point in
-                    AreaMark(
-                        x: .value("Date", point.0),
-                        y: .value(label, point.1)
-                    )
-                    .foregroundStyle(
-                        .linearGradient(
-                            colors: [color.opacity(0.22), color.opacity(0.03)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .interpolationMethod(.catmullRom)
-                    LineMark(
-                        x: .value("Date", point.0),
-                        y: .value(label, point.1)
-                    )
-                    .foregroundStyle(color)
-                    .interpolationMethod(.catmullRom)
-                    .lineStyle(.init(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                }
-                if let selected = selected {
-                    RuleMark(x: .value("Date", selected.0))
-                        .foregroundStyle(color.opacity(0.35))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                        .annotation(position: .top, spacing: 8, overflowResolution: .init(x: .fit, y: .disabled)) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(selected.0, format: .dateTime.month().day())
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundColor(.secondary)
-                                Text(String(format: "%.1f %@", selected.1, unit))
-                                    .font(.caption.bold())
-                                    .foregroundColor(color)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                    PointMark(
-                        x: .value("Date", selected.0),
-                        y: .value(label, selected.1)
-                    )
-                    .symbolSize(120)
-                    .foregroundStyle(.orange)
-                }
-            }
-            .frame(height: 260)
-            .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 6)) { value in
-                    AxisGridLine()
-                    AxisValueLabel(format: .dateTime.month().day(), centered: true)
-                        .font(.headline)
-                }
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading) { value in
-                    AxisGridLine()
-                    AxisValueLabel()
-                        .font(.headline)
-                }
-            }
-            .chartOverlay { proxy in
-                GeometryReader { geo in
-                    Rectangle().fill(Color.clear).contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                updateSelection(from: value.location, proxy: proxy, geometry: geo)
-                            }
-                            .onEnded { _ in
-                                selected = nil
-                            }
-                        )
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active(let location):
-                                updateSelection(from: location, proxy: proxy, geometry: geo)
-                            case .ended:
-                                selected = nil
-                            }
-                        }
-                }
-            }
-            if let selected = selected {
-                let minVal = data.map { $0.1 }.min() ?? selected.1
-                let maxVal = data.map { $0.1 }.max() ?? selected.1
-                let idx = data.firstIndex(where: { $0.0 == selected.0 && $0.1 == selected.1 }) ?? 0
-                let prev = idx > 0 ? data[idx-1].1 : selected.1
-                let note: String = {
-                    if selected.1 == minVal {
-                        return "Minimum"
-                    } else if selected.1 == maxVal {
-                        return "Maximum"
-                    } else if abs(selected.1 - prev) > 0.15 * (maxVal - minVal) {
-                        return "High Increase"
-                    } else {
-                        return ""
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(label)
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            .foregroundColor(color)
+                        Text("Drag or hover anywhere across the chart to inspect a specific day.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
-                }()
-                HStack {
-                    Spacer()
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("\(selected.0, formatter: HealthLineChartSheet.fullDateFormatter)")
-                            .font(.title2.bold())
-                            .foregroundColor(.primary)
-                        HStack(spacing: 8) {
-                            Spacer()
-                            Text(String(format: "%.1f \(unit)", selected.1))
-                                .font(.system(size: 44, weight: .bold, design: .rounded))
-                                .foregroundColor(.orange)
-                            if !note.isEmpty && showsPerformanceNote {
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if let selected {
+                        let accent = accentColor(for: selected)
+                        let selectionCallout = callout(for: selected)
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("\(selected.0, formatter: HealthLineChartSheet.fullDateFormatter)")
+                                        .font(.headline)
+                                        .foregroundColor(.secondary)
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Text(String(format: "%.1f", selected.1))
+                                            .font(.system(size: 42, weight: .bold, design: .rounded))
+                                            .foregroundColor(accent)
+                                        Text(unit)
+                                            .font(.headline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
                                 Spacer()
-                                if note == "Maximum" {
-                                    Image(systemName: "gauge.with.dots.needle.100percent")
-                                } else if note == "High Increase" {
-                                    Image(systemName: "gauge.with.dots.needle.bottom.50percent.badge.plus")
-                                } else if note == "Minimum" {
-                                    Image(systemName: "arrowtriangle.down.2.fill")
-                                }
-                                if note == "Maximum" {
-                                    Text("Maximum")
+                                if let selectionCallout {
+                                    Text(selectionCallout.title)
                                         .font(.caption.bold())
-                                        .foregroundColor(.red)
-                                } else if note == "High Increase" {
-                                    Text("High Increase")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.green)
-                                } else if note == "Minimum" {
-                                    Text("Recovering")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.blue)
+                                        .foregroundColor(selectionCallout.color)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(selectionCallout.color.opacity(0.15), in: Capsule())
                                 }
                             }
-                            Spacer()
+                            if let detail = selectionCallout?.detail {
+                                Text(detail)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .stroke(accent.opacity(0.18), lineWidth: 1.2)
+                        )
+                    }
+
+                    Chart {
+                        ForEach(data, id: \.0) { point in
+                            AreaMark(
+                                x: .value("Date", point.0),
+                                y: .value(label, point.1)
+                            )
+                            .foregroundStyle(
+                                .linearGradient(
+                                    colors: [color.opacity(0.22), color.opacity(0.03)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .interpolationMethod(.catmullRom)
+                            LineMark(
+                                x: .value("Date", point.0),
+                                y: .value(label, point.1)
+                            )
+                            .foregroundStyle(color)
+                            .interpolationMethod(.catmullRom)
+                            .lineStyle(.init(lineWidth: 2.8, lineCap: .round, lineJoin: .round))
+                        }
+                        if let selected = selected {
+                            let accent = accentColor(for: selected)
+                            RuleMark(x: .value("Date", selected.0))
+                                .foregroundStyle(accent.opacity(0.38))
+                                .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [4]))
+                            PointMark(
+                                x: .value("Date", selected.0),
+                                y: .value(label, selected.1)
+                            )
+                            .symbolSize(135)
+                            .foregroundStyle(accent)
                         }
                     }
-                    .padding(12)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(12)
-                    .shadow(radius: 4)
-                    Spacer()
+                    .frame(height: 320)
+                    .chartXAxis {
+                        AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                            AxisGridLine()
+                            AxisValueLabel(format: .dateTime.month().day(), centered: true)
+                                .font(.headline)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) { _ in
+                            AxisGridLine()
+                            AxisValueLabel()
+                                .font(.headline)
+                        }
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geo in
+                            Rectangle()
+                                .fill(Color.clear)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            updateSelection(from: value.location, proxy: proxy, geometry: geo)
+                                        }
+                                        .onEnded { _ in }
+                                )
+                                .onContinuousHover { phase in
+                                    switch phase {
+                                    case .active(let location):
+                                        updateSelection(from: location, proxy: proxy, geometry: geo)
+                                    case .ended:
+                                        break
+                                    }
+                                }
+                        }
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(color.opacity(0.14), lineWidth: 1.1)
+                    )
+                }
+                .padding(20)
+            }
+            .background(
+                LinearGradient(
+                    colors: [Color(.systemBackground), color.opacity(0.08)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+            )
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                if selected == nil {
+                    selected = data.last
                 }
             }
         }
-        .padding()
     }
 }

@@ -1775,8 +1775,13 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         }
     }
     
-    func fetchWorkouts(from startDate: Date, to endDate: Date, completion: @escaping ([HKWorkout]) -> Void) {
-        if AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+    func fetchWorkouts(
+        from startDate: Date,
+        to endDate: Date,
+        allowDuringForegroundCritical: Bool = false,
+        completion: @escaping ([HKWorkout]) -> Void
+    ) {
+        if !allowDuringForegroundCritical, AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
             DispatchQueue.main.async {
                 completion([])
             }
@@ -2625,13 +2630,21 @@ extension HealthKitManager {
 extension HealthKitManager {
     /// Fetch all workouts in a date range with analytics (VO2 max, HRV trend, post-workout HR, recovery)
     @MainActor
-    func fetchWorkoutsWithAnalytics(from startDate: Date, to endDate: Date) async -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
-        if AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+    func fetchWorkoutsWithAnalytics(
+        from startDate: Date,
+        to endDate: Date,
+        allowDuringForegroundCritical: Bool = false
+    ) async -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        if !allowDuringForegroundCritical, AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
             return []
         }
 
         let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
-            fetchWorkouts(from: startDate, to: endDate) { result in
+            fetchWorkouts(
+                from: startDate,
+                to: endDate,
+                allowDuringForegroundCritical: allowDuringForegroundCritical
+            ) { result in
                 continuation.resume(returning: result)
             }
         }
