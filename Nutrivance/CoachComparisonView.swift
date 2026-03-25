@@ -11,8 +11,17 @@ struct CoachSummaryInsight: Identifiable, Hashable {
     let endDate: Date?
     let numericMentions: [Double]
     let numericComparison: [Double]
-    let label: String
+    let metricNumberMentions: [CoachMetricKey: [Double]]
+    let metricExtremumPreferences: [CoachMetricKey: CoachMetricExtremumPreference]
     let range: NSRange
+}
+
+enum CoachMetricExtremumPreference: Hashable {
+    case maximum
+    case minimum
+    case average
+    case trend
+    case neutral
 }
 
 enum CoachMetricKey: String, CaseIterable, Hashable {
@@ -345,6 +354,14 @@ enum CoachSummaryNLP {
             let dateBounds = detectDateBounds(in: sentence.text, anchorDate: anchorDate, timeFilter: timeFilter)
             let numericMentions = detectNumericMentions(in: sentence.text)
             let numericComparison = detectNumericComparison(in: sentence.text)
+            let metricNumberMentions = detectMetricNumberMentions(
+                in: sentence.text,
+                metrics: detectedMetrics
+            )
+            let metricExtremumPreferences = detectMetricExtremumPreferences(
+                in: sentence.text,
+                metrics: detectedMetrics
+            )
             let key = detectedMetrics.map(\.rawValue).joined(separator: "|") + "|" + sentence.text
             guard seen.insert(key).inserted else { continue }
 
@@ -357,7 +374,8 @@ enum CoachSummaryNLP {
                     endDate: dateBounds?.1,
                     numericMentions: numericMentions,
                     numericComparison: numericComparison,
-                    label: relationshipLabel(for: sentence.text),
+                    metricNumberMentions: metricNumberMentions,
+                    metricExtremumPreferences: metricExtremumPreferences,
                     range: sentence.range
                 )
             )
@@ -523,23 +541,6 @@ enum CoachSummaryNLP {
         return nil
     }
 
-    private static func relationshipLabel(for text: String) -> String {
-        let lower = text.lowercased()
-        if lower.contains("good") || lower.contains("balanced") {
-            return "Balanced"
-        }
-        if lower.contains("higher than") || lower.contains("outran") || lower.contains("over") {
-            return "Above"
-        }
-        if lower.contains("lower than") || lower.contains("under") {
-            return "Below"
-        }
-        if lower.contains("stable") {
-            return "Stable"
-        }
-        return "Coach Highlight"
-    }
-
     private static func detectNumericMentions(in text: String) -> [Double] {
         let pattern = #"-?\d+(?:\.\d+)?"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -568,6 +569,97 @@ enum CoachSummaryNLP {
         }
 
         return []
+    }
+
+    private static func detectMetricNumberMentions(
+        in text: String,
+        metrics: [CoachMetricKey]
+    ) -> [CoachMetricKey: [Double]] {
+        let lower = text.lowercased()
+        let nsLower = lower as NSString
+        let numberPattern = #"-?\d+(?:\.\d+)?"#
+        guard let regex = try? NSRegularExpression(pattern: numberPattern) else { return [:] }
+        let allMatches = regex.matches(in: lower, range: NSRange(location: 0, length: nsLower.length))
+        var result: [CoachMetricKey: [Double]] = [:]
+
+        for metric in metrics {
+            let aliasRanges = metric.aliases.compactMap { alias -> NSRange? in
+                let range = nsLower.range(of: alias)
+                return range.location == NSNotFound ? nil : range
+            }
+            guard !aliasRanges.isEmpty else { continue }
+
+            let values = allMatches.compactMap { match -> Double? in
+                let number = Double(nsLower.substring(with: match.range))
+                let isNearby = aliasRanges.contains { aliasRange in
+                    let distance: Int
+                    if match.range.location > aliasRange.location {
+                        distance = match.range.location - NSMaxRange(aliasRange)
+                    } else {
+                        distance = aliasRange.location - NSMaxRange(match.range)
+                    }
+                    return distance <= 24
+                }
+                return isNearby ? number : nil
+            }
+
+            if !values.isEmpty {
+                result[metric] = values
+            }
+        }
+
+        return result
+    }
+
+    private static func detectMetricExtremumPreferences(
+        in text: String,
+        metrics: [CoachMetricKey]
+    ) -> [CoachMetricKey: CoachMetricExtremumPreference] {
+        let lower = text.lowercased()
+        let nsLower = lower as NSString
+        let maximumCues = ["peak", "highest", "high", "spike", "top", "climb", "climbing", "rising", "rose"]
+        let minimumCues = ["lowest", "low", "dip", "dipping", "drop", "dropping", "fell", "falling", "suppressed"]
+        let averageCues = ["average", "avg", "baseline", "typical", "mean"]
+        let trendCues = ["trend", "trending", "moved", "move", "from", "to", "versus", "vs"]
+
+        func nearbyCueScore(aliasRange: NSRange, cues: [String]) -> Int {
+            cues.reduce(0) { score, cue in
+                let cueRange = nsLower.range(of: cue)
+                guard cueRange.location != NSNotFound else { return score }
+                let distance: Int
+                if cueRange.location > aliasRange.location {
+                    distance = cueRange.location - NSMaxRange(aliasRange)
+                } else {
+                    distance = aliasRange.location - NSMaxRange(cueRange)
+                }
+                return distance <= 28 ? score + max(1, 28 - distance) : score
+            }
+        }
+
+        var result: [CoachMetricKey: CoachMetricExtremumPreference] = [:]
+        for metric in metrics {
+            let aliasRanges = metric.aliases.compactMap { alias -> NSRange? in
+                let range = nsLower.range(of: alias)
+                return range.location == NSNotFound ? nil : range
+            }
+            guard let bestAliasRange = aliasRanges.min(by: { $0.location < $1.location }) else { continue }
+
+            let maximumScore = nearbyCueScore(aliasRange: bestAliasRange, cues: maximumCues)
+            let minimumScore = nearbyCueScore(aliasRange: bestAliasRange, cues: minimumCues)
+            let averageScore = nearbyCueScore(aliasRange: bestAliasRange, cues: averageCues)
+            let trendScore = nearbyCueScore(aliasRange: bestAliasRange, cues: trendCues)
+
+            let ranked: [(CoachMetricExtremumPreference, Int)] = [
+                (.maximum, maximumScore),
+                (.minimum, minimumScore),
+                (.average, averageScore),
+                (.trend, trendScore)
+            ]
+            let best = ranked.max(by: { $0.1 < $1.1 })
+            result[metric] = (best?.1 ?? 0) > 0 ? (best?.0 ?? .neutral) : .neutral
+        }
+
+        return result
     }
 }
 
@@ -625,6 +717,7 @@ struct CoachComparisonView: View {
     @State private var selectedDate: Date? = nil
     @State private var floatingOverlayState: CoachComparisonFloatingState? = nil
     @State private var floatingOverlayPosition: CGPoint? = nil
+    @State private var canvasSize: CGSize = .zero
 
     private var chartSeries: [CoachMetricSeries] {
         insight.metrics.compactMap {
@@ -694,7 +787,7 @@ struct CoachComparisonView: View {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Coach Whiteboard")
                                         .font(.title2.bold())
-                                    Text(insight.label)
+                                    Text(metricsHeadline)
                                         .font(.headline)
                                         .foregroundColor(.orange)
                                     Text(insight.snippet)
@@ -706,7 +799,7 @@ struct CoachComparisonView: View {
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                     if let highlightRange {
-                                        Text("Highlighted window: \(highlightRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(highlightRange.upperBound.formatted(date: .abbreviated, time: .omitted)) • \(insight.label)")
+                                        Text("Highlighted window: \(highlightRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(highlightRange.upperBound.formatted(date: .abbreviated, time: .omitted))")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
@@ -727,7 +820,6 @@ struct CoachComparisonView: View {
                                         floatingOverlayPosition: $floatingOverlayPosition,
                                         highlightRange: highlightRange,
                                         highlightWindow: highlightWindow,
-                                        label: insight.label,
                                         supportingText: comparisonSupportText,
                                         timeFilter: timeFilter,
                                         snippet: insight.snippet
@@ -749,11 +841,25 @@ struct CoachComparisonView: View {
                                     presentation: floatingOverlayState.presentation,
                                     color: floatingOverlayState.color,
                                     position: $floatingOverlayPosition,
-                                    canvasSize: geometry.size
+                                    canvasSize: CGSize(
+                                        width: max(canvasSize.width, geometry.size.width),
+                                        height: max(canvasSize.height, geometry.size.height)
+                                    )
                                 )
                                 .zIndex(100)
                             }
                         }
+                        .background(
+                            GeometryReader { contentGeometry in
+                                Color.clear
+                                    .onAppear {
+                                        canvasSize = contentGeometry.size
+                                    }
+                                    .onChange(of: contentGeometry.size) { _, newValue in
+                                        canvasSize = newValue
+                                    }
+                            }
+                        )
                         .padding()
                         .coordinateSpace(name: "comparisonCanvas")
                     }
@@ -783,6 +889,14 @@ struct CoachComparisonView: View {
             }
         }
     }
+
+    private var metricsHeadline: String {
+        let names = chartSeries.map(\.title)
+        if names.isEmpty {
+            return "Coach Comparison"
+        }
+        return names.joined(separator: " + ")
+    }
 }
 
 private struct CoachComparisonChartCard: View {
@@ -793,7 +907,6 @@ private struct CoachComparisonChartCard: View {
     @Binding var floatingOverlayPosition: CGPoint?
     let highlightRange: ClosedRange<Date>?
     let highlightWindow: DateInterval?
-    let label: String
     let supportingText: String
     let timeFilter: StrainRecoveryView.TimeFilter
     let snippet: String
@@ -817,6 +930,22 @@ private struct CoachComparisonChartCard: View {
         }
     }
 
+    private var dataPoints: [(Date, Double)] {
+        series.data
+    }
+
+    private var dataValues: [Double] {
+        dataPoints.map(\.1)
+    }
+
+    private var dataMinValue: Double {
+        dataValues.min() ?? 0
+    }
+
+    private var dataMaxValue: Double {
+        dataValues.max() ?? 1
+    }
+
     private var snippetLowercased: String {
         snippet.lowercased()
     }
@@ -827,6 +956,14 @@ private struct CoachComparisonChartCard: View {
 
     private var numericComparison: [Double] {
         insight.numericComparison
+    }
+
+    private var metricNumberMentions: [Double] {
+        insight.metricNumberMentions[series.id] ?? []
+    }
+
+    private var metricExtremumPreference: CoachMetricExtremumPreference {
+        insight.metricExtremumPreferences[series.id] ?? .neutral
     }
 
     private var focusKinds: [CoachComparisonFocusKind] {
@@ -854,9 +991,13 @@ private struct CoachComparisonChartCard: View {
         focusKinds.compactMap { focusPresentation(for: $0) }
     }
 
+    private var focusPresentationMap: [CoachComparisonFocusKind: CoachComparisonFocusPresentation] {
+        Dictionary(uniqueKeysWithValues: focusPresentations.map { ($0.kind, $0) })
+    }
+
     private var activePresentation: CoachComparisonFocusPresentation? {
         guard let focusedKind else { return nil }
-        return focusPresentations.first(where: { $0.kind == focusedKind })
+        return focusPresentationMap[focusedKind]
     }
 
     private var chartDomain: ClosedRange<Date> {
@@ -870,19 +1011,24 @@ private struct CoachComparisonChartCard: View {
     }
 
     private var averagePresentation: CoachComparisonFocusPresentation? {
-        focusPresentations.first(where: { $0.kind == .average })
+        focusPresentationMap[.average]
     }
 
     private var maximumPresentation: CoachComparisonFocusPresentation? {
-        focusPresentations.first(where: { $0.kind == .maximum })
+        focusPresentationMap[.maximum]
     }
 
     private var totalPresentation: CoachComparisonFocusPresentation? {
-        focusPresentations.first(where: { $0.kind == .total })
+        focusPresentationMap[.total]
     }
 
     private var trendPresentation: CoachComparisonFocusPresentation? {
-        focusPresentations.first(where: { $0.kind == .trend })
+        focusPresentationMap[.trend]
+    }
+
+    private var preferredHighlightZoomRange: ClosedRange<Date>? {
+        guard let highlightRange else { return nil }
+        return highlightRange
     }
 
     private var coachTrendIntent: CoachTrendDirection? {
@@ -965,8 +1111,8 @@ private struct CoachComparisonChartCard: View {
                     RectangleMark(
                         xStart: .value("Highlight Start", highlightRange.lowerBound),
                         xEnd: .value("Highlight End", highlightWindow?.end ?? highlightRange.upperBound),
-                        yStart: .value("Min", series.data.map(\.1).min() ?? 0),
-                        yEnd: .value("Max", series.data.map(\.1).max() ?? 1)
+                        yStart: .value("Min", dataMinValue),
+                        yEnd: .value("Max", dataMaxValue)
                     )
                     .foregroundStyle(
                         .linearGradient(
@@ -975,13 +1121,6 @@ private struct CoachComparisonChartCard: View {
                             endPoint: .bottom
                         )
                     )
-                    .annotation(position: .topLeading, alignment: .leading) {
-                        Text(label)
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.thinMaterial, in: Capsule())
-                    }
                 }
 
                 if let averageValue = averagePresentation?.averageValue {
@@ -997,7 +1136,7 @@ private struct CoachComparisonChartCard: View {
                         }
                 }
 
-                ForEach(series.data, id: \.0) { point in
+                ForEach(dataPoints, id: \.0) { point in
                     AreaMark(
                         x: .value("Date", point.0),
                         y: .value(series.title, point.1)
@@ -1042,7 +1181,7 @@ private struct CoachComparisonChartCard: View {
                     .symbol(.diamond)
                     .symbolSize(focusedKind == .maximum ? 180 : 120)
                     .annotation(position: .top, spacing: 10, overflowResolution: .init(x: .fit, y: .disabled)) {
-                        Text("\(isMinimumCue(in: snippetLowercased) ? "Low" : "Peak") \(valueString(for: targetPoint.1))")
+                        Text("\(prefersMinimumCue ? "Low" : "Peak") \(valueString(for: targetPoint.1))")
                             .font(.caption2.bold())
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -1212,7 +1351,7 @@ private struct CoachComparisonChartCard: View {
         )
         .onChange(of: focusedKind) { _, newValue in
             guard let newValue,
-                  let presentation = focusPresentations.first(where: { $0.kind == newValue }) else {
+                  let presentation = focusPresentationMap[newValue] else {
                 if floatingOverlayState?.sourceMetric == series.id {
                     floatingOverlayState = nil
                 }
@@ -1305,13 +1444,24 @@ private struct CoachComparisonChartCard: View {
         )
     }
 
+    private var prefersMinimumCue: Bool {
+        switch metricExtremumPreference {
+        case .minimum:
+            return true
+        case .maximum:
+            return false
+        default:
+            return isMinimumCue(in: snippetLowercased)
+        }
+    }
+
     private func focusPresentation(for kind: CoachComparisonFocusKind) -> CoachComparisonFocusPresentation? {
         switch kind {
         case .average:
             let averageRange = bestAverageRange()
             let averageData = averageRange.map { range in
-                series.data.filter { $0.0 >= range.lowerBound && $0.0 <= range.upperBound }
-            } ?? series.data
+                dataPoints.filter { $0.0 >= range.lowerBound && $0.0 <= range.upperBound }
+            } ?? dataPoints
             let averageValue = averageData.map(\.1).average
             guard let averageValue else { return nil }
             return CoachComparisonFocusPresentation(
@@ -1329,16 +1479,16 @@ private struct CoachComparisonChartCard: View {
                 trendDirection: nil
             )
         case .maximum:
-            let candidateData = highlightedPoints.isEmpty ? series.data : highlightedPoints
+            let candidateData = highlightedPoints.isEmpty ? dataPoints : highlightedPoints
             let mentionedTarget = nearestPointMatchingMentionedValue(in: candidateData)
             guard let targetPoint = mentionedTarget ?? (
-                isMinimumCue(in: snippetLowercased)
+                prefersMinimumCue
                     ? candidateData.min(by: { $0.1 < $1.1 })
                     : candidateData.max(by: { $0.1 < $1.1 })
             ) else {
                 return nil
             }
-            let title = isMinimumCue(in: snippetLowercased) ? "Lowest Point" : "Peak Point"
+            let title = prefersMinimumCue ? "Lowest Point" : "Peak Point"
             return CoachComparisonFocusPresentation(
                 kind: .maximum,
                 title: title,
@@ -1347,7 +1497,7 @@ private struct CoachComparisonChartCard: View {
                     title: title,
                     point: targetPoint
                 ),
-                zoomRange: contextualZoomRange(around: targetPoint.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5),
+                zoomRange: preferredHighlightZoomRange ?? contextualZoomRange(around: targetPoint.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5),
                 averageValue: nil,
                 targetPoint: targetPoint,
                 totalValue: nil,
@@ -1378,7 +1528,7 @@ private struct CoachComparisonChartCard: View {
                 title: "\(timeFilter.rawValue) Trend",
                 chipValueText: signedValueString(for: segment.delta),
                 explanation: trendExplanation(for: segment),
-                zoomRange: series.data[segment.startIndex].0...series.data[segment.endIndex].0,
+                zoomRange: preferredHighlightZoomRange ?? (dataPoints[segment.startIndex].0...dataPoints[segment.endIndex].0),
                 averageValue: nil,
                 targetPoint: nil,
                 totalValue: nil,
@@ -1388,13 +1538,13 @@ private struct CoachComparisonChartCard: View {
     }
 
     private func bestAverageRange() -> ClosedRange<Date>? {
-        if let highlightRange {
-            return highlightRange
+        if let preferredHighlightZoomRange {
+            return preferredHighlightZoomRange
         }
         if let target = averageTargetValue() {
             return bestAverageRange(closestTo: target)
         }
-        return contextualZoomRange(around: series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 12 : 5)
+        return contextualZoomRange(around: dataPoints.last?.0, preferredVisiblePoints: timeFilter == .month ? 12 : 5)
     }
 
     private func averageExplanation(
@@ -1405,7 +1555,7 @@ private struct CoachComparisonChartCard: View {
             return "The coach cue reads \(series.title.lowercased()) as averaging around \(valueString(for: averageValue)) across this \(timeFilter.rawValue) window."
         }
         let mentionedText = averageTargetValue().map { " The NLP layer spotted a coach reference near \(valueString(for: $0)), so the zoom is centered on the range whose average is closest to that number." } ?? ""
-        return "The coach text matches an average reading here: \(series.title.lowercased()) sits around \(valueString(for: averageValue)) across \(zoomRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(zoomRange.upperBound.formatted(date: .abbreviated, time: .omitted)), so the dotted line marks the level being referenced.\(mentionedText)"
+        return "The coach is describing \(series.title.lowercased()) averaging around \(valueString(for: averageValue)) from \(zoomRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(zoomRange.upperBound.formatted(date: .abbreviated, time: .omitted)). That implies this metric was holding near that level across the highlighted range, not just on one day.\(mentionedText)"
     }
 
     private func maximumExplanation(
@@ -1419,17 +1569,17 @@ private struct CoachComparisonChartCard: View {
         } else {
             rangeText = ""
         }
-        let mentionText = nearestPointMatchingMentionedValue(in: highlightedPoints.isEmpty ? series.data : highlightedPoints) != nil
+        let mentionText = nearestPointMatchingMentionedValue(in: highlightedPoints.isEmpty ? dataPoints : highlightedPoints) != nil
             ? " The NLP layer used the number mentioned in the coach text to pick this point."
             : ""
-        return "\(title) lands on \(point.0.formatted(date: .abbreviated, time: .omitted)) at \(valueString(for: point.1)), which best matches the coach wording.\(mentionText)\(rangeText)"
+        return "\(title) lands on \(point.0.formatted(date: .abbreviated, time: .omitted)) at \(valueString(for: point.1)). That means this was the sharpest expression of the coach's point inside the emphasized range.\(mentionText)\(rangeText)"
     }
 
     private func totalExplanation(
         totalValue: Double,
         range: ClosedRange<Date>
     ) -> String {
-        "The coach cue reads \(series.title.lowercased()) as an accumulated load over \(range.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(range.upperBound.formatted(date: .abbreviated, time: .omitted)). Integrated together, the chart totals \(valueString(for: totalValue))."
+        "The coach is reading \(series.title.lowercased()) as an accumulated load from \(range.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(range.upperBound.formatted(date: .abbreviated, time: .omitted)). Integrated together, that range totals \(valueString(for: totalValue)), which is the cumulative cost or volume the coach is reacting to."
     }
 
     private func trendExplanation(for segment: CoachTrendSegment) -> String {
@@ -1449,7 +1599,7 @@ private struct CoachComparisonChartCard: View {
         } else {
             comparisonText = ""
         }
-        return "\(coachMatchText) \(series.title) moves \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted)) with a net change of \(signedValueString(for: segment.delta)).\(comparisonText)"
+        return "\(coachMatchText) \(series.title) moves \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted)) with a net change of \(signedValueString(for: segment.delta)). That implies the coach is reading a real directional shift across that dated window rather than an isolated spike.\(comparisonText)"
     }
 
     private func bestTrendSegment() -> CoachTrendSegment? {
@@ -1457,16 +1607,16 @@ private struct CoachComparisonChartCard: View {
 
         let minSegmentLength = min(3, series.data.count)
         let maxSegmentLength = min(series.data.count, timeFilter == .month ? 14 : 7)
-        let valueSpan = max(0.0001, (series.data.map(\.1).max() ?? 0) - (series.data.map(\.1).min() ?? 0))
+        let valueSpan = max(0.0001, dataMaxValue - dataMinValue)
         let recentPreference = ["improving", "improved", "better", "recently", "lately", "this week", "past week", "last week"].contains(where: snippetLowercased.contains)
         var best: CoachTrendSegment?
         var bestScore = -Double.infinity
 
         for length in minSegmentLength...maxSegmentLength {
-            for startIndex in 0...(series.data.count - length) {
+            for startIndex in 0...(dataPoints.count - length) {
                 let endIndex = startIndex + length - 1
-                let startValue = series.data[startIndex].1
-                let endValue = series.data[endIndex].1
+                let startValue = dataPoints[startIndex].1
+                let endValue = dataPoints[endIndex].1
                 let delta = endValue - startValue
                 let normalizedStrength = abs(delta) / valueSpan
                 let direction: CoachTrendDirection
@@ -1496,9 +1646,9 @@ private struct CoachComparisonChartCard: View {
                     score += 0.15
                 }
                 if let highlightRange {
-                    let segmentRange = series.data[startIndex].0...series.data[endIndex].0
+                    let segmentRange = dataPoints[startIndex].0...dataPoints[endIndex].0
                     if rangesOverlap(segmentRange, highlightRange) {
-                        score += 0.35
+                        score += 1.1
                     }
                 }
                 if score > bestScore {
@@ -1522,7 +1672,7 @@ private struct CoachComparisonChartCard: View {
             if numericComparison.count == 2 {
                 return (numericComparison[0] + numericComparison[1]) / 2
             }
-            return numericMentions.first
+            return metricNumberMentions.first ?? numericMentions.first
         }
         return nil
     }
@@ -1530,19 +1680,19 @@ private struct CoachComparisonChartCard: View {
     private func bestAverageRange(closestTo target: Double) -> ClosedRange<Date>? {
         guard series.data.count >= 3 else { return nil }
         let minLength = min(3, series.data.count)
-        let maxLength = min(series.data.count, timeFilter == .month ? 14 : 7)
+        let maxLength = min(dataPoints.count, timeFilter == .month ? 14 : 7)
         var bestRange: ClosedRange<Date>?
         var bestDistance = Double.infinity
 
         for length in minLength...maxLength {
-            for startIndex in 0...(series.data.count - length) {
+            for startIndex in 0...(dataPoints.count - length) {
                 let endIndex = startIndex + length - 1
-                let slice = Array(series.data[startIndex...endIndex]).map(\.1)
+                let slice = Array(dataPoints[startIndex...endIndex]).map(\.1)
                 let sliceAverage = coachAverage(slice) ?? 0
                 let distance = abs(sliceAverage - target)
                 if distance < bestDistance {
                     bestDistance = distance
-                    bestRange = series.data[startIndex].0...series.data[endIndex].0
+                    bestRange = dataPoints[startIndex].0...dataPoints[endIndex].0
                 }
             }
         }
@@ -1551,30 +1701,31 @@ private struct CoachComparisonChartCard: View {
     }
 
     private func nearestPointMatchingMentionedValue(in data: [(Date, Double)]) -> (Date, Double)? {
-        guard !numericMentions.isEmpty else { return nil }
+        let mentionPool = metricNumberMentions.isEmpty ? numericMentions : metricNumberMentions
+        guard !mentionPool.isEmpty else { return nil }
         return data.min { lhs, rhs in
-            let lhsDistance = numericMentions.map { abs(lhs.1 - $0) }.min() ?? .infinity
-            let rhsDistance = numericMentions.map { abs(rhs.1 - $0) }.min() ?? .infinity
+            let lhsDistance = mentionPool.map { abs(lhs.1 - $0) }.min() ?? .infinity
+            let rhsDistance = mentionPool.map { abs(rhs.1 - $0) }.min() ?? .infinity
             return lhsDistance < rhsDistance
         }
     }
 
     private func contextualZoomRange(around centerDate: Date?, preferredVisiblePoints: Int) -> ClosedRange<Date>? {
         guard let centerDate,
-              let centerIndex = series.data.firstIndex(where: { Calendar.current.isDate($0.0, inSameDayAs: centerDate) }) ?? nearestIndex(to: centerDate) else {
+              let centerIndex = dataPoints.firstIndex(where: { Calendar.current.isDate($0.0, inSameDayAs: centerDate) }) ?? nearestIndex(to: centerDate) else {
             return nil
         }
 
         let halfWindow = max(1, preferredVisiblePoints / 2)
         let lowerBound = max(0, centerIndex - halfWindow)
-        let upperBound = min(series.data.count - 1, centerIndex + halfWindow)
+        let upperBound = min(dataPoints.count - 1, centerIndex + halfWindow)
         guard lowerBound < upperBound else { return nil }
-        return series.data[lowerBound].0...series.data[upperBound].0
+        return dataPoints[lowerBound].0...dataPoints[upperBound].0
     }
 
     private func nearestIndex(to date: Date) -> Int? {
-        guard let point = nearestPoint(in: series.data, to: date) else { return nil }
-        return series.data.firstIndex(where: { $0.0 == point.0 && $0.1 == point.1 })
+        guard let point = nearestPoint(in: dataPoints, to: date) else { return nil }
+        return dataPoints.firstIndex(where: { $0.0 == point.0 && $0.1 == point.1 })
     }
 
     private func signedValueString(for value: Double) -> String {
@@ -1637,10 +1788,19 @@ private extension CoachMetricKey {
         case .readinessScore:
             let strain = Dictionary(uniqueKeysWithValues: derivedLoadSnapshots(engine: engine, sportFilter: sportFilter, window: window).map { ($0.date, $0.strainScore) })
             let recovery = Dictionary(uniqueKeysWithValues: estimatedRecoverySeries(engine: engine, window: window))
+            let hrvValues = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
             return mergeSeriesDates(window: window) { date in
                 guard let strainValue = strain[date], let recoveryValue = recovery[date] else { return nil }
                 let normalizedStrain = HealthStateEngine.normalizedStrainPercent(from: strainValue)
-                return max(0, min(100, recoveryValue * 0.7 - normalizedStrain * 0.25 + 35))
+                let hrvValue = hrvValues[date]
+                let hrvTrendComponent: Double
+                if let hrvValue, let baseline = engine.hrvBaseline7Day, baseline > 0 {
+                    let deviation = (hrvValue - baseline) / baseline
+                    hrvTrendComponent = max(0, min(100, (deviation * 200) + 50))
+                } else {
+                    hrvTrendComponent = engine.hrvTrendScore
+                }
+                return max(0, min(100, (recoveryValue * 0.70) + (hrvTrendComponent * 0.10) - (normalizedStrain * 0.25) + 25))
             }
         case .sessionLoad:
             return derivedLoadSnapshots(engine: engine, sportFilter: sportFilter, window: window).map { ($0.date, $0.sessionLoad) }

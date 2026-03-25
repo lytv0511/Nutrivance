@@ -197,6 +197,12 @@ struct StrainRecoveryView: View {
                             chartTimeFilter: graphTimeFilter,
                             anchorDate: selectedDate
                         )
+                        ReadinessScoreSection(
+                            engine: engine,
+                            headlineTimeFilter: timeFilter,
+                            chartTimeFilter: graphTimeFilter,
+                            anchorDate: selectedDate
+                        )
                         HRVSection(
                             engine: engine,
                             headlineTimeFilter: timeFilter,
@@ -5584,6 +5590,96 @@ struct RecoveryScoreSection: View {
                 )
             )
         }
+    }
+}
+
+@MainActor
+struct ReadinessScoreSection: View {
+    @ObservedObject var engine: HealthStateEngine
+    let headlineTimeFilter: StrainRecoveryView.TimeFilter
+    let chartTimeFilter: StrainRecoveryView.TimeFilter
+    let anchorDate: Date
+
+    private var selectedDay: Date {
+        Calendar.current.startOfDay(for: anchorDate)
+    }
+
+    private var readinessData: [(Date, Double)] {
+        let window = chartWindow(for: chartTimeFilter, anchorDate: anchorDate)
+        let loadSnapshots = dailyLoadSnapshots(
+            workouts: engine.workoutAnalytics,
+            estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+            displayWindow: window
+        )
+        let strainLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.strainScore) })
+        return dateSequence(from: window.start, to: window.end).compactMap { day in
+            guard let strain = strainLookup[day],
+                  let recovery = recoveryScore(for: day, engine: engine),
+                  let readiness = readinessScore(for: day, recoveryScore: recovery, strainScore: strain, engine: engine) else {
+                return nil
+            }
+            return (day, readiness)
+        }
+    }
+
+    private var selectedReadinessScore: Double {
+        let window = chartWindow(for: chartTimeFilter, anchorDate: anchorDate)
+        let loadSnapshots = dailyLoadSnapshots(
+            workouts: engine.workoutAnalytics,
+            estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+            displayWindow: window
+        )
+        let selectedStrain = loadSnapshots.last(where: { Calendar.current.isDate($0.date, inSameDayAs: selectedDay) })?.strainScore ?? engine.strainScore
+        let selectedRecovery = recoveryScore(for: selectedDay, engine: engine) ?? engine.recoveryScore
+        return readinessScore(
+            for: selectedDay,
+            recoveryScore: selectedRecovery,
+            strainScore: selectedStrain,
+            engine: engine
+        ) ?? engine.readinessScore
+    }
+
+    private func readinessClassification(for score: Double) -> RecoveryClassification {
+        recoveryClassification(for: score)
+    }
+
+    var body: some View {
+        let averageReadiness = average(readinessData.map(\.1)) ?? selectedReadinessScore
+        let headlineReadiness = headlineTimeFilter == .day ? selectedReadinessScore : averageReadiness
+        let readinessState = readinessClassification(for: selectedReadinessScore)
+
+        HealthCard(
+            symbol: "figure.run.circle.fill",
+            title: "Readiness Score",
+            value: String(format: "%.0f", headlineReadiness),
+            unit: "/100",
+            valueContext: metricValueContext(for: headlineTimeFilter, dayLabel: "today", aggregateKind: "avg"),
+            trend: "\(chartTimeFilter.rawValue) avg: " + String(format: "%.0f", averageReadiness),
+            color: readinessState.color,
+            chartData: readinessData,
+            chartLabel: "Readiness",
+            chartUnit: "%",
+            badgeText: readinessState.title,
+            badgeColor: readinessState.color,
+            chartStatusProvider: { value in
+                let state = readinessClassification(for: value)
+                return HealthChartStatusDescriptor(
+                    title: state.title,
+                    color: state.color,
+                    detail: state.detail
+                )
+            },
+            expandedContent: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Readiness blends recovery reserve, HRV trend support, and strain drag into one training-day score.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("For \(selectedDay.formatted(date: .abbreviated, time: .omitted)), readiness lands at \(formatted(selectedReadinessScore, digits: 1))/100 after recovery support and strain cost are combined.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+        )
     }
 }
 
