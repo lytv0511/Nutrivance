@@ -121,7 +121,7 @@ struct StrainRecoveryView: View {
                                         .padding(.vertical, 8)
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .tint(timeFilter == filter ? .accentColor : .gray.opacity(0.35))
+                                .tint(timeFilter == filter ? .orange : .orange.opacity(0.3))
                             }
                         }
                         Spacer()
@@ -139,8 +139,20 @@ struct StrainRecoveryView: View {
                                 Text(sportFilter?.capitalized ?? "All Sports")
                                 Image(systemName: "chevron.down")
                             }
-                            .foregroundColor(.blue)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .foregroundStyle(.orange)
+                            .background(
+                                Capsule()
+                                    .fill(Color.orange.opacity(0.14))
+                            )
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                            )
                         }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal)
 
@@ -1885,6 +1897,7 @@ private struct StrainRecoveryAISummarySection: View {
     @State private var isSavingToJournal = false
     @State private var showJournalSavedPopup = false
     @State private var journalSavedPopupTask: Task<Void, Never>? = nil
+    @State private var showsAllSuggestions = false
 
     private struct SummaryGenerationReadiness {
         let canGenerate: Bool
@@ -1913,6 +1926,47 @@ private struct StrainRecoveryAISummarySection: View {
         filteredSuggestions.first(where: { $0.id == selectedSuggestionID })
             ?? suggestions.first(where: { $0.id == selectedSuggestionID })
             ?? suggestions.first
+    }
+
+    private var keyboardPrimarySuggestion: SummarySuggestion? {
+        let query = intentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return nil }
+        return filteredSuggestions.first
+    }
+
+    private var collapsedSuggestions: [SummarySuggestion] {
+        Array(filteredSuggestions.prefix(8))
+    }
+
+    private var shouldShowExpandedSuggestionToggle: Bool {
+        !filteredSuggestions.isEmpty
+    }
+
+    private func estimatedSuggestionChipWidth(for suggestion: SummarySuggestion) -> CGFloat {
+        CGFloat(max(110, min(210, 64 + (suggestion.title.count * 8))))
+    }
+
+    private func fittedCollapsedSuggestions(for availableWidth: CGFloat) -> [SummarySuggestion] {
+        let reservedToggleWidth: CGFloat = filteredSuggestions.count > 1 ? 62 : 0
+        let targetWidth = max(availableWidth - reservedToggleWidth, 120)
+        var runningWidth: CGFloat = 0
+        var visible: [SummarySuggestion] = []
+
+        for suggestion in collapsedSuggestions {
+            let chipWidth = estimatedSuggestionChipWidth(for: suggestion)
+            let proposedWidth = runningWidth == 0 ? chipWidth : runningWidth + 10 + chipWidth
+            if proposedWidth > targetWidth, !visible.isEmpty {
+                break
+            }
+            visible.append(suggestion)
+            runningWidth = proposedWidth
+        }
+
+        return visible
+    }
+
+    private func shouldShowCollapsedSuggestionToggle(for availableWidth: CGFloat) -> Bool {
+        filteredSuggestions.count > fittedCollapsedSuggestions(for: availableWidth).count
     }
 
     private var selectedSuggestionRequestID: String {
@@ -1946,6 +2000,44 @@ private struct StrainRecoveryAISummarySection: View {
         }
 
         return states
+    }
+
+    private func applySuggestion(_ suggestion: SummarySuggestion) {
+        let request = StrainRecoverySummaryRequest.build(
+            engine: engine,
+            timeFilter: timeFilter,
+            sportFilter: sportFilter,
+            anchorDate: anchorDate,
+            intentText: suggestion.queryText,
+            selectedSuggestion: suggestion,
+            refreshVersion: refreshVersions[suggestion.id, default: 0]
+        )
+
+        selectedSuggestionID = suggestion.id
+        intentText = suggestion.queryText
+        requestedRequestID = nil
+        displayedRequestID = nil
+        persistedEntry = nil
+        summaryText = ""
+        selectedComparisonInsight = nil
+
+        if let cachedEntry = cacheSnapshot[request.requestID],
+           cachedEntry.source == .appleIntelligence {
+            persistedEntry = cachedEntry
+            summaryText = cachedEntry.summaryText
+            statusText = cachedEntry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
+            displayedRequestID = cachedEntry.requestID
+            requestedRequestID = cachedEntry.requestID
+        } else {
+            Task {
+                statusText = "Generating \(suggestion.title) with Apple Intelligence for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
+                await generateSummary(
+                    for: request,
+                    requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
+                    allowLocalRefreshFallback: !shouldRequireAppleIntelligenceByDefault
+                )
+            }
+        }
     }
 
     private var currentRequestDescriptor: String {
@@ -2246,6 +2338,88 @@ private struct StrainRecoveryAISummarySection: View {
         }
     }
 
+    @ViewBuilder
+    private func suggestionButton(for suggestion: SummarySuggestion) -> some View {
+        let cacheState = suggestionCacheStates[suggestion.id] ?? (false, false)
+        let isKeyboardPrimary = keyboardPrimarySuggestion?.id == suggestion.id
+
+        Button {
+            applySuggestion(suggestion)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: suggestion.symbol)
+                    .font(.caption.weight(.bold))
+                Text(suggestion.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .multilineTextAlignment(.leading)
+            }
+            .foregroundColor(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(
+                color: cacheState.hasAISummary ? Color.orange.opacity(0.28) : .clear,
+                radius: cacheState.isPassivePriority ? 16 : 10,
+                x: 0,
+                y: 0
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(
+                        (selectedSuggestionID == suggestion.id ? Color.orange : Color.orange.opacity(0.35)),
+                        lineWidth: selectedSuggestionID == suggestion.id ? 1.4 : 1
+                    )
+            )
+            .overlay {
+                if cacheState.hasAISummary {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.orange.opacity(0.45), lineWidth: cacheState.isPassivePriority ? 2.4 : 1.6)
+                        .blur(radius: cacheState.isPassivePriority ? 8 : 4)
+                        .padding(cacheState.isPassivePriority ? -8 : -3)
+                }
+            }
+            .overlay {
+                if isKeyboardPrimary {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.orange.opacity(0.55), lineWidth: 1.4)
+                        .blur(radius: 4)
+                        .padding(2)
+                        .mask(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color.white, Color.clear],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                        )
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var suggestionToggleButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showsAllSuggestions.toggle()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if showsAllSuggestions {
+                    Text("Less")
+                }
+                Image(systemName: showsAllSuggestions ? "chevron.up" : "chevron.down")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundColor(.orange)
+        }
+        .buttonStyle(.plain)
+    }
+
     @MainActor
     private func performSaveToJournal() {
         guard !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -2296,7 +2470,9 @@ private struct StrainRecoveryAISummarySection: View {
                         performSaveToJournal()
                     }
                     .font(.caption.weight(.semibold))
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .shadow(color: Color.purple.opacity(0.18), radius: 12, x: 0, y: 0)
                     .disabled(isSavingToJournal)
                 }
                 if isLoading {
@@ -2318,6 +2494,10 @@ private struct StrainRecoveryAISummarySection: View {
                     .textInputAutocapitalization(.sentences)
                     .autocorrectionDisabled(false)
                     .submitLabel(.search)
+                    .onSubmit {
+                        guard let keyboardPrimarySuggestion else { return }
+                        applySuggestion(keyboardPrimarySuggestion)
+                    }
                 if !intentText.isEmpty {
                     Button {
                         intentText = ""
@@ -2352,81 +2532,44 @@ private struct StrainRecoveryAISummarySection: View {
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                ForEach(filteredSuggestions.prefix(24)) { suggestion in
-                    Button {
-                        let request = StrainRecoverySummaryRequest.build(
-                            engine: engine,
-                            timeFilter: timeFilter,
-                            sportFilter: sportFilter,
-                            anchorDate: anchorDate,
-                            intentText: suggestion.queryText,
-                            selectedSuggestion: suggestion,
-                            refreshVersion: refreshVersions[suggestion.id, default: 0]
-                        )
-
-                        selectedSuggestionID = suggestion.id
-                        intentText = suggestion.queryText
-                        requestedRequestID = nil
-                        displayedRequestID = nil
-                        persistedEntry = nil
-                        summaryText = ""
-                        selectedComparisonInsight = nil
-
-                        if let cachedEntry = cacheSnapshot[request.requestID],
-                           cachedEntry.source == .appleIntelligence {
-                            persistedEntry = cachedEntry
-                            summaryText = cachedEntry.summaryText
-                            statusText = cachedEntry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
-                            displayedRequestID = cachedEntry.requestID
-                            requestedRequestID = cachedEntry.requestID
-                        } else {
-                            Task {
-                                statusText = "Generating \(suggestion.title) with Apple Intelligence for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
-                                await generateSummary(
-                                    for: request,
-                                    requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
-                                    allowLocalRefreshFallback: !shouldRequireAppleIntelligenceByDefault
-                                )
-                            }
-                        }
-                    } label: {
-                        let cacheState = suggestionCacheStates[suggestion.id] ?? (false, false)
-                        HStack(spacing: 8) {
-                            Image(systemName: suggestion.symbol)
-                                .font(.caption.weight(.bold))
-                            Text(suggestion.title)
-                                .font(.caption.weight(.semibold))
-                                .multilineTextAlignment(.leading)
-                        }
-                        .foregroundColor(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .shadow(
-                            color: cacheState.hasAISummary ? Color.orange.opacity(0.28) : .clear,
-                            radius: cacheState.isPassivePriority ? 16 : 10,
-                            x: 0,
-                            y: 0
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(
-                                    (selectedSuggestionID == suggestion.id ? Color.orange : Color.orange.opacity(0.35)),
-                                    lineWidth: selectedSuggestionID == suggestion.id ? 1.4 : 1
-                                )
-                        )
-                        .overlay {
-                            if cacheState.hasAISummary {
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.orange.opacity(0.45), lineWidth: cacheState.isPassivePriority ? 2.4 : 1.6)
-                                    .blur(radius: cacheState.isPassivePriority ? 8 : 4)
-                                    .padding(cacheState.isPassivePriority ? -8 : -3)
-                            }
+            VStack(alignment: .leading, spacing: 10) {
+                if showsAllSuggestions {
+                    HStack(spacing: 10) {
+                        Text("Suggestions")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        if shouldShowExpandedSuggestionToggle {
+                            suggestionToggleButton
                         }
                     }
-                    .buttonStyle(.plain)
+
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                        ForEach(filteredSuggestions.prefix(24)) { suggestion in
+                            suggestionButton(for: suggestion)
+                        }
+                    }
+                } else {
+                    GeometryReader { geometry in
+                        let visibleSuggestions = fittedCollapsedSuggestions(for: geometry.size.width)
+                        let shouldShowToggle = shouldShowCollapsedSuggestionToggle(for: geometry.size.width)
+
+                        HStack(spacing: 10) {
+                            ForEach(visibleSuggestions) { suggestion in
+                                suggestionButton(for: suggestion)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+
+                            Spacer(minLength: 0)
+
+                            if shouldShowToggle {
+                                suggestionToggleButton
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                    }
+                    .frame(height: 48)
                 }
             }
 
@@ -2557,6 +2700,7 @@ private struct StrainRecoveryAISummarySection: View {
             deferredSuggestionsRefreshTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
+                showsAllSuggestions = false
                 refreshSuggestionsSnapshot()
                 scheduleAutoSummaryLoad()
             }
@@ -4724,6 +4868,12 @@ private struct StrainClassification {
     let color: Color
 }
 
+private struct StrainConsistencyClassification {
+    let title: String
+    let detail: String
+    let color: Color
+}
+
 private func strainClassification(for score: Double) -> StrainClassification {
     switch score {
     case ..<6:
@@ -4734,6 +4884,39 @@ private func strainClassification(for score: Double) -> StrainClassification {
         return StrainClassification(title: "Productive", detail: "Solid training stress with meaningful adaptation potential.", color: .orange)
     default:
         return StrainClassification(title: "High", detail: "Heavy load day that needs strong recovery support.", color: .red)
+    }
+}
+
+private func strainScoreStandardDeviation(_ values: [Double]) -> Double {
+    guard values.count > 1 else { return 0 }
+    let mean = values.reduce(0, +) / Double(values.count)
+    let variance = values
+        .map { pow($0 - mean, 2) }
+        .reduce(0, +) / Double(values.count)
+    return sqrt(variance)
+}
+
+private func strainConsistencyClassification(for scores: [Double]) -> StrainConsistencyClassification {
+    let deviation = strainScoreStandardDeviation(scores)
+    switch deviation {
+    case ..<1.75:
+        return StrainConsistencyClassification(
+            title: "Consistent",
+            detail: "Strain stayed tightly clustered across this period with only small day-to-day swings.",
+            color: .green
+        )
+    case ..<3.5:
+        return StrainConsistencyClassification(
+            title: "Fairly Consistent",
+            detail: "Strain had some meaningful variation, but the overall load pattern still stayed reasonably steady.",
+            color: .yellow
+        )
+    default:
+        return StrainConsistencyClassification(
+            title: "Inconsistent",
+            detail: "Strain swung sharply across the period, suggesting a more uneven load pattern.",
+            color: .red
+        )
     }
 }
 
@@ -5393,7 +5576,16 @@ struct StrainRecoveryMathSection: View {
                 return average(loadSnapshots.map(\.strainScore)) ?? strainValue
             }
         }()
-        let strainState = strainClassification(for: strainValue)
+        let dailyStrainState = strainClassification(for: strainValue)
+        let periodStrainConsistencyState = strainConsistencyClassification(for: loadSnapshots.map(\.strainScore))
+        let headlineStrainState: (title: String, color: Color) = {
+            switch headlineTimeFilter {
+            case .day:
+                return (dailyStrainState.title, dailyStrainState.color)
+            case .week, .month:
+                return (periodStrainConsistencyState.title, periodStrainConsistencyState.color)
+            }
+        }()
         HealthCard(
             symbol: "flame.fill",
             title: "Strain",
@@ -5405,12 +5597,12 @@ struct StrainRecoveryMathSection: View {
                 aggregateKind: "avg"
             ),
             trend: "\(chartTimeFilter.rawValue) load: " + String(format: "%.1f", totalLoad),
-            color: strainState.color,
+            color: headlineStrainState.color,
             chartData: strainChartData,
             chartLabel: "Strain",
             chartUnit: "/21",
-            badgeText: strainState.title,
-            badgeColor: strainState.color,
+            badgeText: headlineStrainState.title,
+            badgeColor: headlineStrainState.color,
             chartStatusProvider: { value in
                 let state = strainClassification(for: value)
                 return HealthChartStatusDescriptor(
@@ -5424,12 +5616,21 @@ struct StrainRecoveryMathSection: View {
                     Text("Strain uses weighted heart-rate-zone load plus a small base-load term, then log-scales that day and nudges it up only when acute load clearly outruns chronic load.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    if headlineTimeFilter != .day {
+                        Text("For \(headlineTimeFilter.rawValue), the headline label reflects consistency based on the standard deviation of strain scores across the visible period, not the most recent day alone.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
                     if let snapshot = selectedSnapshot {
                         Text("For \(selectedDay.formatted(date: .abbreviated, time: .omitted)), daily load is \(formatted(snapshot.totalDailyLoad, digits: 2)), acute/chronic ratio is \(formatted(snapshot.acwr, digits: 2)), and the final score lands at \(formatted(snapshot.strainScore, digits: 1))/21.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
-                    Text("\(strainState.title) means \(strainState.detail) Strain bands are 0-5 Low, 6-10 Building, 11-14 Productive, and 15+ High.")
+                    Text(
+                        headlineTimeFilter == .day
+                        ? "\(dailyStrainState.title) means \(dailyStrainState.detail) Strain bands are 0-5 Low, 6-10 Building, 11-14 Productive, and 15+ High."
+                        : "\(periodStrainConsistencyState.title) means \(periodStrainConsistencyState.detail)"
+                    )
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     Button("View more") {
