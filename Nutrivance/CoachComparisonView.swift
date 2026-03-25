@@ -9,6 +9,8 @@ struct CoachSummaryInsight: Identifiable, Hashable {
     let metrics: [CoachMetricKey]
     let startDate: Date?
     let endDate: Date?
+    let numericMentions: [Double]
+    let numericComparison: [Double]
     let label: String
     let range: NSRange
 }
@@ -341,6 +343,8 @@ enum CoachSummaryNLP {
             }
 
             let dateBounds = detectDateBounds(in: sentence.text, anchorDate: anchorDate, timeFilter: timeFilter)
+            let numericMentions = detectNumericMentions(in: sentence.text)
+            let numericComparison = detectNumericComparison(in: sentence.text)
             let key = detectedMetrics.map(\.rawValue).joined(separator: "|") + "|" + sentence.text
             guard seen.insert(key).inserted else { continue }
 
@@ -351,6 +355,8 @@ enum CoachSummaryNLP {
                     metrics: detectedMetrics,
                     startDate: dateBounds?.0,
                     endDate: dateBounds?.1,
+                    numericMentions: numericMentions,
+                    numericComparison: numericComparison,
                     label: relationshipLabel(for: sentence.text),
                     range: sentence.range
                 )
@@ -431,39 +437,90 @@ enum CoachSummaryNLP {
         anchorDate: Date,
         timeFilter: StrainRecoveryView.TimeFilter
     ) -> (Date, Date)? {
-        let pattern = #"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let nsText = text as NSString
-        let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-        guard !matches.isEmpty else { return nil }
-
+        let calendar = Calendar.current
+        let monthToken = #"jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec"#
         let formatter = DateFormatter()
         formatter.locale = .current
         formatter.dateFormat = "MMM d yyyy"
-        let year = Calendar.current.component(.year, from: anchorDate)
+        let monthYearFormatter = DateFormatter()
+        monthYearFormatter.locale = .current
+        monthYearFormatter.dateFormat = "MMM yyyy"
+        let defaultYear = calendar.component(.year, from: anchorDate)
+        let nsText = text as NSString
 
-        var resolvedDates: [Date] = []
-        for match in matches {
-            guard
-                let monthRange = Range(match.range(at: 1), in: text),
-                let dayRange = Range(match.range(at: 2), in: text)
-            else { continue }
+        func resolvedDate(month: String, day: String, explicitYear: String? = nil) -> Date? {
+            let resolvedYear = explicitYear ?? String(defaultYear)
+            let token = "\(month.prefix(3).capitalized) \(day) \(resolvedYear)"
+            return formatter.date(from: token).map { calendar.startOfDay(for: $0) }
+        }
 
-            let month = String(text[monthRange]).prefix(3).capitalized
-            let startDay = String(text[dayRange])
-            if let date = formatter.date(from: "\(month) \(startDay) \(year)") {
-                resolvedDates.append(Calendar.current.startOfDay(for: date))
-            }
-
-            if match.range(at: 3).location != NSNotFound,
-               let endDayRange = Range(match.range(at: 3), in: text),
-               let date = formatter.date(from: "\(month) \(text[endDayRange]) \(year)") {
-                resolvedDates.append(Calendar.current.startOfDay(for: date))
+        let crossMonthPattern = #"(?i)\b(\#(monthToken))[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?\s*(?:to|-|–)\s*(\#(monthToken))[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?"#
+        if let regex = try? NSRegularExpression(pattern: crossMonthPattern),
+           let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+           let month1Range = Range(match.range(at: 1), in: text),
+           let day1Range = Range(match.range(at: 2), in: text),
+           let month2Range = Range(match.range(at: 4), in: text),
+           let day2Range = Range(match.range(at: 5), in: text) {
+            let year1 = match.range(at: 3).location != NSNotFound ? nsText.substring(with: match.range(at: 3)) : nil
+            let year2 = match.range(at: 6).location != NSNotFound ? nsText.substring(with: match.range(at: 6)) : nil
+            if let start = resolvedDate(month: String(text[month1Range]), day: String(text[day1Range]), explicitYear: year1),
+               let end = resolvedDate(month: String(text[month2Range]), day: String(text[day2Range]), explicitYear: year2) {
+                return (min(start, end), max(start, end))
             }
         }
 
-        guard let start = resolvedDates.min(), let end = resolvedDates.max() else { return nil }
-        return (start, end)
+        let sameMonthRangePattern = #"(?i)\b(\#(monthToken))[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?\s*(?:to|-|–)\s*(\d{1,2})\b"#
+        if let regex = try? NSRegularExpression(pattern: sameMonthRangePattern),
+           let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+           let monthRange = Range(match.range(at: 1), in: text),
+           let startDayRange = Range(match.range(at: 2), in: text),
+           let endDayRange = Range(match.range(at: 4), in: text) {
+            let explicitYear = match.range(at: 3).location != NSNotFound ? nsText.substring(with: match.range(at: 3)) : nil
+            if let start = resolvedDate(month: String(text[monthRange]), day: String(text[startDayRange]), explicitYear: explicitYear),
+               let end = resolvedDate(month: String(text[monthRange]), day: String(text[endDayRange]), explicitYear: explicitYear) {
+                return (min(start, end), max(start, end))
+            }
+        }
+
+        let monthYearPattern = #"(?i)\b(\#(monthToken))[a-z]*\.?\s+(\d{4})\b"#
+        if let regex = try? NSRegularExpression(pattern: monthYearPattern),
+           let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+           let monthRange = Range(match.range(at: 1), in: text),
+           let yearRange = Range(match.range(at: 2), in: text),
+           let monthStart = monthYearFormatter.date(from: "\(String(text[monthRange]).prefix(3).capitalized) \(text[yearRange])"),
+           let monthInterval = calendar.dateInterval(of: .month, for: monthStart) {
+            let start = calendar.startOfDay(for: monthInterval.start)
+            let end = calendar.date(byAdding: .day, value: -1, to: monthInterval.end).map { calendar.startOfDay(for: $0) } ?? start
+            return (start, end)
+        }
+
+        let singleDatePattern = #"(?i)\b(\#(monthToken))[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?"#
+        if let regex = try? NSRegularExpression(pattern: singleDatePattern) {
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            let resolvedDates = matches.compactMap { match -> Date? in
+                guard let monthRange = Range(match.range(at: 1), in: text),
+                      let dayRange = Range(match.range(at: 2), in: text) else {
+                    return nil
+                }
+                let explicitYear = match.range(at: 3).location != NSNotFound ? nsText.substring(with: match.range(at: 3)) : nil
+                return resolvedDate(month: String(text[monthRange]), day: String(text[dayRange]), explicitYear: explicitYear)
+            }
+            if let start = resolvedDates.min(), let end = resolvedDates.max() {
+                return (start, end)
+            }
+        }
+
+        let lower = text.lowercased()
+        if timeFilter == .week && (lower.contains("this week") || lower.contains("selected week")) {
+            let period = comparisonSummaryPeriod(for: .week, requestedDate: anchorDate)
+            return (period.start, period.end)
+        }
+        if timeFilter == .month && (lower.contains("this month") || lower.contains("selected month")) {
+            let period = comparisonSummaryPeriod(for: .month, requestedDate: anchorDate)
+            return (period.start, period.end)
+        }
+
+        return nil
     }
 
     private static func relationshipLabel(for text: String) -> String {
@@ -481,6 +538,36 @@ enum CoachSummaryNLP {
             return "Stable"
         }
         return "Coach Highlight"
+    }
+
+    private static func detectNumericMentions(in text: String) -> [Double] {
+        let pattern = #"-?\d+(?:\.\d+)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsText = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        return matches.compactMap { match in
+            Double(nsText.substring(with: match.range))
+        }
+    }
+
+    private static func detectNumericComparison(in text: String) -> [Double] {
+        let patterns = [
+            #"(?i)\bfrom\s+(-?\d+(?:\.\d+)?)\s+(?:to|up to|down to)\s+(-?\d+(?:\.\d+)?)\b"#,
+            #"(?i)\b(-?\d+(?:\.\d+)?)\s*(?:to|vs|versus|compared to|against)\s*(-?\d+(?:\.\d+)?)\b"#
+        ]
+        let nsText = text as NSString
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+                  let first = Double(nsText.substring(with: match.range(at: 1))),
+                  let second = Double(nsText.substring(with: match.range(at: 2))) else {
+                continue
+            }
+            return [first, second]
+        }
+
+        return []
     }
 }
 
@@ -634,6 +721,7 @@ struct CoachComparisonView: View {
                                 ForEach(chartSeries) { series in
                                     CoachComparisonChartCard(
                                         series: series,
+                                        insight: insight,
                                         selectedDate: $selectedDate,
                                         floatingOverlayState: $floatingOverlayState,
                                         floatingOverlayPosition: $floatingOverlayPosition,
@@ -699,6 +787,7 @@ struct CoachComparisonView: View {
 
 private struct CoachComparisonChartCard: View {
     let series: CoachMetricSeries
+    let insight: CoachSummaryInsight
     @Binding var selectedDate: Date?
     @Binding var floatingOverlayState: CoachComparisonFloatingState?
     @Binding var floatingOverlayPosition: CGPoint?
@@ -732,10 +821,20 @@ private struct CoachComparisonChartCard: View {
         snippet.lowercased()
     }
 
+    private var numericMentions: [Double] {
+        insight.numericMentions
+    }
+
+    private var numericComparison: [Double] {
+        insight.numericComparison
+    }
+
     private var focusKinds: [CoachComparisonFocusKind] {
         let explicitKinds = detectedFocusKinds(
             in: snippetLowercased,
-            supportsTotal: series.id.supportsTotalComparison
+            supportsTotal: series.id.supportsTotalComparison,
+            highlightRange: highlightRange,
+            numericComparison: numericComparison
         )
         if !explicitKinds.isEmpty {
             return explicitKinds
@@ -1209,9 +1308,12 @@ private struct CoachComparisonChartCard: View {
     private func focusPresentation(for kind: CoachComparisonFocusKind) -> CoachComparisonFocusPresentation? {
         switch kind {
         case .average:
-            let averageValue = series.data.map(\.1).average
-            guard let averageValue else { return nil }
             let averageRange = bestAverageRange()
+            let averageData = averageRange.map { range in
+                series.data.filter { $0.0 >= range.lowerBound && $0.0 <= range.upperBound }
+            } ?? series.data
+            let averageValue = averageData.map(\.1).average
+            guard let averageValue else { return nil }
             return CoachComparisonFocusPresentation(
                 kind: .average,
                 title: "\(timeFilter.rawValue) Average",
@@ -1227,9 +1329,13 @@ private struct CoachComparisonChartCard: View {
                 trendDirection: nil
             )
         case .maximum:
-            guard let targetPoint = isMinimumCue(in: snippetLowercased)
-                ? series.data.min(by: { $0.1 < $1.1 })
-                : series.data.max(by: { $0.1 < $1.1 }) else {
+            let candidateData = highlightedPoints.isEmpty ? series.data : highlightedPoints
+            let mentionedTarget = nearestPointMatchingMentionedValue(in: candidateData)
+            guard let targetPoint = mentionedTarget ?? (
+                isMinimumCue(in: snippetLowercased)
+                    ? candidateData.min(by: { $0.1 < $1.1 })
+                    : candidateData.max(by: { $0.1 < $1.1 })
+            ) else {
                 return nil
             }
             let title = isMinimumCue(in: snippetLowercased) ? "Lowest Point" : "Peak Point"
@@ -1285,6 +1391,9 @@ private struct CoachComparisonChartCard: View {
         if let highlightRange {
             return highlightRange
         }
+        if let target = averageTargetValue() {
+            return bestAverageRange(closestTo: target)
+        }
         return contextualZoomRange(around: series.data.last?.0, preferredVisiblePoints: timeFilter == .month ? 12 : 5)
     }
 
@@ -1295,7 +1404,8 @@ private struct CoachComparisonChartCard: View {
         guard let zoomRange else {
             return "The coach cue reads \(series.title.lowercased()) as averaging around \(valueString(for: averageValue)) across this \(timeFilter.rawValue) window."
         }
-        return "The coach text matches an average reading here: \(series.title.lowercased()) sits around \(valueString(for: averageValue)) across \(zoomRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(zoomRange.upperBound.formatted(date: .abbreviated, time: .omitted)), so the dotted line marks the level being referenced."
+        let mentionedText = averageTargetValue().map { " The NLP layer spotted a coach reference near \(valueString(for: $0)), so the zoom is centered on the range whose average is closest to that number." } ?? ""
+        return "The coach text matches an average reading here: \(series.title.lowercased()) sits around \(valueString(for: averageValue)) across \(zoomRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(zoomRange.upperBound.formatted(date: .abbreviated, time: .omitted)), so the dotted line marks the level being referenced.\(mentionedText)"
     }
 
     private func maximumExplanation(
@@ -1309,7 +1419,10 @@ private struct CoachComparisonChartCard: View {
         } else {
             rangeText = ""
         }
-        return "\(title) lands on \(point.0.formatted(date: .abbreviated, time: .omitted)) at \(valueString(for: point.1)), which best matches the coach wording.\(rangeText)"
+        let mentionText = nearestPointMatchingMentionedValue(in: highlightedPoints.isEmpty ? series.data : highlightedPoints) != nil
+            ? " The NLP layer used the number mentioned in the coach text to pick this point."
+            : ""
+        return "\(title) lands on \(point.0.formatted(date: .abbreviated, time: .omitted)) at \(valueString(for: point.1)), which best matches the coach wording.\(mentionText)\(rangeText)"
     }
 
     private func totalExplanation(
@@ -1330,7 +1443,13 @@ private struct CoachComparisonChartCard: View {
         } else {
             coachMatchText = "This is the clearest trend segment in the displayed data."
         }
-        return "\(coachMatchText) \(series.title) moves \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted)) with a net change of \(signedValueString(for: segment.delta))."
+        let comparisonText: String
+        if numericComparison.count == 2 {
+            comparisonText = " The NLP layer also detected a numeric move from \(valueString(for: numericComparison[0])) to \(valueString(for: numericComparison[1])), and this segment is the closest chart match."
+        } else {
+            comparisonText = ""
+        }
+        return "\(coachMatchText) \(series.title) moves \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted)) with a net change of \(signedValueString(for: segment.delta)).\(comparisonText)"
     }
 
     private func bestTrendSegment() -> CoachTrendSegment? {
@@ -1361,6 +1480,14 @@ private struct CoachComparisonChartCard: View {
                 if let coachTrendIntent {
                     score += coachTrendIntent == direction ? 0.9 : -0.45
                 }
+                if numericComparison.count == 2 {
+                    let startMatch = abs(startValue - numericComparison[0])
+                    let endMatch = abs(endValue - numericComparison[1])
+                    let reverseStartMatch = abs(startValue - numericComparison[1])
+                    let reverseEndMatch = abs(endValue - numericComparison[0])
+                    let bestPairMatch = min(startMatch + endMatch, reverseStartMatch + reverseEndMatch)
+                    score += max(0, 1.1 - (bestPairMatch / max(1, valueSpan)))
+                }
                 let endRecency = Double(endIndex + 1) / Double(series.data.count)
                 let startRecency = Double(startIndex + 1) / Double(series.data.count)
                 score += endRecency * (recentPreference ? 0.4 : 0.12)
@@ -1388,6 +1515,48 @@ private struct CoachComparisonChartCard: View {
         }
 
         return best
+    }
+
+    private func averageTargetValue() -> Double? {
+        if snippetLowercased.contains("average") || snippetLowercased.contains("avg") || snippetLowercased.contains("baseline") {
+            if numericComparison.count == 2 {
+                return (numericComparison[0] + numericComparison[1]) / 2
+            }
+            return numericMentions.first
+        }
+        return nil
+    }
+
+    private func bestAverageRange(closestTo target: Double) -> ClosedRange<Date>? {
+        guard series.data.count >= 3 else { return nil }
+        let minLength = min(3, series.data.count)
+        let maxLength = min(series.data.count, timeFilter == .month ? 14 : 7)
+        var bestRange: ClosedRange<Date>?
+        var bestDistance = Double.infinity
+
+        for length in minLength...maxLength {
+            for startIndex in 0...(series.data.count - length) {
+                let endIndex = startIndex + length - 1
+                let slice = Array(series.data[startIndex...endIndex]).map(\.1)
+                let sliceAverage = coachAverage(slice) ?? 0
+                let distance = abs(sliceAverage - target)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    bestRange = series.data[startIndex].0...series.data[endIndex].0
+                }
+            }
+        }
+
+        return bestRange
+    }
+
+    private func nearestPointMatchingMentionedValue(in data: [(Date, Double)]) -> (Date, Double)? {
+        guard !numericMentions.isEmpty else { return nil }
+        return data.min { lhs, rhs in
+            let lhsDistance = numericMentions.map { abs(lhs.1 - $0) }.min() ?? .infinity
+            let rhsDistance = numericMentions.map { abs(rhs.1 - $0) }.min() ?? .infinity
+            return lhsDistance < rhsDistance
+        }
     }
 
     private func contextualZoomRange(around centerDate: Date?, preferredVisiblePoints: Int) -> ClosedRange<Date>? {
@@ -1522,24 +1691,55 @@ private struct DerivedLoadPoint {
     let strainScore: Double
 }
 
+private func comparisonSummaryPeriod(
+    for timeFilter: StrainRecoveryView.TimeFilter,
+    requestedDate: Date
+) -> (start: Date, end: Date, endExclusive: Date) {
+    let calendar = Calendar.current
+    let safeRequestedDate = calendar.startOfDay(for: requestedDate)
+    let today = calendar.startOfDay(for: Date())
+
+    switch timeFilter {
+    case .day:
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: safeRequestedDate) ?? safeRequestedDate
+        return (safeRequestedDate, safeRequestedDate, endExclusive)
+    case .week:
+        let interval = calendar.dateInterval(of: .weekOfYear, for: safeRequestedDate)
+        let start = interval.map { calendar.startOfDay(for: $0.start) } ?? safeRequestedDate
+        let rawEndExclusive = interval?.end ?? (calendar.date(byAdding: .day, value: 7, to: start) ?? start)
+        let rawEnd = calendar.date(byAdding: .day, value: -1, to: rawEndExclusive) ?? start
+        let end = min(calendar.startOfDay(for: rawEnd), today)
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        return (start, end, endExclusive)
+    case .month:
+        let interval = calendar.dateInterval(of: .month, for: safeRequestedDate)
+        let start = interval.map { calendar.startOfDay(for: $0.start) } ?? safeRequestedDate
+        let rawEndExclusive = interval?.end ?? (calendar.date(byAdding: .month, value: 1, to: start) ?? start)
+        let rawEnd = calendar.date(byAdding: .day, value: -1, to: rawEndExclusive) ?? start
+        let end = min(calendar.startOfDay(for: rawEnd), today)
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        return (start, end, endExclusive)
+    }
+}
+
 private func comparisonWindow(
     for timeFilter: StrainRecoveryView.TimeFilter,
     anchorDate: Date
 ) -> (start: Date, end: Date, endExclusive: Date) {
     let calendar = Calendar.current
-    let end = calendar.startOfDay(for: anchorDate)
-    let dayCount: Int
     switch timeFilter {
     case .day:
-        dayCount = 7
+        let end = calendar.startOfDay(for: anchorDate)
+        let start = calendar.date(byAdding: .day, value: -6, to: end) ?? end
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        return (start, end, endExclusive)
     case .week:
-        dayCount = 7
+        let period = comparisonSummaryPeriod(for: .week, requestedDate: anchorDate)
+        return (period.start, period.end, period.endExclusive)
     case .month:
-        dayCount = 30
+        let period = comparisonSummaryPeriod(for: .month, requestedDate: anchorDate)
+        return (period.start, period.end, period.endExclusive)
     }
-    let start = calendar.date(byAdding: .day, value: -(dayCount - 1), to: end) ?? end
-    let endExclusive = calendar.date(byAdding: .day, value: 1, to: end) ?? end
-    return (start, end, endExclusive)
 }
 
 private func filterComparisonSeries(
@@ -1628,9 +1828,16 @@ private func comparisonDateSequence(from start: Date, to end: Date) -> [Date] {
     return (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: safeStart) }
 }
 
+private func coachAverage(_ values: [Double]) -> Double? {
+    guard !values.isEmpty else { return nil }
+    return values.reduce(0, +) / Double(values.count)
+}
+
 private func detectedFocusKinds(
     in snippet: String,
-    supportsTotal: Bool
+    supportsTotal: Bool,
+    highlightRange: ClosedRange<Date>?,
+    numericComparison: [Double]
 ) -> [CoachComparisonFocusKind] {
     var kinds: [CoachComparisonFocusKind] = []
 
@@ -1650,6 +1857,21 @@ private func detectedFocusKinds(
     }
     if trendKeywords.contains(where: snippet.contains) {
         kinds.append(.trend)
+    }
+    if numericComparison.count == 2 {
+        kinds.append(.trend)
+        kinds.append(.maximum)
+    }
+
+    if let highlightRange {
+        if Calendar.current.isDate(highlightRange.lowerBound, inSameDayAs: highlightRange.upperBound) {
+            kinds.append(.maximum)
+        } else {
+            kinds.append(.trend)
+            if supportsTotal {
+                kinds.append(.total)
+            }
+        }
     }
 
     if kinds.isEmpty {

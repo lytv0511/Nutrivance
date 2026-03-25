@@ -78,6 +78,8 @@ extension Notification.Name {
     static let nutrivanceViewControlFilter2 = Notification.Name("nutrivance.viewControl.filter2")
     static let nutrivanceViewControlFilter3 = Notification.Name("nutrivance.viewControl.filter3")
     static let nutrivanceViewControlFilter4 = Notification.Name("nutrivance.viewControl.filter4")
+    static let nutrivanceViewControlRefresh = Notification.Name("nutrivance.viewControl.refresh")
+    static let nutrivanceViewControlSaveToJournal = Notification.Name("nutrivance.viewControl.saveToJournal")
 }
 
 func toggleSystemSidebar() {
@@ -699,6 +701,20 @@ struct NutrivanceApp: App {
                             }
                         }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .strainRecovery {
+                        Divider()
+
+                        Button("Refresh Coach Summary") {
+                            postViewControl(.nutrivanceViewControlRefresh)
+                        }
+                        .keyboardShortcut("R", modifiers: [.command])
+
+                        Button("Save Coach Summary to Journal") {
+                            postViewControl(.nutrivanceViewControlSaveToJournal)
+                        }
+                        .keyboardShortcut("S", modifiers: [.command])
                     }
                 } else {
                     Button("No View Controls Available") {}

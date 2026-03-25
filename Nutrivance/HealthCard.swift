@@ -19,6 +19,7 @@ struct HealthCard<ExpandedContent: View>: View {
     let title: String
     let value: String
     let unit: String
+    let valueContext: String?
     let trend: String?
     let color: Color
     let chartData: [(Date, Double)]
@@ -46,6 +47,7 @@ struct HealthCard<ExpandedContent: View>: View {
         title: String,
         value: String,
         unit: String,
+        valueContext: String? = nil,
         trend: String? = nil,
         color: Color,
         chartData: [(Date, Double)],
@@ -62,6 +64,7 @@ struct HealthCard<ExpandedContent: View>: View {
         self.title = title
         self.value = value
         self.unit = unit
+        self.valueContext = valueContext
         self.trend = trend
         self.color = color
         self.chartData = chartData
@@ -108,6 +111,12 @@ struct HealthCard<ExpandedContent: View>: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .baselineOffset(2)
+                        if let valueContext {
+                            Text(valueContext)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.secondary)
+                                .baselineOffset(2)
+                        }
                     }
                     if let trend = trend {
                         Text(trend)
