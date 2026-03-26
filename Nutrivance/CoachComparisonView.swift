@@ -314,6 +314,7 @@ private struct CoachComparisonFloatingState: Identifiable, Equatable {
     let presentation: CoachComparisonFocusPresentation
     let color: Color
     var position: CGPoint?
+    var zOrder: Int = 0
 
     var id: String {
         sourceMetric.rawValue
@@ -324,7 +325,8 @@ private struct CoachComparisonFloatingState: Identifiable, Equatable {
         lhs.presentation.id == rhs.presentation.id &&
         lhs.presentation.chipValueText == rhs.presentation.chipValueText &&
         lhs.presentation.explanation == rhs.presentation.explanation &&
-        lhs.position == rhs.position
+        lhs.position == rhs.position &&
+        lhs.zOrder == rhs.zOrder
     }
 }
 
@@ -731,6 +733,11 @@ struct CoachComparisonView: View {
     @State private var selectedDate: Date? = nil
     @State private var floatingOverlays: [CoachMetricKey: CoachComparisonFloatingState] = [:]
     @State private var canvasSize: CGSize = .zero
+    @State private var nextOverlayZOrder: Int = 1
+    @State private var hoveredMetric: CoachMetricKey?
+    @State private var hoveredMetricTimestamp: Date?
+
+    private let liveHoverExpiration: TimeInterval = 0.35
 
     private var chartSeries: [CoachMetricSeries] {
         insight.metrics.compactMap {
@@ -830,6 +837,9 @@ struct CoachComparisonView: View {
                                         insight: insight,
                                         selectedDate: $selectedDate,
                                         floatingOverlays: $floatingOverlays,
+                                        nextOverlayZOrder: $nextOverlayZOrder,
+                                        hoveredMetric: $hoveredMetric,
+                                        hoveredMetricTimestamp: $hoveredMetricTimestamp,
                                         highlightRange: highlightRange,
                                         highlightWindow: highlightWindow,
                                         supportingText: comparisonSupportText,
@@ -860,11 +870,14 @@ struct CoachComparisonView: View {
                                         updated.position = newPosition
                                         floatingOverlays[floatingOverlay.sourceMetric] = updated
                                     },
+                                    onActivate: {
+                                        bringOverlayToFront(floatingOverlay.sourceMetric)
+                                    },
                                     onClose: {
                                         floatingOverlays.removeValue(forKey: floatingOverlay.sourceMetric)
                                     }
                                 )
-                                .zIndex(100 + Double(activeFloatingOverlays.firstIndex(where: { $0.id == floatingOverlay.id }) ?? 0))
+                                .zIndex(Double(floatingOverlay.zOrder))
                             }
                         }
                         .background(
@@ -886,7 +899,8 @@ struct CoachComparisonView: View {
                     )
                     .background(
                         PencilSqueezeCatcher {
-                            NotificationCenter.default.post(name: .coachComparisonPencilSqueeze, object: nil)
+                            let target = effectiveHoveredMetric?.rawValue ?? "__all__"
+                            NotificationCenter.default.post(name: .coachComparisonPencilSqueeze, object: target)
                         }
                     )
 
@@ -912,8 +926,27 @@ struct CoachComparisonView: View {
 
     private var activeFloatingOverlays: [CoachComparisonFloatingState] {
         floatingOverlays.values.sorted { lhs, rhs in
-            lhs.sourceMetric.rawValue < rhs.sourceMetric.rawValue
+            if lhs.zOrder == rhs.zOrder {
+                return lhs.sourceMetric.rawValue < rhs.sourceMetric.rawValue
+            }
+            return lhs.zOrder < rhs.zOrder
         }
+    }
+
+    private var effectiveHoveredMetric: CoachMetricKey? {
+        guard let hoveredMetric,
+              let hoveredMetricTimestamp,
+              Date().timeIntervalSince(hoveredMetricTimestamp) <= liveHoverExpiration else {
+            return nil
+        }
+        return hoveredMetric
+    }
+
+    private func bringOverlayToFront(_ metric: CoachMetricKey) {
+        guard var overlay = floatingOverlays[metric] else { return }
+        overlay.zOrder = nextOverlayZOrder
+        nextOverlayZOrder += 1
+        floatingOverlays[metric] = overlay
     }
 }
 
@@ -922,6 +955,9 @@ private struct CoachComparisonChartCard: View {
     let insight: CoachSummaryInsight
     @Binding var selectedDate: Date?
     @Binding var floatingOverlays: [CoachMetricKey: CoachComparisonFloatingState]
+    @Binding var nextOverlayZOrder: Int
+    @Binding var hoveredMetric: CoachMetricKey?
+    @Binding var hoveredMetricTimestamp: Date?
     let highlightRange: ClosedRange<Date>?
     let highlightWindow: DateInterval?
     let supportingText: String
@@ -934,7 +970,10 @@ private struct CoachComparisonChartCard: View {
     @State private var cardFrameInCanvas: CGRect = .zero
     @State private var chartFrameInCanvas: CGRect = .zero
     @State private var hoverLocationInCanvas: CGPoint? = nil
+    @State private var lastHoverEventDate: Date? = nil
     @State private var analysis = CoachComparisonChartAnalysis.empty
+
+    private let liveHoverExpiration: TimeInterval = 0.35
 
     private var currentSelection: (Date, Double)? {
         guard let selectedDate else { return nil }
@@ -1148,13 +1187,13 @@ private struct CoachComparisonChartCard: View {
                     .foregroundStyle(series.color)
                     .symbol(.diamond)
                     .symbolSize(focusedKind == .maximum ? 180 : 120)
-                    .annotation(position: .top, spacing: 10, overflowResolution: .init(x: .fit, y: .disabled)) {
-                        Text("\(prefersMinimumCue ? "Low" : "Peak") \(valueString(for: targetPoint.1))")
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.thinMaterial, in: Capsule())
-                    }
+//                    .annotation(position: .top, spacing: 10, overflowResolution: .init(x: .fit, y: .disabled)) {
+//                        Text("\(prefersMinimumCue ? "Low" : "Peak") \(valueString(for: targetPoint.1))")
+//                            .font(.caption2.bold())
+//                            .padding(.horizontal, 8)
+//                            .padding(.vertical, 4)
+//                            .background(.thinMaterial, in: Capsule())
+//                    }
                 }
 
                 if let selection = currentSelection {
@@ -1224,28 +1263,22 @@ private struct CoachComparisonChartCard: View {
                                 .onChanged { value in
                                     isInteractionPaletteExpanded = true
                                     isHoveringChart = true
+                                    markHoverActive()
                                     updateSelection(from: value.location, proxy: proxy, geometry: geo)
                                 }
                                 .onEnded { _ in
-                                    selectedDate = nil
-                                    isHoveringChart = false
-                                if focusedKind == nil {
-                                    isInteractionPaletteExpanded = false
+                                    clearHoverState()
                                 }
-                            }
                         )
                         .onContinuousHover { phase in
                             switch phase {
                             case .active(let location):
                                 isInteractionPaletteExpanded = true
                                 isHoveringChart = true
+                                markHoverActive()
                                 updateSelection(from: location, proxy: proxy, geometry: geo)
                             case .ended:
-                                selectedDate = nil
-                                isHoveringChart = false
-                                if focusedKind == nil {
-                                    isInteractionPaletteExpanded = false
-                                }
+                                clearHoverState()
                             }
                         }
                 }
@@ -1266,26 +1299,35 @@ private struct CoachComparisonChartCard: View {
                 }
             }
             .animation(.interactiveSpring(response: 0.44, dampingFraction: 0.76, blendDuration: 0.14), value: focusedKind)
-            .onReceive(NotificationCenter.default.publisher(for: .coachComparisonPencilSqueeze)) { _ in
-                if focusedKind != nil {
-                    let generator = UIImpactFeedbackGenerator(style: .medium)
-                    generator.impactOccurred()
-                    withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.72, blendDuration: 0.12)) {
-                        focusedKind = nil
-                    }
-                    removeOverlay()
-                    return
+            .onReceive(NotificationCenter.default.publisher(for: .coachComparisonPencilSqueeze)) { note in
+                let targetMetricRawValue = note.object as? String
+                let targetsAllGraphs = targetMetricRawValue == "__all__"
+                guard targetsAllGraphs || targetMetricRawValue == series.id.rawValue else { return }
+                guard let defaultFocus = focusPresentations.first?.kind else { return }
+
+                let shouldHide: Bool
+                if targetsAllGraphs {
+                    shouldHide = !floatingOverlays.isEmpty
+                } else {
+                    shouldHide = focusedKind != nil || floatingOverlays[series.id] != nil
                 }
 
-                guard isHoveringChart, let defaultFocus = focusPresentations.first?.kind else { return }
                 let generator = UIImpactFeedbackGenerator(style: .medium)
                 generator.impactOccurred()
                 withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.7, blendDuration: 0.12)) {
-                    focusedKind = defaultFocus
-                    let position = hoverLocationInCanvas.map {
-                        CGPoint(x: $0.x + 110, y: $0.y + 8)
-                    } ?? pendingOrDefaultOverlayPosition()
-                    upsertOverlay(for: defaultFocus, position: position)
+                    if shouldHide {
+                        focusedKind = nil
+                        removeOverlay()
+                    } else {
+                        focusedKind = defaultFocus
+                        let position = liveHoverLocationInCanvas.map {
+                            CGPoint(x: $0.x + 110, y: $0.y + 8)
+                        } ?? pendingOrDefaultOverlayPosition()
+                        upsertOverlay(for: defaultFocus, position: position)
+                    }
+                }
+                if !shouldHide {
+                    scheduleDefaultOverlayPlacementIfNeeded()
                 }
             }
 
@@ -1391,6 +1433,7 @@ private struct CoachComparisonChartCard: View {
             x: overlayFrame.minX + location.x,
             y: overlayFrame.minY + location.y
         )
+        lastHoverEventDate = Date()
         guard let date else { return }
         if let closest = nearestPoint(in: series.data, to: date) {
             if selectedDate != closest.0 {
@@ -1418,6 +1461,37 @@ private struct CoachComparisonChartCard: View {
                 upsertOverlay(for: kind, position: position)
                 scheduleDefaultOverlayPlacementIfNeeded()
             }
+        }
+    }
+
+    private var liveHoverLocationInCanvas: CGPoint? {
+        guard isLiveHover else { return nil }
+        return hoverLocationInCanvas
+    }
+
+    private var isLiveHover: Bool {
+        guard let lastHoverEventDate else { return false }
+        return Date().timeIntervalSince(lastHoverEventDate) <= liveHoverExpiration
+    }
+
+    private func markHoverActive() {
+        let now = Date()
+        hoveredMetric = series.id
+        hoveredMetricTimestamp = now
+        lastHoverEventDate = now
+    }
+
+    private func clearHoverState() {
+        selectedDate = nil
+        isHoveringChart = false
+        hoverLocationInCanvas = nil
+        lastHoverEventDate = nil
+        if hoveredMetric == series.id {
+            hoveredMetric = nil
+            hoveredMetricTimestamp = nil
+        }
+        if focusedKind == nil {
+            isInteractionPaletteExpanded = false
         }
     }
 
@@ -1491,12 +1565,15 @@ private struct CoachComparisonChartCard: View {
         presentation: CoachComparisonFocusPresentation,
         position: CGPoint?
     ) {
+        let zOrder = nextOverlayZOrder
         floatingOverlays[series.id] = CoachComparisonFloatingState(
             sourceMetric: series.id,
             presentation: presentation,
             color: series.color,
-            position: position
+            position: position,
+            zOrder: zOrder
         )
+        nextOverlayZOrder += 1
     }
 
     private func removeOverlay() {
@@ -2193,16 +2270,22 @@ private struct CoachComparisonFloatingOverlay: View {
     let state: CoachComparisonFloatingState
     let canvasSize: CGSize
     let onMove: (CGPoint) -> Void
+    let onActivate: () -> Void
     let onClose: () -> Void
 
     @GestureState private var dragTranslation: CGSize = .zero
+    @State private var measuredOverlaySize = CGSize(width: 240, height: 150)
 
-    private let overlaySize = CGSize(width: 240, height: 150)
+    private let preferredOverlayWidth: CGFloat = 240
+    private let leftInset: CGFloat = 0
+    private let topInset: CGFloat = 0
+    private let rightOverflow: CGFloat = -32
+    private let bottomOverflow: CGFloat = -0
 
     private var resolvedPosition: CGPoint {
         state.position ?? CGPoint(
-            x: max(overlaySize.width / 2 + 16, canvasSize.width - (overlaySize.width / 2) - 20),
-            y: max(overlaySize.height / 2 + 24, 140)
+            x: max(measuredOverlaySize.width / 2 + leftInset, canvasSize.width - (measuredOverlaySize.width / 2) + rightOverflow),
+            y: max(measuredOverlaySize.height / 2 + 24, 140)
         )
     }
 
@@ -2236,11 +2319,22 @@ private struct CoachComparisonFloatingOverlay: View {
                 .foregroundColor(.secondary)
         }
         .padding(14)
-        .frame(width: overlaySize.width, alignment: .leading)
+        .frame(width: preferredOverlayWidth, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(state.color.opacity(0.28), lineWidth: 1)
+        )
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        measuredOverlaySize = geo.size
+                    }
+                    .onChange(of: geo.size) { _, newValue in
+                        measuredOverlaySize = newValue
+                    }
+            }
         )
         .shadow(color: state.color.opacity(0.14), radius: 14, x: 0, y: 8)
         .position(
@@ -2255,6 +2349,9 @@ private struct CoachComparisonFloatingOverlay: View {
         )
         .gesture(
             DragGesture()
+                .onChanged { _ in
+                    onActivate()
+                }
                 .updating($dragTranslation) { value, state, _ in
                     state = value.translation
                 }
@@ -2265,6 +2362,9 @@ private struct CoachComparisonFloatingOverlay: View {
                     ))
                 }
         )
+        .onTapGesture {
+            onActivate()
+        }
         .onAppear {
             if state.position == nil {
                 onMove(resolvedPosition)
@@ -2273,11 +2373,11 @@ private struct CoachComparisonFloatingOverlay: View {
     }
 
     private func clampedPosition(x: CGFloat, y: CGFloat) -> CGPoint {
-        let halfWidth = overlaySize.width / 2
-        let halfHeight = overlaySize.height / 2
+        let halfWidth = measuredOverlaySize.width / 2
+        let halfHeight = measuredOverlaySize.height / 2
         return CGPoint(
-            x: min(max(x, halfWidth + 12), max(halfWidth + 12, canvasSize.width - halfWidth - 12)),
-            y: min(max(y, halfHeight + 12), max(halfHeight + 12, canvasSize.height - halfHeight - 12))
+            x: min(max(x, halfWidth + leftInset), max(halfWidth + leftInset, canvasSize.width - halfWidth + rightOverflow)),
+            y: min(max(y, halfHeight + topInset), max(halfHeight + topInset, canvasSize.height - halfHeight + bottomOverflow))
         )
     }
 }

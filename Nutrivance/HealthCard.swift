@@ -370,7 +370,7 @@ struct HealthLineChartSheet: View {
         if selection.1 == maxVal {
             return SelectionCallout(title: "Maximum", color: .red, detail: "Highest value in the visible window.")
         }
-        if showsPerformanceNote && abs(selection.1 - prev) > 0.15 * range {
+        if showsPerformanceNote && (selection.1 - prev) > 0.15 * range {
             return SelectionCallout(title: "High Increase", color: .green, detail: "A sharp move versus the prior visible point.")
         }
         return nil
@@ -470,11 +470,11 @@ struct HealthLineChartSheet: View {
                                         .background(selectionCallout.color.opacity(0.15), in: Capsule())
                                 }
                             }
-                            if let detail = selectionCallout?.detail {
-                                Text(detail)
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            }
+//                            if let detail = selectionCallout?.detail {
+//                                Text(detail)
+//                                    .font(.subheadline)
+//                                    .foregroundColor(.secondary)
+//                            }
                         }
                         .padding(18)
                         .frame(maxWidth: .infinity, alignment: .leading)
