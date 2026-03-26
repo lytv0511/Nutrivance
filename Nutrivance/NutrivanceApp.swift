@@ -1,6 +1,11 @@
+import Combine
+import HealthKit
 import SwiftUI
 import SwiftData
 import UIKit
+#if canImport(WatchConnectivity)
+import WatchConnectivity
+#endif
 #if canImport(BackgroundTasks)
 import BackgroundTasks
 #endif
@@ -18,6 +23,734 @@ private func allViewControllers(from root: UIViewController) -> [UIViewControlle
     
     return controllers
 }
+
+#if canImport(WatchConnectivity)
+private struct WatchDashboardPayload: Codable {
+    let generatedAt: Date
+    let strainWeek: [WatchMetricPointPayload]
+    let recoveryWeek: [WatchMetricPointPayload]
+    let readinessWeek: [WatchMetricPointPayload]
+    let trainingLoadWeek: [WatchMetricPointPayload]
+    let hrvWeek: [WatchMetricPointPayload]
+    let hrrWeek: [WatchMetricPointPayload]
+    let rhrWeek: [WatchMetricPointPayload]
+    let stressWeek: [WatchStressPointPayload]
+    let workouts: [WatchWorkoutPayload]
+    let vitals: [WatchVitalPayload]
+    let coachSummaries: [String: String]
+    let recommendedSleepHours: Double
+    let sleepDebtHours: Double
+    let sleepScheduleText: String
+    let sleepHours: Double
+    let sleepConsistencyScore: Double
+    let sleepStages: [WatchSleepStagePayload]
+}
+
+private struct WatchMetricPointPayload: Codable {
+    let date: Date
+    let value: Double
+}
+
+private struct WatchStressPointPayload: Codable {
+    let date: Date
+    let stress: Double
+    let energy: Double
+    let regulation: Double
+}
+
+private struct WatchWorkoutPayload: Codable {
+    let id: UUID
+    let title: String
+    let subtitle: String
+    let startDate: Date
+    let durationMinutes: Int
+    let calories: Int
+    let distanceKilometers: Double?
+    let averageHeartRate: Int
+    let maxHeartRate: Int
+    let strain: Double
+    let load: Double
+    let zoneMinutes: [Double]
+    let note: String
+}
+
+private struct WatchVitalPayload: Codable {
+    let title: String
+    let value: Double
+    let displayValue: String
+    let minimum: Double
+    let normalLowerBound: Double
+    let normalUpperBound: Double
+    let maximum: Double
+}
+
+private struct WatchSleepStagePayload: Codable {
+    let name: String
+    let hours: Double
+    let colorName: String
+}
+
+private struct WatchCoachCacheEntry: Codable {
+    let summaryText: String
+    let generatedAt: Date
+    let timeFilterRawValue: String
+    let suggestionID: String
+    let expiresAt: Date?
+}
+
+private struct WatchLoadSnapshot {
+    let date: Date
+    let sessionLoad: Double
+    let totalDailyLoad: Double
+    let acuteLoad: Double
+    let chronicLoad: Double
+    let acwr: Double
+    let strainScore: Double
+}
+
+@MainActor
+final class WatchDashboardSyncBridge: NSObject {
+    static let shared = WatchDashboardSyncBridge()
+
+    private enum Keys {
+        static let dashboardPayload = "dashboardPayload"
+        static let request = "request"
+        static let dashboardSnapshot = "dashboardSnapshot"
+    }
+
+    private let session: WCSession? = WCSession.isSupported() ? WCSession.default : nil
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+    private let engine = HealthStateEngine.shared
+
+    private var cancellables: Set<AnyCancellable> = []
+    private var pendingSyncTask: Task<Void, Never>?
+    private var latestPayloadData: Data?
+    private var hasActivatedSession = false
+
+    override init() {
+        super.init()
+        configureObservers()
+    }
+
+    func activateIfNeeded() {
+        guard let session else { return }
+        session.delegate = self
+        session.activate()
+        scheduleSnapshotRefresh(reason: "startup", delayNanoseconds: 1_000_000_000)
+    }
+
+    func handleScenePhaseChange(_ phase: ScenePhase) {
+        guard phase == .active else { return }
+        scheduleSnapshotRefresh(reason: "scene-active", delayNanoseconds: 600_000_000)
+    }
+
+    private func configureObservers() {
+        engine.objectWillChange
+            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleSnapshotRefresh(reason: "engine")
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleSnapshotRefresh(reason: "defaults")
+            }
+            .store(in: &cancellables)
+    }
+
+    private func scheduleSnapshotRefresh(
+        reason: String,
+        delayNanoseconds: UInt64 = 250_000_000
+    ) {
+        pendingSyncTask?.cancel()
+        pendingSyncTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled else { return }
+            self.publishLatestSnapshot(reason: reason)
+        }
+    }
+
+    private func publishLatestSnapshot(reason: String) {
+        let payload = buildPayload()
+        guard let data = try? encoder.encode(payload) else { return }
+
+        latestPayloadData = data
+        pushLatestPayloadToWatch()
+        print("[WatchSync] Published dashboard snapshot (\(reason)).")
+    }
+
+    private func pushLatestPayloadToWatch() {
+        guard let session, hasActivatedSession, let latestPayloadData else { return }
+        do {
+            try session.updateApplicationContext([Keys.dashboardPayload: latestPayloadData])
+        } catch {
+            print("[WatchSync] Failed to update application context: \(error.localizedDescription)")
+        }
+    }
+
+    private func buildPayload() -> WatchDashboardPayload {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let weekDays = watchDateSequence(endingAt: today, days: 7)
+        let loadSnapshots = watchDailyLoadSnapshots(
+            workouts: engine.workoutAnalytics,
+            estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+            endingAt: today,
+            days: 7
+        )
+        let recoveryPairs: [(Date, Double)] = weekDays.compactMap { day in
+            watchRecoveryScore(for: day, engine: engine).map { (day, $0) }
+        }
+        let recoveryLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: recoveryPairs)
+        let readinessPairs: [(Date, Double)] = loadSnapshots.compactMap { snapshot in
+            guard let recovery = recoveryLookup[snapshot.date],
+                  let readiness = watchReadinessScore(
+                    for: snapshot.date,
+                    recoveryScore: recovery,
+                    strainScore: snapshot.strainScore,
+                    engine: engine
+                  ) else {
+                return nil
+            }
+            return (snapshot.date, readiness)
+        }
+        let readinessLookup = Dictionary(uniqueKeysWithValues: readinessPairs)
+
+        let midpointSeries = watchFilteredDailyValues(engine.sleepMidpointHours, endingAt: today, days: 7)
+        let sleepConsistencyScore = watchSleepConsistencyScore(
+            midpointSeries: midpointSeries,
+            fallback: engine.sleepConsistency ?? 0
+        )
+        let latestSleepDay = engine.sleepStages.keys.max() ?? today
+        let sleepStagePayloads = watchSleepStagePayloads(from: engine.sleepStages[latestSleepDay] ?? [:])
+        let sleepHours = engine.anchoredSleepDuration[today] ?? engine.dailySleepDuration[today] ?? engine.sleepHours ?? 0
+        let recommendedSleepHours = min(max(engine.sleepBaseline60Day?.mean ?? engine.sleepBaseline7Day ?? 8.0, 7.0), 9.0)
+        let sleepDebtHours = max(0, recommendedSleepHours - sleepHours)
+
+        return WatchDashboardPayload(
+            generatedAt: Date(),
+            strainWeek: loadSnapshots.map { WatchMetricPointPayload(date: $0.date, value: $0.strainScore) },
+            recoveryWeek: weekDays.compactMap { day in
+                recoveryLookup[day].map { WatchMetricPointPayload(date: day, value: $0) }
+            },
+            readinessWeek: weekDays.compactMap { day in
+                readinessLookup[day].map { WatchMetricPointPayload(date: day, value: $0) }
+            },
+            trainingLoadWeek: loadSnapshots.map { WatchMetricPointPayload(date: $0.date, value: $0.totalDailyLoad) },
+            hrvWeek: engine.timeSeries(for: "hrv", days: 7).map { WatchMetricPointPayload(date: $0.0, value: $0.1) },
+            hrrWeek: watchFilteredDailyValues(engine.dailyHRRAggregates, endingAt: today, days: 7).map {
+                WatchMetricPointPayload(date: $0.0, value: $0.1)
+            },
+            rhrWeek: engine.timeSeries(for: "rhr", days: 7).map { WatchMetricPointPayload(date: $0.0, value: $0.1) },
+            stressWeek: watchStressPayloads(
+                days: weekDays,
+                recoveryLookup: recoveryLookup,
+                readinessLookup: readinessLookup,
+                hrvSeries: Dictionary(uniqueKeysWithValues: engine.timeSeries(for: "hrv", days: 7))
+            ),
+            workouts: watchWorkoutPayloads(
+                engine: engine,
+                loadSnapshots: loadSnapshots
+            ),
+            vitals: watchVitalPayloads(
+                engine: engine,
+                today: today,
+                sleepHours: sleepHours,
+                sleepConsistencyScore: sleepConsistencyScore
+            ),
+            coachSummaries: watchCoachSummaries(),
+            recommendedSleepHours: recommendedSleepHours,
+            sleepDebtHours: sleepDebtHours,
+            sleepScheduleText: watchSleepScheduleText(
+                bedtimeHour: watchAverageBedtimeHour(engine: engine, endingAt: today),
+                sleepGoalHours: recommendedSleepHours
+            ),
+            sleepHours: sleepHours,
+            sleepConsistencyScore: sleepConsistencyScore,
+            sleepStages: sleepStagePayloads
+        )
+    }
+}
+
+extension WatchDashboardSyncBridge: WCSessionDelegate {
+    nonisolated func session(
+        _ session: WCSession,
+        activationDidCompleteWith activationState: WCSessionActivationState,
+        error: Error?
+    ) {
+        Task { @MainActor in
+            self.hasActivatedSession = error == nil && activationState == .activated
+            self.pushLatestPayloadToWatch()
+            self.scheduleSnapshotRefresh(reason: "session-activated")
+        }
+    }
+
+    nonisolated func sessionDidBecomeInactive(_ session: WCSession) { }
+
+    nonisolated func sessionDidDeactivate(_ session: WCSession) {
+        Task { @MainActor in
+            session.activate()
+        }
+    }
+
+    nonisolated func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String : Any],
+        replyHandler: @escaping ([String : Any]) -> Void
+    ) {
+        guard (message[Keys.request] as? String) == Keys.dashboardSnapshot else {
+            replyHandler([:])
+            return
+        }
+
+        Task { @MainActor in
+            if self.latestPayloadData == nil {
+                self.publishLatestSnapshot(reason: "watch-request")
+            }
+
+            replyHandler([
+                Keys.dashboardPayload: self.latestPayloadData ?? Data()
+            ])
+        }
+    }
+}
+
+@MainActor
+private func watchWorkoutPayloads(
+    engine: HealthStateEngine,
+    loadSnapshots: [WatchLoadSnapshot]
+) -> [WatchWorkoutPayload] {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: Date())
+    let loadLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0) })
+
+    return engine.workoutAnalytics
+        .filter { calendar.isDate($0.workout.startDate, inSameDayAs: today) }
+        .sorted { $0.workout.startDate > $1.workout.startDate }
+        .map { pair in
+            let day = calendar.startOfDay(for: pair.workout.startDate)
+            let averageHeartRate = pair.analytics.heartRates.isEmpty
+                ? 0
+                : Int((pair.analytics.heartRates.map(\.1).reduce(0, +) / Double(pair.analytics.heartRates.count)).rounded())
+            let maxHeartRate = Int((pair.analytics.peakHR ?? pair.analytics.heartRates.map(\.1).max() ?? 0).rounded())
+            let zoneMinutes = watchZoneMinutes(from: pair.analytics)
+            let workoutLoad = HealthStateEngine.proWorkoutLoad(
+                for: pair.workout,
+                analytics: pair.analytics,
+                estimatedMaxHeartRate: engine.estimatedMaxHeartRate
+            )
+            let strainScore = loadLookup[day]?.strainScore ?? min(21, max(0, workoutLoad / 6))
+
+            return WatchWorkoutPayload(
+                id: pair.workout.uuid,
+                title: pair.workout.workoutActivityType.name,
+                subtitle: watchWorkoutSubtitle(for: pair.workout),
+                startDate: pair.workout.startDate,
+                durationMinutes: Int((pair.workout.duration / 60).rounded()),
+                calories: Int((pair.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0).rounded()),
+                distanceKilometers: pair.workout.totalDistance.map { $0.doubleValue(for: .meter()) / 1000 },
+                averageHeartRate: averageHeartRate,
+                maxHeartRate: maxHeartRate,
+                strain: strainScore,
+                load: workoutLoad,
+                zoneMinutes: zoneMinutes,
+                note: watchWorkoutNote(for: pair.analytics)
+            )
+        }
+}
+
+@MainActor
+private func watchVitalPayloads(
+    engine: HealthStateEngine,
+    today: Date,
+    sleepHours: Double,
+    sleepConsistencyScore: Double
+) -> [WatchVitalPayload] {
+    let sleepHR = engine.dailySleepHeartRate[today] ?? engine.basalSleepingHeartRate[today] ?? engine.restingHeartRate ?? 0
+    let respiratory = engine.respiratoryRate[today] ?? 0
+    let wristTemperature = engine.wristTemperature[today] ?? 0
+    let oxygen = engine.spO2[today] ?? 0
+
+    return [
+        WatchVitalPayload(
+            title: "Sleep HR",
+            value: sleepHR,
+            displayValue: String(format: "%.0f bpm", sleepHR),
+            minimum: 42,
+            normalLowerBound: 48,
+            normalUpperBound: 60,
+            maximum: 72
+        ),
+        WatchVitalPayload(
+            title: "Respiratory",
+            value: respiratory,
+            displayValue: String(format: "%.1f br/min", respiratory),
+            minimum: 10,
+            normalLowerBound: 12,
+            normalUpperBound: 18,
+            maximum: 22
+        ),
+        WatchVitalPayload(
+            title: "Wrist Temp",
+            value: wristTemperature,
+            displayValue: String(format: "%+.1f C", wristTemperature),
+            minimum: -1.0,
+            normalLowerBound: -0.3,
+            normalUpperBound: 0.3,
+            maximum: 1.0
+        ),
+        WatchVitalPayload(
+            title: "SpO2",
+            value: oxygen,
+            displayValue: String(format: "%.1f%%", oxygen),
+            minimum: 88,
+            normalLowerBound: 95,
+            normalUpperBound: 100,
+            maximum: 100
+        ),
+        WatchVitalPayload(
+            title: "Sleep Hours",
+            value: sleepHours,
+            displayValue: String(format: "%.1f h", sleepHours),
+            minimum: 4,
+            normalLowerBound: 7,
+            normalUpperBound: 9,
+            maximum: 10
+        ),
+        WatchVitalPayload(
+            title: "Consistency",
+            value: sleepConsistencyScore,
+            displayValue: String(format: "%.0f%%", sleepConsistencyScore),
+            minimum: 0,
+            normalLowerBound: 75,
+            normalUpperBound: 100,
+            maximum: 100
+        )
+    ]
+}
+
+private func watchCoachSummaries() -> [String: String] {
+    let storageKey = "strain_recovery_ai_summary_cache_v2"
+    guard let data = UserDefaults.standard.data(forKey: storageKey),
+          let cache = try? JSONDecoder().decode([String: WatchCoachCacheEntry].self, from: data) else {
+        return [:]
+    }
+
+    let now = Date()
+    let validEntries = cache.values.filter { entry in
+        guard !entry.summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if let expiresAt = entry.expiresAt {
+            return expiresAt > now
+        }
+        return true
+    }
+
+    let preferredEntries = validEntries.filter { $0.suggestionID == "overall" }
+    let source = preferredEntries.isEmpty ? validEntries : preferredEntries
+
+    return ["1D", "1W", "1M"].reduce(into: [String: String]()) { result, filter in
+        result[filter] = source
+            .filter { $0.timeFilterRawValue == filter }
+            .sorted { $0.generatedAt > $1.generatedAt }
+            .first?
+            .summaryText
+    }
+}
+
+@MainActor
+private func watchRecoveryScore(
+    for day: Date,
+    engine: HealthStateEngine
+) -> Double? {
+    let normalizedDay = Calendar.current.startOfDay(for: day)
+    let hrvPairs: [(Date, Double)] = engine.dailyHRV.map { ($0.date, $0.average) }
+    let hrvLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: hrvPairs)
+    let latestHRV = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.effectHRV)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: hrvLookup)
+    let restingHeartRate = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.basalSleepingHeartRate)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailyRestingHeartRate)
+    let sleepDurationHours = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration)
+    let timeInBedHours = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredTimeInBed)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration)
+    let bedtimeVarianceMinutes = HealthStateEngine.circularStandardDeviationMinutes(
+        from: engine.sleepStartHours,
+        around: normalizedDay
+    )
+    let inputs = HealthStateEngine.proRecoveryInputs(
+        latestHRV: latestHRV,
+        restingHeartRate: restingHeartRate,
+        sleepDurationHours: sleepDurationHours,
+        timeInBedHours: timeInBedHours,
+        hrvBaseline60Day: engine.hrvBaseline60Day,
+        rhrBaseline60Day: engine.rhrBaseline60Day,
+        sleepBaseline60Day: engine.sleepBaseline60Day,
+        hrvBaseline7Day: engine.hrvBaseline7Day,
+        rhrBaseline7Day: engine.rhrBaseline7Day,
+        sleepBaseline7Day: engine.sleepBaseline7Day,
+        bedtimeVarianceMinutes: bedtimeVarianceMinutes
+    )
+
+    guard !inputs.isInconclusive else { return nil }
+    guard inputs.hrvZScore != nil || inputs.restingHeartRateZScore != nil || inputs.sleepRatio != nil else {
+        return nil
+    }
+
+    return HealthStateEngine.proRecoveryScore(from: inputs)
+}
+
+@MainActor
+private func watchReadinessScore(
+    for day: Date,
+    recoveryScore: Double,
+    strainScore: Double,
+    engine: HealthStateEngine
+) -> Double? {
+    let normalizedDay = Calendar.current.startOfDay(for: day)
+    let hrvPairs: [(Date, Double)] = engine.dailyHRV.map { ($0.date, $0.average) }
+    let hrvLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: hrvPairs)
+    let hrvValue = hrvLookup[normalizedDay]
+
+    let hrvTrendComponent: Double
+    if let hrvValue, let baseline = engine.hrvBaseline7Day, baseline > 0 {
+        let deviation = (hrvValue - baseline) / baseline
+        hrvTrendComponent = max(0, min(100, (deviation * 200) + 50))
+    } else {
+        hrvTrendComponent = engine.hrvTrendScore
+    }
+
+    let normalizedStrain = HealthStateEngine.normalizedStrainPercent(from: strainScore)
+    let readiness = (recoveryScore * 0.70) + (hrvTrendComponent * 0.10) - (normalizedStrain * 0.25) + 25
+    return max(0, min(100, readiness))
+}
+
+private func watchDailyLoadSnapshots(
+    workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    estimatedMaxHeartRate: Double,
+    endingAt endDate: Date,
+    days: Int
+) -> [WatchLoadSnapshot] {
+    let calendar = Calendar.current
+    let end = calendar.startOfDay(for: endDate)
+    let start = calendar.date(byAdding: .day, value: -(days - 1), to: end) ?? end
+    let loadWindowStart = calendar.date(byAdding: .day, value: -27, to: start) ?? start
+
+    var sessionLoadByDay: [Date: Double] = [:]
+    var workoutMinutesByDay: [Date: Double] = [:]
+
+    for (workout, analytics) in workouts {
+        let day = calendar.startOfDay(for: workout.startDate)
+        let load = HealthStateEngine.proWorkoutLoad(
+            for: workout,
+            analytics: analytics,
+            estimatedMaxHeartRate: estimatedMaxHeartRate
+        )
+        sessionLoadByDay[day, default: 0] += load
+        workoutMinutesByDay[day, default: 0] += workout.duration / 60
+    }
+
+    let loadDates = watchDateSequence(from: loadWindowStart, to: end)
+    let orderedLoads = loadDates.map { day in
+        let sessionLoad = sessionLoadByDay[day, default: 0]
+        let activeMinutes = workoutMinutesByDay[day, default: 0]
+        return sessionLoad + HealthStateEngine.passiveDailyBaseLoad(activeMinutes: activeMinutes)
+    }
+
+    return watchDateSequence(from: start, to: end).map { day in
+        let stateIndex = loadDates.firstIndex(of: day) ?? max(loadDates.count - 1, 0)
+        let state = HealthStateEngine.proTrainingLoadState(loads: orderedLoads, index: stateIndex)
+
+        return WatchLoadSnapshot(
+            date: day,
+            sessionLoad: sessionLoadByDay[day, default: 0],
+            totalDailyLoad: orderedLoads[stateIndex],
+            acuteLoad: state.acuteLoad,
+            chronicLoad: state.chronicLoad,
+            acwr: state.acwr,
+            strainScore: HealthStateEngine.proStrainScore(
+                acuteLoad: state.acuteLoad,
+                chronicLoad: state.chronicLoad
+            )
+        )
+    }
+}
+
+private func watchFilteredDailyValues(
+    _ values: [Date: Double],
+    endingAt endDate: Date,
+    days: Int
+) -> [(Date, Double)] {
+    let calendar = Calendar.current
+    let end = calendar.startOfDay(for: endDate)
+    let start = calendar.date(byAdding: .day, value: -(days - 1), to: end) ?? end
+
+    return values
+        .filter { date, _ in
+            date >= start && date <= end
+        }
+        .sorted { $0.0 < $1.0 }
+}
+
+private func watchDateSequence(endingAt endDate: Date, days: Int) -> [Date] {
+    let calendar = Calendar.current
+    let end = calendar.startOfDay(for: endDate)
+    let start = calendar.date(byAdding: .day, value: -(days - 1), to: end) ?? end
+    return watchDateSequence(from: start, to: end)
+}
+
+private func watchDateSequence(from start: Date, to end: Date) -> [Date] {
+    let calendar = Calendar.current
+    let safeStart = calendar.startOfDay(for: start)
+    let safeEnd = calendar.startOfDay(for: end)
+    guard safeStart <= safeEnd else { return [] }
+
+    let dayCount = (calendar.dateComponents([.day], from: safeStart, to: safeEnd).day ?? 0) + 1
+    return (0..<dayCount).compactMap {
+        calendar.date(byAdding: .day, value: $0, to: safeStart)
+    }
+}
+
+private func watchSleepConsistencyScore(
+    midpointSeries: [(Date, Double)],
+    fallback: Double
+) -> Double {
+    let values = midpointSeries.map(\.1)
+    let midpointDeviationHours = watchStandardDeviation(values) ?? fallback
+    let best = 0.25
+    let worst = 3.0
+    let clamped = min(max(midpointDeviationHours, best), worst)
+    return ((worst - clamped) / (worst - best)) * 100
+}
+
+private func watchStandardDeviation(_ values: [Double]) -> Double? {
+    guard values.count > 1 else { return values.first }
+    let mean = values.reduce(0, +) / Double(values.count)
+    let variance = values.map { pow($0 - mean, 2) }.reduce(0, +) / Double(values.count)
+    return sqrt(max(variance, 0))
+}
+
+private func watchStressPayloads(
+    days: [Date],
+    recoveryLookup: [Date: Double],
+    readinessLookup: [Date: Double],
+    hrvSeries: [Date: Double]
+) -> [WatchStressPointPayload] {
+    let hrvValues = hrvSeries.values
+    let baselineHRV = hrvValues.isEmpty ? 50 : (hrvValues.reduce(0, +) / Double(hrvValues.count))
+
+    return days.map { day in
+        let recovery = recoveryLookup[day] ?? 50
+        let readiness = readinessLookup[day] ?? 50
+        let hrv = hrvSeries[day] ?? baselineHRV
+        let deviation = baselineHRV > 0 ? (hrv - baselineHRV) / baselineHRV : 0
+
+        let stress = max(0, min(100, 55 - (deviation * 120) - ((recovery - 50) * 0.35)))
+        let energy = max(0, min(100, 45 + (deviation * 90) + ((readiness - 50) * 0.45)))
+        let regulation = max(0, min(100, (recovery * 0.55) + (readiness * 0.45) - abs(stress - 50) * 0.2))
+
+        return WatchStressPointPayload(
+            date: day,
+            stress: stress,
+            energy: energy,
+            regulation: regulation
+        )
+    }
+}
+
+private func watchSleepStagePayloads(from stages: [String: Double]) -> [WatchSleepStagePayload] {
+    let preferredKeys: [(String, String)] = [
+        ("core", "blue"),
+        ("rem", "purple"),
+        ("deep", "indigo")
+    ]
+
+    return preferredKeys.compactMap { key, colorName in
+        guard let value = stages[key], value > 0 else { return nil }
+        return WatchSleepStagePayload(
+            name: key.capitalized,
+            hours: value,
+            colorName: colorName
+        )
+    }
+}
+
+@MainActor
+private func watchAverageBedtimeHour(
+    engine: HealthStateEngine,
+    endingAt endDate: Date
+) -> Double? {
+    let bedtimeSeries = watchFilteredDailyValues(engine.sleepStartHours, endingAt: endDate, days: 7).map(\.1)
+    guard !bedtimeSeries.isEmpty else { return nil }
+    return bedtimeSeries.reduce(0, +) / Double(bedtimeSeries.count)
+}
+
+private func watchSleepScheduleText(
+    bedtimeHour: Double?,
+    sleepGoalHours: Double
+) -> String {
+    guard let bedtimeHour else {
+        return "10:30 PM - 7:00 AM"
+    }
+
+    let wakeHour = fmod(bedtimeHour + sleepGoalHours, 24)
+    return "\(watchClockString(fromDecimalHour: bedtimeHour)) - \(watchClockString(fromDecimalHour: wakeHour))"
+}
+
+private func watchClockString(fromDecimalHour hour: Double) -> String {
+    let normalized = hour >= 0 ? hour : (24 + hour)
+    let wholeHour = Int(normalized) % 24
+    let minute = Int(((normalized - Double(Int(normalized))) * 60).rounded()) % 60
+    let formatter = DateFormatter()
+    formatter.dateFormat = "h:mm a"
+
+    var components = DateComponents()
+    components.hour = wholeHour
+    components.minute = minute
+    let date = Calendar.current.date(from: components) ?? Date()
+    return formatter.string(from: date)
+}
+
+private func watchZoneMinutes(from analytics: WorkoutAnalytics) -> [Double] {
+    var minutes = Array(repeating: 0.0, count: 5)
+
+    for breakdown in analytics.hrZoneBreakdown {
+        let zoneIndex = max(0, min(4, breakdown.zone.zoneNumber - 1))
+        minutes[zoneIndex] += breakdown.timeInZone / 60
+    }
+
+    return minutes
+}
+
+private func watchWorkoutSubtitle(for workout: HKWorkout) -> String {
+    let timeLabel = workout.startDate.formatted(.dateTime.hour().minute())
+    return "\(timeLabel) • \(workout.workoutActivityType.name)"
+}
+
+private func watchWorkoutNote(for analytics: WorkoutAnalytics) -> String {
+    var fragments: [String] = []
+
+    if let hrr2 = analytics.hrr2 {
+        fragments.append("HRR 2m \(Int(hrr2.rounded())) bpm")
+    }
+    if let vo2 = analytics.vo2Max {
+        fragments.append(String(format: "VO2 %.1f", vo2))
+    }
+    if let peakHR = analytics.peakHR {
+        fragments.append("Peak HR \(Int(peakHR.rounded()))")
+    }
+
+    if fragments.isEmpty {
+        return "Workout analytics synced from your iPhone."
+    }
+
+    return fragments.joined(separator: " • ")
+}
+#endif
 
 private func topViewController(from controller: UIViewController) -> UIViewController {
     if let presented = controller.presentedViewController {
@@ -449,6 +1182,7 @@ struct NutrivanceApp: App {
 
     init() {
         StrainRecoveryAggressiveCachingController.shared.registerBackgroundTasks()
+        WatchDashboardSyncBridge.shared.activateIfNeeded()
     }
 
     private func navigate(
@@ -493,6 +1227,7 @@ struct NutrivanceApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     HealthStateEngine.shared.handleScenePhaseChange(newPhase)
                     StrainRecoveryAggressiveCachingController.shared.handleScenePhaseChange(newPhase)
+                    WatchDashboardSyncBridge.shared.handleScenePhaseChange(newPhase)
                 }
         }
         .commands {
