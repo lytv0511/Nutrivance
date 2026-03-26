@@ -76,7 +76,7 @@ struct ContentView: View {
         case .hrv:
             TrendMetricDetailView(
                 title: "HRV",
-                subtitle: "Daily average for the week",
+                subtitle: "",
                 points: store.hrvWeek,
                 unit: "ms",
                 accent: .mint,
@@ -85,7 +85,7 @@ struct ContentView: View {
         case .hrr:
             TrendMetricDetailView(
                 title: "HRR",
-                subtitle: "Daily average for the week",
+                subtitle: "",
                 points: store.hrrWeek,
                 unit: "bpm",
                 accent: .cyan,
@@ -94,7 +94,7 @@ struct ContentView: View {
         case .rhr:
             TrendMetricDetailView(
                 title: "RHR",
-                subtitle: "Daily average for the week",
+                subtitle: "",
                 points: store.rhrWeek,
                 unit: "bpm",
                 accent: .pink,
@@ -552,7 +552,7 @@ private struct OverviewDashboardPage: View {
                 recovery: store.currentRecovery / 100,
                 readiness: store.currentReadiness / 100
             )
-            .padding(10)
+            .padding(2)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -578,23 +578,41 @@ private struct StrainDashboardPage: View {
             actions: actions,
             selectedTab: $selectedTab
         ) {
-            VStack(spacing: 6) {
-                HStack {
-                    Text("Weekly Load")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                    Spacer()
-                    Text(String(format: "%.1f", store.currentStrain))
-                        .font(.caption.weight(.bold))
+            GeometryReader { proxy in
+                let chartHeight = min(max(proxy.size.height * 0.44, 62), 88)
+
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("Weekly Load")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.76))
+                        Spacer()
+                        Text(String(format: "%.1f", store.currentStrain))
+                            .font(.headline.weight(.bold))
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    WeeklyBarChart(
+                        points: store.strainWeek,
+                        accent: .orange,
+                        highlightedIndex: store.strainWeek.count - 1
+                    )
+                    .frame(height: chartHeight)
+
+                    VStack(spacing: 2) {
+                        Text(String(format: "%.1f", store.currentStrain))
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.orange)
+
+                        Text("Today • \(todayLabel())")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.62))
+                    }
+                    .frame(maxWidth: .infinity)
                 }
                 .frame(maxWidth: .infinity)
-
-                WeeklyBarChart(
-                    points: store.strainWeek,
-                    accent: .orange,
-                    highlightedIndex: store.strainWeek.count - 1
-                )
-                .frame(height: 58)
+                .frame(maxHeight: .infinity, alignment: .center)
             }
         }
     }
@@ -620,13 +638,48 @@ private struct RecoveryDashboardPage: View {
             actions: actions,
             selectedTab: $selectedTab
         ) {
-            WeeklyDualBarChart(
-                primaryPoints: store.recoveryWeek,
-                primaryColor: .cyan,
-                secondaryPoints: store.readinessWeek,
-                secondaryColor: .mint
-            )
-            .frame(height: 62)
+            GeometryReader { proxy in
+                let chartHeight = min(max(proxy.size.height * 0.42, 60), 84)
+
+                VStack(spacing: 12) {
+                    WeeklyDualBarChart(
+                        primaryPoints: store.recoveryWeek,
+                        primaryColor: .cyan,
+                        secondaryPoints: store.readinessWeek,
+                        secondaryColor: .mint
+                    )
+                    .frame(height: chartHeight)
+
+                    HStack(spacing: 18) {
+                        VStack(spacing: 2) {
+                            Text(String(format: "%.0f", store.currentRecovery))
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(.cyan)
+                            Text("Recovery")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.62))
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        VStack(spacing: 2) {
+                            Text(String(format: "%.0f", store.currentReadiness))
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(.mint)
+                            Text("Readiness")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.62))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+
+                    Text("Today • \(todayLabel())")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
         }
     }
 }
@@ -652,7 +705,7 @@ private struct MindfulnessDashboardPage: View {
             selectedTab: $selectedTab
         ) {
             MindfulnessRing(score: store.currentMindfulness)
-                .padding(10)
+                .padding(2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -853,7 +906,7 @@ private struct TripleMetricRing: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let size = min(proxy.size.width, proxy.size.height) * 0.78
+            let size = min(proxy.size.width, proxy.size.height) * 0.92
             let lineWidth = max(12, size * 0.115)
 
             ZStack {
@@ -1039,26 +1092,40 @@ private struct WeeklyBarChart: View {
     var body: some View {
         GeometryReader { proxy in
             let maxValue = max(points.map(\.value).max() ?? 1, 1)
+            let averageValue = points.isEmpty ? 0 : points.map(\.value).reduce(0, +) / Double(points.count)
             let yLabelWidth: CGFloat = 18
-            let xLabelHeight: CGFloat = 12
+            let xLabelHeight: CGFloat = 16
             let chartHeight = max(proxy.size.height - xLabelHeight - 4, 26)
             let plotWidth = max(proxy.size.width - yLabelWidth - 4, 40)
             let barWidth = min(14, max(6, (plotWidth - CGFloat(max(points.count - 1, 0)) * 4) / CGFloat(max(points.count, 1))))
 
             VStack(spacing: 4) {
                 HStack(alignment: .bottom, spacing: 4) {
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text(String(format: "%.0f", maxValue))
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.58))
-                        Spacer()
-                        Text("0")
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.58))
-                    }
+                    yAxisLabels(
+                        maxValue: maxValue,
+                        averageValue: averageValue,
+                        chartHeight: chartHeight,
+                        highlightColor: accent
+                    )
                     .frame(width: yLabelWidth, height: chartHeight)
 
                     ZStack(alignment: .bottomLeading) {
+                        referenceLine(
+                            value: averageValue,
+                            maxValue: maxValue,
+                            chartHeight: chartHeight,
+                            plotWidth: plotWidth,
+                            color: accent.opacity(0.75)
+                        )
+
+                        referenceLine(
+                            value: maxValue,
+                            maxValue: maxValue,
+                            chartHeight: chartHeight,
+                            plotWidth: plotWidth,
+                            color: accent
+                        )
+
                         Rectangle()
                             .fill(Color.white.opacity(0.18))
                             .frame(width: 1, height: chartHeight)
@@ -1099,6 +1166,46 @@ private struct WeeklyBarChart: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
     }
+
+    @ViewBuilder
+    private func yAxisLabels(maxValue: Double, averageValue: Double, chartHeight: CGFloat, highlightColor: Color) -> some View {
+        let averageY = yPosition(for: averageValue, maxValue: maxValue, chartHeight: chartHeight)
+
+        ZStack(alignment: .topTrailing) {
+            Text(shortMetricLabel(maxValue))
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(highlightColor)
+                .offset(y: -4)
+
+            Text(shortMetricLabel(averageValue))
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(highlightColor.opacity(0.82))
+                .offset(y: averageY - 6)
+
+            Text("0")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.white.opacity(0.58))
+                .frame(maxHeight: .infinity, alignment: .bottomTrailing)
+                .offset(y: 4)
+        }
+    }
+
+    @ViewBuilder
+    private func referenceLine(value: Double, maxValue: Double, chartHeight: CGFloat, plotWidth: CGFloat, color: Color) -> some View {
+        let ratio = maxValue > 0 ? value / maxValue : 0
+        let y = chartHeight - (chartHeight - 2) * CGFloat(ratio.clamped(to: 0...1))
+
+        Rectangle()
+            .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .foregroundStyle(color)
+            .frame(width: plotWidth, height: 1)
+            .position(x: plotWidth / 2, y: y)
+    }
+
+    private func yPosition(for value: Double, maxValue: Double, chartHeight: CGFloat) -> CGFloat {
+        let ratio = maxValue > 0 ? value / maxValue : 0
+        return chartHeight - (chartHeight - 2) * CGFloat(ratio.clamped(to: 0...1))
+    }
 }
 
 private struct WeeklyDualBarChart: View {
@@ -1114,8 +1221,10 @@ private struct WeeklyDualBarChart: View {
                 secondaryPoints.map(\.value).max() ?? 1,
                 1
             )
+            let combinedValues = primaryPoints.map(\.value) + secondaryPoints.map(\.value)
+            let averageValue = combinedValues.isEmpty ? 0 : combinedValues.reduce(0, +) / Double(combinedValues.count)
             let yLabelWidth: CGFloat = 18
-            let xLabelHeight: CGFloat = 12
+            let xLabelHeight: CGFloat = 16
             let chartHeight = max(proxy.size.height - xLabelHeight - 4, 26)
             let plotWidth = max(proxy.size.width - yLabelWidth - 4, 40)
             let dayWidth = min(18, max(10, (plotWidth - CGFloat(max(primaryPoints.count - 1, 0)) * 4) / CGFloat(max(primaryPoints.count, 1))))
@@ -1123,18 +1232,30 @@ private struct WeeklyDualBarChart: View {
 
             VStack(spacing: 4) {
                 HStack(alignment: .bottom, spacing: 4) {
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text(String(format: "%.0f", maxValue))
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.58))
-                        Spacer()
-                        Text("0")
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.58))
-                    }
+                    yAxisLabels(
+                        maxValue: maxValue,
+                        averageValue: averageValue,
+                        chartHeight: chartHeight
+                    )
                     .frame(width: yLabelWidth, height: chartHeight)
 
                     ZStack(alignment: .bottomLeading) {
+                        referenceLine(
+                            value: averageValue,
+                            maxValue: maxValue,
+                            chartHeight: chartHeight,
+                            plotWidth: plotWidth,
+                            color: primaryColor.opacity(0.82)
+                        )
+
+                        referenceLine(
+                            value: maxValue,
+                            maxValue: maxValue,
+                            chartHeight: chartHeight,
+                            plotWidth: plotWidth,
+                            color: secondaryColor
+                        )
+
                         Rectangle()
                             .fill(Color.white.opacity(0.18))
                             .frame(width: 1, height: chartHeight)
@@ -1183,6 +1304,46 @@ private struct WeeklyDualBarChart: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
     }
+
+    @ViewBuilder
+    private func yAxisLabels(maxValue: Double, averageValue: Double, chartHeight: CGFloat) -> some View {
+        let averageY = yPosition(for: averageValue, maxValue: maxValue, chartHeight: chartHeight)
+
+        ZStack(alignment: .topTrailing) {
+            Text(shortMetricLabel(maxValue))
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(secondaryColor)
+                .offset(y: -4)
+
+            Text(shortMetricLabel(averageValue))
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(primaryColor.opacity(0.82))
+                .offset(y: averageY - 6)
+
+            Text("0")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.white.opacity(0.58))
+                .frame(maxHeight: .infinity, alignment: .bottomTrailing)
+                .offset(y: 4)
+        }
+    }
+
+    @ViewBuilder
+    private func referenceLine(value: Double, maxValue: Double, chartHeight: CGFloat, plotWidth: CGFloat, color: Color) -> some View {
+        let ratio = maxValue > 0 ? value / maxValue : 0
+        let y = chartHeight - (chartHeight - 2) * CGFloat(ratio.clamped(to: 0...1))
+
+        Rectangle()
+            .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .foregroundStyle(color)
+            .frame(width: plotWidth, height: 1)
+            .position(x: plotWidth / 2, y: y)
+    }
+
+    private func yPosition(for value: Double, maxValue: Double, chartHeight: CGFloat) -> CGFloat {
+        let ratio = maxValue > 0 ? value / maxValue : 0
+        return chartHeight - (chartHeight - 2) * CGFloat(ratio.clamped(to: 0...1))
+    }
 }
 
 private struct MindfulnessRing: View {
@@ -1190,7 +1351,7 @@ private struct MindfulnessRing: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let size = min(proxy.size.width, proxy.size.height) * 0.78
+            let size = min(proxy.size.width, proxy.size.height) * 0.92
             let lineWidth = max(13, size * 0.125)
 
             ZStack {
@@ -1532,7 +1693,7 @@ private struct TrainingLoadView: View {
     var body: some View {
         CrownControlledMetricView(
             title: "Load",
-            subtitle: "Scroll the Digital Crown through the week",
+            subtitle: "",
             points: store.trainingLoadWeek,
             unit: "TL",
             accent: .orange,
@@ -1705,11 +1866,6 @@ private struct CrownControlledMetricView: View {
             let selectedBand = band(for: selectedValue, idealRange: idealRange)
 
             VStack(spacing: compactHeight ? 8 : 10) {
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .multilineTextAlignment(.center)
-
                 MiniTrendChart(
                     points: points,
                     accent: accent,
@@ -2094,10 +2250,22 @@ private func shortTime(_ date: Date) -> String {
     date.formatted(.dateTime.hour().minute())
 }
 
+private func todayLabel() -> String {
+    Date().formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+}
+
 private func relativeDate(_ date: Date) -> String {
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .short
     return formatter.localizedString(for: date, relativeTo: Date())
+}
+
+private func shortMetricLabel(_ value: Double) -> String {
+    if value >= 100 {
+        return String(format: "%.0f", value)
+    }
+
+    return String(format: "%.1f", value)
 }
 
 private func hoursString(_ hours: Double) -> String {

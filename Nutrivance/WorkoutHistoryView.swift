@@ -489,6 +489,12 @@ struct RoutePoint: Identifiable {
     let coordinate: CLLocationCoordinate2D
 }
 
+struct ColoredRouteSegment: Identifiable {
+    let id = UUID()
+    let coordinates: [CLLocationCoordinate2D]
+    let color: UIColor
+}
+
 struct Split {
     let distance: Double // in km
     let time: TimeInterval
@@ -517,6 +523,8 @@ struct WorkoutDetailView: View {
 
     @State private var showHRZones = false
     @State private var routePoints: [RoutePoint] = []
+    @State private var routeLocations: [CLLocation] = []
+    @State private var coloredSegments: [ColoredRouteSegment] = []
     @State private var isLoadingRoute = false
     @State private var historicalZoneProfile: HRZoneProfile? = nil
     @State private var historicalMaxHR: Double? = nil
@@ -848,8 +856,55 @@ struct WorkoutDetailView: View {
         return updatedZones
     }
 
+    private func color(for heartRate: Double) -> UIColor {
+        switch heartRate {
+        case ..<120: return .systemBlue
+        case ..<140: return .systemGreen
+        case ..<160: return .systemYellow
+        case ..<180: return .systemOrange
+        default: return .systemRed
+        }
+    }
+
+    private func buildSegments(
+        locations: [CLLocation],
+        heartRates: [(Date, Double)]
+    ) -> [ColoredRouteSegment] {
+
+        guard locations.count > 1 else { return [] }
+
+        func nearestHR(to date: Date) -> Double? {
+            heartRates.min {
+                abs($0.0.timeIntervalSince(date)) < abs($1.0.timeIntervalSince(date))
+            }?.1
+        }
+
+        var segments: [ColoredRouteSegment] = []
+
+        for i in 0..<(locations.count - 1) {
+            let start = locations[i]
+            let end = locations[i + 1]
+
+            guard let hr = nearestHR(to: start.timestamp) else { continue }
+
+            segments.append(
+                ColoredRouteSegment(
+                    coordinates: [start.coordinate, end.coordinate],
+                    color: color(for: hr)
+                )
+            )
+        }
+
+        return segments
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if !coloredSegments.isEmpty {
+                RouteMapView(segments: coloredSegments)
+                    .frame(height: 260)
+                    .cornerRadius(16)
+            }
             // High-level metrics
             let columns = [GridItem(.flexible()), GridItem(.flexible())]
             LazyVGrid(columns: columns, spacing: 12) {
@@ -1396,33 +1451,56 @@ struct WorkoutDetailView: View {
     }
 
     private func loadRoute() {
-        guard routePoints.isEmpty else { return }
-        guard analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .cycling || analytics.workout.workoutActivityType == .walking || analytics.workout.workoutActivityType == .hiking else { return }
+        guard routeLocations.isEmpty else { return }
+        guard analytics.workout.workoutActivityType == .running ||
+              analytics.workout.workoutActivityType == .cycling ||
+              analytics.workout.workoutActivityType == .walking ||
+              analytics.workout.workoutActivityType == .hiking else { return }
+
         isLoadingRoute = true
 
         let healthStore = HKHealthStore()
         let predicate = HKQuery.predicateForObjects(from: analytics.workout)
         let routeType = HKSeriesType.workoutRoute()
 
-        let sampleQuery = HKSampleQuery(sampleType: routeType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
-            guard error == nil, let routes = samples as? [HKWorkoutRoute], let route = routes.first else {
+        let sampleQuery = HKSampleQuery(
+            sampleType: routeType,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: nil
+        ) { _, samples, error in
+
+            guard error == nil,
+                  let routes = samples as? [HKWorkoutRoute],
+                  let route = routes.first else {
                 DispatchQueue.main.async { isLoadingRoute = false }
                 return
             }
+
+            var allLocations: [CLLocation] = []
 
             let routeQuery = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
                 guard error == nil else {
                     DispatchQueue.main.async { isLoadingRoute = false }
                     return
                 }
-                if done, let locations = locations {
-                    let points = locations.map { RoutePoint(coordinate: $0.coordinate) }
+
+                if let locations = locations {
+                    allLocations.append(contentsOf: locations)
+                }
+
+                if done {
                     DispatchQueue.main.async {
-                        self.routePoints = points
+                        self.routeLocations = allLocations
+                        self.coloredSegments = buildSegments(
+                            locations: allLocations,
+                            heartRates: analytics.heartRates
+                        )
                         self.isLoadingRoute = false
                     }
                 }
             }
+
             healthStore.execute(routeQuery)
         }
 
@@ -1814,6 +1892,54 @@ struct WorkoutMetricCard: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(color.opacity(0.25), lineWidth: 1)
         )
+    }
+}
+
+struct RouteMapView: UIViewRepresentable {
+    let segments: [ColoredRouteSegment]
+
+    func makeUIView(context: Context) -> MKMapView {
+        let map = MKMapView()
+        map.delegate = context.coordinator
+        return map
+    }
+
+    func updateUIView(_ mapView: MKMapView, context: Context) {
+        mapView.removeOverlays(mapView.overlays)
+
+        for segment in segments {
+            let polyline = MKPolyline(
+                coordinates: segment.coordinates,
+                count: segment.coordinates.count
+            )
+            mapView.addOverlay(polyline)
+        }
+
+        if let first = segments.first?.coordinates.first {
+            let region = MKCoordinateRegion(
+                center: first,
+                latitudinalMeters: 1000,
+                longitudinalMeters: 1000
+            )
+            mapView.setRegion(region, animated: true)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    class Coordinator: NSObject, MKMapViewDelegate {
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            guard let polyline = overlay as? MKPolyline else {
+                return MKOverlayRenderer()
+            }
+
+            let renderer = MKPolylineRenderer(polyline: polyline)
+            renderer.strokeColor = .systemBlue // (we'll upgrade this next)
+            renderer.lineWidth = 5
+            return renderer
+        }
     }
 }
 
