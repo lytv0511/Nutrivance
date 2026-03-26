@@ -2282,6 +2282,7 @@ private struct CoachComparisonFloatingOverlay: View {
     private let rightOverflow: CGFloat = -32
     private let bottomOverflow: CGFloat = -0
 
+
     private var resolvedPosition: CGPoint {
         state.position ?? CGPoint(
             x: max(measuredOverlaySize.width / 2 + leftInset, canvasSize.width - (measuredOverlaySize.width / 2) + rightOverflow),

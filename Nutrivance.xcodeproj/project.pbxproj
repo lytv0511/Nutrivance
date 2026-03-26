@@ -65,6 +65,7 @@
 		156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */; };
 		1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1570E2662D67B75300F42CB5 /* FuelCheckView.swift */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
+		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		157C20AA2D6E6D6800D1FA9A /* MindfulnessRealmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */; };
 		157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */; };
 		157C20AE2D6E6DDA00D1FA9A /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */; };
@@ -118,6 +119,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		15753FA32F74D9CA00007262 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 15D7FF952CD142690048E050 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 15753F9A2F74D9C900007262;
+			remoteInfo = "Nutrivance for Apple Watch Watch App";
+		};
 		15D7FFB02CD1426A0048E050 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 15D7FF952CD142690048E050 /* Project object */;
@@ -135,6 +143,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		15753FA62F74D9CA00007262 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -206,6 +225,7 @@
 		156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionUnit.swift; sourceTree = "<group>"; };
 		1570E2662D67B75300F42CB5 /* FuelCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuelCheckView.swift; sourceTree = "<group>"; };
 		15741EA42CEFE2F400CDE4F9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nutrivance for Apple Watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindfulnessRealmView.swift; sourceTree = "<group>"; };
 		157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodTrackerView.swift; sourceTree = "<group>"; };
 		157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalView.swift; sourceTree = "<group>"; };
@@ -295,10 +315,18 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		15753F9C2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = "Nutrivance for Apple Watch Watch App"; sourceTree = "<group>"; };
 		15AC8E8E2CDCF4FC0002101A /* WaterWidget */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = WaterWidget; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		15753F982F74D9C900007262 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15D7FF9A2CD142690048E050 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -547,6 +575,7 @@
 				15D7FFB22CD1426A0048E050 /* NutrivanceTests */,
 				15D7FFBC2CD1426A0048E050 /* NutrivanceUITests */,
 				15AC8E8E2CDCF4FC0002101A /* WaterWidget */,
+				15753F9C2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */,
 				15AC8E892CDCF4FC0002101A /* Frameworks */,
 				15D7FF9E2CD142690048E050 /* Products */,
 				15B273BB2CECB8FC004E6931 /* NutritionExtractor */,
@@ -559,6 +588,7 @@
 				15D7FF9D2CD142690048E050 /* Nutrivance.app */,
 				15D7FFAF2CD1426A0048E050 /* NutrivanceTests.xctest */,
 				15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */,
+				15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -702,6 +732,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		15753F9A2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 15753FA92F74D9CA00007262 /* Build configuration list for PBXNativeTarget "Nutrivance for Apple Watch Watch App" */;
+			buildPhases = (
+				15753F972F74D9C900007262 /* Sources */,
+				15753F982F74D9C900007262 /* Frameworks */,
+				15753F992F74D9C900007262 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				15753F9C2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */,
+			);
+			name = "Nutrivance for Apple Watch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "Nutrivance for Apple Watch Watch App";
+			productReference = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
 		15D7FF9C2CD142690048E050 /* Nutrivance */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 15D7FFC32CD1426A0048E050 /* Build configuration list for PBXNativeTarget "Nutrivance" */;
@@ -710,10 +762,12 @@
 				15D7FF9A2CD142690048E050 /* Frameworks */,
 				15D7FF9B2CD142690048E050 /* Resources */,
 				15AC8E9F2CDCF4FE0002101A /* Embed Foundation Extensions */,
+				15753FA62F74D9CA00007262 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				15753FA42F74D9CA00007262 /* PBXTargetDependency */,
 			);
 			name = Nutrivance;
 			productName = Nutrivance;
@@ -763,9 +817,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1610;
+				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
+					15753F9A2F74D9C900007262 = {
+						CreatedOnToolsVersion = 26.4;
+					};
 					15D7FF9C2CD142690048E050 = {
 						CreatedOnToolsVersion = 16.0;
 						LastSwiftMigration = 1610;
@@ -799,11 +856,19 @@
 				15D7FF9C2CD142690048E050 /* Nutrivance */,
 				15D7FFAE2CD1426A0048E050 /* NutrivanceTests */,
 				15D7FFB82CD1426A0048E050 /* NutrivanceUITests */,
+				15753F9A2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		15753F992F74D9C900007262 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15D7FF9B2CD142690048E050 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -832,6 +897,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		15753F972F74D9C900007262 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		15D7FF992CD142690048E050 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -959,6 +1031,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		15753FA42F74D9CA00007262 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 15753F9A2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */;
+			targetProxy = 15753FA32F74D9CA00007262 /* PBXContainerItemProxy */;
+		};
 		15D7FFB12CD1426A0048E050 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 15D7FF9C2CD142690048E050 /* Nutrivance */;
@@ -972,6 +1049,72 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		15753FA72F74D9CA00007262 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 586BPLW3X9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Nutrivance for Apple Watch";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = None.Nutrivance;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		15753FA82F74D9CA00007262 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 586BPLW3X9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Nutrivance for Apple Watch";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = None.Nutrivance;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
 		15D7FFC12CD1426A0048E050 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1293,6 +1436,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		15753FA92F74D9CA00007262 /* Build configuration list for PBXNativeTarget "Nutrivance for Apple Watch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				15753FA72F74D9CA00007262 /* Debug */,
+				15753FA82F74D9CA00007262 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		15D7FF982CD142690048E050 /* Build configuration list for PBXProject "Nutrivance" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
