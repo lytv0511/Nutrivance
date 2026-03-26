@@ -345,9 +345,6 @@ struct WorkoutHistoryView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 reloadPersistedHRZoneSettings()
             }
-            .task {
-                await ensureFullHistoryCoverageIfNeeded()
-            }
         }
     }
 
@@ -392,16 +389,6 @@ struct WorkoutHistoryView: View {
                 scrollProxy?.scrollTo(closest.workout.startDate, anchor: .top)
             }
         }
-    }
-
-    @MainActor
-    private func ensureFullHistoryCoverageIfNeeded() async {
-        let start = Calendar.current.date(byAdding: .day, value: -3650, to: Date()) ?? Date()
-        guard engine.needsWorkoutAnalyticsCoverage(from: start, to: Date()) else { return }
-
-        isLoading = true
-        defer { isLoading = false }
-        await engine.ensureFullWorkoutHistoryCoverage()
     }
 
     @MainActor

@@ -1875,6 +1875,7 @@ struct ExploreDietsCard: View {
     }
 }
 
+@MainActor
 class HealthInsightsViewModel: ObservableObject {
     @Published var tdee: Double = 2000
     @Published var todayExerciseCalories: Double = 0

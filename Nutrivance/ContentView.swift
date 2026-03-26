@@ -11,6 +11,8 @@ struct ContentView: View {
     @StateObject private var appState = AppState()
     @StateObject private var engine = HealthStateEngine.shared
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
+    @SceneStorage("startup_curtain_dismissed") private var hasDismissedStartupCurtain = false
     @State private var showStartupCurtain = true
     
     var body: some View {
@@ -20,6 +22,7 @@ struct ContentView: View {
     //                if horizontalSizeClass == .regular {
     //                    ContentView_iPad_alt()
     //                        .environmentObject(appState)
+//                    ContentView_iPad_alt()
                     ContentView_iPad_alt()
     //                } else {
     //                    ContentView_iPad()
@@ -31,15 +34,19 @@ struct ContentView: View {
                 }
             }
 
-            if showStartupCurtain {
+            if showStartupCurtain && !hasDismissedStartupCurtain {
                 StartupCurtainView()
                     .transition(.opacity.combined(with: .scale(scale: 1.02)))
                     .zIndex(10)
             }
         }
         .task {
-            requestHealthDataPermissions()
-            let minimumCurtainDuration: UInt64 = 2_200_000_000
+            guard !hasDismissedStartupCurtain else {
+                showStartupCurtain = false
+                return
+            }
+
+            let minimumCurtainDuration: UInt64 = engine.hasHydratedCachedMetrics ? 700_000_000 : 2_200_000_000
             let maximumCurtainDuration: UInt64 = 5_000_000_000
             let pollInterval: UInt64 = 200_000_000
 
@@ -49,11 +56,16 @@ struct ContentView: View {
             while Date().timeIntervalSince(startedAt) < Double(maximumCurtainDuration) / 1_000_000_000 {
                 let hasWorkoutBootstrap = engine.hasInitializedWorkoutAnalytics
                 let hasCoreHealthBootstrap =
+                    engine.hasHydratedCachedMetrics ||
                     !engine.dailyHRV.isEmpty ||
                     !engine.dailyRestingHeartRate.isEmpty ||
                     !engine.sleepStages.isEmpty
 
-                if hasWorkoutBootstrap || hasCoreHealthBootstrap {
+                if engine.requiresInitialFullSync {
+                    if hasWorkoutBootstrap {
+                        break
+                    }
+                } else if hasWorkoutBootstrap || hasCoreHealthBootstrap {
                     break
                 }
 
@@ -62,19 +74,13 @@ struct ContentView: View {
 
             try? await Task.sleep(nanoseconds: 500_000_000)
             withAnimation(.easeOut(duration: 0.35)) {
+                hasDismissedStartupCurtain = true
                 showStartupCurtain = false
             }
         }
-    }
-    private func requestHealthDataPermissions() {
-        appState.healthKitManager.requestAuthorization { success, error in
-            if let error = error {
-                print("Error requesting health data permissions: \(error.localizedDescription)")
-            } else if success {
-                print("Health data permissions granted.")
-            } else {
-                print("Health data permissions not granted.")
-            }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active, hasDismissedStartupCurtain else { return }
+            showStartupCurtain = false
         }
     }
 }
@@ -104,7 +110,7 @@ private struct StartupCurtainView: View {
                 Text("Preparing Nutrivance")
                     .font(.system(.title2, design: .rounded, weight: .bold))
                     .foregroundColor(.white)
-                Text("Loading health history and coaching context in the background.")
+                Text("Showing cached health data first, then refreshing live metrics in the background.")
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
                     .foregroundColor(.white.opacity(0.72))

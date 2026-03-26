@@ -159,6 +159,7 @@ struct NutrientAnalysis {
     }
 }
 
+@MainActor
 class UnifiedLoggingViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
     @Published var hasVisibleText = false
     @Published var hasVisibleBarcode = false

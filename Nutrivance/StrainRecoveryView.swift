@@ -36,6 +36,7 @@ struct TappableChartPreview: View {
 struct StrainRecoveryView: View {
     @StateObject private var engine = HealthStateEngine.shared
     @StateObject private var aggressiveCachingController = StrainRecoveryAggressiveCachingController.shared
+    @Environment(\.scenePhase) private var scenePhase
     @State private var animationPhase: Double = 0
     @State private var isLoadingHistoricalCoverage = false
     @State private var historicalCoverageMessage = "Loading older strain and recovery history..."
@@ -361,6 +362,12 @@ struct StrainRecoveryView: View {
             .task(id: historicalCoverageKey) {
                 await ensureHistoricalCoverageIfNeeded()
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .background else { return }
+                historicalCoverageTask?.cancel()
+                isLoadingHistoricalCoverage = false
+                AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(false)
+            }
             .sheet(isPresented: $showingSummarySettings) {
                 StrainRecoverySummarySettingsView(
                     engine: engine,
@@ -390,21 +397,22 @@ struct StrainRecoveryView: View {
             let workoutCoverageStart = selectedDate < interactiveThreshold
                 ? min(yearPrefetchStart, historicalWindowStart)
                 : historicalWindowStart
+            let vitalCoverageStart = historicalWindowStart
             let needsWorkoutCoverage = engine.needsWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
-            let needsSpO2Coverage = engine.needsSpO2Coverage(from: window.start, to: window.endExclusive)
-            guard needsWorkoutCoverage || needsSpO2Coverage else { return }
+            let needsRecoveryMetricsCoverage = engine.needsRecoveryMetricsCoverage(from: vitalCoverageStart, to: window.endExclusive)
+            guard needsWorkoutCoverage || needsRecoveryMetricsCoverage else { return }
 
             historicalCoverageMessage = selectedDate < interactiveThreshold
-                ? "Loading \(calendar.component(.year, from: selectedDate)) training history through \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
-                : "Refreshing workout history..."
+                ? "Loading \(calendar.component(.year, from: selectedDate)) training and recovery history through \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
+                : "Refreshing recovery history..."
             isLoadingHistoricalCoverage = true
             defer { isLoadingHistoricalCoverage = false }
 
             if needsWorkoutCoverage {
                 await engine.ensureWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
             }
-            if needsSpO2Coverage {
-                await engine.ensureSpO2Coverage(from: window.start, to: window.endExclusive)
+            if needsRecoveryMetricsCoverage {
+                await engine.ensureRecoveryMetricsCoverage(from: vitalCoverageStart, to: window.endExclusive)
             }
         }
         historicalCoverageTask = task
@@ -422,7 +430,7 @@ struct StrainRecoveryView: View {
                 Text(historicalCoverageMessage)
                     .font(.headline)
                     .multilineTextAlignment(.center)
-                Text("We are fetching older HealthKit workouts on demand and will reuse cached analytics when available.")
+                Text("We are fetching only the missing chart history and caching it for later opens.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -1869,6 +1877,7 @@ private func allowsBackgroundAISummaryUpgrades() -> Bool {
 
 private struct StrainRecoveryAISummarySection: View {
     @ObservedObject var engine: HealthStateEngine
+    @Environment(\.scenePhase) private var scenePhase
     let timeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
     let anchorDate: Date
@@ -1888,6 +1897,7 @@ private struct StrainRecoveryAISummarySection: View {
     @State private var backgroundGenerationStarterTask: Task<Void, Never>? = nil
     @State private var deferredSummaryLoadingTask: Task<Void, Never>? = nil
     @State private var deferredSuggestionsRefreshTask: Task<Void, Never>? = nil
+    @State private var summaryPrerequisiteTask: Task<Void, Never>? = nil
     @State private var requestedRequestID: String? = nil
     @State private var backgroundGenerationContextID: String? = nil
     @State private var backgroundFetchStatusText: String? = nil
@@ -2285,10 +2295,14 @@ private struct StrainRecoveryAISummarySection: View {
             return
         }
 
-        Task { @MainActor in
+        summaryPrerequisiteTask?.cancel()
+        summaryPrerequisiteTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled else { return }
-            engine.refreshAllMetrics(force: true)
+            let chartFilter: StrainRecoveryView.TimeFilter = timeFilter == .day ? .week : timeFilter
+            let window = chartWindow(for: chartFilter, anchorDate: anchorDate)
+            let start = Calendar.current.date(byAdding: .day, value: -27, to: window.start) ?? window.start
+            await engine.ensureRecoveryMetricsCoverage(from: start, to: window.endExclusive)
         }
     }
 
@@ -2744,10 +2758,18 @@ private struct StrainRecoveryAISummarySection: View {
                 aggressiveCachingController.cancelByUser()
             }
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .background else { return }
+            deferredSummaryLoadingTask?.cancel()
+            deferredSuggestionsRefreshTask?.cancel()
+            summaryPrerequisiteTask?.cancel()
+            cancelBackgroundGeneration()
+        }
         .onDisappear {
             AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(false)
             deferredSummaryLoadingTask?.cancel()
             deferredSuggestionsRefreshTask?.cancel()
+            summaryPrerequisiteTask?.cancel()
             cancelBackgroundGeneration()
         }
     }
@@ -6852,6 +6874,7 @@ struct WorkoutContributionsSection: View {
     struct DailyLoadSnapshot: Identifiable {
         let date: Date
         let sessionLoad: Double
+        let totalDailyLoad: Double
         let acuteLoad: Double
         let acuteTotal: Double
         let chronicLoad: Double
@@ -6914,25 +6937,6 @@ struct WorkoutContributionsSection: View {
         return nil
     }
     
-    private func sessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
-        let zoneWeightedLoad = analytics.hrZoneBreakdown.reduce(0.0) { partial, entry in
-            let zoneWeight = Double(min(max(entry.zone.zoneNumber, 1), 5))
-            let zoneMinutes = entry.timeInZone / 60.0
-            return partial + (zoneMinutes * zoneWeight)
-        }
-        
-        if zoneWeightedLoad > 0 {
-            return zoneWeightedLoad.rounded()
-        }
-        
-        let durationMinutes = workout.duration / 60.0
-        if let effortScore = workoutEffortScore(from: workout) {
-            return (durationMinutes * max(1, effortScore)).rounded()
-        }
-        
-        return 0
-    }
-
     private var selectedDayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         let calendar = Calendar.current
         return workoutsForComputation
@@ -6977,14 +6981,28 @@ struct WorkoutContributionsSection: View {
         let calendar = Calendar.current
         var sessionLoadByDay: [Date: Double] = [:]
         var workoutCountByDay: [Date: Int] = [:]
+        var activeMinutesByDay: [Date: Double] = [:]
+        let loadWindowStart = calendar.date(byAdding: .day, value: -27, to: displayWindow.start) ?? displayWindow.start
         
         for (workout, analytics) in workoutsForComputation {
             let day = calendar.startOfDay(for: workout.startDate)
-            let load = sessionLoad(for: workout, analytics: analytics)
+            let load = HealthStateEngine.proWorkoutLoad(
+                for: workout,
+                analytics: analytics,
+                estimatedMaxHeartRate: engine.estimatedMaxHeartRate
+            )
             sessionLoadByDay[day, default: 0] += load
             workoutCountByDay[day, default: 0] += 1
+            activeMinutesByDay[day, default: 0] += workout.duration / 60.0
         }
-        
+
+        let loadDates = dateSequence(from: loadWindowStart, to: displayWindow.end)
+        let orderedLoads = loadDates.map { day in
+            let sessionLoad = sessionLoadByDay[day, default: 0]
+            let activeMinutes = activeMinutesByDay[day, default: 0]
+            return sessionLoad + HealthStateEngine.passiveDailyBaseLoad(activeMinutes: activeMinutes)
+        }
+
         return dateSequence(from: displayWindow.start, to: displayWindow.end).map { day in
             let acuteTotal = (0..<7).reduce(0.0) { partial, offset in
                 let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
@@ -6995,9 +7013,6 @@ struct WorkoutContributionsSection: View {
                 let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
                 return partial + (sessionLoadByDay[sourceDay] ?? 0)
             }
-            
-            let acuteAverage = acuteTotal / 7.0
-            let chronicLoad = chronicTotal / 28.0
             let activeDaysLast28 = (0..<28).reduce(0) { partial, offset in
                 let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
                 return partial + ((sessionLoadByDay[sourceDay] ?? 0) > 0 ? 1 : 0)
@@ -7006,15 +7021,18 @@ struct WorkoutContributionsSection: View {
                 let sourceDay = calendar.date(byAdding: .day, value: -offset, to: day) ?? day
                 return (sessionLoadByDay[sourceDay] ?? 0) > 0
             })
+            let stateIndex = loadDates.firstIndex(of: day) ?? (orderedLoads.indices.last ?? 0)
+            let state = HealthStateEngine.proTrainingLoadState(loads: orderedLoads, index: stateIndex)
             
             return DailyLoadSnapshot(
                 date: day,
                 sessionLoad: sessionLoadByDay[day] ?? 0,
-                acuteLoad: acuteAverage,
+                totalDailyLoad: orderedLoads[stateIndex],
+                acuteLoad: state.acuteLoad,
                 acuteTotal: acuteTotal,
-                chronicLoad: chronicLoad,
+                chronicLoad: state.chronicLoad,
                 chronicTotal: chronicTotal,
-                acwr: chronicLoad > 0 ? acuteAverage / chronicLoad : 0,
+                acwr: state.acwr,
                 workoutCount: workoutCountByDay[day] ?? 0,
                 activeDaysLast28: activeDaysLast28,
                 daysSinceLastWorkout: daysSinceLastWorkout
@@ -7032,6 +7050,7 @@ struct WorkoutContributionsSection: View {
         return dailyLoadSnapshots.last ?? DailyLoadSnapshot(
             date: displayWindow.end,
             sessionLoad: 0,
+            totalDailyLoad: HealthStateEngine.passiveDailyBaseLoad(),
             acuteLoad: 0,
             acuteTotal: 0,
             chronicLoad: 0,
@@ -7054,9 +7073,9 @@ struct WorkoutContributionsSection: View {
     private var status: WorkoutLoadStatus {
         if selectedSnapshot.activeDaysLast28 < 14 {
             return WorkoutLoadStatus(
-                title: "Baseline Outdated",
+                title: "Gathering Baseline",
                 color: .orange,
-                detail: "Baseline out of date. 14 active days in the last 28 are recommended to recalculate your fitness floor.",
+                detail: "Training-load baseline is still calibrating. Aim for 14 active days in the last 28 before trusting ACWR-driven risk calls.",
                 hidesRatio: true
             )
         }
@@ -7074,7 +7093,7 @@ struct WorkoutContributionsSection: View {
                 return WorkoutLoadStatus(
                     title: "Re-establishing",
                     color: .orange,
-                    detail: "Restarting training. ACWR may be sensitive for the next 7 days as you rebuild your acute baseline.",
+                    detail: "Recent return from a break detected. Acute load will rise faster than chronic load for a while, so ACWR is being treated as calibration only.",
                     hidesRatio: true
                 )
             }
@@ -7176,14 +7195,17 @@ struct WorkoutContributionsSection: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    Text("Acute Load (7-day daily average): " + String(format: "%.1f", selectedSnapshot.acuteLoad) + " pts/day = " + String(format: "%.0f", selectedSnapshot.acuteTotal) + " / 7")
+                    Text("Acute Load (7-day EWMA): " + String(format: "%.1f", selectedSnapshot.acuteLoad) + " pts/day")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("Chronic Load (28-day average): " + String(format: "%.1f", selectedSnapshot.chronicLoad) + " pts/day = " + String(format: "%.0f", selectedSnapshot.chronicTotal) + " / 28")
+                    Text("Chronic Load (28-day EWMA): " + String(format: "%.1f", selectedSnapshot.chronicLoad) + " pts/day")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Window context: last 7 days session load " + String(format: "%.0f", selectedSnapshot.acuteTotal) + " pts • last 28 days session load " + String(format: "%.0f", selectedSnapshot.chronicTotal) + " pts")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     if status.hidesRatio {
-                        Text("ACWR is hidden while the baseline is being rebuilt.")
+                        Text("ACWR is hidden while the baseline is being rebuilt and calibrated.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {

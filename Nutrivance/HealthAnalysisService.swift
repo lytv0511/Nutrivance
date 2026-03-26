@@ -7,6 +7,7 @@
 
 import Foundation
 
+@MainActor
 class HealthAnalysisService: ObservableObject {
     @Published var isAnalyzing = false
     @Published var insights: String = ""

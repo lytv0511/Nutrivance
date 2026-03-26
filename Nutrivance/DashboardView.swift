@@ -76,6 +76,7 @@ private enum DashboardSnapshotPersistence {
 
 struct DashboardView: View {
     @StateObject var engine = HealthStateEngine.shared
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedChartRange: ChartRange = .month
     @State private var selectedMetric: MetricType = .recovery
     @State private var animationPhase: Double = 0
@@ -339,10 +340,29 @@ struct DashboardView: View {
         }
     }
 
+    private var cacheRefreshStatusText: String? {
+        if engine.isRefreshingCachedMetrics {
+            if let updatedAt = engine.cachedMetricsUpdatedAt {
+                return "Showing cached metrics from \(updatedAt.formatted(date: .abbreviated, time: .shortened)) while live values refresh in the background."
+            }
+            return "Refreshing live metrics in the background."
+        }
+
+        guard let updatedAt = engine.cachedMetricsUpdatedAt else { return nil }
+        return "Cached metrics last updated \(updatedAt.formatted(date: .abbreviated, time: .shortened))."
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
+                    if let cacheRefreshStatusText {
+                        Text(cacheRefreshStatusText)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     dashboardItemsSection()
                     feelGoodScoreSection()
                     acwrSection()
@@ -406,6 +426,11 @@ struct DashboardView: View {
                 dashboardItemOrder = saved.dashboardItemOrder
                 summaryCardsOrder = saved.summaryCardsOrder
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .background else { return }
+                dashboardRefreshTask?.cancel()
+                isRefreshingDashboardMetrics = false
+            }
             .onDisappear {
                 dashboardRefreshTask?.cancel()
             }
@@ -421,7 +446,7 @@ struct DashboardView: View {
         guard !Task.isCancelled else { return }
 
         await MainActor.run {
-            engine.refreshAllMetrics()
+            engine.refreshStartupMetrics()
         }
 
         guard !Task.isCancelled else { return }

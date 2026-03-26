@@ -393,7 +393,6 @@ extension HealthKitManager {
 extension HealthKitManager {
     /// Fetch all workouts in a given date range, and for each, fetch all heart rate samples during the workout.
     /// Prints all data fetched (workout summary and HR samples) to the terminal.
-    @MainActor
     func fetchWorkoutsAndHeartRates(from startDate: Date, to endDate: Date) async -> [(workout: HKWorkout, heartRates: [(Date, Double)])] {
         // Refactored to be fully async/await, no blocking
         let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
@@ -415,7 +414,6 @@ extension HealthKitManager {
     }
 
     /// Fetch all heart rate samples for a given workout.
-    @MainActor
     func fetchHeartRateSamples(for workout: HKWorkout) async -> [(Date, Double)] {
         guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return [] }
         let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
@@ -433,7 +431,6 @@ extension HealthKitManager {
 extension HealthKitManager {
     /// Async: Fetch post-workout heart rate recovery for the most recent workout.
     /// Returns: (recoveryBPM: Double, recoveryDelta: Double, recoveryTime: Double, workoutType: String, workoutDate: Date)?
-    @MainActor
     func fetchPostWorkoutHRRecovery() async -> (Double, Double, Double, String, Date)? {
         let workout = await withCheckedContinuation { continuation in
             self.fetchMostRecentWorkout { workout in
@@ -464,7 +461,6 @@ extension HealthKitManager {
 
     /// Async: Estimate VO2 max using best available method for the most recent workout.
     /// Uses HealthKit VO2 max if available, else estimates from HR and workout type.
-    @MainActor
     func fetchEstimatedVO2Max() async -> Double? {
         let workout = await withCheckedContinuation { continuation in
             self.fetchMostRecentWorkout { workout in
@@ -617,7 +613,6 @@ let additionalTypes: [(HKSampleType, String)] = [
     (HKObjectType.quantityType(forIdentifier: .physicalEffort)!, "physical_effort")
 ]
 
-@MainActor
 final class HealthKitManager: ObservableObject, @unchecked Sendable {
     let healthStore: HKHealthStore
     private var maxHR7DayCache: [Date: Double?] = [:]
@@ -2629,7 +2624,6 @@ extension HealthKitManager {
 
 extension HealthKitManager {
     /// Fetch all workouts in a date range with analytics (VO2 max, HRV trend, post-workout HR, recovery)
-    @MainActor
     func fetchWorkoutsWithAnalytics(
         from startDate: Date,
         to endDate: Date,
@@ -2732,7 +2726,6 @@ extension HealthKitManager {
     }
     
     /// Fetch peak HR from workouts in a date range
-    @MainActor
     func fetchPeakHRLast90Days(from startDate: Date) async -> Double? {
         let workouts: [HKWorkout] = await withCheckedContinuation { continuation in
             fetchWorkouts(from: startDate, to: Date()) { result in
@@ -2759,7 +2752,6 @@ extension HealthKitManager {
     
     /// Infer lactate threshold HR from recent workouts
     /// Uses 95th percentile of max HRs in high-intensity efforts (>80% estimated maxHR)
-    @MainActor
     func inferLactateThresholdHR(from startDate: Date = Date(timeIntervalSinceNow: -30 * 86400)) async -> Double? {
         let anchor = await fetchAnchorMetrics()
         guard let age = anchor.age else { return nil }

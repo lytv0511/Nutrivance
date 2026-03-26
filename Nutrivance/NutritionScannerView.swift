@@ -6,6 +6,7 @@ import UIKit
 #endif
 
 // ViewModel for managing nutrition scanning
+@MainActor
 class NutritionScannerViewModel: ObservableObject {
     @Published var isProcessing = false
     @Published var detectedNutrition: [NutritionDetection] = []

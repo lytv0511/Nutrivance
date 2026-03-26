@@ -10,6 +10,7 @@ struct NutritionGoal: Codable, Identifiable {
     let deadline: Date
 }
 
+@MainActor
 class GoalsViewModel: ObservableObject {
     @Published var goals: [NutritionGoal] = []
 }

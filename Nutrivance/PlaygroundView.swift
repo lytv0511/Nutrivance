@@ -197,6 +197,7 @@ struct PlaygroundPresetPicker: View {
 }
 
 
+@MainActor
 class PresetManager: ObservableObject {
     @Published var elements: [ResizableWidget] = []
     @Published var selectedPreset: Int = 0

@@ -256,6 +256,7 @@ enum SearchScope: String, CaseIterable, Hashable {
     }
 }
 
+@MainActor
 class NavigationState: ObservableObject {
     @Published var selectedView: String = "Dashboard"
     @Published var selectedRootTab: RootTabSelection = .dashboard
@@ -425,6 +426,7 @@ class NavigationState: ObservableObject {
     }
 }
 
+@MainActor
 class SearchState: ObservableObject {
     @Published var searchText = ""
     @Published var isSearching = false
@@ -489,6 +491,7 @@ struct NutrivanceApp: App {
                 .environmentObject(navigationState)
                 .environmentObject(searchState)
                 .onChange(of: scenePhase) { _, newPhase in
+                    HealthStateEngine.shared.handleScenePhaseChange(newPhase)
                     StrainRecoveryAggressiveCachingController.shared.handleScenePhaseChange(newPhase)
                 }
         }

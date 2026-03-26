@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import Combine
+import SwiftUI
 
 /// Central physiology engine for Nutrivance.
 /// All health calculations should live here, not in Views.
@@ -14,6 +15,168 @@ final class HealthStateEngine: ObservableObject {
     
     // Use a shared HealthKitManager instance
     private let hkManager = HealthKitManager()
+    private let metricsSnapshotFileName = "healthMetricsSnapshot.json"
+    private let metricsSnapshotCloudKey = "health_metrics_snapshot_v1"
+
+    struct PersistedDateValue: Codable {
+        let date: Date
+        let value: Double
+    }
+
+    struct PersistedDailyHRVPoint: Codable {
+        let date: Date
+        let average: Double
+        let min: Double
+        let max: Double
+    }
+
+    struct PersistedHRVSamplePoint: Codable {
+        let date: Date
+        let value: Double
+    }
+
+    struct PersistedRollingBaselineStats: Codable {
+        let mean: Double
+        let standardDeviation: Double
+        let sampleCount: Int
+    }
+
+    struct PersistedSleepStageDay: Codable {
+        let date: Date
+        let stages: [String: Double]
+    }
+
+    struct PersistedHeartRateZoneDay: Codable {
+        let date: Date
+        let zones: [String: Double]
+    }
+
+    struct PersistedStringDoubleValue: Codable {
+        let key: String
+        let value: Double
+    }
+
+    struct PersistedReadinessResult: Codable {
+        let score: Int
+        let confidence: Double
+        let primaryDriver: String
+    }
+
+    struct PersistedWorkoutSeriesPoint: Codable {
+        let date: Date
+        let value: Double
+    }
+
+    struct PersistedWorkoutZoneBreakdown: Codable {
+        let zone: HeartRateZone
+        let timeInZone: TimeInterval
+    }
+
+    struct PersistedWorkoutAnalyticsEntry: Codable {
+        let workoutStartDate: Date
+        let workoutEndDate: Date
+        let workoutDuration: Double
+        let workoutTypeRawValue: UInt
+        let totalEnergyBurnedKilocalories: Double?
+        let totalDistanceMeters: Double?
+        let metadata: [String: Double]
+        let heartRates: [PersistedWorkoutSeriesPoint]
+        let vo2Max: Double?
+        let metTotal: Double?
+        let metAverage: Double?
+        let metSeries: [PersistedWorkoutSeriesPoint]
+        let postWorkoutHRSeries: [PersistedWorkoutSeriesPoint]
+        let peakHR: Double?
+        let hrr0: Double?
+        let hrr1: Double?
+        let hrr2: Double?
+        let powerSeries: [PersistedWorkoutSeriesPoint]
+        let speedSeries: [PersistedWorkoutSeriesPoint]
+        let cadenceSeries: [PersistedWorkoutSeriesPoint]
+        let elevationSeries: [PersistedWorkoutSeriesPoint]
+        let elevationGain: Double?
+        let verticalOscillation: Double?
+        let groundContactTime: Double?
+        let strideLength: Double?
+        let hrZoneProfile: HRZoneProfile?
+        let hrZoneBreakdown: [PersistedWorkoutZoneBreakdown]
+    }
+
+    struct MetricsSnapshot: Codable {
+        let updatedAt: Date
+        let latestHRV: Double?
+        let restingHeartRate: Double?
+        let dailyRestingHeartRate: [PersistedDateValue]
+        let dailySleepDuration: [PersistedDateValue]
+        let sleepHours: Double?
+        let activityLoad: Double
+        let hrvHistory: [Double]
+        let hrvSampleHistory: [PersistedHRVSamplePoint]
+        let dailyHRV: [PersistedDailyHRVPoint]
+        let sleepHRVAverage: Double?
+        let lastSleepStart: Date?
+        let lastSleepEnd: Date?
+        let hrvBaseline7Day: Double?
+        let rhrBaseline7Day: Double?
+        let sleepBaseline7Day: Double?
+        let hrvBaseline28Day: Double?
+        let rhrBaseline28Day: Double?
+        let hrvBaseline60Day: PersistedRollingBaselineStats?
+        let rhrBaseline60Day: PersistedRollingBaselineStats?
+        let sleepBaseline60Day: PersistedRollingBaselineStats?
+        let estimatedMaxHeartRate: Double
+        let userAge: Double?
+        let acuteTrainingLoad: Double
+        let chronicTrainingLoad: Double
+        let trainingLoadRatio: Double
+        let functionalOverreachingFlag: Bool
+        let recoveryBaseline7Day: Double?
+        let strainBaseline7Day: Double?
+        let circadianBaseline7Day: Double?
+        let autonomicBaseline7Day: Double?
+        let moodBaseline7Day: Double?
+        let sleepStages: [PersistedSleepStageDay]
+        let sleepEfficiency: [PersistedDateValue]
+        let sleepConsistency: Double?
+        let sleepStartHours: [PersistedDateValue]
+        let sleepMidpointHours: [PersistedDateValue]
+        let dailySleepHeartRate: [PersistedDateValue]
+        let nightlyAnchoredHRV: [PersistedDateValue]
+        let effectHRV: [PersistedDateValue]
+        let basalSleepingHeartRate: [PersistedDateValue]
+        let anchoredSleepDuration: [PersistedDateValue]
+        let anchoredTimeInBed: [PersistedDateValue]
+        let readinessHRV: Double?
+        let readinessEffectHRV: Double?
+        let readinessBasalHeartRate: Double?
+        let readinessSleepDuration: Double?
+        let readinessTimeInBed: Double?
+        let readinessSleepEfficiency: Double?
+        let readinessSleepRatio: Double?
+        let workoutHRVDecay: [PersistedDateValue]
+        let recoverySuppressedFlag: Bool
+        let respiratoryRate: [PersistedDateValue]
+        let wristTemperature: [PersistedDateValue]
+        let spO2: [PersistedDateValue]
+        let postWorkoutHR: [PersistedDateValue]
+        let vo2Max: [PersistedDateValue]
+        let heartRateZones: [PersistedHeartRateZoneDay]
+        let kcalBurned: [PersistedDateValue]
+        let effortRating: [PersistedDateValue]
+        let favoriteSport: String?
+        let trainingFrequency: Double?
+        let trainingFrequencyBySport: [PersistedStringDoubleValue]
+        let recoveryScore: Double
+        let strainScore: Double
+        let readinessScore: Double
+        let hrvTrendScore: Double
+        let circadianHRVScore: Double
+        let sleepHRVScore: Double
+        let allostaticStressScore: Double
+        let autonomicBalanceScore: Double
+        let feelGoodScore: Double
+        let feelGoodReadiness: PersistedReadinessResult
+    }
 
     // MARK: - Workout/HR Data Cache
     private var allWorkoutHRCache: [(workout: HKWorkout, heartRates: [(Date, Double)])] = []
@@ -68,6 +231,16 @@ final class HealthStateEngine: ObservableObject {
     private var lastCachedWorkoutDate: Date? = nil // Tracks latest workout in persistent cache
     private var earliestRequestedWorkoutDate: Date? = nil
     private var diskCacheLoaded: Bool = false
+    private var metricsSnapshotSaveTask: Task<Void, Never>?
+    private var metricsSnapshotWriteTask: Task<Void, Never>?
+    private var metricsRefreshCompletionTask: Task<Void, Never>?
+    private var foregroundResumeTask: Task<Void, Never>?
+    private var cloudSnapshotObserver: NSObjectProtocol?
+    @Published private(set) var hasHydratedCachedMetrics: Bool = false
+    @Published private(set) var cachedMetricsUpdatedAt: Date?
+    @Published private(set) var isRefreshingCachedMetrics: Bool = false
+    @Published private(set) var requiresInitialFullSync: Bool = false
+    private var isAppActive = true
 
     // MARK: - Persistent Cache Management
     private func cacheDirectoryURL() -> URL? {
@@ -78,36 +251,465 @@ final class HealthStateEngine: ObservableObject {
         guard let dir = cacheDirectoryURL() else { return nil }
         return dir.appendingPathComponent(cacheFileName)
     }
+
+    private func metricsSnapshotURL() -> URL? {
+        guard let dir = cacheDirectoryURL() else { return nil }
+        return dir.appendingPathComponent(metricsSnapshotFileName)
+    }
+
+    private func sortedDateValues(from values: [Date: Double], limit: Int? = nil) -> [PersistedDateValue] {
+        let sorted = values
+            .map { PersistedDateValue(date: $0.key, value: $0.value) }
+            .sorted { $0.date < $1.date }
+        if let limit, sorted.count > limit {
+            return Array(sorted.suffix(limit))
+        }
+        return sorted
+    }
+
+    private func dateValueDictionary(from values: [PersistedDateValue]) -> [Date: Double] {
+        Dictionary(uniqueKeysWithValues: values.map { ($0.date, $0.value) })
+    }
+
+    private func currentMetricsSnapshot() -> MetricsSnapshot {
+        MetricsSnapshot(
+            updatedAt: Date(),
+            latestHRV: latestHRV,
+            restingHeartRate: restingHeartRate,
+            dailyRestingHeartRate: sortedDateValues(from: dailyRestingHeartRate),
+            dailySleepDuration: sortedDateValues(from: dailySleepDuration),
+            sleepHours: sleepHours,
+            activityLoad: activityLoad,
+            hrvHistory: hrvHistory,
+            hrvSampleHistory: hrvSampleHistory.map { PersistedHRVSamplePoint(date: $0.date, value: $0.value) },
+            dailyHRV: dailyHRV.map { PersistedDailyHRVPoint(date: $0.date, average: $0.average, min: $0.min, max: $0.max) },
+            sleepHRVAverage: sleepHRVAverage,
+            lastSleepStart: lastSleepStart,
+            lastSleepEnd: lastSleepEnd,
+            hrvBaseline7Day: hrvBaseline7Day,
+            rhrBaseline7Day: rhrBaseline7Day,
+            sleepBaseline7Day: sleepBaseline7Day,
+            hrvBaseline28Day: hrvBaseline28Day,
+            rhrBaseline28Day: rhrBaseline28Day,
+            hrvBaseline60Day: hrvBaseline60Day.map { PersistedRollingBaselineStats(mean: $0.mean, standardDeviation: $0.standardDeviation, sampleCount: $0.sampleCount) },
+            rhrBaseline60Day: rhrBaseline60Day.map { PersistedRollingBaselineStats(mean: $0.mean, standardDeviation: $0.standardDeviation, sampleCount: $0.sampleCount) },
+            sleepBaseline60Day: sleepBaseline60Day.map { PersistedRollingBaselineStats(mean: $0.mean, standardDeviation: $0.standardDeviation, sampleCount: $0.sampleCount) },
+            estimatedMaxHeartRate: estimatedMaxHeartRate,
+            userAge: userAge,
+            acuteTrainingLoad: acuteTrainingLoad,
+            chronicTrainingLoad: chronicTrainingLoad,
+            trainingLoadRatio: trainingLoadRatio,
+            functionalOverreachingFlag: functionalOverreachingFlag,
+            recoveryBaseline7Day: recoveryBaseline7Day,
+            strainBaseline7Day: strainBaseline7Day,
+            circadianBaseline7Day: circadianBaseline7Day,
+            autonomicBaseline7Day: autonomicBaseline7Day,
+            moodBaseline7Day: moodBaseline7Day,
+            sleepStages: sleepStages
+                .map { PersistedSleepStageDay(date: $0.key, stages: $0.value) }
+                .sorted { $0.date < $1.date },
+            sleepEfficiency: sortedDateValues(from: sleepEfficiency),
+            sleepConsistency: sleepConsistency,
+            sleepStartHours: sortedDateValues(from: sleepStartHours),
+            sleepMidpointHours: sortedDateValues(from: sleepMidpointHours),
+            dailySleepHeartRate: sortedDateValues(from: dailySleepHeartRate),
+            nightlyAnchoredHRV: sortedDateValues(from: nightlyAnchoredHRV),
+            effectHRV: sortedDateValues(from: effectHRV),
+            basalSleepingHeartRate: sortedDateValues(from: basalSleepingHeartRate),
+            anchoredSleepDuration: sortedDateValues(from: anchoredSleepDuration),
+            anchoredTimeInBed: sortedDateValues(from: anchoredTimeInBed),
+            readinessHRV: readinessHRV,
+            readinessEffectHRV: readinessEffectHRV,
+            readinessBasalHeartRate: readinessBasalHeartRate,
+            readinessSleepDuration: readinessSleepDuration,
+            readinessTimeInBed: readinessTimeInBed,
+            readinessSleepEfficiency: readinessSleepEfficiency,
+            readinessSleepRatio: readinessSleepRatio,
+            workoutHRVDecay: sortedDateValues(from: workoutHRVDecay),
+            recoverySuppressedFlag: recoverySuppressedFlag,
+            respiratoryRate: sortedDateValues(from: respiratoryRate),
+            wristTemperature: sortedDateValues(from: wristTemperature),
+            spO2: sortedDateValues(from: spO2),
+            postWorkoutHR: sortedDateValues(from: postWorkoutHR),
+            vo2Max: sortedDateValues(from: vo2Max),
+            heartRateZones: heartRateZones
+                .map { PersistedHeartRateZoneDay(date: $0.key, zones: $0.value) }
+                .sorted { $0.date < $1.date },
+            kcalBurned: sortedDateValues(from: kcalBurned),
+            effortRating: sortedDateValues(from: effortRating),
+            favoriteSport: favoriteSport,
+            trainingFrequency: trainingFrequency,
+            trainingFrequencyBySport: trainingFrequencyBySport
+                .map { PersistedStringDoubleValue(key: $0.key, value: $0.value) }
+                .sorted { $0.key < $1.key },
+            recoveryScore: recoveryScore,
+            strainScore: strainScore,
+            readinessScore: readinessScore,
+            hrvTrendScore: hrvTrendScore,
+            circadianHRVScore: circadianHRVScore,
+            sleepHRVScore: sleepHRVScore,
+            allostaticStressScore: allostaticStressScore,
+            autonomicBalanceScore: autonomicBalanceScore,
+            feelGoodScore: feelGoodScore,
+            feelGoodReadiness: PersistedReadinessResult(
+                score: feelGoodReadiness.score,
+                confidence: feelGoodReadiness.confidence,
+                primaryDriver: feelGoodReadiness.primaryDriver
+            )
+        )
+    }
+
+    private func cloudTrimmedSnapshot(from snapshot: MetricsSnapshot) -> MetricsSnapshot {
+        let dayLimit = 180
+        let sampleLimit = 600
+        return MetricsSnapshot(
+            updatedAt: snapshot.updatedAt,
+            latestHRV: snapshot.latestHRV,
+            restingHeartRate: snapshot.restingHeartRate,
+            dailyRestingHeartRate: Array(snapshot.dailyRestingHeartRate.suffix(dayLimit)),
+            dailySleepDuration: Array(snapshot.dailySleepDuration.suffix(dayLimit)),
+            sleepHours: snapshot.sleepHours,
+            activityLoad: snapshot.activityLoad,
+            hrvHistory: Array(snapshot.hrvHistory.suffix(180)),
+            hrvSampleHistory: Array(snapshot.hrvSampleHistory.suffix(sampleLimit)),
+            dailyHRV: Array(snapshot.dailyHRV.suffix(dayLimit)),
+            sleepHRVAverage: snapshot.sleepHRVAverage,
+            lastSleepStart: snapshot.lastSleepStart,
+            lastSleepEnd: snapshot.lastSleepEnd,
+            hrvBaseline7Day: snapshot.hrvBaseline7Day,
+            rhrBaseline7Day: snapshot.rhrBaseline7Day,
+            sleepBaseline7Day: snapshot.sleepBaseline7Day,
+            hrvBaseline28Day: snapshot.hrvBaseline28Day,
+            rhrBaseline28Day: snapshot.rhrBaseline28Day,
+            hrvBaseline60Day: snapshot.hrvBaseline60Day,
+            rhrBaseline60Day: snapshot.rhrBaseline60Day,
+            sleepBaseline60Day: snapshot.sleepBaseline60Day,
+            estimatedMaxHeartRate: snapshot.estimatedMaxHeartRate,
+            userAge: snapshot.userAge,
+            acuteTrainingLoad: snapshot.acuteTrainingLoad,
+            chronicTrainingLoad: snapshot.chronicTrainingLoad,
+            trainingLoadRatio: snapshot.trainingLoadRatio,
+            functionalOverreachingFlag: snapshot.functionalOverreachingFlag,
+            recoveryBaseline7Day: snapshot.recoveryBaseline7Day,
+            strainBaseline7Day: snapshot.strainBaseline7Day,
+            circadianBaseline7Day: snapshot.circadianBaseline7Day,
+            autonomicBaseline7Day: snapshot.autonomicBaseline7Day,
+            moodBaseline7Day: snapshot.moodBaseline7Day,
+            sleepStages: Array(snapshot.sleepStages.suffix(dayLimit)),
+            sleepEfficiency: Array(snapshot.sleepEfficiency.suffix(dayLimit)),
+            sleepConsistency: snapshot.sleepConsistency,
+            sleepStartHours: Array(snapshot.sleepStartHours.suffix(dayLimit)),
+            sleepMidpointHours: Array(snapshot.sleepMidpointHours.suffix(dayLimit)),
+            dailySleepHeartRate: Array(snapshot.dailySleepHeartRate.suffix(dayLimit)),
+            nightlyAnchoredHRV: Array(snapshot.nightlyAnchoredHRV.suffix(dayLimit)),
+            effectHRV: Array(snapshot.effectHRV.suffix(dayLimit)),
+            basalSleepingHeartRate: Array(snapshot.basalSleepingHeartRate.suffix(dayLimit)),
+            anchoredSleepDuration: Array(snapshot.anchoredSleepDuration.suffix(dayLimit)),
+            anchoredTimeInBed: Array(snapshot.anchoredTimeInBed.suffix(dayLimit)),
+            readinessHRV: snapshot.readinessHRV,
+            readinessEffectHRV: snapshot.readinessEffectHRV,
+            readinessBasalHeartRate: snapshot.readinessBasalHeartRate,
+            readinessSleepDuration: snapshot.readinessSleepDuration,
+            readinessTimeInBed: snapshot.readinessTimeInBed,
+            readinessSleepEfficiency: snapshot.readinessSleepEfficiency,
+            readinessSleepRatio: snapshot.readinessSleepRatio,
+            workoutHRVDecay: Array(snapshot.workoutHRVDecay.suffix(dayLimit)),
+            recoverySuppressedFlag: snapshot.recoverySuppressedFlag,
+            respiratoryRate: Array(snapshot.respiratoryRate.suffix(dayLimit)),
+            wristTemperature: Array(snapshot.wristTemperature.suffix(dayLimit)),
+            spO2: Array(snapshot.spO2.suffix(dayLimit)),
+            postWorkoutHR: Array(snapshot.postWorkoutHR.suffix(dayLimit)),
+            vo2Max: Array(snapshot.vo2Max.suffix(dayLimit)),
+            heartRateZones: Array(snapshot.heartRateZones.suffix(dayLimit)),
+            kcalBurned: Array(snapshot.kcalBurned.suffix(dayLimit)),
+            effortRating: Array(snapshot.effortRating.suffix(dayLimit)),
+            favoriteSport: snapshot.favoriteSport,
+            trainingFrequency: snapshot.trainingFrequency,
+            trainingFrequencyBySport: snapshot.trainingFrequencyBySport,
+            recoveryScore: snapshot.recoveryScore,
+            strainScore: snapshot.strainScore,
+            readinessScore: snapshot.readinessScore,
+            hrvTrendScore: snapshot.hrvTrendScore,
+            circadianHRVScore: snapshot.circadianHRVScore,
+            sleepHRVScore: snapshot.sleepHRVScore,
+            allostaticStressScore: snapshot.allostaticStressScore,
+            autonomicBalanceScore: snapshot.autonomicBalanceScore,
+            feelGoodScore: snapshot.feelGoodScore,
+            feelGoodReadiness: snapshot.feelGoodReadiness
+        )
+    }
+
+    private func loadMetricsSnapshotFromDisk() -> MetricsSnapshot? {
+        guard let url = metricsSnapshotURL(),
+              FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(MetricsSnapshot.self, from: data)
+    }
+
+    private func loadMetricsSnapshotFromCloud() -> MetricsSnapshot? {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        guard let data = cloudStore.data(forKey: metricsSnapshotCloudKey) else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(MetricsSnapshot.self, from: data)
+    }
+
+    private func applyMetricsSnapshot(_ snapshot: MetricsSnapshot) {
+        latestHRV = snapshot.latestHRV
+        restingHeartRate = snapshot.restingHeartRate
+        dailyRestingHeartRate = dateValueDictionary(from: snapshot.dailyRestingHeartRate)
+        dailySleepDuration = dateValueDictionary(from: snapshot.dailySleepDuration)
+        sleepHours = snapshot.sleepHours
+        activityLoad = snapshot.activityLoad
+        hrvHistory = snapshot.hrvHistory
+        hrvSampleHistory = snapshot.hrvSampleHistory.map { HRVSamplePoint(date: $0.date, value: $0.value) }
+        dailyHRV = snapshot.dailyHRV.map {
+            DailyHRVPoint(date: $0.date, average: $0.average, min: $0.min, max: $0.max)
+        }
+        sleepHRVAverage = snapshot.sleepHRVAverage
+        lastSleepStart = snapshot.lastSleepStart
+        lastSleepEnd = snapshot.lastSleepEnd
+        hrvBaseline7Day = snapshot.hrvBaseline7Day
+        rhrBaseline7Day = snapshot.rhrBaseline7Day
+        sleepBaseline7Day = snapshot.sleepBaseline7Day
+        hrvBaseline28Day = snapshot.hrvBaseline28Day
+        rhrBaseline28Day = snapshot.rhrBaseline28Day
+        hrvBaseline60Day = snapshot.hrvBaseline60Day.map {
+            RollingBaselineStats(mean: $0.mean, standardDeviation: $0.standardDeviation, sampleCount: $0.sampleCount)
+        }
+        rhrBaseline60Day = snapshot.rhrBaseline60Day.map {
+            RollingBaselineStats(mean: $0.mean, standardDeviation: $0.standardDeviation, sampleCount: $0.sampleCount)
+        }
+        sleepBaseline60Day = snapshot.sleepBaseline60Day.map {
+            RollingBaselineStats(mean: $0.mean, standardDeviation: $0.standardDeviation, sampleCount: $0.sampleCount)
+        }
+        estimatedMaxHeartRate = snapshot.estimatedMaxHeartRate
+        userAge = snapshot.userAge
+        acuteTrainingLoad = snapshot.acuteTrainingLoad
+        chronicTrainingLoad = snapshot.chronicTrainingLoad
+        trainingLoadRatio = snapshot.trainingLoadRatio
+        functionalOverreachingFlag = snapshot.functionalOverreachingFlag
+        recoveryBaseline7Day = snapshot.recoveryBaseline7Day
+        strainBaseline7Day = snapshot.strainBaseline7Day
+        circadianBaseline7Day = snapshot.circadianBaseline7Day
+        autonomicBaseline7Day = snapshot.autonomicBaseline7Day
+        moodBaseline7Day = snapshot.moodBaseline7Day
+        sleepStages = Dictionary(uniqueKeysWithValues: snapshot.sleepStages.map { ($0.date, $0.stages) })
+        sleepEfficiency = dateValueDictionary(from: snapshot.sleepEfficiency)
+        sleepConsistency = snapshot.sleepConsistency
+        sleepStartHours = dateValueDictionary(from: snapshot.sleepStartHours)
+        sleepMidpointHours = dateValueDictionary(from: snapshot.sleepMidpointHours)
+        dailySleepHeartRate = dateValueDictionary(from: snapshot.dailySleepHeartRate)
+        nightlyAnchoredHRV = dateValueDictionary(from: snapshot.nightlyAnchoredHRV)
+        effectHRV = dateValueDictionary(from: snapshot.effectHRV)
+        basalSleepingHeartRate = dateValueDictionary(from: snapshot.basalSleepingHeartRate)
+        anchoredSleepDuration = dateValueDictionary(from: snapshot.anchoredSleepDuration)
+        anchoredTimeInBed = dateValueDictionary(from: snapshot.anchoredTimeInBed)
+        readinessHRV = snapshot.readinessHRV
+        readinessEffectHRV = snapshot.readinessEffectHRV
+        readinessBasalHeartRate = snapshot.readinessBasalHeartRate
+        readinessSleepDuration = snapshot.readinessSleepDuration
+        readinessTimeInBed = snapshot.readinessTimeInBed
+        readinessSleepEfficiency = snapshot.readinessSleepEfficiency
+        readinessSleepRatio = snapshot.readinessSleepRatio
+        workoutHRVDecay = dateValueDictionary(from: snapshot.workoutHRVDecay)
+        recoverySuppressedFlag = snapshot.recoverySuppressedFlag
+        respiratoryRate = dateValueDictionary(from: snapshot.respiratoryRate)
+        wristTemperature = dateValueDictionary(from: snapshot.wristTemperature)
+        spO2 = dateValueDictionary(from: snapshot.spO2)
+        postWorkoutHR = dateValueDictionary(from: snapshot.postWorkoutHR)
+        vo2Max = dateValueDictionary(from: snapshot.vo2Max)
+        heartRateZones = Dictionary(uniqueKeysWithValues: snapshot.heartRateZones.map { ($0.date, $0.zones) })
+        kcalBurned = dateValueDictionary(from: snapshot.kcalBurned)
+        effortRating = dateValueDictionary(from: snapshot.effortRating)
+        favoriteSport = snapshot.favoriteSport
+        trainingFrequency = snapshot.trainingFrequency
+        trainingFrequencyBySport = Dictionary(uniqueKeysWithValues: snapshot.trainingFrequencyBySport.map { ($0.key, $0.value) })
+        recoveryScore = snapshot.recoveryScore
+        strainScore = snapshot.strainScore
+        readinessScore = snapshot.readinessScore
+        hrvTrendScore = snapshot.hrvTrendScore
+        circadianHRVScore = snapshot.circadianHRVScore
+        sleepHRVScore = snapshot.sleepHRVScore
+        allostaticStressScore = snapshot.allostaticStressScore
+        autonomicBalanceScore = snapshot.autonomicBalanceScore
+        feelGoodScore = snapshot.feelGoodScore
+        feelGoodReadiness = ReadinessResult(
+            score: snapshot.feelGoodReadiness.score,
+            confidence: snapshot.feelGoodReadiness.confidence,
+            primaryDriver: snapshot.feelGoodReadiness.primaryDriver
+        )
+        cachedMetricsUpdatedAt = snapshot.updatedAt
+        hasHydratedCachedMetrics = true
+    }
+
+    private func hydrateMetricsFromCacheIfAvailable() {
+        let localSnapshot = loadMetricsSnapshotFromDisk()
+        let cloudSnapshot = loadMetricsSnapshotFromCloud()
+
+        let bestSnapshot = [localSnapshot, cloudSnapshot]
+            .compactMap { $0 }
+            .max(by: { $0.updatedAt < $1.updatedAt })
+
+        guard let bestSnapshot else { return }
+        applyMetricsSnapshot(bestSnapshot)
+    }
+
+    private func saveMetricsSnapshotNow() {
+        guard isAppActive else { return }
+        let snapshot = currentMetricsSnapshot()
+        cachedMetricsUpdatedAt = snapshot.updatedAt
+        hasHydratedCachedMetrics = true
+
+        let localURL = metricsSnapshotURL()
+        let cloudKey = metricsSnapshotCloudKey
+        let cloudSnapshot = cloudTrimmedSnapshot(from: snapshot)
+        metricsSnapshotWriteTask?.cancel()
+        metricsSnapshotWriteTask = Task.detached(priority: .utility) {
+            if let url = localURL,
+               let localData = try? JSONEncoder().encode(snapshot) {
+                try? localData.write(to: url, options: .atomic)
+            }
+
+            if let cloudData = try? JSONEncoder().encode(cloudSnapshot) {
+                let cloudStore = NSUbiquitousKeyValueStore.default
+                cloudStore.set(cloudData, forKey: cloudKey)
+            }
+        }
+    }
+
+    private func scheduleMetricsSnapshotSave(delayNanoseconds: UInt64 = 600_000_000) {
+        metricsSnapshotSaveTask?.cancel()
+        metricsSnapshotSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard let self, !Task.isCancelled, self.isAppActive else { return }
+            self.saveMetricsSnapshotNow()
+        }
+    }
+
+    private func beginBackgroundMetricsRefreshWindow() {
+        isRefreshingCachedMetrics = true
+        metricsRefreshCompletionTask?.cancel()
+        metricsRefreshCompletionTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.isRefreshingCachedMetrics = false
+            self.scheduleMetricsSnapshotSave(delayNanoseconds: 200_000_000)
+        }
+    }
     
     /// Save complete cache metadata for fast load on app restart
     private func savePersistentCacheMetadata(_ analytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) {
         guard let url = persistentCacheURL() else { return }
-        let cacheData = analytics.map { pair -> [String: Any] in
-            // Store essential metrics that define a workout display
-            var dict: [String: Any] = [
-                "workoutStartDate": pair.workout.startDate.timeIntervalSince1970,
-                "workoutEndDate": pair.workout.endDate.timeIntervalSince1970,
-                "workoutDuration": pair.workout.duration,
-                "workoutType": pair.workout.workoutActivityType.rawValue,
-                "metTotal": pair.analytics.metTotal ?? 0,
-                "vo2Max": pair.analytics.vo2Max ?? 0,
-                "avgHR": pair.analytics.heartRates.map { $0.1 }.average ?? 0,
-                "peakHR": pair.analytics.peakHR ?? 0,
-                "totalKcal": pair.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0,
-                "distance": pair.workout.totalDistance?.doubleValue(for: .meter()) ?? 0,
-                "elevationGain": pair.analytics.elevationGain ?? 0
-            ]
-            return dict
+        let encoder = JSONEncoder()
+        let cacheEntries = analytics.map { pair -> PersistedWorkoutAnalyticsEntry in
+            let numericMetadata = (pair.workout.metadata ?? [:]).reduce(into: [String: Double]()) { partial, item in
+                if let number = item.value as? NSNumber {
+                    partial[item.key] = number.doubleValue
+                } else if let value = item.value as? Double {
+                    partial[item.key] = value
+                }
+            }
+
+            return PersistedWorkoutAnalyticsEntry(
+                workoutStartDate: pair.workout.startDate,
+                workoutEndDate: pair.workout.endDate,
+                workoutDuration: pair.workout.duration,
+                workoutTypeRawValue: pair.workout.workoutActivityType.rawValue,
+                totalEnergyBurnedKilocalories: pair.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()),
+                totalDistanceMeters: pair.workout.totalDistance?.doubleValue(for: .meter()),
+                metadata: numericMetadata,
+                heartRates: pair.analytics.heartRates.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                vo2Max: pair.analytics.vo2Max,
+                metTotal: pair.analytics.metTotal,
+                metAverage: pair.analytics.metAverage,
+                metSeries: pair.analytics.metSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                postWorkoutHRSeries: pair.analytics.postWorkoutHRSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                peakHR: pair.analytics.peakHR,
+                hrr0: pair.analytics.hrr0,
+                hrr1: pair.analytics.hrr1,
+                hrr2: pair.analytics.hrr2,
+                powerSeries: pair.analytics.powerSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                speedSeries: pair.analytics.speedSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                cadenceSeries: pair.analytics.cadenceSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                elevationSeries: pair.analytics.elevationSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                elevationGain: pair.analytics.elevationGain,
+                verticalOscillation: pair.analytics.verticalOscillation,
+                groundContactTime: pair.analytics.groundContactTime,
+                strideLength: pair.analytics.strideLength,
+                hrZoneProfile: pair.analytics.hrZoneProfile,
+                hrZoneBreakdown: pair.analytics.hrZoneBreakdown.map {
+                    PersistedWorkoutZoneBreakdown(zone: $0.zone, timeInZone: $0.timeInZone)
+                }
+            )
         }
         do {
-            let jsonData = try JSONSerialization.data(withJSONObject: cacheData, options: .prettyPrinted)
+            let jsonData = try encoder.encode(cacheEntries)
             try jsonData.write(to: url, options: .atomicWrite)
-            print("[Cache] Saved \(cacheData.count) workouts to disk")
+            print("[Cache] Saved \(cacheEntries.count) workouts to disk")
         } catch {
             print("Failed to save persistent cache: \(error)")
         }
     }
-    
+
+    private func rebuildWorkoutAnalytics(from cacheEntries: [PersistedWorkoutAnalyticsEntry]) -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        cacheEntries.compactMap { entry in
+            guard let activityType = HKWorkoutActivityType(rawValue: entry.workoutTypeRawValue) else {
+                return nil
+            }
+
+            let totalEnergyBurned = entry.totalEnergyBurnedKilocalories.map {
+                HKQuantity(unit: .kilocalorie(), doubleValue: $0)
+            }
+            let totalDistance = entry.totalDistanceMeters.map {
+                HKQuantity(unit: .meter(), doubleValue: $0)
+            }
+            let workoutMetadata = entry.metadata.isEmpty ? nil : entry.metadata.reduce(into: [String: Any]()) { partial, item in
+                partial[item.key] = item.value
+            }
+
+            let workout = HKWorkout(
+                activityType: activityType,
+                start: entry.workoutStartDate,
+                end: entry.workoutEndDate,
+                duration: entry.workoutDuration,
+                totalEnergyBurned: totalEnergyBurned,
+                totalDistance: totalDistance,
+                metadata: workoutMetadata
+            )
+
+            let analytics = WorkoutAnalytics(
+                workout: workout,
+                heartRates: entry.heartRates.map { ($0.date, $0.value) },
+                vo2Max: entry.vo2Max,
+                metTotal: entry.metTotal,
+                metAverage: entry.metAverage,
+                metSeries: entry.metSeries.map { ($0.date, $0.value) },
+                postWorkoutHRSeries: entry.postWorkoutHRSeries.map { ($0.date, $0.value) },
+                peakHR: entry.peakHR,
+                hrr0: entry.hrr0,
+                hrr1: entry.hrr1,
+                hrr2: entry.hrr2,
+                powerSeries: entry.powerSeries.map { ($0.date, $0.value) },
+                speedSeries: entry.speedSeries.map { ($0.date, $0.value) },
+                cadenceSeries: entry.cadenceSeries.map { ($0.date, $0.value) },
+                elevationSeries: entry.elevationSeries.map { ($0.date, $0.value) },
+                elevationGain: entry.elevationGain,
+                verticalOscillation: entry.verticalOscillation,
+                groundContactTime: entry.groundContactTime,
+                strideLength: entry.strideLength,
+                hrZoneProfile: entry.hrZoneProfile,
+                hrZoneBreakdown: entry.hrZoneBreakdown.map { ($0.zone, $0.timeInZone) }
+            )
+
+            return (workout, analytics)
+        }
+    }
+
     /// Check if persistent cache exists and extract metadata for differential refresh
     /// This runs synchronously and reads cache metadata only, not full objects
     private func loadCachedAnalyticsFromDisk() -> [CachedWorkoutSummary] {
@@ -115,63 +717,40 @@ final class HealthStateEngine: ObservableObject {
             print("[Cache] No persistent cache file found")
             return []
         }
-        
+
         do {
             let data = try Data(contentsOf: url)
-            if let cacheArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                print("[Cache] Cache file exists with \(cacheArray.count) workouts")
-                let summaries = cacheArray.compactMap { dict -> CachedWorkoutSummary? in
-                    guard let startTime = dict["workoutStartDate"] as? TimeInterval else { return nil }
-                    return CachedWorkoutSummary(
-                        startDate: Date(timeIntervalSince1970: startTime),
-                        endDate: Date(timeIntervalSince1970: (dict["workoutEndDate"] as? TimeInterval) ?? startTime),
-                        duration: (dict["workoutDuration"] as? Double) ?? 0,
-                        workoutType: dict["workoutType"] as? String ?? "other",
-                        metTotal: (dict["metTotal"] as? Double) ?? 0,
-                        vo2Max: dict["vo2Max"] as? Double,
-                        avgHR: (dict["avgHR"] as? Double) ?? 0,
-                        peakHR: dict["peakHR"] as? Double,
-                        totalKcal: (dict["totalKcal"] as? Double) ?? 0,
-                        distance: (dict["distance"] as? Double) ?? 0
-                    )
-                }
-                return summaries
+            let cacheEntries = try JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data)
+            print("[Cache] Cache file exists with \(cacheEntries.count) workouts")
+            let summaries = cacheEntries.map { entry in
+                CachedWorkoutSummary(
+                    startDate: entry.workoutStartDate,
+                    endDate: entry.workoutEndDate,
+                    duration: entry.workoutDuration,
+                    workoutType: HKWorkoutActivityType(rawValue: entry.workoutTypeRawValue)?.name ?? "other",
+                    metTotal: entry.metTotal ?? 0,
+                    vo2Max: entry.vo2Max,
+                    avgHR: entry.heartRates.map(\.value).average ?? 0,
+                    peakHR: entry.peakHR,
+                    totalKcal: entry.totalEnergyBurnedKilocalories ?? 0,
+                    distance: entry.totalDistanceMeters ?? 0
+                )
             }
+                return summaries
         } catch {
             print("[Cache] Failed to load persistent cache: \(error)")
         }
         return []
     }
-    
-    /// Load cache synchronously from disk - returns immediately without blocking
-    private func loadCachedWorkoutsFromDisk() -> [CachedWorkoutSummary] {
-        guard let url = persistentCacheURL(), FileManager.default.fileExists(atPath: url.path) else {
+
+    private func loadPersistedWorkoutAnalyticsEntries() -> [PersistedWorkoutAnalyticsEntry] {
+        guard let url = persistentCacheURL(),
+              FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url) else {
             return []
         }
-        
-        do {
-            let data = try Data(contentsOf: url)
-            if let cacheArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                return cacheArray.compactMap { dict in
-                    guard let startTime = dict["workoutStartDate"] as? TimeInterval else { return nil }
-                    return CachedWorkoutSummary(
-                        startDate: Date(timeIntervalSince1970: startTime),
-                        endDate: Date(timeIntervalSince1970: (dict["workoutEndDate"] as? TimeInterval) ?? startTime),
-                        duration: (dict["workoutDuration"] as? Double) ?? 0,
-                        workoutType: dict["workoutType"] as? String ?? "other",
-                        metTotal: (dict["metTotal"] as? Double) ?? 0,
-                        vo2Max: dict["vo2Max"] as? Double,
-                        avgHR: (dict["avgHR"] as? Double) ?? 0,
-                        peakHR: dict["peakHR"] as? Double,
-                        totalKcal: (dict["totalKcal"] as? Double) ?? 0,
-                        distance: (dict["distance"] as? Double) ?? 0
-                    )
-                }
-            }
-        } catch {
-            print("Failed to load persistent cache: \(error)")
-        }
-        return []
+
+        return (try? JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data)) ?? []
     }
     
     private func loadPersistentCache() {
@@ -182,12 +761,9 @@ final class HealthStateEngine: ObservableObject {
         
         do {
             let data = try Data(contentsOf: url)
-            if let cacheArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                let maxDate = cacheArray.compactMap { $0["workoutStartDate"] as? TimeInterval }
-                    .map { Date(timeIntervalSince1970: $0) }
-                    .max()
-                lastCachedWorkoutDate = maxDate
-            }
+            let cacheEntries = try JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data)
+            lastCachedWorkoutDate = cacheEntries.map(\.workoutStartDate).max()
+            earliestRequestedWorkoutDate = cacheEntries.map(\.workoutStartDate).min()
             diskCacheLoaded = true
         } catch {
             print("Failed to load persistent cache: \(error)")
@@ -267,14 +843,30 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Sleep Quality Fetch (stages, efficiency, consistency)
     private func fetchSleepQuality(days: Int = 28) {
-        guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return }
         let calendar = Calendar.current
         let endDate = Date()
         let startDate = calendar.date(byAdding: .day, value: -days, to: endDate) ?? endDate
+        fetchSleepQuality(from: startDate, to: endDate, mergeIntoExisting: false)
+    }
+
+    private func fetchSleepQuality(
+        from startDate: Date,
+        to endDate: Date,
+        mergeIntoExisting: Bool,
+        completion: (() -> Void)? = nil
+    ) {
+        guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else {
+            completion?()
+            return
+        }
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate)
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
         let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, error in
-            guard let samples = samples as? [HKCategorySample], error == nil else { return }
+            guard let samples = samples as? [HKCategorySample], error == nil else {
+                completion?()
+                return
+            }
+            let calendar = Calendar.current
             var stages: [Date: [String: Double]] = [:]
             var efficiency: [Date: Double] = [:]
             var bedtimeHours: [Date: Double] = [:]
@@ -382,29 +974,56 @@ final class HealthStateEngine: ObservableObject {
                 consistency = sqrt(variance)
             }
             DispatchQueue.main.async {
-                // Remove inBed from stages
-                self.sleepStages = stages.mapValues { dict in
+                let sanitizedStages = stages.mapValues { dict in
                     var d = dict
                     d.removeValue(forKey: "inBed")
                     return d
                 }
-                self.sleepEfficiency = efficiency
-                self.sleepConsistency = consistency
-                self.sleepStartHours = bedtimeHours
-                self.sleepMidpointHours = midpointHours
+
+                if mergeIntoExisting {
+                    self.sleepStages.merge(sanitizedStages) { _, new in new }
+                    self.sleepEfficiency.merge(efficiency) { _, new in new }
+                    self.sleepStartHours.merge(bedtimeHours) { _, new in new }
+                    self.sleepMidpointHours.merge(midpointHours) { _, new in new }
+                } else {
+                    self.sleepStages = sanitizedStages
+                    self.sleepEfficiency = efficiency
+                    self.sleepStartHours = bedtimeHours
+                    self.sleepMidpointHours = midpointHours
+                }
+
+                let midpointValues = self.sleepMidpointHours.values.map { $0 }
+                if !midpointValues.isEmpty {
+                    let mean = midpointValues.reduce(0, +) / Double(midpointValues.count)
+                    let variance = midpointValues.map { pow($0 - mean, 2) }.reduce(0, +) / Double(midpointValues.count)
+                    self.sleepConsistency = sqrt(variance)
+                } else {
+                    self.sleepConsistency = consistency
+                }
             }
             
             Task { @MainActor in
+                var pending = 2
+                let finish: () -> Void = {
+                    pending -= 1
+                    if pending == 0 {
+                        completion?()
+                    }
+                }
                 self.fetchSleepHeartRateHistory(
                     sleepWindows: sleepWindows,
                     queryStart: startDate,
-                    queryEnd: endDate
+                    queryEnd: endDate,
+                    mergeIntoExisting: mergeIntoExisting,
+                    completion: finish
                 )
                 self.fetchSleepAnchoredRecoveryHistory(
                     stageSleepWindows: mergedStageWindows,
                     inBedSleepWindows: mergedInBedWindows,
                     queryStart: startDate,
-                    queryEnd: endDate
+                    queryEnd: endDate,
+                    mergeIntoExisting: mergeIntoExisting,
+                    completion: finish
                 )
             }
         }
@@ -414,15 +1033,23 @@ final class HealthStateEngine: ObservableObject {
     private func fetchSleepHeartRateHistory(
         sleepWindows: [Date: [(start: Date, end: Date)]],
         queryStart: Date,
-        queryEnd: Date
+        queryEnd: Date,
+        mergeIntoExisting: Bool = false,
+        completion: (() -> Void)? = nil
     ) {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+        guard let type = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
+            completion?()
+            return
+        }
         
         let sortedDays = sleepWindows.keys.sorted(by: >)
         guard !sortedDays.isEmpty else {
             DispatchQueue.main.async {
-                self.dailySleepHeartRate = [:]
+                if !mergeIntoExisting {
+                    self.dailySleepHeartRate = [:]
+                }
             }
+            completion?()
             return
         }
         
@@ -431,7 +1058,7 @@ final class HealthStateEngine: ObservableObject {
         let subsequentBatchDays = 120
         
         Task {
-            var aggregated: [Date: Double] = [:]
+            var aggregated: [Date: Double] = mergeIntoExisting ? self.dailySleepHeartRate : [:]
             var cursor = 0
             
             while cursor < sortedDays.count {
@@ -454,6 +1081,8 @@ final class HealthStateEngine: ObservableObject {
                 
                 cursor = end
             }
+
+            completion?()
         }
     }
     
@@ -562,10 +1191,15 @@ final class HealthStateEngine: ObservableObject {
         stageSleepWindows: [Date: [(start: Date, end: Date)]],
         inBedSleepWindows: [Date: [(start: Date, end: Date)]],
         queryStart: Date,
-        queryEnd: Date
+        queryEnd: Date,
+        mergeIntoExisting: Bool = false,
+        completion: (() -> Void)? = nil
     ) {
         guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN),
-              let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+              let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
+            completion?()
+            return
+        }
 
         Task {
             let result = await self.computeSleepAnchoredRecoveryHistory(
@@ -578,7 +1212,11 @@ final class HealthStateEngine: ObservableObject {
             )
 
             await MainActor.run {
-                self.nightlyAnchoredHRV = result.reduce(into: [:]) { $0[$1.key] = $1.value.anchoredHRV }
+                var mergedNightlyAnchoredHRV = mergeIntoExisting ? self.nightlyAnchoredHRV : [:]
+                for (day, value) in result {
+                    mergedNightlyAnchoredHRV[day] = value.anchoredHRV
+                }
+                self.nightlyAnchoredHRV = mergedNightlyAnchoredHRV
                 let sortedDays = self.nightlyAnchoredHRV.keys.sorted()
                 var smoothedEffectHRV: [Date: Double] = [:]
                 var previousEffectiveHRV: Double?
@@ -589,9 +1227,17 @@ final class HealthStateEngine: ObservableObject {
                     previousEffectiveHRV = effectiveHRV
                 }
                 self.effectHRV = smoothedEffectHRV
-                self.basalSleepingHeartRate = result.reduce(into: [:]) { $0[$1.key] = $1.value.basalHeartRate }
-                self.anchoredSleepDuration = result.reduce(into: [:]) { $0[$1.key] = $1.value.asleepHours }
-                self.anchoredTimeInBed = result.reduce(into: [:]) { $0[$1.key] = $1.value.timeInBedHours }
+                var mergedBasalHeartRate = mergeIntoExisting ? self.basalSleepingHeartRate : [:]
+                var mergedSleepDuration = mergeIntoExisting ? self.anchoredSleepDuration : [:]
+                var mergedTimeInBed = mergeIntoExisting ? self.anchoredTimeInBed : [:]
+                for (day, value) in result {
+                    mergedBasalHeartRate[day] = value.basalHeartRate
+                    mergedSleepDuration[day] = value.asleepHours
+                    mergedTimeInBed[day] = value.timeInBedHours
+                }
+                self.basalSleepingHeartRate = mergedBasalHeartRate
+                self.anchoredSleepDuration = mergedSleepDuration
+                self.anchoredTimeInBed = mergedTimeInBed
 
                 if let latestDay = result.keys.max(), let latest = result[latestDay] {
                     self.readinessHRV = latest.anchoredHRV
@@ -617,6 +1263,7 @@ final class HealthStateEngine: ObservableObject {
                     self.lastSleepEnd = latestRecentWindow.key.addingTimeInterval(latestRecentWindow.value.asleepHours * 3600)
                 }
                 self.scheduleScoresRefresh()
+                completion?()
             }
         }
     }
@@ -1524,6 +2171,21 @@ final class HealthStateEngine: ObservableObject {
     init() {
         // Load persistent cache on startup (synchronously)
         loadPersistentCache()
+        hydrateMetricsFromCacheIfAvailable()
+        cloudSnapshotObserver = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: NSUbiquitousKeyValueStore.default,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            guard self.isAppActive else { return }
+            guard let snapshot = self.loadMetricsSnapshotFromCloud() else { return }
+            if let cachedMetricsUpdatedAt = self.cachedMetricsUpdatedAt,
+               cachedMetricsUpdatedAt >= snapshot.updatedAt {
+                return
+            }
+            self.applyMetricsSnapshot(snapshot)
+        }
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1539,13 +2201,51 @@ final class HealthStateEngine: ObservableObject {
             self.hkManager.requestAuthorization { [weak self] success, error in
                 DispatchQueue.main.async {
                     if success {
-                        self?.refreshAllMetrics()
+                        guard let self else { return }
+                        if self.requiresInitialFullSync {
+                            self.refreshAllMetrics(force: true)
+                        } else {
+                            self.refreshStartupMetrics()
+                        }
                     } else {
                         print("HealthKit authorization failed: \(error?.localizedDescription ?? "Unknown error")")
                     }
                 }
             }
         }
+    }
+
+    deinit {
+        if let cloudSnapshotObserver {
+            NotificationCenter.default.removeObserver(cloudSnapshotObserver)
+        }
+    }
+
+    func handleScenePhaseChange(_ scenePhase: ScenePhase) {
+        if scenePhase == .active {
+            isAppActive = true
+            foregroundResumeTask?.cancel()
+            foregroundResumeTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard let self, !Task.isCancelled, self.isAppActive else { return }
+                self.refreshStartupMetrics()
+            }
+            return
+        }
+
+        guard scenePhase == .background else { return }
+
+        isAppActive = false
+
+        foregroundResumeTask?.cancel()
+        scoreRefreshTask?.cancel()
+        metricsSnapshotSaveTask?.cancel()
+        metricsSnapshotWriteTask?.cancel()
+        metricsRefreshCompletionTask?.cancel()
+        smartDifferentialRefreshTask?.cancel()
+        historicalBatchLoadTask?.cancel()
+
+        isRefreshingCachedMetrics = false
     }
 
     // MARK: - Analytics Cache Helpers
@@ -1575,6 +2275,7 @@ final class HealthStateEngine: ObservableObject {
             return
         }
         lastMetricsRefreshAt = Date()
+        beginBackgroundMetricsRefreshWindow()
 
         // All fetches are now on the main actor
         self.fetchLatestHRV()
@@ -1595,8 +2296,43 @@ final class HealthStateEngine: ObservableObject {
             self.userAge = age
             self.estimatedMaxHeartRate = Self.estimateMaxHeartRateNes(age: age)
             self.scheduleScoresRefresh()
+            self.scheduleMetricsSnapshotSave()
         }
         self.updateScores()
+        self.scheduleMetricsSnapshotSave(delayNanoseconds: 2_000_000_000)
+    }
+
+    func refreshStartupMetrics(force: Bool = false) {
+        if !force, AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            return
+        }
+
+        if !force,
+           let lastMetricsRefreshAt,
+           Date().timeIntervalSince(lastMetricsRefreshAt) < metricsRefreshCooldown {
+            return
+        }
+        lastMetricsRefreshAt = Date()
+        beginBackgroundMetricsRefreshWindow()
+
+        // Startup should only refresh lightweight, user-visible summary metrics.
+        self.fetchLatestHRV()
+        self.fetchRestingHeartRate()
+        self.fetchSleep()
+        self.fetchBaselines()
+        self.fetchTrainingLoad()
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let age = await self.hkManager.fetchAgeAsync()
+            self.userAge = age
+            self.estimatedMaxHeartRate = Self.estimateMaxHeartRateNes(age: age)
+            self.scheduleScoresRefresh()
+            self.scheduleMetricsSnapshotSave()
+        }
+
+        self.updateScores()
+        self.scheduleMetricsSnapshotSave(delayNanoseconds: 1_000_000_000)
     }
     
     private func scheduleScoresRefresh() {
@@ -1605,6 +2341,7 @@ final class HealthStateEngine: ObservableObject {
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard let self = self, !Task.isCancelled else { return }
             self.updateScores()
+            self.scheduleMetricsSnapshotSave()
         }
     }
 
@@ -1616,6 +2353,18 @@ final class HealthStateEngine: ObservableObject {
         }
 
         if !forceRefresh, activeWorkoutRefreshDays == days {
+            return
+        }
+
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
+
+        if !forceRefresh,
+           !workoutAnalytics.isEmpty,
+           !needsWorkoutAnalyticsCoverage(from: start, to: end) {
+            workoutAnalyticsCacheTimestamp = Date()
+            lastCacheDaysRequested = days
+            hasInitializedWorkoutAnalytics = true
             return
         }
 
@@ -1631,8 +2380,6 @@ final class HealthStateEngine: ObservableObject {
             }
         }
 
-        let end = Date()
-        let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
         let analytics = await hkManager.fetchWorkoutsWithAnalytics(
             from: start,
             to: end,
@@ -1645,6 +2392,7 @@ final class HealthStateEngine: ObservableObject {
         self.lastCachedWorkoutDate = analytics.map { $0.workout.startDate }.max()
         self.hasInitializedWorkoutAnalytics = true // Mark initial load complete
         savePersistentCacheMetadata(analytics)
+        scheduleMetricsSnapshotSave()
     }
     
     /// Check if the current cache is valid
@@ -1670,30 +2418,42 @@ final class HealthStateEngine: ObservableObject {
         guard !hasStartedInitialDifferentialRefresh else { return }
         hasStartedInitialDifferentialRefresh = true
 
-        // CRITICAL: Check for persistent cache synchronously
-        // Mark initialized immediately - view won't show stale data
-        let cachedSummaries = loadCachedAnalyticsFromDisk()
-        
-        if !cachedSummaries.isEmpty {
-            // Cache exists - extract latest date for differential refresh
-            self.lastCachedWorkoutDate = cachedSummaries.map { $0.startDate }.max()
-            print("[Cache] ✅ Found cached data for \(cachedSummaries.count) workouts (latest: \(self.lastCachedWorkoutDate?.formatted() ?? "unknown"))")
-        } else {
-            print("[Cache] No cached workouts found, will fetch all from HealthKit")
+        let cachedEntries = loadPersistedWorkoutAnalyticsEntries()
+        let cachedSummaries = cachedEntries.map { entry in
+            CachedWorkoutSummary(
+                startDate: entry.workoutStartDate,
+                endDate: entry.workoutEndDate,
+                duration: entry.workoutDuration,
+                workoutType: HKWorkoutActivityType(rawValue: entry.workoutTypeRawValue)?.name ?? "other",
+                metTotal: entry.metTotal ?? 0,
+                vo2Max: entry.vo2Max,
+                avgHR: entry.heartRates.map(\.value).average ?? 0,
+                peakHR: entry.peakHR,
+                totalKcal: entry.totalEnergyBurnedKilocalories ?? 0,
+                distance: entry.totalDistanceMeters ?? 0
+            )
         }
         
-        // Mark as initialized to prevent view reload loops
-        self.hasInitializedWorkoutAnalytics = true
-        
-        // Launch background differential refresh to fetch real data
-        // Keep the interactive shared engine focused on recent workouts so date switches and
-        // scroll-heavy views stay responsive. Full-history loading remains opt-in from
-        // dedicated history refresh flows instead of running automatically for every screen.
-        smartDifferentialRefreshTask?.cancel()
-        smartDifferentialRefreshTask = Task { [weak self] in
-            guard let self = self, !Task.isCancelled else { return }
-            print("[Cache] Starting differential refresh...")
-            await self.smartDifferentialRefresh(totalDays: self.interactiveWorkoutLookbackDays)
+        if !cachedSummaries.isEmpty {
+            self.lastCachedWorkoutDate = cachedSummaries.map { $0.startDate }.max()
+            self.earliestRequestedWorkoutDate = cachedSummaries.map { $0.startDate }.min()
+            self.workoutAnalytics = rebuildWorkoutAnalytics(from: cachedEntries)
+            self.workoutAnalyticsCacheTimestamp = Date()
+            self.requiresInitialFullSync = false
+            print("[Cache] ✅ Found cached data for \(cachedSummaries.count) workouts (latest: \(self.lastCachedWorkoutDate?.formatted() ?? "unknown"))")
+            self.hasInitializedWorkoutAnalytics = true
+        } else {
+            self.requiresInitialFullSync = true
+            print("[Cache] No cached workouts found, will fetch all from HealthKit")
+            smartDifferentialRefreshTask?.cancel()
+            smartDifferentialRefreshTask = Task { [weak self] in
+                guard let self, !Task.isCancelled else { return }
+                await self.smartDifferentialRefresh(totalDays: self.longTermLookbackDays)
+            }
+        }
+
+        if hasHydratedCachedMetrics {
+            scheduleMetricsSnapshotSave()
         }
     }
     
@@ -1729,58 +2489,66 @@ final class HealthStateEngine: ObservableObject {
         let endDate = Date()
         let totalStartDate = Calendar.current.date(byAdding: .day, value: -totalDays, to: endDate) ?? endDate
         
-        // PRIORITY: If we have cached data (lastCachedWorkoutDate is set), fetch with overlap
-        // Re-fetch from 7 days BEFORE cached date to validate data and get real HKWorkout objects
-        // This ensures we display fresh data without doing a full 10-year fetch
+        // Startup policy: trust cached history and only fetch workouts newer than the
+        // latest cached workout. Historical edits/deletes are handled by explicit refresh.
         if let cachedDate = lastCachedWorkoutDate {
-            print("[Cache] Loading workouts with 7-day overlap from cache date...")
-            
-            // Fetch from 7 days before cached date to today (small overlap ensures fresh data)
-            let overlapStart = Calendar.current.date(byAdding: .day, value: -7, to: cachedDate) ?? cachedDate
-            let refreshedWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: overlapStart, to: endDate)
-            
-            // Set workoutAnalytics immediately with refreshed data (includes real HKWorkout objects)
-            self.workoutAnalytics = refreshedWorkouts
-            self.workoutAnalyticsCacheTimestamp = Date()
-            self.lastCachedWorkoutDate = refreshedWorkouts.map { $0.workout.startDate }.max()
-            self.earliestRequestedWorkoutDate = overlapStart
-            self.hasNewDataAvailable = false // Reset since we just fetched fresh data
-            savePersistentCacheMetadata(refreshedWorkouts)
-            
-            print("[Cache] ✅ Loaded \(refreshedWorkouts.count) workouts with fresh data")
-            
-            // Avoid long-running automatic historical loads while interactive views are active.
-            if allowsAutomaticHistoricalBatchLoading, totalStartDate < overlapStart {
-                scheduleHistoricalBatchLoad(from: totalStartDate, to: overlapStart, batchSize: 30)
+            let incrementalStart = cachedDate.addingTimeInterval(1)
+            guard incrementalStart < endDate else {
+                self.hasNewDataAvailable = false
+                return
+            }
+
+            print("[Cache] Loading workouts newer than cached latest date...")
+            let newWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: incrementalStart, to: endDate)
+            guard !Task.isCancelled else { return }
+
+            if !newWorkouts.isEmpty {
+                var mergedByID = Dictionary(uniqueKeysWithValues: workoutAnalytics.map { ($0.workout.uuid, $0) })
+                for workout in newWorkouts {
+                    mergedByID[workout.workout.uuid] = workout
+                }
+
+                let merged = mergedByID.values.sorted { lhs, rhs in
+                    lhs.workout.startDate > rhs.workout.startDate
+                }
+
+                self.workoutAnalytics = merged
+                self.workoutAnalyticsCacheTimestamp = Date()
+                self.lastCachedWorkoutDate = merged.map { $0.workout.startDate }.max()
+                self.earliestRequestedWorkoutDate = merged.map { $0.workout.startDate }.min()
+                self.hasNewDataAvailable = false
+                savePersistentCacheMetadata(merged)
+                scheduleMetricsSnapshotSave()
+                print("[Cache] ✅ Appended \(newWorkouts.count) new workouts without recomputing cached history")
+            } else {
+                self.workoutAnalyticsCacheTimestamp = Date()
+                self.hasNewDataAvailable = false
+                print("[Cache] No new workouts found beyond cached history")
             }
             return
         }
         
         // FALLBACK: If no cached date (first run), load all data from HealthKit
         // This only happens on very first app launch
-        print("[Cache] First run: fetching ALL workouts from HealthKit in batches")
+        print("[Cache] First run: fetching full 10-year workout history from HealthKit")
         if workoutAnalytics.isEmpty {
-            // Fetch first batch (most recent 60 days) instantly
-            let recentStart = Calendar.current.date(byAdding: .day, value: -60, to: endDate) ?? totalStartDate
-            let recentWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: recentStart, to: endDate)
-            
-            self.workoutAnalytics = recentWorkouts
+            let historicalWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: totalStartDate, to: endDate)
+
+            self.workoutAnalytics = historicalWorkouts
             self.workoutAnalyticsCacheTimestamp = Date()
             self.lastCacheDaysRequested = totalDays
-            self.lastCachedWorkoutDate = recentWorkouts.map { $0.workout.startDate }.max()
-            self.earliestRequestedWorkoutDate = recentStart
-            savePersistentCacheMetadata(recentWorkouts)
+            self.lastCachedWorkoutDate = historicalWorkouts.map { $0.workout.startDate }.max()
+            self.earliestRequestedWorkoutDate = historicalWorkouts.map { $0.workout.startDate }.min() ?? totalStartDate
+            self.hasInitializedWorkoutAnalytics = true
+            self.requiresInitialFullSync = false
+            savePersistentCacheMetadata(historicalWorkouts)
+            scheduleMetricsSnapshotSave()
             
-            print("[Cache] ✅ Initial load: \(recentWorkouts.count) recent workouts displayed")
-            
-            // Avoid long-running automatic historical loads while interactive views are active.
-            if allowsAutomaticHistoricalBatchLoading, totalStartDate < recentStart {
-                scheduleHistoricalBatchLoad(from: totalStartDate, to: recentStart, batchSize: 30)
-            }
+            print("[Cache] ✅ Initial load: \(historicalWorkouts.count) workouts cached across 10 years")
             return
         }
         
-        // Step 1: Fetch new workouts (after lastCachedWorkoutDate)
+        // Fallback path when in-memory state exists but we do not have a cached latest date.
         let newStartDate = totalStartDate
         let newWorkouts = await hkManager.fetchWorkoutsWithAnalytics(from: newStartDate, to: endDate)
         
@@ -1797,30 +2565,9 @@ final class HealthStateEngine: ObservableObject {
             // Update UI with new workouts immediately
             self.workoutAnalytics = updatedAnalytics
             savePersistentCacheMetadata(updatedAnalytics)
+            scheduleMetricsSnapshotSave()
         }
         
-        // Step 3: Background check for changes in old data (last 30 days of cached data)
-        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: newStartDate) ?? newStartDate
-        if newStartDate > thirtyDaysAgo {
-            // Fetch old data to check for modifications
-            let oldDataRange = thirtyDaysAgo ..< newStartDate
-            let historicalRefresh = await hkManager.fetchWorkoutsWithAnalytics(from: thirtyDaysAgo, to: newStartDate)
-            
-            // Compare: if counts differ or metrics changed, flag as hasNewDataAvailable
-            let historicalCount = historicalRefresh.count
-            let cachedHistoricalCount = updatedAnalytics.filter { 
-                $0.workout.startDate >= thirtyDaysAgo && $0.workout.startDate < newStartDate
-            }.count
-            
-            if historicalCount != cachedHistoricalCount {
-                hasDataChanges = true
-                self.hasNewDataAvailable = true
-            }
-            // TODO: Deep comparison of workout metrics for more granular change detection
-        }
-        
-        // If no data changes in old range, refresh button stays as "Reload"
-        // If changes detected, refresh button shows "Load New Metrics"
         if !hasDataChanges {
             self.hasNewDataAvailable = false
         }
@@ -1855,6 +2602,7 @@ final class HealthStateEngine: ObservableObject {
             if !batchWorkouts.isEmpty {
                 self.workoutAnalytics.append(contentsOf: batchWorkouts)
                 self.savePersistentCacheMetadata(self.workoutAnalytics)
+                self.scheduleMetricsSnapshotSave()
                 print("[Cache] ✅ Batch \(batchCount + 1) complete: +\(batchWorkouts.count) workouts (total: \(self.workoutAnalytics.count))")
             } else {
                 print("[Cache] Batch \(batchCount + 1): No workouts found")
@@ -1882,9 +2630,10 @@ final class HealthStateEngine: ObservableObject {
         self.lastCachedWorkoutDate = analytics.map { $0.workout.startDate }.max()
         self.earliestRequestedWorkoutDate = start
         self.hasNewDataAvailable = false
-        
+
         // Save fresh copy
         savePersistentCacheMetadata(analytics)
+        scheduleMetricsSnapshotSave()
     }
 
     func clearWorkoutAnalyticsCache() {
@@ -1904,6 +2653,11 @@ final class HealthStateEngine: ObservableObject {
         if let url = persistentCacheURL() {
             try? FileManager.default.removeItem(at: url)
         }
+        if let url = metricsSnapshotURL() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.removeObject(forKey: metricsSnapshotCloudKey)
     }
 
     func needsWorkoutAnalyticsCoverage(from start: Date, to end: Date) -> Bool {
@@ -1944,6 +2698,7 @@ final class HealthStateEngine: ObservableObject {
         lastCachedWorkoutDate = max(lastCachedWorkoutDate ?? normalizedEnd, merged.map { $0.workout.startDate }.max() ?? normalizedEnd)
         hasInitializedWorkoutAnalytics = true
         savePersistentCacheMetadata(merged)
+        scheduleMetricsSnapshotSave()
     }
 
     func ensureFullWorkoutHistoryCoverage() async {
@@ -1952,16 +2707,36 @@ final class HealthStateEngine: ObservableObject {
         await ensureWorkoutAnalyticsCoverage(from: start, to: end)
     }
 
-    func needsSpO2Coverage(from start: Date, to end: Date) -> Bool {
+    func ensureFullSpO2Coverage() async {
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -longTermLookbackDays, to: end) ?? end
+        await ensureSpO2Coverage(from: start, to: end)
+    }
+
+    private func needsCoverage<T>(for values: [Date: T], from start: Date, to end: Date) -> Bool {
         let normalizedStart = Calendar.current.startOfDay(for: start)
         let normalizedEnd = Calendar.current.startOfDay(for: end)
-        let coveredDates = spO2.keys.sorted()
+        let coveredDates = values.keys.sorted()
 
         guard let earliest = coveredDates.first, let latest = coveredDates.last else {
             return true
         }
 
         return normalizedStart < earliest || normalizedEnd > latest
+    }
+
+    func needsRecoveryMetricsCoverage(from start: Date, to end: Date) -> Bool {
+        needsCoverage(for: Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) }), from: start, to: end)
+            || needsCoverage(for: dailyRestingHeartRate, from: start, to: end)
+            || needsCoverage(for: sleepStages, from: start, to: end)
+            || needsCoverage(for: respiratoryRate, from: start, to: end)
+            || needsCoverage(for: wristTemperature, from: start, to: end)
+            || needsCoverage(for: spO2, from: start, to: end)
+            || needsCoverage(for: dailySleepHeartRate, from: start, to: end)
+    }
+
+    func needsSpO2Coverage(from start: Date, to end: Date) -> Bool {
+        needsCoverage(for: spO2, from: start, to: end)
     }
 
     func ensureSpO2Coverage(from start: Date, to end: Date) async {
@@ -1981,6 +2756,276 @@ final class HealthStateEngine: ObservableObject {
         await MainActor.run {
             self.spO2 = merged
         }
+        scheduleMetricsSnapshotSave()
+    }
+
+    func needsSleepHeartRateCoverage(from start: Date, to end: Date) -> Bool {
+        needsCoverage(for: dailySleepHeartRate, from: start, to: end)
+    }
+
+    func ensureRecoveryMetricsCoverage(from start: Date, to end: Date) async {
+        let normalizedStart = Calendar.current.startOfDay(for: start)
+        let normalizedEnd = min(end, Date())
+        guard normalizedStart < normalizedEnd else { return }
+
+        async let hrvTask: Void = ensureHRVCoverage(from: normalizedStart, to: normalizedEnd)
+        async let rhrTask: Void = ensureRestingHeartRateCoverage(from: normalizedStart, to: normalizedEnd)
+        async let respiratoryTask: Void = ensureRespiratoryRateCoverage(from: normalizedStart, to: normalizedEnd)
+        async let wristTask: Void = ensureWristTemperatureCoverage(from: normalizedStart, to: normalizedEnd)
+        async let spO2Task: Void = ensureSpO2Coverage(from: normalizedStart, to: normalizedEnd)
+        async let sleepTask: Void = ensureSleepRecoveryCoverage(from: normalizedStart, to: normalizedEnd)
+
+        _ = await (hrvTask, rhrTask, respiratoryTask, wristTask, spO2Task, sleepTask)
+        scheduleScoresRefresh()
+        scheduleMetricsSnapshotSave()
+    }
+
+    func ensureSleepHeartRateCoverage(from start: Date, to end: Date) async {
+        let normalizedStart = Calendar.current.startOfDay(for: start)
+        let normalizedEnd = min(end, Date())
+        guard normalizedStart < normalizedEnd else { return }
+        guard needsSleepHeartRateCoverage(from: normalizedStart, to: normalizedEnd) else { return }
+        guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return }
+        guard let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        let sleepSamples: [HKCategorySample] = await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: normalizedStart, end: normalizedEnd)
+            let query = HKSampleQuery(
+                sampleType: sleepType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+
+        guard !sleepSamples.isEmpty else { return }
+
+        let calendar = Calendar.current
+        var stageSleepWindows: [Date: [(start: Date, end: Date)]] = [:]
+        var inBedSleepWindows: [Date: [(start: Date, end: Date)]] = [:]
+
+        for sample in sleepSamples {
+            let day = calendar.startOfDay(for: sample.startDate)
+            switch HKCategoryValueSleepAnalysis(rawValue: sample.value) {
+            case .inBed:
+                inBedSleepWindows[day, default: []].append((start: sample.startDate, end: sample.endDate))
+            case .asleepCore, .asleepDeep, .asleepREM, .asleepUnspecified:
+                stageSleepWindows[day, default: []].append((start: sample.startDate, end: sample.endDate))
+            default:
+                continue
+            }
+        }
+
+        let tolerance: TimeInterval = 5 * 60
+        func mergedWindows(from windowsByDay: [Date: [(start: Date, end: Date)]]) -> [Date: [(start: Date, end: Date)]] {
+            var mergedByDay: [Date: [(start: Date, end: Date)]] = [:]
+            for (day, intervals) in windowsByDay {
+                let sortedIntervals = intervals.sorted { $0.start < $1.start }
+                var merged: [(start: Date, end: Date)] = []
+                for interval in sortedIntervals {
+                    guard var last = merged.last else {
+                        merged.append(interval)
+                        continue
+                    }
+                    if interval.start <= last.end.addingTimeInterval(tolerance) {
+                        last.end = max(last.end, interval.end)
+                        merged[merged.count - 1] = last
+                    } else {
+                        merged.append(interval)
+                    }
+                }
+                mergedByDay[day] = merged
+            }
+            return mergedByDay
+        }
+
+        let mergedStageWindows = mergedWindows(from: stageSleepWindows)
+        let mergedInBedWindows = mergedWindows(from: inBedSleepWindows)
+        let allDays = Set(mergedStageWindows.keys).union(mergedInBedWindows.keys)
+        var sleepWindows: [Date: [(start: Date, end: Date)]] = [:]
+        for day in allDays {
+            if let stage = mergedStageWindows[day], !stage.isEmpty {
+                sleepWindows[day] = stage
+            } else if let inBed = mergedInBedWindows[day], !inBed.isEmpty {
+                sleepWindows[day] = inBed
+            }
+        }
+
+        guard !sleepWindows.isEmpty else { return }
+
+        let fetched = await computeSleepHeartRateBatch(
+            days: sleepWindows.keys.sorted(by: >),
+            sleepWindows: sleepWindows,
+            fallbackStart: normalizedStart,
+            fallbackEnd: normalizedEnd,
+            heartRateType: heartRateType
+        )
+        guard !fetched.isEmpty else { return }
+
+        var merged = dailySleepHeartRate
+        for (day, value) in fetched {
+            merged[day] = value
+        }
+
+        await MainActor.run {
+            self.dailySleepHeartRate = merged
+        }
+        scheduleMetricsSnapshotSave()
+    }
+
+    private func ensureHRVCoverage(from start: Date, to end: Date) async {
+        let existing = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) })
+        guard needsCoverage(for: existing, from: start, to: end) else { return }
+        guard let type = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else { return }
+
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: HKQuery.predicateForSamples(withStart: start, end: end),
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+
+        guard !samples.isEmpty else { return }
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: samples) { calendar.startOfDay(for: $0.endDate) }
+        let fetchedPoints = grouped.map { day, daySamples in
+            let values = daySamples.map { $0.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli)) }
+            let average = values.reduce(0, +) / Double(values.count)
+            return DailyHRVPoint(
+                date: day,
+                average: average,
+                min: values.min() ?? average,
+                max: values.max() ?? average
+            )
+        }
+
+        var merged = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0) })
+        for point in fetchedPoints {
+            merged[point.date] = point
+        }
+
+        await MainActor.run {
+            self.dailyHRV = merged.values.sorted { $0.date < $1.date }
+        }
+    }
+
+    private func ensureRestingHeartRateCoverage(from start: Date, to end: Date) async {
+        guard needsCoverage(for: dailyRestingHeartRate, from: start, to: end) else { return }
+        guard let type = HKQuantityType.quantityType(forIdentifier: .restingHeartRate) else { return }
+
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: HKQuery.predicateForSamples(withStart: start, end: end),
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+
+        guard !samples.isEmpty else { return }
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: samples) { calendar.startOfDay(for: $0.endDate) }
+        var merged = dailyRestingHeartRate
+        for (day, daySamples) in grouped {
+            let values = daySamples.map { $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) }
+            guard !values.isEmpty else { continue }
+            merged[day] = values.reduce(0, +) / Double(values.count)
+        }
+
+        await MainActor.run {
+            self.dailyRestingHeartRate = merged
+        }
+    }
+
+    private func ensureRespiratoryRateCoverage(from start: Date, to end: Date) async {
+        guard needsCoverage(for: respiratoryRate, from: start, to: end) else { return }
+        let fetched = await fetchDailyQuantityValues(
+            identifier: .respiratoryRate,
+            unit: HKUnit.count().unitDivided(by: .minute()),
+            from: start,
+            to: end
+        )
+        guard !fetched.isEmpty else { return }
+        await MainActor.run {
+            self.respiratoryRate.merge(fetched) { _, new in new }
+        }
+    }
+
+    private func ensureWristTemperatureCoverage(from start: Date, to end: Date) async {
+        guard needsCoverage(for: wristTemperature, from: start, to: end) else { return }
+        let fetched = await fetchDailyQuantityValues(
+            identifier: .appleSleepingWristTemperature,
+            unit: HKUnit.degreeCelsius(),
+            from: start,
+            to: end
+        )
+        guard !fetched.isEmpty else { return }
+        await MainActor.run {
+            self.wristTemperature.merge(fetched) { _, new in new }
+        }
+    }
+
+    private func ensureSleepRecoveryCoverage(from start: Date, to end: Date) async {
+        guard needsCoverage(for: sleepStages, from: start, to: end)
+            || needsCoverage(for: dailySleepHeartRate, from: start, to: end)
+            || needsCoverage(for: anchoredSleepDuration, from: start, to: end) else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            self.fetchSleepQuality(from: start, to: end, mergeIntoExisting: true) {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func fetchDailyQuantityValues(
+        identifier: HKQuantityTypeIdentifier,
+        unit: HKUnit,
+        from start: Date,
+        to end: Date
+    ) async -> [Date: Double] {
+        guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { return [:] }
+
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: HKQuery.predicateForSamples(withStart: start, end: end),
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            self.healthStore.execute(query)
+        }
+
+        guard !samples.isEmpty else { return [:] }
+
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: samples) { calendar.startOfDay(for: $0.endDate) }
+        var result: [Date: Double] = [:]
+        for (day, daySamples) in grouped {
+            let values = daySamples.map { $0.quantity.doubleValue(for: unit) }
+            guard !values.isEmpty else { continue }
+            let average = values.reduce(0, +) / Double(values.count)
+            result[day] = identifier == .oxygenSaturation ? average * 100.0 : average
+        }
+        return result
     }
 
     // MARK: - Fetch HRV
@@ -2859,6 +3904,7 @@ final class HealthStateEngine: ObservableObject {
         workoutHRVDecay = calculateWorkoutHRVDecay()
         recoverySuppressedFlag = isRecoverySuppressedComparedToSevenDayAverage(currentRecovery: recoveryScore)
         functionalOverreachingFlag = evaluateFunctionalOverreaching()
+        scheduleMetricsSnapshotSave()
     }
     
     private func updateScoreBaselines() {

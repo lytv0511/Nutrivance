@@ -1,6 +1,7 @@
 import CloudKit
 import Foundation
 
+@MainActor
 class CloudKitManager: ObservableObject {
     static let shared = CloudKitManager()
     private let container = CKContainer.default()
