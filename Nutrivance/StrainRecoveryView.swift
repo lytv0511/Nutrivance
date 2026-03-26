@@ -2374,6 +2374,8 @@ private struct StrainRecoveryAISummarySection: View {
         let isKeyboardPrimary = keyboardPrimarySuggestion?.id == suggestion.id
 
         Button {
+            let generator = UIImpactFeedbackGenerator(style: .light)
+            generator.impactOccurred()
             applySuggestion(suggestion)
         } label: {
             HStack(spacing: 8) {
@@ -2434,6 +2436,8 @@ private struct StrainRecoveryAISummarySection: View {
 
     private var suggestionToggleButton: some View {
         Button {
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
             withAnimation(.easeInOut(duration: 0.2)) {
                 showsAllSuggestions.toggle()
             }
@@ -3759,6 +3763,8 @@ private struct StrainRecoverySummaryRequest {
         - Treat this selected report as its own mini-app. Stay in its lane and do not collapse back into a general summary.
         - If a topic appears on the ignore list, do not mention it unless it is strictly necessary to explain the selected focus.
         - Pick a reasoning frame that matches the selected report and keep the entire answer inside that frame.
+        - Address the athlete directly as "you" and "your" throughout the final answer.
+        - Do not refer to the athlete as "the user", "the athlete", "they", or "their" unless a quoted evidence line requires it.
         - Vary sentence openings and cadence. Do not begin every sentence with You.
         - When describing a trend, comparison, best day, worst day, rise, drop, or streak, name the date or date range directly if the evidence block includes it.
         - Prefer concrete dates such as Mar 14, Mar 10 to Mar 16, or April 2025 over vague words like recently or lately when a date anchor exists.
