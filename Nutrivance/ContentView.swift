@@ -14,6 +14,31 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @SceneStorage("startup_curtain_dismissed") private var hasDismissedStartupCurtain = false
     @State private var showStartupCurtain = true
+
+    private var startupStatusText: String {
+        let hasCoreHealthBootstrap =
+            engine.hasHydratedCachedMetrics ||
+            !engine.dailyHRV.isEmpty ||
+            !engine.dailyRestingHeartRate.isEmpty ||
+            !engine.sleepStages.isEmpty
+
+        if !engine.hasHydratedCachedMetrics && !engine.hasInitializedWorkoutAnalytics {
+            return "Loading cached health data..."
+        }
+        if engine.isSyncingStartupWorkoutCoverage {
+            return "Fetching workouts..."
+        }
+        if engine.isRefreshingCachedMetrics {
+            return "Updating metrics..."
+        }
+        if !engine.hasInitializedWorkoutAnalytics {
+            return "Preparing workout history..."
+        }
+        if !hasCoreHealthBootstrap {
+            return "Updating recovery metrics..."
+        }
+        return "Finalizing startup..."
+    }
     
     var body: some View {
         ZStack {
@@ -35,7 +60,7 @@ struct ContentView: View {
             }
 
             if showStartupCurtain && !hasDismissedStartupCurtain {
-                StartupCurtainView()
+                StartupCurtainView(statusText: startupStatusText)
                     .transition(.opacity.combined(with: .scale(scale: 1.02)))
                     .zIndex(10)
             }
@@ -47,7 +72,7 @@ struct ContentView: View {
             }
 
             let minimumCurtainDuration: UInt64 = engine.hasHydratedCachedMetrics ? 700_000_000 : 2_200_000_000
-            let maximumCurtainDuration: UInt64 = 5_000_000_000
+            let maximumCurtainDuration: UInt64 = 12_000_000_000
             let pollInterval: UInt64 = 200_000_000
 
             let startedAt = Date()
@@ -62,10 +87,10 @@ struct ContentView: View {
                     !engine.sleepStages.isEmpty
 
                 if engine.requiresInitialFullSync {
-                    if hasWorkoutBootstrap {
+                    if hasWorkoutBootstrap && !engine.isSyncingStartupWorkoutCoverage {
                         break
                     }
-                } else if hasWorkoutBootstrap || hasCoreHealthBootstrap {
+                } else if (hasWorkoutBootstrap || hasCoreHealthBootstrap) && !engine.isSyncingStartupWorkoutCoverage {
                     break
                 }
 
@@ -86,6 +111,7 @@ struct ContentView: View {
 }
 
 private struct StartupCurtainView: View {
+    let statusText: String
     @State private var pulse = false
 
     var body: some View {
@@ -110,7 +136,7 @@ private struct StartupCurtainView: View {
                 Text("Preparing Nutrivance")
                     .font(.system(.title2, design: .rounded, weight: .bold))
                     .foregroundColor(.white)
-                Text("Showing cached health data first, then refreshing live metrics in the background.")
+                Text(statusText)
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
                     .foregroundColor(.white.opacity(0.72))

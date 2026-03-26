@@ -1953,11 +1953,14 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private func estimatedSuggestionChipWidth(for suggestion: SummarySuggestion) -> CGFloat {
-        CGFloat(max(110, min(210, 64 + (suggestion.title.count * 8))))
+        CGFloat(max(90, min(210, 46 + (suggestion.title.count * 6))))
     }
 
-    private func fittedCollapsedSuggestions(for availableWidth: CGFloat) -> [SummarySuggestion] {
-        let reservedToggleWidth: CGFloat = filteredSuggestions.count > 1 ? 62 : 0
+    private func fittedCollapsedSuggestions(
+        for availableWidth: CGFloat,
+        reservingToggle: Bool
+    ) -> [SummarySuggestion] {
+        let reservedToggleWidth: CGFloat = reservingToggle ? 20 : 0
         let targetWidth = max(availableWidth - reservedToggleWidth, 120)
         var runningWidth: CGFloat = 0
         var visible: [SummarySuggestion] = []
@@ -1975,8 +1978,21 @@ private struct StrainRecoveryAISummarySection: View {
         return visible
     }
 
-    private func shouldShowCollapsedSuggestionToggle(for availableWidth: CGFloat) -> Bool {
-        filteredSuggestions.count > fittedCollapsedSuggestions(for: availableWidth).count
+    private func collapsedSuggestionLayout(for availableWidth: CGFloat) -> ([SummarySuggestion], Bool) {
+        let fittedWithoutToggle = fittedCollapsedSuggestions(
+            for: availableWidth,
+            reservingToggle: false
+        )
+
+        guard filteredSuggestions.count > fittedWithoutToggle.count else {
+            return (fittedWithoutToggle, false)
+        }
+
+        let fittedWithToggle = fittedCollapsedSuggestions(
+            for: availableWidth,
+            reservingToggle: true
+        )
+        return (fittedWithToggle, true)
     }
 
     private var selectedSuggestionRequestID: String {
@@ -2565,8 +2581,9 @@ private struct StrainRecoveryAISummarySection: View {
                     }
                 } else {
                     GeometryReader { geometry in
-                        let visibleSuggestions = fittedCollapsedSuggestions(for: geometry.size.width)
-                        let shouldShowToggle = shouldShowCollapsedSuggestionToggle(for: geometry.size.width)
+                        let layout = collapsedSuggestionLayout(for: geometry.size.width)
+                        let visibleSuggestions = layout.0
+                        let shouldShowToggle = layout.1
 
                         HStack(spacing: 10) {
                             ForEach(visibleSuggestions) { suggestion in
@@ -4603,7 +4620,7 @@ private struct SummarySuggestion: Identifiable, Hashable {
                         promptInstructions: "Focus on how \(sport) performance is improving, what metrics moved, and why those changes matter.",
                         analyticalFramework: "Use a breakthrough-story framework for \(sport) and connect changed metrics to changed performance.",
                         negativeConstraints: "Do not waste space on routine sessions or non-\(sport) details.",
-                        languageStyle: "Use celebratory but evidence-backed \(sport) progression language."
+                        languageStyle: "Use celebratory but evidence-backed \(sport) progression language. Address user as you."
                     )
                 )
             }

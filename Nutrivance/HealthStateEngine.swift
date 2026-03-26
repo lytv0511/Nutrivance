@@ -73,6 +73,7 @@ final class HealthStateEngine: ObservableObject {
     }
 
     struct PersistedWorkoutAnalyticsEntry: Codable {
+        let workoutUUID: String
         let workoutStartDate: Date
         let workoutEndDate: Date
         let workoutDuration: Double
@@ -101,6 +102,8 @@ final class HealthStateEngine: ObservableObject {
         let hrZoneProfile: HRZoneProfile?
         let hrZoneBreakdown: [PersistedWorkoutZoneBreakdown]
     }
+
+    private static let cachedWorkoutUUIDMetadataKey = "NutrivanceCachedWorkoutUUID"
 
     struct MetricsSnapshot: Codable {
         let updatedAt: Date
@@ -235,11 +238,13 @@ final class HealthStateEngine: ObservableObject {
     private var metricsSnapshotWriteTask: Task<Void, Never>?
     private var metricsRefreshCompletionTask: Task<Void, Never>?
     private var foregroundResumeTask: Task<Void, Never>?
+    private var startupWorkoutCoverageTask: Task<Void, Never>?
     private var cloudSnapshotObserver: NSObjectProtocol?
     @Published private(set) var hasHydratedCachedMetrics: Bool = false
     @Published private(set) var cachedMetricsUpdatedAt: Date?
     @Published private(set) var isRefreshingCachedMetrics: Bool = false
     @Published private(set) var requiresInitialFullSync: Bool = false
+    @Published private(set) var isSyncingStartupWorkoutCoverage: Bool = false
     private var isAppActive = true
 
     // MARK: - Persistent Cache Management
@@ -616,6 +621,7 @@ final class HealthStateEngine: ObservableObject {
             }
 
             return PersistedWorkoutAnalyticsEntry(
+                workoutUUID: canonicalWorkoutID(for: pair.workout),
                 workoutStartDate: pair.workout.startDate,
                 workoutEndDate: pair.workout.endDate,
                 workoutDuration: pair.workout.duration,
@@ -656,6 +662,14 @@ final class HealthStateEngine: ObservableObject {
         }
     }
 
+    private func canonicalWorkoutID(for workout: HKWorkout) -> String {
+        if let metadataValue = workout.metadata?[Self.cachedWorkoutUUIDMetadataKey] as? String,
+           !metadataValue.isEmpty {
+            return metadataValue
+        }
+        return workout.uuid.uuidString
+    }
+
     private func rebuildWorkoutAnalytics(from cacheEntries: [PersistedWorkoutAnalyticsEntry]) -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         cacheEntries.compactMap { entry in
             guard let activityType = HKWorkoutActivityType(rawValue: entry.workoutTypeRawValue) else {
@@ -668,9 +682,10 @@ final class HealthStateEngine: ObservableObject {
             let totalDistance = entry.totalDistanceMeters.map {
                 HKQuantity(unit: .meter(), doubleValue: $0)
             }
-            let workoutMetadata = entry.metadata.isEmpty ? nil : entry.metadata.reduce(into: [String: Any]()) { partial, item in
+            var workoutMetadata = entry.metadata.reduce(into: [String: Any]()) { partial, item in
                 partial[item.key] = item.value
             }
+            workoutMetadata[Self.cachedWorkoutUUIDMetadataKey] = entry.workoutUUID
 
             let workout = HKWorkout(
                 activityType: activityType,
@@ -679,7 +694,7 @@ final class HealthStateEngine: ObservableObject {
                 duration: entry.workoutDuration,
                 totalEnergyBurned: totalEnergyBurned,
                 totalDistance: totalDistance,
-                metadata: workoutMetadata
+                metadata: workoutMetadata.isEmpty ? nil : workoutMetadata
             )
 
             let analytics = WorkoutAnalytics(
@@ -2164,6 +2179,7 @@ final class HealthStateEngine: ObservableObject {
     private var smartDifferentialRefreshTask: Task<Void, Never>?
     private var historicalBatchLoadTask: Task<Void, Never>?
     private let metricsRefreshCooldown: TimeInterval = 20
+    private let startupWorkoutCoverageDays = 42
     private let allowsAutomaticHistoricalBatchLoading = false
 
     // MARK: - Initialization
@@ -2207,6 +2223,7 @@ final class HealthStateEngine: ObservableObject {
                         } else {
                             self.refreshStartupMetrics()
                         }
+                        self.scheduleStartupWorkoutCoverageSync()
                     } else {
                         print("HealthKit authorization failed: \(error?.localizedDescription ?? "Unknown error")")
                     }
@@ -2229,6 +2246,7 @@ final class HealthStateEngine: ObservableObject {
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 guard let self, !Task.isCancelled, self.isAppActive else { return }
                 self.refreshStartupMetrics()
+                self.scheduleStartupWorkoutCoverageSync()
             }
             return
         }
@@ -2238,6 +2256,8 @@ final class HealthStateEngine: ObservableObject {
         isAppActive = false
 
         foregroundResumeTask?.cancel()
+        startupWorkoutCoverageTask?.cancel()
+        isSyncingStartupWorkoutCoverage = false
         scoreRefreshTask?.cancel()
         metricsSnapshotSaveTask?.cancel()
         metricsSnapshotWriteTask?.cancel()
@@ -2345,6 +2365,19 @@ final class HealthStateEngine: ObservableObject {
         }
     }
 
+    private func scheduleStartupWorkoutCoverageSync() {
+        startupWorkoutCoverageTask?.cancel()
+        startupWorkoutCoverageTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard let self, !Task.isCancelled, self.isAppActive else { return }
+            self.isSyncingStartupWorkoutCoverage = true
+            defer { self.isSyncingStartupWorkoutCoverage = false }
+            let end = Date()
+            let start = Calendar.current.date(byAdding: .day, value: -startupWorkoutCoverageDays, to: end) ?? end
+            await self.ensureWorkoutAnalyticsCoverage(from: start, to: end)
+        }
+    }
+
     /// Refresh workout analytics with smart caching
     /// Only fetches from HealthKit if cache is stale or days range changed
     func refreshWorkoutAnalytics(days: Int = 30, forceRefresh: Bool = false) async {
@@ -2392,6 +2425,7 @@ final class HealthStateEngine: ObservableObject {
         self.lastCachedWorkoutDate = analytics.map { $0.workout.startDate }.max()
         self.hasInitializedWorkoutAnalytics = true // Mark initial load complete
         savePersistentCacheMetadata(analytics)
+        scheduleScoresRefresh()
         scheduleMetricsSnapshotSave()
     }
     
@@ -2442,6 +2476,7 @@ final class HealthStateEngine: ObservableObject {
             self.requiresInitialFullSync = false
             print("[Cache] ✅ Found cached data for \(cachedSummaries.count) workouts (latest: \(self.lastCachedWorkoutDate?.formatted() ?? "unknown"))")
             self.hasInitializedWorkoutAnalytics = true
+            self.scheduleScoresRefresh()
         } else {
             self.requiresInitialFullSync = true
             print("[Cache] No cached workouts found, will fetch all from HealthKit")
@@ -2503,9 +2538,9 @@ final class HealthStateEngine: ObservableObject {
             guard !Task.isCancelled else { return }
 
             if !newWorkouts.isEmpty {
-                var mergedByID = Dictionary(uniqueKeysWithValues: workoutAnalytics.map { ($0.workout.uuid, $0) })
+                var mergedByID = Dictionary(uniqueKeysWithValues: workoutAnalytics.map { (canonicalWorkoutID(for: $0.workout), $0) })
                 for workout in newWorkouts {
-                    mergedByID[workout.workout.uuid] = workout
+                    mergedByID[canonicalWorkoutID(for: workout.workout)] = workout
                 }
 
                 let merged = mergedByID.values.sorted { lhs, rhs in
@@ -2518,6 +2553,7 @@ final class HealthStateEngine: ObservableObject {
                 self.earliestRequestedWorkoutDate = merged.map { $0.workout.startDate }.min()
                 self.hasNewDataAvailable = false
                 savePersistentCacheMetadata(merged)
+                scheduleScoresRefresh()
                 scheduleMetricsSnapshotSave()
                 print("[Cache] ✅ Appended \(newWorkouts.count) new workouts without recomputing cached history")
             } else {
@@ -2633,6 +2669,7 @@ final class HealthStateEngine: ObservableObject {
 
         // Save fresh copy
         savePersistentCacheMetadata(analytics)
+        scheduleScoresRefresh()
         scheduleMetricsSnapshotSave()
     }
 
@@ -2683,9 +2720,9 @@ final class HealthStateEngine: ObservableObject {
             to: normalizedEnd,
             allowDuringForegroundCritical: true
         )
-        var mergedByID = Dictionary(uniqueKeysWithValues: workoutAnalytics.map { ($0.workout.uuid, $0) })
+        var mergedByID = Dictionary(uniqueKeysWithValues: workoutAnalytics.map { (canonicalWorkoutID(for: $0.workout), $0) })
         for workout in fetched {
-            mergedByID[workout.workout.uuid] = workout
+            mergedByID[canonicalWorkoutID(for: workout.workout)] = workout
         }
 
         let merged = mergedByID.values.sorted { lhs, rhs in
@@ -2698,6 +2735,7 @@ final class HealthStateEngine: ObservableObject {
         lastCachedWorkoutDate = max(lastCachedWorkoutDate ?? normalizedEnd, merged.map { $0.workout.startDate }.max() ?? normalizedEnd)
         hasInitializedWorkoutAnalytics = true
         savePersistentCacheMetadata(merged)
+        scheduleScoresRefresh()
         scheduleMetricsSnapshotSave()
     }
 

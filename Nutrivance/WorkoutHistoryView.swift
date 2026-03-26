@@ -194,6 +194,17 @@ struct WorkoutHistoryView: View {
         }
     }
 
+    private func workoutRowID(for pair: (workout: HKWorkout, analytics: WorkoutAnalytics)) -> String {
+        [
+            pair.workout.startDate.timeIntervalSinceReferenceDate,
+            pair.workout.endDate.timeIntervalSinceReferenceDate,
+            pair.workout.duration,
+            Double(pair.workout.workoutActivityType.rawValue)
+        ]
+        .map { String(format: "%.6f", $0) }
+        .joined(separator: "|")
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -212,7 +223,7 @@ struct WorkoutHistoryView: View {
                         } else {
                             ForEach(groupedWorkouts.sorted(by: { ($0.key.year! * 12 + $0.key.month!) > ($1.key.year! * 12 + $1.key.month!) }), id: \.key) { (key, workouts) in
                                 Section(header: Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))").font(.headline).foregroundColor(.orange)) {
-                                    ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.workout.startDate) { pair in
+                                    ForEach(Array(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }).enumerated()), id: \.offset) { _, pair in
                                         WorkoutCard(
                                             workout: pair.workout,
                                             analytics: pair.analytics,
@@ -226,7 +237,7 @@ struct WorkoutHistoryView: View {
                                                 impact.impactOccurred()
                                             }
                                         )
-                                            .id(pair.workout.startDate)
+                                            .id(workoutRowID(for: pair))
                                     }
                                 }
                             }
