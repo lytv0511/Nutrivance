@@ -903,60 +903,16 @@ struct WorkoutDetailView: View {
         geometry: GeometryProxy,
         data: [(Date, Double)]
     ) -> some View {
-        Rectangle()
-            .fill(Color.clear)
-            .contentShape(Rectangle())
-            .gesture(
-                SpatialTapGesture()
-                    .onEnded { value in
-                        updateSelection(
-                            from: value.location,
-                            proxy: proxy,
-                            geometry: geometry,
-                            data: data
-                        )
-                    }
-            )
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.25)
-                    .sequenced(before: DragGesture(minimumDistance: 0))
-                    .onChanged { value in
-                        switch value {
-                        case .first(true):
-                            break
-                        case .second(true, let drag):
-                            guard let drag else { return }
-                            guard isHorizontalScrub(drag) || drag.translation == .zero else {
-                                return
-                            }
-                            updateSelection(
-                                from: drag.location,
-                                proxy: proxy,
-                                geometry: geometry,
-                                data: data
-                            )
-                        default:
-                            break
-                        }
-                    }
-                    .onEnded { value in
-                        switch value {
-                        case .second(true, let drag):
-                            guard let drag else { return }
-                            guard isHorizontalScrub(drag) || drag.translation == .zero else {
-                                return
-                            }
-                            updateSelection(
-                                from: drag.location,
-                                proxy: proxy,
-                                geometry: geometry,
-                                data: data
-                            )
-                        default:
-                            break
-                        }
-                    }
-            )
+        HorizontalChartScrubOverlay(
+            onChanged: { location in
+                updateSelection(
+                    from: location,
+                    proxy: proxy,
+                    geometry: geometry,
+                    data: data
+                )
+            }
+        )
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let location):
@@ -1869,6 +1825,64 @@ struct WorkoutDetailView: View {
             splits.append(Split(distance: km, time: time, pace: pace, avgHR: avgHR))
         }
         return splits
+    }
+}
+
+private struct HorizontalChartScrubOverlay: UIViewRepresentable {
+    let onChanged: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChanged: onChanged)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        panGesture.delegate = context.coordinator
+        panGesture.cancelsTouchesInView = true
+        panGesture.delaysTouchesBegan = false
+        panGesture.delaysTouchesEnded = false
+        view.addGestureRecognizer(panGesture)
+
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChanged = onChanged
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGPoint) -> Void
+
+        init(onChanged: @escaping (CGPoint) -> Void) {
+            self.onChanged = onChanged
+        }
+
+        @objc
+        func handlePan(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .began, .changed, .ended:
+                onChanged(gesture.location(in: gesture.view))
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let panGesture = gestureRecognizer as? UIPanGestureRecognizer,
+                  let view = panGesture.view else {
+                return false
+            }
+
+            let velocity = panGesture.velocity(in: view)
+            return abs(velocity.x) > abs(velocity.y)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
     }
 }
 
