@@ -450,6 +450,12 @@ final class WatchDashboardStore: ObservableObject {
             .sorted { $0.startDate > $1.startDate }
     }
 
+    var yesterdayWorkouts: [WorkoutSession] {
+        workouts
+            .filter { Calendar.current.isDateInYesterday($0.startDate) }
+            .sorted { $0.startDate > $1.startDate }
+    }
+
     var vitalsNormalityScore: Int {
         guard !vitals.isEmpty else { return 0 }
         let normalCount = vitals.filter { band(for: $0.value, idealRange: $0.normalRange) == .optimal }.count
@@ -552,8 +558,9 @@ private struct OverviewDashboardPage: View {
                 recovery: store.currentRecovery / 100,
                 readiness: store.currentReadiness / 100
             )
-            .padding(2)
+            .padding(0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .offset(y: -12)
         }
     }
 }
@@ -579,19 +586,9 @@ private struct StrainDashboardPage: View {
             selectedTab: $selectedTab
         ) {
             GeometryReader { proxy in
-                let chartHeight = min(max(proxy.size.height * 0.44, 62), 88)
+                let chartHeight = min(max(proxy.size.height * 0.64, 88), 126)
 
-                VStack(spacing: 12) {
-                    HStack {
-                        Text("Weekly Load")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.76))
-                        Spacer()
-                        Text(String(format: "%.1f", store.currentStrain))
-                            .font(.headline.weight(.bold))
-                    }
-                    .frame(maxWidth: .infinity)
-
+                VStack(spacing: 8) {
                     WeeklyBarChart(
                         points: store.strainWeek,
                         accent: .orange,
@@ -600,11 +597,15 @@ private struct StrainDashboardPage: View {
                     .frame(height: chartHeight)
 
                     VStack(spacing: 2) {
-                        Text(String(format: "%.1f", store.currentStrain))
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.orange)
-
+                        HStack(alignment: .lastTextBaseline, spacing: 6) {
+                            Text(String(format: "%.1f", store.currentStrain))
+                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(.orange)
+                            Text(watchStrainClassificationTitle(for: store.currentStrain))
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(watchStrainClassificationColor(for: store.currentStrain))
+                        }
                         Text("Today • \(todayLabel())")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.white.opacity(0.62))
@@ -659,6 +660,9 @@ private struct RecoveryDashboardPage: View {
                             Text("Recovery")
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(.white.opacity(0.62))
+                            Text(watchRecoveryClassificationTitle(for: store.currentRecovery))
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(watchRecoveryClassificationColor(for: store.currentRecovery))
                         }
                         .frame(maxWidth: .infinity)
 
@@ -670,6 +674,9 @@ private struct RecoveryDashboardPage: View {
                             Text("Readiness")
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(.white.opacity(0.62))
+                            Text(watchRecoveryClassificationTitle(for: store.currentReadiness))
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(watchRecoveryClassificationColor(for: store.currentReadiness))
                         }
                         .frame(maxWidth: .infinity)
                     }
@@ -705,8 +712,9 @@ private struct MindfulnessDashboardPage: View {
             selectedTab: $selectedTab
         ) {
             MindfulnessRing(score: store.currentMindfulness)
-                .padding(2)
+                .padding(0)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .offset(y: -12)
         }
     }
 }
@@ -721,29 +729,37 @@ private struct WorkoutHistoryDashboardPage: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Today")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white.opacity(0.72))
-
                     Text("Workout History")
                         .font(.headline.weight(.semibold))
 
-                    if store.todayWorkouts.isEmpty {
-                        SectionCard(title: "No workouts today") {
-                            Text("Start a workout from the launcher to populate this list.")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.72))
-                        }
-                    } else {
-                        ForEach(store.todayWorkouts) { workout in
-                            NavigationLink(value: WatchDestination.workoutDetail(workout.id)) {
-                                WorkoutRowCard(workout: workout)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    workoutSection(title: "Today", workouts: store.todayWorkouts)
+                    workoutSection(title: "Yesterday", workouts: store.yesterdayWorkouts)
                 }
                 .padding(12)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workoutSection(title: String, workouts: [WorkoutSession]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white.opacity(0.72))
+
+            if workouts.isEmpty {
+                SectionCard(title: "No workouts \(title.lowercased())") {
+                    Text(title == "Today" ? "Start a workout from the launcher to populate this list." : "No workouts were recorded yesterday.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+            } else {
+                ForEach(workouts) { workout in
+                    NavigationLink(value: WatchDestination.workoutDetail(workout.id)) {
+                        WorkoutRowCard(workout: workout)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -906,20 +922,28 @@ private struct TripleMetricRing: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let size = min(proxy.size.width, proxy.size.height) * 0.92
+            let size = min(proxy.size.width, proxy.size.height) * 1.16
             let lineWidth = max(12, size * 0.115)
+            let outerDiameter = size
+            let middleDiameter = size * 0.72
+            let innerDiameter = size * 0.45
+            let outerY = -(outerDiameter / 2) + (lineWidth / 2)
+            let middleY = -(middleDiameter / 2) + (lineWidth / 2)
+            let innerY = -(innerDiameter / 2) + (lineWidth / 2)
 
             ZStack {
-                ring(progress: readiness, lineWidth: lineWidth, diameter: size, color: Color(red: 0.20, green: 0.78, blue: 0.35))
-                ring(progress: recovery, lineWidth: lineWidth, diameter: size * 0.72, color: Color(red: 0.45, green: 0.80, blue: 1.0))
-                ring(progress: strain, lineWidth: lineWidth, diameter: size * 0.45, color: .orange)
+                ring(progress: readiness, lineWidth: lineWidth, diameter: outerDiameter, color: Color(red: 0.20, green: 0.78, blue: 0.35))
+                ring(progress: recovery, lineWidth: lineWidth, diameter: middleDiameter, color: Color(red: 0.45, green: 0.80, blue: 1.0))
+                ring(progress: strain, lineWidth: lineWidth, diameter: innerDiameter, color: .orange)
 
-                HStack(spacing: size * 0.06) {
-                    symbolBadge(symbol: "flame.fill", color: .orange, size: size)
-                    symbolBadge(symbol: "heart.fill", color: Color(red: 0.45, green: 0.80, blue: 1.0), size: size)
-                    symbolBadge(symbol: "checkmark", color: Color(red: 0.20, green: 0.78, blue: 0.35), size: size)
-                }
-                .offset(y: -size * 0.23)
+                symbolBadge(symbol: "checkmark", color: .black, size: size * 0.66)
+                    .offset(y: outerY)
+
+                symbolBadge(symbol: "heart.fill", color: .black, size: size * 0.56)
+                    .offset(y: middleY)
+
+                symbolBadge(symbol: "flame.fill", color: .black, size: size * 0.42)
+                    .offset(y: innerY)
             }
             .frame(width: size, height: size)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1009,56 +1033,145 @@ private struct LegendTag: View {
     }
 }
 
+private enum MetricTrendDirection {
+    case up
+    case down
+    case steady
+
+    var symbol: String {
+        switch self {
+        case .up:
+            return "arrow.up.right"
+        case .down:
+            return "arrow.down.right"
+        case .steady:
+            return "equal"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .up:
+            return .mint
+        case .down:
+            return .orange
+        case .steady:
+            return .cyan
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .up:
+            return "Rising"
+        case .down:
+            return "Falling"
+        case .steady:
+            return "Steady"
+        }
+    }
+}
+
 private struct MiniTrendChart: View {
     let points: [MetricPoint]
     let accent: Color
     let secondaryPoints: [MetricPoint]?
     let highlightedIndex: Int?
+    let idealRange: ClosedRange<Double>?
 
     var body: some View {
         GeometryReader { proxy in
-            let rect = proxy.frame(in: .local)
             let minValue = minimumValue()
             let maxValue = maximumValue()
+            let xAxisHeight: CGFloat = 18
+            let chartHeight = max(proxy.size.height - xAxisHeight - 4, 46)
+            let plotWidth = max(proxy.size.width, 30)
+            let rect = CGRect(x: 0, y: 0, width: plotWidth, height: chartHeight)
 
-            ZStack {
-                VStack(spacing: 0) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        Rectangle()
-                            .fill(Color.white.opacity(0.05))
-                            .frame(height: 1)
-                        Spacer()
+            VStack(spacing: 4) {
+                HStack(alignment: .bottom, spacing: 0) {
+                    ZStack(alignment: .bottomLeading) {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [accent.opacity(0.18), Color.white.opacity(0.04)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+
+                        VStack(spacing: 0) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.08))
+                                    .frame(height: 1)
+                                Spacer()
+                            }
+                        }
+                        .padding(.vertical, 10)
+
+                        if let secondaryPoints {
+                            LineChartPath(
+                                points: secondaryPoints.map(\.value),
+                                minValue: minValue,
+                                maxValue: maxValue
+                            )
+                            .stroke(Color.white.opacity(0.42), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+                        }
+
+                        LineChartPath(
+                            points: points.map(\.value),
+                            minValue: minValue,
+                            maxValue: maxValue
+                        )
+                        .stroke(Color.white.opacity(0.94), style: StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round))
+
+                        if points.count > 1 {
+                            ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
+                                let x = rect.minX + rect.width * CGFloat(index) / CGFloat(points.count - 1)
+                                let y = yPosition(for: point.value, in: rect, minValue: minValue, maxValue: maxValue)
+                                let baseY = rect.maxY - 10
+                                let isHighlighted = highlightedIndex == index
+                                let markerColor = pointColor(for: point.value)
+                                let capsuleHeight = max(16, baseY - y)
+
+                                Capsule()
+                                    .fill(markerColor.opacity(isHighlighted ? 0.55 : 0.30))
+                                    .frame(width: isHighlighted ? 8 : 6, height: capsuleHeight)
+                                    .position(x: x, y: y + capsuleHeight / 2)
+
+                                Circle()
+                                    .fill(markerColor)
+                                    .frame(width: isHighlighted ? 12 : 8, height: isHighlighted ? 12 : 8)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.white.opacity(0.88), lineWidth: isHighlighted ? 2 : 1)
+                                    )
+                                    .shadow(color: markerColor.opacity(isHighlighted ? 0.50 : 0.22), radius: isHighlighted ? 5 : 2)
+                                    .position(x: x, y: y)
+                            }
+                        } else if let point = points.first {
+                            Circle()
+                                .fill(pointColor(for: point.value))
+                                .frame(width: 12, height: 12)
+                                .overlay(Circle().stroke(Color.white.opacity(0.88), lineWidth: 2))
+                                .position(x: rect.midX, y: yPosition(for: point.value, in: rect, minValue: minValue, maxValue: maxValue))
+                        }
                     }
-                }
-                .padding(.vertical, 10)
-
-                LineChartPath(
-                    points: points.map(\.value),
-                    minValue: minValue,
-                    maxValue: maxValue
-                )
-                .stroke(accent, style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
-
-                if let secondaryPoints {
-                    LineChartPath(
-                        points: secondaryPoints.map(\.value),
-                        minValue: minValue,
-                        maxValue: maxValue
-                    )
-                    .stroke(Color.white.opacity(0.32), style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+                    .frame(width: plotWidth, height: chartHeight)
                 }
 
-                if let highlightedIndex,
-                   points.indices.contains(highlightedIndex),
-                   points.count > 1 {
-                    let x = rect.minX + rect.width * CGFloat(highlightedIndex) / CGFloat(points.count - 1)
-                    let y = yPosition(for: points[highlightedIndex].value, in: rect, minValue: minValue, maxValue: maxValue)
-
-                    Circle()
-                        .fill(accent)
-                        .frame(width: 9, height: 9)
-                        .position(x: x, y: y)
-                        .shadow(color: accent.opacity(0.45), radius: 4)
+                HStack {
+                    ForEach(points) { point in
+                        Text(weekdayLetter(point.date))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.68))
+                            .frame(maxWidth: .infinity)
+                    }
                 }
             }
         }
@@ -1076,11 +1189,86 @@ private struct MiniTrendChart: View {
         return max(primary.max() ?? 1, secondary.max() ?? primary.max() ?? 1)
     }
 
+    private func pointColor(for value: Double) -> Color {
+        guard let idealRange else { return accent }
+
+        switch band(for: value, idealRange: idealRange) {
+        case .low:
+            return .cyan
+        case .optimal:
+            return accent
+        case .high:
+            return .orange
+        }
+    }
+
     private func yPosition(for value: Double, in rect: CGRect, minValue: Double, maxValue: Double) -> CGFloat {
         let inset: CGFloat = 10
         guard maxValue > minValue else { return rect.midY }
         let ratio = (value - minValue) / (maxValue - minValue)
         return rect.maxY - inset - (rect.height - inset * 2) * CGFloat(ratio)
+    }
+}
+
+private struct TrendSummaryCard: View {
+    let value: String
+    let trend: MetricTrendDirection
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Spacer(minLength: 0)
+
+            Image(systemName: trend.symbol)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(trend.color)
+                .padding(7)
+                .background(trend.color.opacity(0.18))
+                .clipShape(Circle())
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 0.07, green: 0.16, blue: 0.28).opacity(0.92))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+}
+
+private struct BottomInfoStrip: View {
+    let text: String
+    let symbol: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white.opacity(0.82))
+
+            Text(text)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.78))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -1093,6 +1281,7 @@ private struct WeeklyBarChart: View {
         GeometryReader { proxy in
             let maxValue = max(points.map(\.value).max() ?? 1, 1)
             let averageValue = points.isEmpty ? 0 : points.map(\.value).reduce(0, +) / Double(points.count)
+            let showsMaxGuide = shouldShowMaxGuide(maxValue: maxValue, averageValue: averageValue)
             let yLabelWidth: CGFloat = 18
             let xLabelHeight: CGFloat = 16
             let chartHeight = max(proxy.size.height - xLabelHeight - 4, 26)
@@ -1105,7 +1294,8 @@ private struct WeeklyBarChart: View {
                         maxValue: maxValue,
                         averageValue: averageValue,
                         chartHeight: chartHeight,
-                        highlightColor: accent
+                        highlightColor: accent,
+                        showsMaxGuide: showsMaxGuide
                     )
                     .frame(width: yLabelWidth, height: chartHeight)
 
@@ -1118,13 +1308,15 @@ private struct WeeklyBarChart: View {
                             color: accent.opacity(0.75)
                         )
 
-                        referenceLine(
-                            value: maxValue,
-                            maxValue: maxValue,
-                            chartHeight: chartHeight,
-                            plotWidth: plotWidth,
-                            color: accent
-                        )
+                        if showsMaxGuide {
+                            referenceLine(
+                                value: maxValue,
+                                maxValue: maxValue,
+                                chartHeight: chartHeight,
+                                plotWidth: plotWidth,
+                                color: accent
+                            )
+                        }
 
                         Rectangle()
                             .fill(Color.white.opacity(0.18))
@@ -1168,14 +1360,16 @@ private struct WeeklyBarChart: View {
     }
 
     @ViewBuilder
-    private func yAxisLabels(maxValue: Double, averageValue: Double, chartHeight: CGFloat, highlightColor: Color) -> some View {
+    private func yAxisLabels(maxValue: Double, averageValue: Double, chartHeight: CGFloat, highlightColor: Color, showsMaxGuide: Bool) -> some View {
         let averageY = yPosition(for: averageValue, maxValue: maxValue, chartHeight: chartHeight)
 
         ZStack(alignment: .topTrailing) {
-            Text(shortMetricLabel(maxValue))
-                .font(.system(size: 8, weight: .medium))
-                .foregroundStyle(highlightColor)
-                .offset(y: -4)
+            if showsMaxGuide {
+                Text(shortMetricLabel(maxValue))
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(highlightColor)
+                    .offset(y: -4)
+            }
 
             Text(shortMetricLabel(averageValue))
                 .font(.system(size: 8, weight: .medium))
@@ -1206,6 +1400,10 @@ private struct WeeklyBarChart: View {
         let ratio = maxValue > 0 ? value / maxValue : 0
         return chartHeight - (chartHeight - 2) * CGFloat(ratio.clamped(to: 0...1))
     }
+
+    private func shouldShowMaxGuide(maxValue: Double, averageValue: Double) -> Bool {
+        maxValue > 0 && ((maxValue - averageValue) / maxValue) >= 0.14
+    }
 }
 
 private struct WeeklyDualBarChart: View {
@@ -1223,6 +1421,7 @@ private struct WeeklyDualBarChart: View {
             )
             let combinedValues = primaryPoints.map(\.value) + secondaryPoints.map(\.value)
             let averageValue = combinedValues.isEmpty ? 0 : combinedValues.reduce(0, +) / Double(combinedValues.count)
+            let showsMaxGuide = shouldShowMaxGuide(maxValue: maxValue, averageValue: averageValue)
             let yLabelWidth: CGFloat = 18
             let xLabelHeight: CGFloat = 16
             let chartHeight = max(proxy.size.height - xLabelHeight - 4, 26)
@@ -1235,7 +1434,8 @@ private struct WeeklyDualBarChart: View {
                     yAxisLabels(
                         maxValue: maxValue,
                         averageValue: averageValue,
-                        chartHeight: chartHeight
+                        chartHeight: chartHeight,
+                        showsMaxGuide: showsMaxGuide
                     )
                     .frame(width: yLabelWidth, height: chartHeight)
 
@@ -1248,13 +1448,15 @@ private struct WeeklyDualBarChart: View {
                             color: primaryColor.opacity(0.82)
                         )
 
-                        referenceLine(
-                            value: maxValue,
-                            maxValue: maxValue,
-                            chartHeight: chartHeight,
-                            plotWidth: plotWidth,
-                            color: secondaryColor
-                        )
+                        if showsMaxGuide {
+                            referenceLine(
+                                value: maxValue,
+                                maxValue: maxValue,
+                                chartHeight: chartHeight,
+                                plotWidth: plotWidth,
+                                color: secondaryColor
+                            )
+                        }
 
                         Rectangle()
                             .fill(Color.white.opacity(0.18))
@@ -1306,14 +1508,16 @@ private struct WeeklyDualBarChart: View {
     }
 
     @ViewBuilder
-    private func yAxisLabels(maxValue: Double, averageValue: Double, chartHeight: CGFloat) -> some View {
+    private func yAxisLabels(maxValue: Double, averageValue: Double, chartHeight: CGFloat, showsMaxGuide: Bool) -> some View {
         let averageY = yPosition(for: averageValue, maxValue: maxValue, chartHeight: chartHeight)
 
         ZStack(alignment: .topTrailing) {
-            Text(shortMetricLabel(maxValue))
-                .font(.system(size: 8, weight: .medium))
-                .foregroundStyle(secondaryColor)
-                .offset(y: -4)
+            if showsMaxGuide {
+                Text(shortMetricLabel(maxValue))
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(secondaryColor)
+                    .offset(y: -4)
+            }
 
             Text(shortMetricLabel(averageValue))
                 .font(.system(size: 8, weight: .medium))
@@ -1344,6 +1548,10 @@ private struct WeeklyDualBarChart: View {
         let ratio = maxValue > 0 ? value / maxValue : 0
         return chartHeight - (chartHeight - 2) * CGFloat(ratio.clamped(to: 0...1))
     }
+
+    private func shouldShowMaxGuide(maxValue: Double, averageValue: Double) -> Bool {
+        maxValue > 0 && ((maxValue - averageValue) / maxValue) >= 0.14
+    }
 }
 
 private struct MindfulnessRing: View {
@@ -1351,7 +1559,7 @@ private struct MindfulnessRing: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let size = min(proxy.size.width, proxy.size.height) * 0.92
+            let size = min(proxy.size.width, proxy.size.height) * 1.16
             let lineWidth = max(13, size * 0.125)
 
             ZStack {
@@ -1860,42 +2068,29 @@ private struct CrownControlledMetricView: View {
     var body: some View {
         GeometryReader { proxy in
             let compactHeight = proxy.size.height < 220
-            let chartHeight = min(max(proxy.size.height * 0.22, 62), 82)
+            let chartHeight = min(max(proxy.size.height * 0.38, 96), 128)
             let point = points[safe: selectedIndex]
             let selectedValue = point?.value ?? 0
-            let selectedBand = band(for: selectedValue, idealRange: idealRange)
+            let trend = metricTrendDirection(points: points, index: selectedIndex)
 
             VStack(spacing: compactHeight ? 8 : 10) {
                 MiniTrendChart(
                     points: points,
                     accent: accent,
                     secondaryPoints: nil,
-                    highlightedIndex: selectedIndex
+                    highlightedIndex: selectedIndex,
+                    idealRange: idealRange
                 )
                 .frame(height: chartHeight)
 
-                SectionCard(title: point.map { shortDay($0.date) } ?? "No Data") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(formattedMetricValue(selectedValue, unit: unit))
-                                .font(.headline.weight(.semibold))
-                            Spacer()
-                            StatusPill(band: selectedBand)
-                        }
-
-                        Text(detailMessage(for: selectedValue, title: title, band: selectedBand))
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.78))
-                    }
-                }
-
-                Text("Use the Digital Crown to change the selected day.")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .multilineTextAlignment(.center)
+                TrendSummaryCard(
+                    value: formattedMetricValue(selectedValue, unit: unit),
+                    trend: trend,
+                    accent: accent
+                )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .scenePadding(.horizontal)
+            .padding(.horizontal, 8)
             .padding(.vertical, compactHeight ? 8 : 10)
         }
         .navigationTitle(title)
@@ -1977,40 +2172,32 @@ private struct StressTrendView: View {
     var body: some View {
         GeometryReader { proxy in
             let compactHeight = proxy.size.height < 220
-            let chartHeight = min(max(proxy.size.height * 0.22, 62), 82)
+            let chartHeight = min(max(proxy.size.height * 0.38, 96), 128)
             let point = store.stressWeek[safe: selectedIndex]
+            let stressPoints = store.stressWeek.map { MetricPoint(date: $0.date, value: $0.stress) }
+            let selectedStress = point?.stress ?? 0
+            let trend = metricTrendDirection(points: stressPoints, index: selectedIndex)
 
             VStack(spacing: compactHeight ? 8 : 10) {
-                Text("Stress, energy, and regulation from the weekly trend")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .multilineTextAlignment(.center)
-
                 MiniTrendChart(
-                    points: store.stressWeek.map { MetricPoint(date: $0.date, value: $0.stress) },
+                    points: stressPoints,
                     accent: .red,
                     secondaryPoints: nil,
-                    highlightedIndex: selectedIndex
+                    highlightedIndex: selectedIndex,
+                    idealRange: 35...55
                 )
                 .frame(height: chartHeight)
 
-                if let point {
-                    SectionCard(title: shortDay(point.date)) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            MetricLine(label: "Stress", value: "\(Int(point.stress.rounded()))")
-                            MetricLine(label: "Energy", value: "\(Int(point.energy.rounded()))")
-                            MetricLine(label: "Regulation", value: "\(Int(point.regulation.rounded()))")
-                        }
-                    }
+                if point != nil {
+                    TrendSummaryCard(
+                        value: "\(Int(selectedStress.rounded())) pts",
+                        trend: trend,
+                        accent: .red
+                    )
                 }
-
-                Text("Use the Digital Crown to move through the week.")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .scenePadding(.horizontal)
+            .padding(.horizontal, 8)
             .padding(.vertical, compactHeight ? 8 : 10)
         }
         .navigationTitle("Stress")
@@ -2230,6 +2417,38 @@ private func detailMessage(for value: Double, title: String, band: MetricBand) -
     }
 }
 
+private func metricTrendDirection(points: [MetricPoint], index: Int) -> MetricTrendDirection {
+    guard points.indices.contains(index) else { return .steady }
+    guard index > 0 else { return .steady }
+
+    let current = points[index].value
+    let previous = points[index - 1].value
+    let delta = current - previous
+    let threshold = max(abs(previous) * 0.035, 0.6)
+
+    if delta > threshold {
+        return .up
+    }
+
+    if delta < -threshold {
+        return .down
+    }
+
+    return .steady
+}
+
+private func stressDetailMessage(for point: StressPoint) -> String {
+    if point.stress <= 40 && point.regulation >= 70 {
+        return "Stress stayed controlled while regulation remained strong."
+    }
+
+    if point.stress >= 60 {
+        return "Stress ran elevated, so give recovery habits more weight."
+    }
+
+    return "Stress looks manageable with balanced energy and regulation."
+}
+
 private func formattedMetricValue(_ value: Double, unit: String) -> String {
     if unit == "TL" {
         return String(format: "%.0f %@", value, unit)
@@ -2266,6 +2485,58 @@ private func shortMetricLabel(_ value: Double) -> String {
     }
 
     return String(format: "%.1f", value)
+}
+
+private func watchStrainClassificationTitle(for score: Double) -> String {
+    switch score {
+    case ..<6:
+        return "Low"
+    case ..<11:
+        return "Building"
+    case ..<15:
+        return "Productive"
+    default:
+        return "High"
+    }
+}
+
+private func watchStrainClassificationColor(for score: Double) -> Color {
+    switch score {
+    case ..<6:
+        return .blue
+    case ..<11:
+        return .green
+    case ..<15:
+        return .orange
+    default:
+        return .red
+    }
+}
+
+private func watchRecoveryClassificationTitle(for score: Double) -> String {
+    switch score {
+    case 90...100:
+        return "Full Send"
+    case 70..<90:
+        return "Perform"
+    case 40..<70:
+        return "Adapt"
+    default:
+        return "Recover"
+    }
+}
+
+private func watchRecoveryClassificationColor(for score: Double) -> Color {
+    switch score {
+    case 90...100:
+        return .green
+    case 70..<90:
+        return .green
+    case 40..<70:
+        return .orange
+    default:
+        return .red
+    }
 }
 
 private func hoursString(_ hours: Double) -> String {

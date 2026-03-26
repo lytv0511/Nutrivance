@@ -1061,8 +1061,12 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Nutrivance for Apple Watch";
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Nutrivance reads Health data on Apple Watch to show live recovery, workouts, mindfulness, and activity metrics.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = None.Nutrivance;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1096,8 +1100,12 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Nutrivance for Apple Watch";
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Nutrivance reads Health data on Apple Watch to show live recovery, workouts, mindfulness, and activity metrics.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = None.Nutrivance;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

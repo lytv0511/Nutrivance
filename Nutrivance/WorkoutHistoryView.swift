@@ -2,6 +2,8 @@ import SwiftUI
 import HealthKit
 import Charts
 import MapKit
+import CoreLocation
+import WeatherKit
 
 enum HRZoneConfigurationMode: String, CaseIterable, Identifiable {
     case intelligent
@@ -471,7 +473,10 @@ struct WorkoutCard: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: onHeaderTap)
             if isExpanded {
-                WorkoutDetailView(analytics: analytics, hrZoneSettings: hrZoneSettings)
+                WorkoutDetailView(
+                    analytics: analytics,
+                    hrZoneSettings: hrZoneSettings
+                )
             }
         }
         .padding()
@@ -495,11 +500,208 @@ struct ColoredRouteSegment: Identifiable {
     let color: UIColor
 }
 
+private actor WorkoutRouteStore {
+    static let shared = WorkoutRouteStore()
+
+    private var cachedLocations: [UUID: [CLLocation]] = [:]
+
+    func locations(for workout: HKWorkout) async -> [CLLocation] {
+        if let cached = cachedLocations[workout.uuid] {
+            return cached
+        }
+
+        let loaded = await loadLocations(for: workout)
+        cachedLocations[workout.uuid] = loaded
+        return loaded
+    }
+
+    private func loadLocations(for workout: HKWorkout) async -> [CLLocation] {
+        let healthStore = HKHealthStore()
+        let predicate = HKQuery.predicateForObjects(from: workout)
+        let routeType = HKSeriesType.workoutRoute()
+
+        let route: HKWorkoutRoute? = await withCheckedContinuation { continuation in
+            let sampleQuery = HKSampleQuery(
+                sampleType: routeType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                guard error == nil,
+                      let routes = samples as? [HKWorkoutRoute],
+                      let route = routes.first else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: route)
+            }
+            healthStore.execute(sampleQuery)
+        }
+
+        guard let route else { return [] }
+
+        return await withCheckedContinuation { continuation in
+            var allLocations: [CLLocation] = []
+            let routeQuery = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
+                guard error == nil else {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                if let locations {
+                    allLocations.append(contentsOf: locations)
+                }
+
+                if done {
+                    continuation.resume(returning: allLocations)
+                }
+            }
+            healthStore.execute(routeQuery)
+        }
+    }
+}
+
+private func sampledLocations(from locations: [CLLocation], maxPoints: Int) -> [CLLocation] {
+    guard locations.count > maxPoints, maxPoints > 1 else { return locations }
+
+    let step = Double(locations.count - 1) / Double(maxPoints - 1)
+    var sampled: [CLLocation] = []
+    sampled.reserveCapacity(maxPoints)
+
+    for index in 0..<maxPoints {
+        let sampledIndex = Int((Double(index) * step).rounded())
+        sampled.append(locations[min(locations.count - 1, sampledIndex)])
+    }
+
+    return sampled
+}
+
+private func routeTintColor(for heartRate: Double) -> UIColor {
+    switch heartRate {
+    case ..<120: return .systemBlue
+    case ..<140: return .systemGreen
+    case ..<160: return .systemYellow
+    case ..<180: return .systemOrange
+    default: return .systemRed
+    }
+}
+
+private func buildColoredRouteSegments(
+    locations: [CLLocation],
+    heartRates: [(Date, Double)]
+) -> [ColoredRouteSegment] {
+    guard locations.count > 1 else { return [] }
+
+    let sortedHeartRates = heartRates.sorted { $0.0 < $1.0 }
+    guard !sortedHeartRates.isEmpty else {
+        return [ColoredRouteSegment(coordinates: locations.map(\.coordinate), color: .systemBlue)]
+    }
+
+    func nearestHeartRate(to date: Date, startingAt index: inout Int) -> Double {
+        while index < sortedHeartRates.count - 1 &&
+                abs(sortedHeartRates[index + 1].0.timeIntervalSince(date)) <= abs(sortedHeartRates[index].0.timeIntervalSince(date)) {
+            index += 1
+        }
+        return sortedHeartRates[index].1
+    }
+
+    var segments: [ColoredRouteSegment] = []
+    var currentCoordinates: [CLLocationCoordinate2D] = [locations[0].coordinate]
+    var heartRateIndex = 0
+    var currentColor = routeTintColor(for: nearestHeartRate(to: locations[0].timestamp, startingAt: &heartRateIndex))
+
+    for locationIndex in 1..<locations.count {
+        let location = locations[locationIndex]
+        let nextColor = routeTintColor(for: nearestHeartRate(to: location.timestamp, startingAt: &heartRateIndex))
+
+        if nextColor != currentColor && currentCoordinates.count > 1 {
+            segments.append(ColoredRouteSegment(coordinates: currentCoordinates, color: currentColor))
+            currentCoordinates = [locations[locationIndex - 1].coordinate, location.coordinate]
+            currentColor = nextColor
+        } else {
+            currentCoordinates.append(location.coordinate)
+        }
+    }
+
+    if currentCoordinates.count > 1 {
+        segments.append(ColoredRouteSegment(coordinates: currentCoordinates, color: currentColor))
+    }
+
+    return segments
+}
+
 struct Split {
     let distance: Double // in km
     let time: TimeInterval
     let pace: Double? // min/km
     let avgHR: Double?
+}
+
+private struct WorkoutWeatherSnapshot {
+    let requestedDate: Date
+    let matchedDate: Date
+    let temperatureCelsius: Double
+    let humidityFraction: Double
+    let airQualityLabel: String
+
+    var temperatureText: String {
+        String(format: "%.0f", temperatureCelsius)
+    }
+
+    var humidityText: String {
+        String(format: "%.0f", humidityFraction * 100)
+    }
+}
+
+private actor WorkoutWeatherService {
+    static let shared = WorkoutWeatherService()
+
+    private var cache: [String: WorkoutWeatherSnapshot?] = [:]
+    private let service = WeatherService.shared
+
+    func snapshot(for location: CLLocation, at date: Date) async -> WorkoutWeatherSnapshot? {
+        let roundedLat = (location.coordinate.latitude * 1000).rounded() / 1000
+        let roundedLon = (location.coordinate.longitude * 1000).rounded() / 1000
+        let roundedTime = date.timeIntervalSince1970.rounded(.towardZero) / 3600
+        let cacheKey = "\(roundedLat)|\(roundedLon)|\(roundedTime)"
+
+        if let cached = cache[cacheKey] {
+            return cached
+        }
+
+        do {
+            let weather = try await service.weather(for: location)
+            let nearestHour = weather.hourlyForecast.forecast.min(by: {
+                abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+            })
+
+            if let nearestHour,
+               abs(nearestHour.date.timeIntervalSince(date)) <= 12 * 60 * 60 {
+                let snapshot = WorkoutWeatherSnapshot(
+                    requestedDate: date,
+                    matchedDate: nearestHour.date,
+                    temperatureCelsius: nearestHour.temperature.value,
+                    humidityFraction: nearestHour.humidity,
+                    airQualityLabel: "Unavailable"
+                )
+                cache[cacheKey] = snapshot
+                return snapshot
+            }
+
+            let snapshot = WorkoutWeatherSnapshot(
+                requestedDate: date,
+                matchedDate: date,
+                temperatureCelsius: weather.currentWeather.temperature.value,
+                humidityFraction: weather.currentWeather.humidity,
+                airQualityLabel: "Unavailable"
+            )
+            cache[cacheKey] = snapshot
+            return snapshot
+        } catch {
+            cache[cacheKey] = nil
+            return nil
+        }
+    }
 }
 
 private struct HRZone {
@@ -512,14 +714,10 @@ private struct HRZone {
 struct WorkoutDetailView: View {
     let analytics: WorkoutAnalytics
     let hrZoneSettings: HRZoneUserSettings
+    var allowsMapExpansion: Bool = true
+    var showsSummaryContent: Bool = true
 
     @StateObject private var healthKitManager = HealthKitManager()
-    @State private var selectedMETPoint: (Date, Double)? = nil
-    @State private var selectedHRPoint: (Date, Double)? = nil
-    @State private var selectedPostHRPoint: (Date, Double)? = nil
-    @State private var selectedPowerPoint: (Date, Double)? = nil
-    @State private var selectedCadencePoint: (Date, Double)? = nil
-    @State private var selectedPacePoint: (Date, Double)? = nil
 
     @State private var showHRZones = false
     @State private var routePoints: [RoutePoint] = []
@@ -530,6 +728,10 @@ struct WorkoutDetailView: View {
     @State private var historicalMaxHR: Double? = nil
     @State private var historicalRestingHR: Double? = nil
     @State private var hasResolvedZoneProfile = false
+    @State private var selectedScrubbedDate: Date? = nil
+    @State private var weatherSnapshot: WorkoutWeatherSnapshot? = nil
+    @State private var isLoadingWeather = false
+    @State private var showMapDetail = false
 
     private var activeDuration: TimeInterval {
         analytics.workout.duration
@@ -573,9 +775,82 @@ struct WorkoutDetailView: View {
         analytics.heartRates.map { $0.1 }.max()
     }
 
+    private var selectedRouteLocation: CLLocation? {
+        let referenceDate = selectedScrubbedDate ?? analytics.workout.startDate
+        return nearestRouteLocation(to: referenceDate)
+    }
+
+    private var weatherReferenceLocation: CLLocation? {
+        selectedRouteLocation ?? routeLocations.first
+    }
+
+    private var weatherReferenceDate: Date {
+        selectedScrubbedDate ?? analytics.workout.startDate
+    }
+
+    private var selectedRouteCoordinateText: String? {
+        guard let coordinate = selectedRouteLocation?.coordinate else { return nil }
+        return String(format: "%.4f, %.4f", coordinate.latitude, coordinate.longitude)
+    }
+
+    private var selectedMETPoint: (Date, Double)? {
+        selectedPoint(in: analytics.metSeries)
+    }
+
+    private var selectedHRPoint: (Date, Double)? {
+        selectedPoint(in: analytics.heartRates)
+    }
+
+    private var selectedPostHRPoint: (Date, Double)? {
+        selectedPoint(in: analytics.postWorkoutHRSeries)
+    }
+
+    private var selectedPowerPoint: (Date, Double)? {
+        selectedPoint(in: analytics.powerSeries)
+    }
+
+    private var selectedCadencePoint: (Date, Double)? {
+        selectedPoint(in: analytics.cadenceSeries)
+    }
+
+    private var selectedSpeedPoint: (Date, Double)? {
+        let speedSeries = analytics.speedSeries.map { ($0.0, $0.1 * 3.6) }
+        return selectedPoint(in: speedSeries)
+    }
+
+    private var selectedPacePoint: (Date, Double)? {
+        let paceSeries = analytics.speedSeries.compactMap { point -> (Date, Double)? in
+            let speedKPH = point.1 * 3.6
+            guard speedKPH > 0 else { return nil }
+            return (point.0, 60 / speedKPH)
+        }
+        return selectedPoint(in: paceSeries)
+    }
+
+    private var selectedElevationPoint: (Date, Double)? {
+        selectedPoint(in: analytics.elevationSeries)
+    }
+
+    private var selectedRouteElapsedText: String? {
+        guard let timestamp = selectedRouteLocation?.timestamp else { return nil }
+        let elapsed = max(0, timestamp.timeIntervalSince(analytics.workout.startDate))
+        return formattedTime(elapsed)
+    }
+
     private func nearestPoint(in data: [(Date, Double)], to date: Date) -> (Date, Double)? {
         data.min { lhs, rhs in
             abs(lhs.0.timeIntervalSince(date)) < abs(rhs.0.timeIntervalSince(date))
+        }
+    }
+
+    private func selectedPoint(in data: [(Date, Double)]) -> (Date, Double)? {
+        guard let selectedScrubbedDate else { return nil }
+        return nearestPoint(in: data, to: selectedScrubbedDate)
+    }
+
+    private func nearestRouteLocation(to date: Date) -> CLLocation? {
+        routeLocations.min { lhs, rhs in
+            abs(lhs.timestamp.timeIntervalSince(date)) < abs(rhs.timestamp.timeIntervalSince(date))
         }
     }
 
@@ -607,15 +882,13 @@ struct WorkoutDetailView: View {
         from location: CGPoint,
         proxy: ChartProxy,
         geometry: GeometryProxy,
-        data: [(Date, Double)],
-        selection: Binding<(Date, Double)?>
+        data: [(Date, Double)]
     ) {
         guard let point = pointSelection(at: location, proxy: proxy, geometry: geometry, data: data) else {
-            selection.wrappedValue = nil
             return
         }
-        if selection.wrappedValue?.0 != point.0 || selection.wrappedValue?.1 != point.1 {
-            selection.wrappedValue = point
+        if selectedScrubbedDate != point.0 {
+            selectedScrubbedDate = point.0
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
     }
@@ -628,40 +901,60 @@ struct WorkoutDetailView: View {
     private func selectionOverlay(
         proxy: ChartProxy,
         geometry: GeometryProxy,
-        data: [(Date, Double)],
-        selection: Binding<(Date, Double)?>
+        data: [(Date, Double)]
     ) -> some View {
         Rectangle()
             .fill(Color.clear)
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 16)
-                    .onChanged { value in
-                        guard isHorizontalScrub(value) else {
-                            selection.wrappedValue = nil
-                            return
-                        }
+                SpatialTapGesture()
+                    .onEnded { value in
                         updateSelection(
                             from: value.location,
                             proxy: proxy,
                             geometry: geometry,
-                            data: data,
-                            selection: selection
+                            data: data
                         )
                     }
-                    .onEnded { value in
-                        guard isHorizontalScrub(value) else {
-                            selection.wrappedValue = nil
-                            return
+            )
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.25)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .onChanged { value in
+                        switch value {
+                        case .first(true):
+                            break
+                        case .second(true, let drag):
+                            guard let drag else { return }
+                            guard isHorizontalScrub(drag) || drag.translation == .zero else {
+                                return
+                            }
+                            updateSelection(
+                                from: drag.location,
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: data
+                            )
+                        default:
+                            break
                         }
-                        updateSelection(
-                            from: value.location,
-                            proxy: proxy,
-                            geometry: geometry,
-                            data: data,
-                            selection: selection
-                        )
-                        selection.wrappedValue = nil
+                    }
+                    .onEnded { value in
+                        switch value {
+                        case .second(true, let drag):
+                            guard let drag else { return }
+                            guard isHorizontalScrub(drag) || drag.translation == .zero else {
+                                return
+                            }
+                            updateSelection(
+                                from: drag.location,
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: data
+                            )
+                        default:
+                            break
+                        }
                     }
             )
             .onContinuousHover { phase in
@@ -671,11 +964,10 @@ struct WorkoutDetailView: View {
                         from: location,
                         proxy: proxy,
                         geometry: geometry,
-                        data: data,
-                        selection: selection
+                        data: data
                     )
                 case .ended:
-                    selection.wrappedValue = nil
+                    break
                 }
             }
     }
@@ -856,117 +1148,133 @@ struct WorkoutDetailView: View {
         return updatedZones
     }
 
-    private func color(for heartRate: Double) -> UIColor {
-        switch heartRate {
-        case ..<120: return .systemBlue
-        case ..<140: return .systemGreen
-        case ..<160: return .systemYellow
-        case ..<180: return .systemOrange
-        default: return .systemRed
-        }
-    }
-
-    private func buildSegments(
-        locations: [CLLocation],
-        heartRates: [(Date, Double)]
-    ) -> [ColoredRouteSegment] {
-
-        guard locations.count > 1 else { return [] }
-
-        func nearestHR(to date: Date) -> Double? {
-            heartRates.min {
-                abs($0.0.timeIntervalSince(date)) < abs($1.0.timeIntervalSince(date))
-            }?.1
-        }
-
-        var segments: [ColoredRouteSegment] = []
-
-        for i in 0..<(locations.count - 1) {
-            let start = locations[i]
-            let end = locations[i + 1]
-
-            guard let hr = nearestHR(to: start.timestamp) else { continue }
-
-            segments.append(
-                ColoredRouteSegment(
-                    coordinates: [start.coordinate, end.coordinate],
-                    color: color(for: hr)
-                )
-            )
-        }
-
-        return segments
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if !coloredSegments.isEmpty {
-                RouteMapView(segments: coloredSegments)
-                    .frame(height: 260)
+                RouteMapView(
+                    segments: coloredSegments,
+                    startCoordinate: routeLocations.first?.coordinate,
+                    endCoordinate: routeLocations.last?.coordinate,
+                    highlightedCoordinate: selectedRouteLocation?.coordinate
+                )
+                    .frame(height: 210)
                     .cornerRadius(16)
-            }
-            // High-level metrics
-            let columns = [GridItem(.flexible()), GridItem(.flexible())]
-            LazyVGrid(columns: columns, spacing: 12) {
-                if let dist = distanceMeters {
-                    WorkoutMetricCard(title: "Distance", value: String(format: "%.2f", dist / 1000), unit: "km", icon: "ruler", color: .blue)
+
+                if let coordinateText = selectedRouteCoordinateText {
+                    HStack(spacing: 12) {
+                        Label(selectedScrubbedDate == nil ? "Route Start" : "Selected Route Point", systemImage: "mappin.and.ellipse")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if let elapsedText = selectedRouteElapsedText {
+                            Text(elapsedText)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Text(coordinateText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if let spd = avgSpeedKPH {
-                    WorkoutMetricCard(title: "Avg Speed", value: String(format: "%.1f", spd), unit: "km/h", icon: "speedometer", color: .teal)
-                }
-                if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking), let spd = avgSpeedKPH, spd > 0 {
-                    let pace = 60 / spd
-                    WorkoutMetricCard(title: "Avg Pace", value: String(format: "%.1f", pace), unit: "min/km", icon: "stopwatch", color: .blue)
-                }
-                if let power = avgPower {
-                    WorkoutMetricCard(title: "Avg Power", value: String(format: "%.0f", power), unit: "W", icon: "bolt.fill", color: .purple)
-                }
-                if let cadence = avgCadence {
-                    WorkoutMetricCard(title: "Avg Cadence", value: String(format: "%.0f", cadence), unit: "rpm", icon: "waveform.path.ecg", color: .mint)
-                }
-                if let kcal = analytics.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
-                    WorkoutMetricCard(title: "Active KCAL", value: String(format: "%.0f", kcal), unit: "kcal", icon: "flame.fill", color: .orange)
-                }
-                if let elevation = analytics.elevationGain {
-                    WorkoutMetricCard(title: "Elevation Gain", value: String(format: "%.0f", elevation), unit: "m", icon: "mountain.2.fill", color: .green)
-                }
-                if let hr = avgHeartRate {
-                    WorkoutMetricCard(title: "Avg HR", value: String(format: "%.0f", hr), unit: "bpm", icon: "heart.fill", color: .red)
-                }
-                if let pause = pausedDuration {
-                    WorkoutMetricCard(title: "Paused", value: formattedTime(pause), unit: "", icon: "pause.fill", color: .gray)
-                }
-                if let vo = analytics.verticalOscillation {
-                    WorkoutMetricCard(title: "Vert Osc", value: String(format: "%.1f", vo), unit: "cm", icon: "waveform", color: .cyan)
-                }
-                if let gct = analytics.groundContactTime {
-                    WorkoutMetricCard(title: "GCT", value: String(format: "%.0f", gct), unit: "ms", icon: "figure.run", color: .indigo)
-                }
-                if let sl = analytics.strideLength {
-                    WorkoutMetricCard(title: "Stride", value: String(format: "%.2f", sl), unit: "m", icon: "ruler.fill", color: .pink)
+
+                if allowsMapExpansion {
+                    Button {
+                        showMapDetail = true
+                    } label: {
+                        HStack {
+                            Text("View More")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.orange.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+                        )
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
-            // HR Zone Profile Information
-            if let profile = activeZoneProfile {
-                if hrZoneSettings.mode == .customZones {
-                    HeartRateZoneProfileSummaryView(
-                        profile: profile,
-                        displayedMaxHR: historicalMaxHR,
-                        displayedRestingHR: historicalRestingHR,
-                        maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
-                        restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR",
-                        schemaTitleOverride: "Custom",
-                        showsDescription: false
-                    )
-                } else {
-                    HeartRateZoneProfileSummaryView(
-                        profile: profile,
-                        displayedMaxHR: historicalMaxHR,
-                        displayedRestingHR: historicalRestingHR,
-                        maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
-                        restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR"
-                    )
+            if showsSummaryContent && (isLoadingWeather || weatherSnapshot != nil) {
+                WorkoutWeatherCard(
+                    snapshot: weatherSnapshot,
+                    isLoading: isLoadingWeather,
+                    selectedDate: selectedScrubbedDate
+                )
+            }
+            if showsSummaryContent {
+                let columns = [GridItem(.flexible()), GridItem(.flexible())]
+                LazyVGrid(columns: columns, spacing: 12) {
+                    if let dist = distanceMeters {
+                        WorkoutMetricCard(title: "Distance", value: String(format: "%.2f", dist / 1000), unit: "km", icon: "ruler", color: .blue)
+                    }
+                    if let spd = avgSpeedKPH {
+                        WorkoutMetricCard(title: "Avg Speed", value: String(format: "%.1f", spd), unit: "km/h", icon: "speedometer", color: .teal)
+                    }
+                    if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking), let spd = avgSpeedKPH, spd > 0 {
+                        let pace = 60 / spd
+                        WorkoutMetricCard(title: "Avg Pace", value: String(format: "%.1f", pace), unit: "min/km", icon: "stopwatch", color: .blue)
+                    }
+                    if let power = avgPower {
+                        WorkoutMetricCard(title: "Avg Power", value: String(format: "%.0f", power), unit: "W", icon: "bolt.fill", color: .purple)
+                    }
+                    if let cadence = avgCadence {
+                        WorkoutMetricCard(title: "Avg Cadence", value: String(format: "%.0f", cadence), unit: "rpm", icon: "waveform.path.ecg", color: .mint)
+                    }
+                    if let kcal = analytics.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                        WorkoutMetricCard(title: "Active KCAL", value: String(format: "%.0f", kcal), unit: "kcal", icon: "flame.fill", color: .orange)
+                    }
+                    if let elevation = analytics.elevationGain {
+                        WorkoutMetricCard(title: "Elevation Gain", value: String(format: "%.0f", elevation), unit: "m", icon: "mountain.2.fill", color: .green)
+                    }
+                    if let hr = avgHeartRate {
+                        WorkoutMetricCard(title: "Avg HR", value: String(format: "%.0f", hr), unit: "bpm", icon: "heart.fill", color: .red)
+                    }
+                    if let pause = pausedDuration {
+                        WorkoutMetricCard(title: "Paused", value: formattedTime(pause), unit: "", icon: "pause.fill", color: .gray)
+                    }
+                    if let vo = analytics.verticalOscillation {
+                        WorkoutMetricCard(title: "Vert Osc", value: String(format: "%.1f", vo), unit: "cm", icon: "waveform", color: .cyan)
+                    }
+                    if let gct = analytics.groundContactTime {
+                        WorkoutMetricCard(title: "GCT", value: String(format: "%.0f", gct), unit: "ms", icon: "figure.run", color: .indigo)
+                    }
+                    if let sl = analytics.strideLength {
+                        WorkoutMetricCard(title: "Stride", value: String(format: "%.2f", sl), unit: "m", icon: "ruler.fill", color: .pink)
+                    }
+                }
+            }
+
+            if showsSummaryContent {
+                if let profile = activeZoneProfile {
+                    if hrZoneSettings.mode == .customZones {
+                        HeartRateZoneProfileSummaryView(
+                            profile: profile,
+                            displayedMaxHR: historicalMaxHR,
+                            displayedRestingHR: historicalRestingHR,
+                            maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
+                            restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR",
+                            schemaTitleOverride: "Custom",
+                            showsDescription: false
+                        )
+                    } else {
+                        HeartRateZoneProfileSummaryView(
+                            profile: profile,
+                            displayedMaxHR: historicalMaxHR,
+                            displayedRestingHR: historicalRestingHR,
+                            maxHRLabel: historicalMaxHR == nil ? "Max HR" : "7d Max HR",
+                            restingHRLabel: historicalRestingHR == nil ? "Resting HR" : "7d Avg Resting HR"
+                        )
+                    }
                 }
             }
 
@@ -997,8 +1305,7 @@ struct WorkoutDetailView: View {
                         selectionOverlay(
                             proxy: proxy,
                             geometry: geometry,
-                            data: analytics.metSeries,
-                            selection: $selectedMETPoint
+                            data: analytics.metSeries
                         )
                     }
                 }
@@ -1066,8 +1373,7 @@ struct WorkoutDetailView: View {
                         selectionOverlay(
                             proxy: proxy,
                             geometry: geometry,
-                            data: analytics.heartRates,
-                            selection: $selectedHRPoint
+                            data: analytics.heartRates
                         )
                     }
                 }
@@ -1150,8 +1456,7 @@ struct WorkoutDetailView: View {
                         selectionOverlay(
                             proxy: proxy,
                             geometry: geometry,
-                            data: analytics.postWorkoutHRSeries,
-                            selection: $selectedPostHRPoint
+                            data: analytics.postWorkoutHRSeries
                         )
                     }
                 }
@@ -1171,9 +1476,9 @@ struct WorkoutDetailView: View {
             }
 
             // Cycling Power if applicable
-            if analytics.workout.workoutActivityType == .cycling && !analytics.powerSeries.isEmpty {
+            if !analytics.powerSeries.isEmpty {
                 VStack(alignment: .leading) {
-                    Text("Cycling Power")
+                    Text("Power")
                         .font(.subheadline)
                         .bold()
                     Chart {
@@ -1196,13 +1501,12 @@ struct WorkoutDetailView: View {
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
-                                proxy: proxy,
-                                geometry: geometry,
-                                data: analytics.powerSeries,
-                                selection: $selectedPowerPoint
-                            )
-                        }
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: analytics.powerSeries
+                        )
                     }
+                }
                     HStack {
                         let avgPower = analytics.powerSeries.map { $0.1 }.average
                         Text("Avg Power: \(avgPower.map { String(format: "%.1f", $0) } ?? "-") W")
@@ -1217,32 +1521,53 @@ struct WorkoutDetailView: View {
             }
 
             // Cycling Speed if applicable
-            if analytics.workout.workoutActivityType == .cycling && !analytics.speedSeries.isEmpty {
+            if !analytics.speedSeries.isEmpty {
                 VStack(alignment: .leading) {
-                    Text("Cycling Speed")
+                    Text("Speed")
                         .font(.subheadline)
                         .bold()
-                    Chart(analytics.speedSeries, id: \.0) { point in
-                        LineMark(
-                            x: .value("Time", point.0),
-                            y: .value("Speed", point.1 * 3.6) // m/s to km/h
+                    Chart {
+                        ForEach(analytics.speedSeries, id: \.0) { point in
+                            LineMark(
+                                x: .value("Time", point.0),
+                                y: .value("Speed", point.1 * 3.6)
+                            )
+                            .foregroundStyle(.blue)
+                        }
+                        selectionMarks(
+                            selected: selectedSpeedPoint,
+                            xLabel: "Time",
+                            yLabel: "Speed",
+                            color: .blue,
+                            valueText: { String(format: "%.1f km/h", $0) }
                         )
-                        .foregroundStyle(.blue)
                     }
                     .frame(height: 150)
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            let speedSeries = analytics.speedSeries.map { ($0.0, $0.1 * 3.6) }
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: speedSeries
+                            )
+                        }
+                    }
                     HStack {
                         let avgSpeed = analytics.speedSeries.map { $0.1 * 3.6 }.average
                         Text("Avg Speed: \(avgSpeed.map { String(format: "%.1f", $0) } ?? "-") km/h")
+                        if let point = selectedSpeedPoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.1f", point.1)) km/h")
+                        }
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
                 }
             }
 
-            // Cycling Cadence if applicable
-            if analytics.workout.workoutActivityType == .cycling && !analytics.cadenceSeries.isEmpty {
+            if !analytics.cadenceSeries.isEmpty {
                 VStack(alignment: .leading) {
-                    Text("Cycling Cadence")
+                    Text("Cadence")
                         .font(.subheadline)
                         .bold()
                     Chart {
@@ -1265,13 +1590,12 @@ struct WorkoutDetailView: View {
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
-                                proxy: proxy,
-                                geometry: geometry,
-                                data: analytics.cadenceSeries,
-                                selection: $selectedCadencePoint
-                            )
-                        }
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: analytics.cadenceSeries
+                        )
                     }
+                }
                     HStack {
                         let avgCadence = analytics.cadenceSeries.map { $0.1 }.average
                         Text("Avg Cadence: \(avgCadence.map { String(format: "%.0f", $0) } ?? "-") rpm")
@@ -1290,17 +1614,38 @@ struct WorkoutDetailView: View {
                     Text("Elevation")
                         .font(.subheadline)
                         .bold()
-                    Chart(analytics.elevationSeries, id: \.0) { point in
-                        LineMark(
-                            x: .value("Time", point.0),
-                            y: .value("Elevation", point.1)
+                    Chart {
+                        ForEach(analytics.elevationSeries, id: \.0) { point in
+                            LineMark(
+                                x: .value("Time", point.0),
+                                y: .value("Elevation", point.1)
+                            )
+                            .foregroundStyle(.green)
+                        }
+                        selectionMarks(
+                            selected: selectedElevationPoint,
+                            xLabel: "Time",
+                            yLabel: "Elevation",
+                            color: .green,
+                            valueText: { String(format: "%.0f m", $0) }
                         )
-                        .foregroundStyle(.green)
                     }
                     .frame(height: 150)
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            selectionOverlay(
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: analytics.elevationSeries
+                        )
+                    }
+                }
                     HStack {
                         if let gain = analytics.elevationGain {
                             Text("Total Gain: \(String(format: "%.0f", gain)) m")
+                        }
+                        if let point = selectedElevationPoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.0f", point.1)) m")
                         }
                     }
                     .font(.caption)
@@ -1340,8 +1685,7 @@ struct WorkoutDetailView: View {
                             selectionOverlay(
                                 proxy: proxy,
                                 geometry: geometry,
-                                data: paceSeries,
-                                selection: $selectedPacePoint
+                                data: paceSeries
                             )
                         }
                     }
@@ -1393,6 +1737,18 @@ struct WorkoutDetailView: View {
         }
         .task(id: analytics.workout.startDate) {
             await loadHistoricalZoneProfile()
+        }
+        .task(id: routeLocations.map(\.timestamp)) {
+            await loadWeatherSnapshot()
+        }
+        .task(id: selectedScrubbedDate) {
+            await loadWeatherSnapshot()
+        }
+        .fullScreenCover(isPresented: $showMapDetail) {
+            MapDetailView(
+                analytics: analytics,
+                hrZoneSettings: hrZoneSettings
+            )
         }
     }
 
@@ -1458,53 +1814,45 @@ struct WorkoutDetailView: View {
               analytics.workout.workoutActivityType == .hiking else { return }
 
         isLoadingRoute = true
+        Task {
+            let allLocations = await WorkoutRouteStore.shared.locations(for: analytics.workout)
+            let displayLocations = sampledLocations(from: allLocations, maxPoints: 700)
+            let displaySegments = buildColoredRouteSegments(
+                locations: displayLocations,
+                heartRates: analytics.heartRates
+            )
 
-        let healthStore = HKHealthStore()
-        let predicate = HKQuery.predicateForObjects(from: analytics.workout)
-        let routeType = HKSeriesType.workoutRoute()
-
-        let sampleQuery = HKSampleQuery(
-            sampleType: routeType,
-            predicate: predicate,
-            limit: HKObjectQueryNoLimit,
-            sortDescriptors: nil
-        ) { _, samples, error in
-
-            guard error == nil,
-                  let routes = samples as? [HKWorkoutRoute],
-                  let route = routes.first else {
-                DispatchQueue.main.async { isLoadingRoute = false }
-                return
+            await MainActor.run {
+                self.routeLocations = displayLocations
+                self.routePoints = displayLocations.map { RoutePoint(coordinate: $0.coordinate) }
+                self.coloredSegments = displaySegments
+                self.isLoadingRoute = false
             }
+        }
+    }
 
-            var allLocations: [CLLocation] = []
-
-            let routeQuery = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
-                guard error == nil else {
-                    DispatchQueue.main.async { isLoadingRoute = false }
-                    return
-                }
-
-                if let locations = locations {
-                    allLocations.append(contentsOf: locations)
-                }
-
-                if done {
-                    DispatchQueue.main.async {
-                        self.routeLocations = allLocations
-                        self.coloredSegments = buildSegments(
-                            locations: allLocations,
-                            heartRates: analytics.heartRates
-                        )
-                        self.isLoadingRoute = false
-                    }
-                }
+    private func loadWeatherSnapshot() async {
+        guard let location = weatherReferenceLocation else {
+            await MainActor.run {
+                weatherSnapshot = nil
+                isLoadingWeather = false
             }
-
-            healthStore.execute(routeQuery)
+            return
         }
 
-        healthStore.execute(sampleQuery)
+        await MainActor.run {
+            isLoadingWeather = true
+        }
+
+        let snapshot = await WorkoutWeatherService.shared.snapshot(
+            for: location,
+            at: weatherReferenceDate
+        )
+
+        await MainActor.run {
+            weatherSnapshot = snapshot
+            isLoadingWeather = false
+        }
     }
 
     private func generateSplits() -> [Split] {
@@ -1521,6 +1869,35 @@ struct WorkoutDetailView: View {
             splits.append(Split(distance: km, time: time, pace: pace, avgHR: avgHR))
         }
         return splits
+    }
+}
+
+private struct MapDetailView: View {
+    let analytics: WorkoutAnalytics
+    let hrZoneSettings: HRZoneUserSettings
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                WorkoutDetailView(
+                    analytics: analytics,
+                    hrZoneSettings: hrZoneSettings,
+                    allowsMapExpansion: false,
+                    showsSummaryContent: false
+                )
+                .padding()
+            }
+            .navigationTitle("Workout Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1895,50 +2272,162 @@ struct WorkoutMetricCard: View {
     }
 }
 
+private struct WorkoutWeatherCard: View {
+    let snapshot: WorkoutWeatherSnapshot?
+    let isLoading: Bool
+    let selectedDate: Date?
+
+    private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Weather")
+                    .font(.subheadline.bold())
+                Spacer()
+                if let selectedDate {
+                    Text(selectedDate, format: .dateTime.hour().minute())
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else if let snapshot {
+                    Text(snapshot.matchedDate, format: .dateTime.hour().minute())
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let snapshot {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    WorkoutMetricCard(title: "Temp", value: snapshot.temperatureText, unit: "°C", icon: "thermometer.medium", color: .orange)
+                    WorkoutMetricCard(title: "Humidity", value: snapshot.humidityText, unit: "%", icon: "humidity.fill", color: .blue)
+                    WorkoutMetricCard(title: "Air Quality", value: snapshot.airQualityLabel, unit: "", icon: "aqi.medium", color: .green)
+                }
+
+                Text("WeatherKit nearest hourly conditions for the selected workout moment.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Weather data is unavailable for this workout time and route.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 struct RouteMapView: UIViewRepresentable {
     let segments: [ColoredRouteSegment]
+    let startCoordinate: CLLocationCoordinate2D?
+    let endCoordinate: CLLocationCoordinate2D?
+    let highlightedCoordinate: CLLocationCoordinate2D?
+    var isInteractive: Bool = true
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
+        map.showsCompass = false
+        map.isRotateEnabled = false
+        map.showsScale = false
+        map.isScrollEnabled = isInteractive
+        map.isZoomEnabled = isInteractive
+        map.isPitchEnabled = isInteractive
         return map
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
         mapView.removeOverlays(mapView.overlays)
+        mapView.removeAnnotations(mapView.annotations)
 
+        var polylines: [ColoredPolyline] = []
         for segment in segments {
-            let polyline = MKPolyline(
-                coordinates: segment.coordinates,
-                count: segment.coordinates.count
-            )
-            mapView.addOverlay(polyline)
+            let coords = segment.coordinates
+            let poly = ColoredPolyline(coordinates: coords, count: coords.count)
+            poly.color = segment.color
+            polylines.append(poly)
         }
 
-        if let first = segments.first?.coordinates.first {
+        mapView.addOverlays(polylines)
+
+        var annotations: [RouteMarkerAnnotation] = []
+        if let startCoordinate {
+            annotations.append(RouteMarkerAnnotation(coordinate: startCoordinate, tintColor: .systemGreen))
+        }
+        if let endCoordinate {
+            annotations.append(RouteMarkerAnnotation(coordinate: endCoordinate, tintColor: .systemRed))
+        }
+        if let highlightedCoordinate {
+            annotations.append(RouteMarkerAnnotation(coordinate: highlightedCoordinate, tintColor: .systemBlue))
+        }
+        mapView.addAnnotations(annotations)
+
+        if context.coordinator.didSetInitialRegion == false, let first = segments.first?.coordinates.first {
             let region = MKCoordinateRegion(
                 center: first,
                 latitudinalMeters: 1000,
                 longitudinalMeters: 1000
             )
             mapView.setRegion(region, animated: true)
+            context.coordinator.didSetInitialRegion = true
         }
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Subclass MKPolyline to carry a color with the overlay
+    class ColoredPolyline: MKPolyline {
+        var color: UIColor = .systemBlue
+    }
+
+    final class RouteMarkerAnnotation: NSObject, MKAnnotation {
+        let coordinate: CLLocationCoordinate2D
+        let tintColor: UIColor
+
+        init(coordinate: CLLocationCoordinate2D, tintColor: UIColor) {
+            self.coordinate = coordinate
+            self.tintColor = tintColor
+        }
     }
 
     class Coordinator: NSObject, MKMapViewDelegate {
-        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            guard let polyline = overlay as? MKPolyline else {
-                return MKOverlayRenderer()
-            }
+        var didSetInitialRegion = false
 
-            let renderer = MKPolylineRenderer(polyline: polyline)
-            renderer.strokeColor = .systemBlue // (we'll upgrade this next)
-            renderer.lineWidth = 5
-            return renderer
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let poly = overlay as? ColoredPolyline {
+                let renderer = MKPolylineRenderer(polyline: poly)
+                renderer.strokeColor = poly.color
+                renderer.lineJoin = .round
+                renderer.lineCap = .round
+                // Adjust width based on approximate zoom (latitudeDelta) — thinner strokes
+                let span = max(0.0001, mapView.region.span.latitudeDelta)
+                let width = max(1.0, min(6.0, 3.0 / CGFloat(span)))
+                renderer.lineWidth = width
+                return renderer
+            }
+            return MKOverlayRenderer()
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let annotation = annotation as? RouteMarkerAnnotation else { return nil }
+            let identifier = "RouteMarkerAnnotation"
+            let view = (mapView.dequeueReusableAnnotationView(withIdentifier: identifier) as? MKMarkerAnnotationView) ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: identifier)
+            view.annotation = annotation
+            view.markerTintColor = annotation.tintColor
+            view.glyphImage = UIImage(systemName: "circle.fill")
+            view.displayPriority = .required
+            return view
+        }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            for overlay in mapView.overlays {
+                if let poly = overlay as? ColoredPolyline,
+                   let renderer = mapView.renderer(for: poly) as? MKPolylineRenderer {
+                    let span = max(0.0001, mapView.region.span.latitudeDelta)
+                    renderer.lineWidth = max(1.0, min(6.0, 3.0 / CGFloat(span)))
+                }
+            }
         }
     }
 }
@@ -1995,6 +2484,52 @@ extension HKWorkoutActivityType {
         case .preparationAndRecovery: return "figure.cooldown"
         case .other: return "figure"
         default: return "figure"
+        }
+    }
+}
+
+/// Lightweight preview that loads route points for a workout and renders a small `RouteMapView`.
+struct RoutePreviewView: View {
+    let workout: HKWorkout
+    let heartRates: [(Date, Double)]
+
+    @State private var coloredSegments: [ColoredRouteSegment] = []
+    @State private var isLoading = false
+
+    var body: some View {
+        ZStack {
+            if !coloredSegments.isEmpty {
+                RouteMapView(
+                    segments: coloredSegments,
+                    startCoordinate: nil,
+                    endCoordinate: nil,
+                    highlightedCoordinate: nil,
+                    isInteractive: false
+                )
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else if isLoading {
+                ProgressView()
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.1))
+                    .overlay(Text("No route") .font(.caption).foregroundColor(.secondary))
+            }
+        }
+        .onAppear(perform: loadRoute)
+    }
+
+    private func loadRoute() {
+        guard coloredSegments.isEmpty else { return }
+        isLoading = true
+        Task {
+            let allLocations = await WorkoutRouteStore.shared.locations(for: workout)
+            let displayLocations = sampledLocations(from: allLocations, maxPoints: 180)
+            let segments = buildColoredRouteSegments(locations: displayLocations, heartRates: heartRates)
+
+            await MainActor.run {
+                self.coloredSegments = segments
+                self.isLoading = false
+            }
         }
     }
 }

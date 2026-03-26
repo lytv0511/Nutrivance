@@ -1191,6 +1191,9 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!,
             HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!,
             HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature)!,
+
+            // Workout route series (GPS)
+            HKSeriesType.workoutRoute(),
             
             // Body Measurements
             HKQuantityType.quantityType(forIdentifier: .bodyMass)!,

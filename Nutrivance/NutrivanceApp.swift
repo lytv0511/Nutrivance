@@ -326,10 +326,14 @@ private func watchWorkoutPayloads(
 ) -> [WatchWorkoutPayload] {
     let calendar = Calendar.current
     let today = calendar.startOfDay(for: Date())
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
     let loadLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0) })
 
     return engine.workoutAnalytics
-        .filter { calendar.isDate($0.workout.startDate, inSameDayAs: today) }
+        .filter {
+            calendar.isDate($0.workout.startDate, inSameDayAs: today) ||
+            calendar.isDate($0.workout.startDate, inSameDayAs: yesterday)
+        }
         .sorted { $0.workout.startDate > $1.workout.startDate }
         .map { pair in
             let day = calendar.startOfDay(for: pair.workout.startDate)
