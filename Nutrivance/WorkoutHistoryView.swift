@@ -741,6 +741,14 @@ struct WorkoutDetailView: View {
         analytics.workout.duration
     }
 
+    private var standardChartHeight: CGFloat {
+        showsSummaryContent ? 150 : 96
+    }
+
+    private var heartRateChartHeight: CGFloat {
+        showsSummaryContent ? 180 : 112
+    }
+
     private var elapsedDuration: TimeInterval {
         analytics.workout.endDate.timeIntervalSince(analytics.workout.startDate)
     }
@@ -1110,7 +1118,7 @@ struct WorkoutDetailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: showsSummaryContent ? 16 : 12) {
             if !coloredSegments.isEmpty {
                 RouteMapView(
                     segments: coloredSegments,
@@ -1260,7 +1268,7 @@ struct WorkoutDetailView: View {
                         valueText: { String(format: "%.1f MET", $0) }
                     )
                 }
-                .frame(height: 150)
+                .frame(height: standardChartHeight)
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
                         selectionOverlay(
@@ -1328,7 +1336,7 @@ struct WorkoutDetailView: View {
                         valueText: { "\(Int($0)) bpm" }
                     )
                 }
-                .frame(height: 180)
+                .frame(height: heartRateChartHeight)
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
                         selectionOverlay(
@@ -1411,7 +1419,7 @@ struct WorkoutDetailView: View {
                         valueText: { "\(Int($0)) bpm" }
                     )
                 }
-                .frame(height: 150)
+                .frame(height: standardChartHeight)
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
                         selectionOverlay(
@@ -1458,7 +1466,7 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.0f W", $0) }
                         )
                     }
-                    .frame(height: 150)
+                    .frame(height: standardChartHeight)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
@@ -1503,7 +1511,7 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.1f km/h", $0) }
                         )
                     }
-                    .frame(height: 150)
+                    .frame(height: standardChartHeight)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             let speedSeries = analytics.speedSeries.map { ($0.0, $0.1 * 3.6) }
@@ -1547,7 +1555,7 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.0f rpm", $0) }
                         )
                     }
-                    .frame(height: 150)
+                    .frame(height: standardChartHeight)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
@@ -1591,7 +1599,7 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.0f m", $0) }
                         )
                     }
-                    .frame(height: 150)
+                    .frame(height: standardChartHeight)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
@@ -1637,7 +1645,7 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.2f min/km", $0) }
                         )
                     }
-                    .frame(height: 150)
+                    .frame(height: standardChartHeight)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             let paceSeries = analytics.speedSeries.map { point in
