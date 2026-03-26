@@ -643,6 +643,7 @@ private struct WorkoutWeatherSnapshot {
     let temperatureCelsius: Double
     let humidityFraction: Double
     let airQualityLabel: String
+    let sourceLabel: String
 
     var temperatureText: String {
         String(format: "%.0f", temperatureCelsius)
@@ -662,7 +663,7 @@ private actor WorkoutWeatherService {
     func snapshot(for location: CLLocation, at date: Date) async -> WorkoutWeatherSnapshot? {
         let roundedLat = (location.coordinate.latitude * 1000).rounded() / 1000
         let roundedLon = (location.coordinate.longitude * 1000).rounded() / 1000
-        let roundedTime = date.timeIntervalSince1970.rounded(.towardZero) / 3600
+        let roundedTime = (date.timeIntervalSince1970 / 3600).rounded(.towardZero)
         let cacheKey = "\(roundedLat)|\(roundedLon)|\(roundedTime)"
 
         if let cached = cache[cacheKey] {
@@ -682,7 +683,8 @@ private actor WorkoutWeatherService {
                     matchedDate: nearestHour.date,
                     temperatureCelsius: nearestHour.temperature.value,
                     humidityFraction: nearestHour.humidity,
-                    airQualityLabel: "Unavailable"
+                    airQualityLabel: "Unavailable",
+                    sourceLabel: "Nearest hourly forecast"
                 )
                 cache[cacheKey] = snapshot
                 return snapshot
@@ -690,10 +692,11 @@ private actor WorkoutWeatherService {
 
             let snapshot = WorkoutWeatherSnapshot(
                 requestedDate: date,
-                matchedDate: date,
+                matchedDate: weather.currentWeather.date,
                 temperatureCelsius: weather.currentWeather.temperature.value,
                 humidityFraction: weather.currentWeather.humidity,
-                airQualityLabel: "Unavailable"
+                airQualityLabel: "Unavailable",
+                sourceLabel: "Current conditions fallback"
             )
             cache[cacheKey] = snapshot
             return snapshot
@@ -722,6 +725,7 @@ struct WorkoutDetailView: View {
     @State private var showHRZones = false
     @State private var routePoints: [RoutePoint] = []
     @State private var routeLocations: [CLLocation] = []
+    @State private var routeLookupLocations: [CLLocation] = []
     @State private var coloredSegments: [ColoredRouteSegment] = []
     @State private var isLoadingRoute = false
     @State private var historicalZoneProfile: HRZoneProfile? = nil
@@ -781,7 +785,7 @@ struct WorkoutDetailView: View {
     }
 
     private var weatherReferenceLocation: CLLocation? {
-        selectedRouteLocation ?? routeLocations.first
+        selectedRouteLocation ?? routeLookupLocations.first ?? routeLocations.first
     }
 
     private var weatherReferenceDate: Date {
@@ -849,7 +853,8 @@ struct WorkoutDetailView: View {
     }
 
     private func nearestRouteLocation(to date: Date) -> CLLocation? {
-        routeLocations.min { lhs, rhs in
+        let locations = routeLookupLocations.isEmpty ? routeLocations : routeLookupLocations
+        return locations.min { lhs, rhs in
             abs(lhs.timestamp.timeIntervalSince(date)) < abs(rhs.timestamp.timeIntervalSince(date))
         }
     }
@@ -1779,6 +1784,7 @@ struct WorkoutDetailView: View {
             )
 
             await MainActor.run {
+                self.routeLookupLocations = allLocations
                 self.routeLocations = displayLocations
                 self.routePoints = displayLocations.map { RoutePoint(coordinate: $0.coordinate) }
                 self.coloredSegments = displaySegments
@@ -2320,7 +2326,7 @@ private struct WorkoutWeatherCard: View {
                     WorkoutMetricCard(title: "Air Quality", value: snapshot.airQualityLabel, unit: "", icon: "aqi.medium", color: .green)
                 }
 
-                Text("WeatherKit nearest hourly conditions for the selected workout moment.")
+                Text(snapshot.sourceLabel)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {
@@ -2352,30 +2358,37 @@ struct RouteMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        mapView.removeOverlays(mapView.overlays)
-        mapView.removeAnnotations(mapView.annotations)
+        let routeSignature = Coordinator.routeSignature(
+            segments: segments,
+            startCoordinate: startCoordinate,
+            endCoordinate: endCoordinate
+        )
 
-        var polylines: [ColoredPolyline] = []
-        for segment in segments {
-            let coords = segment.coordinates
-            let poly = ColoredPolyline(coordinates: coords, count: coords.count)
-            poly.color = segment.color
-            polylines.append(poly)
+        if context.coordinator.routeSignature != routeSignature {
+            mapView.removeOverlays(mapView.overlays)
+
+            var polylines: [ColoredPolyline] = []
+            polylines.reserveCapacity(segments.count)
+            for segment in segments {
+                let coords = segment.coordinates
+                let poly = ColoredPolyline(coordinates: coords, count: coords.count)
+                poly.color = segment.color
+                polylines.append(poly)
+            }
+
+            mapView.addOverlays(polylines)
+            context.coordinator.routeSignature = routeSignature
+            context.coordinator.updateStaticAnnotations(
+                on: mapView,
+                startCoordinate: startCoordinate,
+                endCoordinate: endCoordinate
+            )
         }
 
-        mapView.addOverlays(polylines)
-
-        var annotations: [RouteMarkerAnnotation] = []
-        if let startCoordinate {
-            annotations.append(RouteMarkerAnnotation(coordinate: startCoordinate, tintColor: .systemGreen))
-        }
-        if let endCoordinate {
-            annotations.append(RouteMarkerAnnotation(coordinate: endCoordinate, tintColor: .systemRed))
-        }
-        if let highlightedCoordinate {
-            annotations.append(RouteMarkerAnnotation(coordinate: highlightedCoordinate, tintColor: .systemBlue))
-        }
-        mapView.addAnnotations(annotations)
+        context.coordinator.updateHighlightAnnotation(
+            on: mapView,
+            coordinate: highlightedCoordinate
+        )
 
         if context.coordinator.didSetInitialRegion == false, let first = segments.first?.coordinates.first {
             let region = MKCoordinateRegion(
@@ -2396,7 +2409,7 @@ struct RouteMapView: UIViewRepresentable {
     }
 
     final class RouteMarkerAnnotation: NSObject, MKAnnotation {
-        let coordinate: CLLocationCoordinate2D
+        dynamic var coordinate: CLLocationCoordinate2D
         let tintColor: UIColor
 
         init(coordinate: CLLocationCoordinate2D, tintColor: UIColor) {
@@ -2407,6 +2420,75 @@ struct RouteMapView: UIViewRepresentable {
 
     class Coordinator: NSObject, MKMapViewDelegate {
         var didSetInitialRegion = false
+        var routeSignature = ""
+        private var startAnnotation: RouteMarkerAnnotation?
+        private var endAnnotation: RouteMarkerAnnotation?
+        private var highlightAnnotation: RouteMarkerAnnotation?
+
+        static func routeSignature(
+            segments: [ColoredRouteSegment],
+            startCoordinate: CLLocationCoordinate2D?,
+            endCoordinate: CLLocationCoordinate2D?
+        ) -> String {
+            let first = segments.first?.coordinates.first
+            let last = segments.last?.coordinates.last
+            let start = startCoordinate.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
+            let end = endCoordinate.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
+            let firstPoint = first.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
+            let lastPoint = last.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
+            return "\(segments.count)|\(firstPoint)|\(lastPoint)|\(start)|\(end)"
+        }
+
+        func updateStaticAnnotations(
+            on mapView: MKMapView,
+            startCoordinate: CLLocationCoordinate2D?,
+            endCoordinate: CLLocationCoordinate2D?
+        ) {
+            if let annotation = startAnnotation {
+                mapView.removeAnnotation(annotation)
+                startAnnotation = nil
+            }
+            if let annotation = endAnnotation {
+                mapView.removeAnnotation(annotation)
+                endAnnotation = nil
+            }
+
+            if let startCoordinate {
+                let annotation = RouteMarkerAnnotation(coordinate: startCoordinate, tintColor: .systemGreen)
+                startAnnotation = annotation
+                mapView.addAnnotation(annotation)
+            }
+
+            if let endCoordinate {
+                let annotation = RouteMarkerAnnotation(coordinate: endCoordinate, tintColor: .systemRed)
+                endAnnotation = annotation
+                mapView.addAnnotation(annotation)
+            }
+        }
+
+        func updateHighlightAnnotation(
+            on mapView: MKMapView,
+            coordinate: CLLocationCoordinate2D?
+        ) {
+            guard let coordinate else {
+                if let highlightAnnotation {
+                    mapView.removeAnnotation(highlightAnnotation)
+                    self.highlightAnnotation = nil
+                }
+                return
+            }
+
+            if let highlightAnnotation {
+                if highlightAnnotation.coordinate.latitude != coordinate.latitude ||
+                    highlightAnnotation.coordinate.longitude != coordinate.longitude {
+                    highlightAnnotation.coordinate = coordinate
+                }
+            } else {
+                let annotation = RouteMarkerAnnotation(coordinate: coordinate, tintColor: .systemBlue)
+                highlightAnnotation = annotation
+                mapView.addAnnotation(annotation)
+            }
+        }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let poly = overlay as? ColoredPolyline {
