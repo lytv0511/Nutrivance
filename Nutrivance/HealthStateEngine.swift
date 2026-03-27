@@ -3981,6 +3981,43 @@ final class HealthStateEngine: ObservableObject {
         return (current - stats.mean) / denominator
     }
 
+    private func rollingStatsForRecentDays(
+        valuesByDay: [Date: Double],
+        days: Int,
+        endingAt endDate: Date = Date()
+    ) -> RollingBaselineStats? {
+        let calendar = Calendar.current
+        let endDay = calendar.startOfDay(for: endDate)
+        guard let startDay = calendar.date(byAdding: .day, value: -(days - 1), to: endDay) else { return nil }
+        let values = valuesByDay
+            .filter { day, _ in
+                let normalized = calendar.startOfDay(for: day)
+                return normalized >= startDay && normalized <= endDay
+            }
+            .map(\.value)
+        return rollingStats(from: values)
+    }
+
+    private func rollingStatsForRecentHRV(
+        days: Int,
+        endingAt endDate: Date = Date()
+    ) -> RollingBaselineStats? {
+        let calendar = Calendar.current
+        let endDay = calendar.startOfDay(for: endDate)
+        guard let startDay = calendar.date(byAdding: .day, value: -(days - 1), to: endDay) else { return nil }
+        let values = dailyHRV
+            .filter { point in
+                let normalized = calendar.startOfDay(for: point.date)
+                return normalized >= startDay && normalized <= endDay
+            }
+            .map(\.average)
+        return rollingStats(from: values)
+    }
+
+    private func sigmoid(_ value: Double) -> Double {
+        1.0 / (1.0 + Foundation.exp(-value))
+    }
+
     private func recoveryReserveScore() -> Double {
         var weightedTotal = 0.0
         var totalWeight = 0.0
@@ -4257,43 +4294,53 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Autonomic Balance
     private func calculateAutonomicBalance() -> Double {
-
         guard let hrv = latestHRV, let rhr = restingHeartRate else { return 50 }
 
-        let hrvSignal = PhysiologySignal(value: hrv, baseline: hrvBaseline7Day ?? hrv, direction: .higherIsBetter)
-        let rhrSignal = PhysiologySignal(value: rhr, baseline: rhrBaseline7Day ?? rhr, direction: .lowerIsBetter)
+        let hrvStats = rollingStatsForRecentHRV(days: 28) ?? hrvBaseline60Day
+        let rhrStats = rollingStatsForRecentDays(valuesByDay: dailyRestingHeartRate, days: 28) ?? rhrBaseline60Day
 
-        // Combine HRV and RHR for autonomic balance, equal weighting
-        let balance = (hrvSignal.score * 0.5) + (rhrSignal.score * 0.5)
+        let zHRV = zScore(current: hrv, stats: hrvStats) ?? 0
+        let zRHR = zScore(current: rhr, stats: rhrStats) ?? 0
 
-        return max(0, min(100, balance))
+        let balance = 50 + (10 * zHRV) - (10 * zRHR)
+        let final = 100 * sigmoid((balance - 50) / 12)
+
+        return max(0, min(100, final))
     }
 
     // MARK: - Strain
 
     private func calculateAllostaticStress() -> Double {
+        let hrvStats = rollingStatsForRecentHRV(days: 28) ?? hrvBaseline60Day
+        let rhrStats = rollingStatsForRecentDays(valuesByDay: dailyRestingHeartRate, days: 28) ?? rhrBaseline60Day
+        let sleepStats = rollingStatsForRecentDays(valuesByDay: dailySleepDuration, days: 28) ?? sleepBaseline60Day
 
-        var stress: Double = 0
+        let zHRV = latestHRV.flatMap { zScore(current: $0, stats: hrvStats) } ?? 0
+        let zRHR = restingHeartRate.flatMap { zScore(current: $0, stats: rhrStats) } ?? 0
 
-        if let hrv = latestHRV {
-            let hrvSignal = PhysiologySignal(value: hrv, baseline: hrvBaseline28Day ?? hrv, direction: .higherIsBetter)
-            stress += (100 - hrvSignal.score) * 0.35
-        }
+        let hrvStress = pow(max(0, -zHRV), 2)
+        let rhrStress = pow(max(0, zRHR), 2)
 
-        if let rhr = restingHeartRate {
-            let rhrSignal = PhysiologySignal(value: rhr, baseline: rhrBaseline28Day ?? rhr, direction: .lowerIsBetter)
-            stress += (100 - rhrSignal.score) * 0.25
-        }
-
+        let sleepDebt: Double
         if let sleep = sleepHours {
-            let sleepScore = normalizeSleep(sleep)
-            stress += (100 - sleepScore) * 0.20
+            let targetSleep = max(sleepStats?.mean ?? sleepBaseline7Day ?? sleep, 0.1)
+            sleepDebt = max(0, (targetSleep - sleep) / targetSleep)
+        } else {
+            sleepDebt = 0
         }
 
-        let strain = Self.normalizedStrainPercent(from: calculateStrainScore())
-        stress += strain * 0.20
+        let strainLoad = Self.normalizedStrainPercent(from: calculateStrainScore()) / 100.0
+        let interaction = hrvStress * strainLoad
 
-        return max(0, min(100, stress))
+        let rawStress =
+            (0.32 * hrvStress) +
+            (0.23 * rhrStress) +
+            (0.20 * sleepDebt) +
+            (0.15 * strainLoad) +
+            (0.10 * interaction)
+
+        let scaledStress = 100 * (1 - Foundation.exp(-rawStress / 1.6))
+        return max(0, min(100, scaledStress))
     }
 
     private func calculateStrainScore() -> Double {

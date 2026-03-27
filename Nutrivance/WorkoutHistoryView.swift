@@ -102,8 +102,17 @@ private extension HRZonePersistedSettings {
     )
 }
 
+func workoutRowIdentifier(for workout: HKWorkout) -> String {
+    if let cachedWorkoutID = workout.metadata?["NutrivanceCachedWorkoutUUID"] as? String,
+       !cachedWorkoutID.isEmpty {
+        return cachedWorkoutID
+    }
+    return workout.uuid.uuidString
+}
+
 struct WorkoutHistoryView: View {
     @ObservedObject var engine = HealthStateEngine.shared
+    @EnvironmentObject private var navigationState: NavigationState
     @State private var expandedWorkoutIDs: Set<String> = []
     @State private var isLoading = false
     @State private var animationPhase: Double = 0
@@ -197,11 +206,7 @@ struct WorkoutHistoryView: View {
     }
 
     private func workoutRowID(for pair: (workout: HKWorkout, analytics: WorkoutAnalytics)) -> String {
-        if let cachedWorkoutID = pair.workout.metadata?["NutrivanceCachedWorkoutUUID"] as? String,
-           !cachedWorkoutID.isEmpty {
-            return cachedWorkoutID
-        }
-        return pair.workout.uuid.uuidString
+        workoutRowIdentifier(for: pair.workout)
     }
 
     var body: some View {
@@ -256,7 +261,10 @@ struct WorkoutHistoryView: View {
                     .padding(.horizontal)
                     .padding(.top, 16)
                     .padding(.bottom)
-                    .onAppear { scrollProxy = proxy }
+                    .onAppear {
+                        scrollProxy = proxy
+                        handlePendingWorkoutNavigation()
+                    }
                 }
             }
             .navigationTitle("Workout History")
@@ -368,6 +376,21 @@ struct WorkoutHistoryView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 reloadPersistedHRZoneSettings()
             }
+            .onChange(of: navigationState.pendingWorkoutScrollID) { _, _ in
+                handlePendingWorkoutNavigation()
+            }
+        }
+    }
+
+    private func handlePendingWorkoutNavigation() {
+        guard let targetID = navigationState.pendingWorkoutScrollID else { return }
+        sportFilter = nil
+        guard filteredWorkouts.contains(where: { workoutRowID(for: $0) == targetID }) else { return }
+        DispatchQueue.main.async {
+            withAnimation {
+                scrollProxy?.scrollTo(targetID, anchor: .top)
+            }
+            navigationState.pendingWorkoutScrollID = nil
         }
     }
 
@@ -650,8 +673,7 @@ struct Split {
 }
 
 private struct WorkoutWeatherSnapshot {
-    let requestedDate: Date
-    let matchedDate: Date
+    let requestedDay: Date
     let temperatureCelsius: Double
     let humidityFraction: Double
     let airQualityLabel: String
@@ -672,11 +694,11 @@ private actor WorkoutWeatherService {
     private var cache: [String: WorkoutWeatherSnapshot?] = [:]
     private let service = WeatherService.shared
 
-    func snapshot(for location: CLLocation, at date: Date) async -> WorkoutWeatherSnapshot? {
+    func snapshot(for location: CLLocation, on day: Date) async -> WorkoutWeatherSnapshot? {
         let roundedLat = (location.coordinate.latitude * 1000).rounded() / 1000
         let roundedLon = (location.coordinate.longitude * 1000).rounded() / 1000
-        let roundedTime = (date.timeIntervalSince1970 / 3600).rounded(.towardZero)
-        let cacheKey = "\(roundedLat)|\(roundedLon)|\(roundedTime)"
+        let dayStart = Calendar.current.startOfDay(for: day)
+        let cacheKey = "\(roundedLat)|\(roundedLon)|\(Int(dayStart.timeIntervalSince1970))"
 
         if let cached = cache[cacheKey] {
             return cached
@@ -684,27 +706,27 @@ private actor WorkoutWeatherService {
 
         do {
             let weather = try await service.weather(for: location)
-            let nearestHour = weather.hourlyForecast.forecast.min(by: {
-                abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
-            })
+            let calendar = Calendar.current
+            let sameDayHours = weather.hourlyForecast.forecast.filter {
+                calendar.isDate($0.date, inSameDayAs: dayStart)
+            }
 
-            if let nearestHour,
-               abs(nearestHour.date.timeIntervalSince(date)) <= 12 * 60 * 60 {
+            if sameDayHours.isEmpty == false {
+                let averageTemperature = sameDayHours.map { $0.temperature.value }.average ?? sameDayHours[0].temperature.value
+                let averageHumidity = sameDayHours.map(\.humidity).average ?? sameDayHours[0].humidity
                 let snapshot = WorkoutWeatherSnapshot(
-                    requestedDate: date,
-                    matchedDate: nearestHour.date,
-                    temperatureCelsius: nearestHour.temperature.value,
-                    humidityFraction: nearestHour.humidity,
+                    requestedDay: dayStart,
+                    temperatureCelsius: averageTemperature,
+                    humidityFraction: averageHumidity,
                     airQualityLabel: "Unavailable",
-                    sourceLabel: "Nearest hourly forecast"
+                    sourceLabel: "Daily average conditions"
                 )
                 cache[cacheKey] = snapshot
                 return snapshot
             }
 
             let snapshot = WorkoutWeatherSnapshot(
-                requestedDate: date,
-                matchedDate: weather.currentWeather.date,
+                requestedDay: dayStart,
                 temperatureCelsius: weather.currentWeather.temperature.value,
                 humidityFraction: weather.currentWeather.humidity,
                 airQualityLabel: "Unavailable",
@@ -830,11 +852,19 @@ struct WorkoutDetailView: View {
     }
 
     private var weatherReferenceLocation: CLLocation? {
-        selectedRouteLocation ?? routeLookupLocations.first ?? routeLocations.first
+        if routeLookupLocations.isEmpty == false {
+            let coordinate = routeLookupLocations[routeLookupLocations.count / 2].coordinate
+            return CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        }
+        if routeLocations.isEmpty == false {
+            let coordinate = routeLocations[routeLocations.count / 2].coordinate
+            return CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        }
+        return nil
     }
 
-    private var weatherReferenceDate: Date {
-        selectedScrubbedDate ?? analytics.workout.startDate
+    private var weatherReferenceDay: Date {
+        Calendar.current.startOfDay(for: analytics.workout.startDate)
     }
 
     private var selectedRouteCoordinateText: String? {
@@ -1258,13 +1288,6 @@ struct WorkoutDetailView: View {
                 }
             }
 
-            if showsSummaryContent && (isLoadingWeather || weatherSnapshot != nil) {
-                WorkoutWeatherCard(
-                    snapshot: weatherSnapshot,
-                    isLoading: isLoadingWeather,
-                    selectedDate: selectedScrubbedDate
-                )
-            }
             if showsSummaryContent {
                 let columns = [GridItem(.flexible()), GridItem(.flexible())]
                 LazyVGrid(columns: columns, spacing: 12) {
@@ -2091,16 +2114,6 @@ struct WorkoutDetailView: View {
         .task(id: analytics.workout.startDate) {
             await loadHistoricalZoneProfile()
         }
-        .task(id: routeLocations.map(\.timestamp)) {
-            if showsSummaryContent {
-                await loadWeatherSnapshot()
-            }
-        }
-        .task(id: selectedScrubbedDate) {
-            if showsSummaryContent {
-                await loadWeatherSnapshot()
-            }
-        }
         .fullScreenCover(isPresented: $showMapDetail) {
             MapDetailView(
                 analytics: analytics,
@@ -2193,7 +2206,7 @@ struct WorkoutDetailView: View {
 
         let snapshot = await WorkoutWeatherService.shared.snapshot(
             for: location,
-            at: weatherReferenceDate
+            on: weatherReferenceDay
         )
 
         await MainActor.run {
@@ -2997,12 +3010,12 @@ private struct WorkoutWeatherCard: View {
                 Text("Weather")
                     .font(.subheadline.bold())
                 Spacer()
-                if let selectedDate {
-                    Text(selectedDate, format: .dateTime.hour().minute())
+                if let snapshot {
+                    Text(snapshot.requestedDay, format: .dateTime.month().day())
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                } else if let snapshot {
-                    Text(snapshot.matchedDate, format: .dateTime.hour().minute())
+                } else if let selectedDate {
+                    Text(selectedDate, format: .dateTime.month().day())
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -3022,7 +3035,7 @@ private struct WorkoutWeatherCard: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {
-                Text("Weather data is unavailable for this workout time and route.")
+                Text("Weather data is unavailable for this workout day.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

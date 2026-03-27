@@ -998,6 +998,7 @@ class NavigationState: ObservableObject {
     @Published var selectedView: String = "Dashboard"
     @Published var selectedRootTab: RootTabSelection = .dashboard
     @Published var presentedDestination: AppDestination?
+    @Published var pendingWorkoutScrollID: String?
     @Published var dismissAction: (() -> Void)?
     @Published var canGoBack: Bool = false
     @Published var showFocusSwitcher = false
@@ -1148,7 +1149,7 @@ class NavigationState: ObservableObject {
 
         if UIDevice.current.userInterfaceIdiom == .phone {
             switch tab {
-            case .dashboard, .search, .playground:
+            case .dashboard, .search, .playground, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .stress:
                 selectedRootTab = tab
                 presentedDestination = nil
             default:
@@ -1160,6 +1161,11 @@ class NavigationState: ObservableObject {
 
         selectedRootTab = tab
         presentedDestination = nil
+    }
+
+    func navigateToWorkoutHistory(scrollTo workoutID: String? = nil) {
+        pendingWorkoutScrollID = workoutID
+        navigate(focus: .fitness, view: "Workout History", tab: .workoutHistory)
     }
 }
 

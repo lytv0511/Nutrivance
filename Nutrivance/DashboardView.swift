@@ -76,6 +76,7 @@ private enum DashboardSnapshotPersistence {
 
 struct DashboardView: View {
     @StateObject var engine = HealthStateEngine.shared
+    @EnvironmentObject private var navigationState: NavigationState
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedChartRange: ChartRange = .month
     @State private var selectedMetric: MetricType = .recovery
@@ -109,6 +110,11 @@ struct DashboardView: View {
     }
 
     private struct HRVChartPoint {
+        let date: Date
+        let value: Double
+    }
+
+    private struct TrainingLoadChartPoint {
         let date: Date
         let value: Double
     }
@@ -148,6 +154,17 @@ struct DashboardView: View {
             activeDaysLast28: 0,
             daysSinceLastWorkout: nil
         ))
+    }
+
+    private var workoutPreviewSettings: HRZoneUserSettings {
+        HRZoneUserSettings(
+            mode: .intelligent,
+            customSchema: .lactatThreshold,
+            fixedMaxHR: nil,
+            fixedRestingHR: nil,
+            fixedLTHR: nil,
+            customZoneUpperBounds: [120, 140, 160, 180, 200]
+        )
     }
 
     private var layoutSettings: DashboardLayoutSettings {
@@ -366,7 +383,7 @@ struct DashboardView: View {
                     dashboardItemsSection()
                     feelGoodScoreSection()
                     acwrSection()
-                    navigationLinksSection()
+                    workoutHistoryPreviewSection()
                 }
                 .padding(.top)
             }
@@ -497,7 +514,7 @@ struct DashboardView: View {
                         summaryCardsInline()
                     }
                 case "HRVTrend":
-                    hrvTrendSection()
+                    trainingLoadTrendSection()
                 default:
                     EmptyView()
                 }
@@ -545,9 +562,8 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func hrvTrendSection() -> some View {
+    private func trainingLoadTrendSection() -> some View {
         VStack(spacing: 8) {
-            // Chart Filters - pill-shaped buttons
             HStack(spacing: 12) {
                 ForEach(ChartRange.allCases, id: \.self) { range in
                     Button(action: { selectedChartRange = range
@@ -569,28 +585,55 @@ struct DashboardView: View {
             }
             .padding(.horizontal)
 
-            // HRV Trend Chart
             VStack(alignment: .leading) {
-                Text("HRV Trend")
+                Text("Training Load")
                     .font(.headline)
                     .padding(.horizontal)
-                let chartPoints = chartData(
-                    for: engine.dailyHRV,
-                    sampleHistory: engine.hrvSampleHistory
-                )
+                let chartPoints = trainingLoadChartData()
+                let maxValue = max(chartPoints.map(\.value).max() ?? 0, 1)
                 Chart {
+                    RuleMark(y: .value("Ideal Low", 70))
+                        .foregroundStyle(.orange.opacity(0.18))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+
+                    RuleMark(y: .value("Ideal High", 90))
+                        .foregroundStyle(.orange.opacity(0.18))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+
                     ForEach(chartPoints, id: \.date) { point in
+                        AreaMark(
+                            x: .value("Date", point.date),
+                            y: .value("Load", point.value)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.orange.opacity(0.28), .orange.opacity(0.04)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+
                         LineMark(
                             x: .value("Date", point.date),
-                            y: .value("HRV", point.value)
+                            y: .value("Load", point.value)
                         )
-                        .foregroundStyle(.green)
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(.orange)
+
+                        PointMark(
+                            x: .value("Date", point.date),
+                            y: .value("Load", point.value)
+                        )
+                        .foregroundStyle(.orange)
+                        .symbolSize(26)
                     }
                 }
+                .chartYScale(domain: 0...(maxValue * 1.18))
                 .frame(height: 200)
                 .padding(.horizontal)
 
-                Text(hrvTrendSummary)
+                Text(trainingLoadTrendSummary)
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.horizontal)
@@ -624,32 +667,96 @@ struct DashboardView: View {
     private func acwrSection() -> some View {
         let loadSummary = dashboardLoadSummary
         let snapshot = liveLoadSnapshot
-        VStack(alignment: .leading) {
-            Text("Training Load (ACWR)")
-                .font(.headline)
-                .padding(.horizontal)
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Acute: \(String(format: "%.1f", snapshot.acuteLoad))")
+                Label("Training Load", systemImage: "flame.fill")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
                 Spacer()
-                Text("ACWR: \(String(format: "%.2f", snapshot.acwr))")
+                Text(String(format: "ACWR %.2f", snapshot.acwr))
+                    .font(.subheadline.weight(.semibold))
             }
-            .padding(.horizontal)
+            HStack(spacing: 12) {
+                DashboardLoadMetricPill(title: "Acute", value: String(format: "%.1f", snapshot.acuteLoad), color: .orange)
+                DashboardLoadMetricPill(title: "Chronic", value: String(format: "%.1f", snapshot.chronicLoad), color: .blue)
+            }
             Text(loadSummary.detail)
                 .font(.caption)
                 .foregroundColor(loadSummary.color)
-                .padding(.horizontal)
         }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.ultraThinMaterial)
+        )
+        .cornerRadius(12)
+        .shadow(radius: 2)
+        .padding(.horizontal)
     }
 
     @ViewBuilder
-    private func navigationLinksSection() -> some View {
-        VStack(spacing: 10) {
-            NavigationLink("Recovery Details", destination: RecoveryScoreView())
-            NavigationLink("Readiness Details", destination: ReadinessCheckView())
-            NavigationLink("Strain & Recovery", destination: StrainRecoveryView())
-            NavigationLink("Fuel Check", destination: FuelCheckView())
+    private func workoutHistoryPreviewSection() -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button {
+                navigationState.navigateToWorkoutHistory()
+                HapticFeedback.selection()
+            } label: {
+                HStack {
+                    Text("Workout History")
+                        .font(.headline)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            workoutPreviewGroup(title: "Today", workouts: workoutsForPreview(dayOffset: 0))
+            workoutPreviewGroup(title: "Yesterday", workouts: workoutsForPreview(dayOffset: -1))
         }
-        .padding(.vertical)
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.ultraThinMaterial)
+        )
+        .cornerRadius(12)
+        .shadow(radius: 2)
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func workoutPreviewGroup(
+        title: String,
+        workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if workouts.isEmpty {
+                Text("No workouts")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
+            } else {
+                ForEach(workouts, id: \.analytics.workout.uuid) { pair in
+                    WorkoutCard(
+                        workout: pair.workout,
+                        analytics: pair.analytics,
+                        isExpanded: false,
+                        hrZoneSettings: workoutPreviewSettings,
+                        onHeaderTap: {
+                            navigationState.navigateToWorkoutHistory(
+                                scrollTo: workoutRowIdentifier(for: pair.workout)
+                            )
+                            HapticFeedback.selection()
+                        }
+                    )
+                }
+            }
+        }
     }
     
     @ViewBuilder
@@ -787,7 +894,7 @@ struct DashboardView: View {
     private func summaryCard(icon: String, title: String, value: Double, baseline: Double?, description: String, color: Color, metric: MetricType) -> some View {
         Button {
             HapticFeedback.selection()
-            activeDetailView = .metric(metric)
+            navigateToMetric(metric)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -818,21 +925,6 @@ struct DashboardView: View {
             .shadow(radius: 2)
         }
         .buttonStyle(PlainButtonStyle())
-        .sheet(isPresented: Binding(
-            get: { 
-                if case .metric(let m) = activeDetailView, m == metric { return true } else { return false }
-            },
-            set: { if !$0 { activeDetailView = .none } }
-        )) {
-            MetricDetailModal(
-                engine: engine,
-                metric: metric
-            )
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
-            .presentationBackground(.ultraThinMaterial)
-        }
     }
 
     // Chart Data Filter
@@ -859,6 +951,97 @@ struct DashboardView: View {
                 .filter { $0.date >= start && $0.date <= now }
                 .map { HRVChartPoint(date: $0.date, value: $0.average) }
         }
+    }
+
+    private func trainingLoadChartData() -> [TrainingLoadChartPoint] {
+        let calendar = Calendar.current
+        let now = Date()
+
+        switch selectedChartRange {
+        case .day24h:
+            guard let start = calendar.date(byAdding: .hour, value: -24, to: now) else { return [] }
+            return engine.workoutAnalytics
+                .filter { $0.workout.startDate >= start && $0.workout.startDate <= now }
+                .sorted { $0.workout.startDate < $1.workout.startDate }
+                .map { pair in
+                    TrainingLoadChartPoint(
+                        date: pair.workout.startDate,
+                        value: sessionLoad(for: pair.workout, analytics: pair.analytics)
+                    )
+                }
+        case .week:
+            return dailyTrainingLoadPoints(days: 7, endingAt: now)
+        case .month:
+            return dailyTrainingLoadPoints(days: 30, endingAt: now)
+        }
+    }
+
+    private func dailyTrainingLoadPoints(days: Int, endingAt endDate: Date) -> [TrainingLoadChartPoint] {
+        let calendar = Calendar.current
+        let endDay = calendar.startOfDay(for: endDate)
+        let dates = (0..<days).compactMap { calendar.date(byAdding: .day, value: -$0, to: endDay) }.reversed()
+
+        var dailyLoads: [Date: Double] = [:]
+        for pair in engine.workoutAnalytics {
+            let day = calendar.startOfDay(for: pair.workout.startDate)
+            dailyLoads[day, default: 0] += sessionLoad(for: pair.workout, analytics: pair.analytics)
+        }
+
+        return dates.map { day in
+            TrainingLoadChartPoint(date: day, value: dailyLoads[day, default: 0])
+        }
+    }
+
+    private var trainingLoadTrendSummary: String {
+        switch selectedChartRange {
+        case .day24h:
+            return "This view shows the last 24 hours of workout load so you can spot short-term spikes."
+        case .week:
+            return dashboardLoadSummary.detail
+        case .month:
+            return "The 30-day view helps you see whether your load is building steadily, flattening out, or spiking."
+        }
+    }
+
+    private func workoutsForPreview(dayOffset: Int) -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        let calendar = Calendar.current
+        let targetDay = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: Date())) ?? Date()
+        return engine.workoutAnalytics
+            .filter { calendar.isDate($0.workout.startDate, inSameDayAs: targetDay) }
+            .sorted { $0.workout.startDate > $1.workout.startDate }
+    }
+
+    private func navigateToMetric(_ metric: MetricType) {
+        switch metric {
+        case .recovery:
+            navigationState.navigate(focus: .fitness, view: "Recovery Score", tab: .recoveryScore)
+        case .readiness:
+            navigationState.navigate(focus: .fitness, view: "Readiness", tab: .readiness)
+        case .strain:
+            navigationState.navigate(focus: .fitness, view: "Strain vs Recovery", tab: .strainRecovery)
+        case .allostatic, .autonomic:
+            navigationState.navigate(focus: .mentalHealth, view: "Stress", tab: .stress)
+        }
+    }
+}
+
+private struct DashboardLoadMetricPill: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -1108,7 +1291,7 @@ struct DashboardArrangementSheet: View {
     
     let mainItems = [
         ("A", "Summary Cards", ["Recovery", "Readiness", "Strain", "Allostatic", "Autonomic"]),
-        ("B", "HRV Trend", [])
+        ("B", "Training Load", [])
     ]
     
     var body: some View {
@@ -1131,7 +1314,7 @@ struct DashboardArrangementSheet: View {
                         ForEach(0..<localDashboardOrder.count, id: \.self) { mainIndex in
                             let mainItemName = localDashboardOrder[mainIndex]
                             let letter = mainItemName == "SummaryCards" ? "A" : "B"
-                            let displayName = mainItemName == "SummaryCards" ? "Summary Cards" : "HRV Trend"
+                            let displayName = mainItemName == "SummaryCards" ? "Summary Cards" : "Training Load"
 
                             VStack(alignment: .leading, spacing: 12) {
                                 Text(letter + ". " + displayName)
