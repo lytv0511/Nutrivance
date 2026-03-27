@@ -714,11 +714,24 @@ private struct HRZone {
     let range: ClosedRange<Double>
 }
 
+private func workoutElapsedTimeText(_ seconds: TimeInterval) -> String {
+    let h = Int(seconds) / 3600
+    let m = (Int(seconds) % 3600) / 60
+    let s = Int(seconds) % 60
+    if h > 0 {
+        return String(format: "%dh %02dm %02ds", h, m, s)
+    } else {
+        return String(format: "%02dm %02ds", m, s)
+    }
+}
+
 struct WorkoutDetailView: View {
     let analytics: WorkoutAnalytics
     let hrZoneSettings: HRZoneUserSettings
     var allowsMapExpansion: Bool = true
     var showsSummaryContent: Bool = true
+    var showsMapSection: Bool = true
+    var scrubbedDate: Binding<Date?>? = nil
 
     @StateObject private var healthKitManager = HealthKitManager()
 
@@ -732,13 +745,25 @@ struct WorkoutDetailView: View {
     @State private var historicalMaxHR: Double? = nil
     @State private var historicalRestingHR: Double? = nil
     @State private var hasResolvedZoneProfile = false
-    @State private var selectedScrubbedDate: Date? = nil
+    @State private var localSelectedScrubbedDate: Date? = nil
     @State private var weatherSnapshot: WorkoutWeatherSnapshot? = nil
     @State private var isLoadingWeather = false
     @State private var showMapDetail = false
 
     private var activeDuration: TimeInterval {
         analytics.workout.duration
+    }
+
+    private var selectedScrubbedDate: Date? {
+        scrubbedDate?.wrappedValue ?? localSelectedScrubbedDate
+    }
+
+    private func updateSelectedScrubbedDate(_ date: Date?) {
+        if let scrubbedDate {
+            scrubbedDate.wrappedValue = date
+        } else {
+            localSelectedScrubbedDate = date
+        }
     }
 
     private var standardChartHeight: CGFloat {
@@ -846,7 +871,7 @@ struct WorkoutDetailView: View {
     private var selectedRouteElapsedText: String? {
         guard let timestamp = selectedRouteLocation?.timestamp else { return nil }
         let elapsed = max(0, timestamp.timeIntervalSince(analytics.workout.startDate))
-        return formattedTime(elapsed)
+        return workoutElapsedTimeText(elapsed)
     }
 
     private func nearestPoint(in data: [(Date, Double)], to date: Date) -> (Date, Double)? {
@@ -901,7 +926,7 @@ struct WorkoutDetailView: View {
             return
         }
         if selectedScrubbedDate != point.0 {
-            selectedScrubbedDate = point.0
+            updateSelectedScrubbedDate(point.0)
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
     }
@@ -954,24 +979,6 @@ struct WorkoutDetailView: View {
             RuleMark(x: .value(xLabel, selected.0))
                 .foregroundStyle(color.opacity(0.35))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                .annotation(position: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(selected.0, format: .dateTime.hour().minute())
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(.secondary)
-                        Text(valueText(selected.1))
-                            .font(.caption.bold())
-                            .foregroundColor(color)
-                        if let secondaryText {
-                            Text(secondaryText)
-                                .font(.caption2.bold())
-                                .foregroundColor(color)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
 
             PointMark(
                 x: .value(xLabel, selected.0),
@@ -980,6 +987,48 @@ struct WorkoutDetailView: View {
             .symbolSize(90)
             .foregroundStyle(color)
         }
+    }
+
+    @ViewBuilder
+    private func selectionBubble(
+        selected: (Date, Double)?,
+        color: Color,
+        secondaryText: String? = nil,
+        valueText: @escaping (Double) -> String
+    ) -> some View {
+        if let selected {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(selected.0, format: .dateTime.hour().minute())
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(.secondary)
+                Text(valueText(selected.1))
+                    .font(.caption.bold())
+                    .foregroundColor(color)
+                if let secondaryText {
+                    Text(secondaryText)
+                        .font(.caption2.bold())
+                        .foregroundColor(color)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    private func chartYScaleDomain(
+        for values: [Double],
+        including extraValues: [Double] = [],
+        minimumPadding: Double = 1
+    ) -> ClosedRange<Double> {
+        let allValues = (values + extraValues).filter { $0.isFinite }
+        guard let minValue = allValues.min(), let maxValue = allValues.max() else {
+            return 0...1
+        }
+
+        let span = max(maxValue - minValue, minimumPadding)
+        let padding = max(span * 0.12, minimumPadding)
+        return (minValue - padding)...(maxValue + padding)
     }
 
     private func zoneForHeartRate(_ heartRate: Double) -> HRZone? {
@@ -1119,7 +1168,7 @@ struct WorkoutDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: showsSummaryContent ? 16 : 12) {
-            if !coloredSegments.isEmpty {
+            if showsMapSection, !coloredSegments.isEmpty {
                 RouteMapView(
                     segments: coloredSegments,
                     startCoordinate: routeLocations.first?.coordinate,
@@ -1209,7 +1258,7 @@ struct WorkoutDetailView: View {
                         WorkoutMetricCard(title: "Avg HR", value: String(format: "%.0f", hr), unit: "bpm", icon: "heart.fill", color: .red)
                     }
                     if let pause = pausedDuration {
-                        WorkoutMetricCard(title: "Paused", value: formattedTime(pause), unit: "", icon: "pause.fill", color: .gray)
+                        WorkoutMetricCard(title: "Paused", value: workoutElapsedTimeText(pause), unit: "", icon: "pause.fill", color: .gray)
                     }
                     if let vo = analytics.verticalOscillation {
                         WorkoutMetricCard(title: "Vert Osc", value: String(format: "%.1f", vo), unit: "cm", icon: "waveform", color: .cyan)
@@ -1268,7 +1317,16 @@ struct WorkoutDetailView: View {
                         valueText: { String(format: "%.1f MET", $0) }
                     )
                 }
+                .chartYScale(domain: chartYScaleDomain(for: analytics.metSeries.map(\.1), minimumPadding: 0.5))
                 .frame(height: standardChartHeight)
+                .overlay(alignment: .topLeading) {
+                    selectionBubble(
+                        selected: selectedMETPoint,
+                        color: .green,
+                        valueText: { String(format: "%.1f MET", $0) }
+                    )
+                    .padding(8)
+                }
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
                         selectionOverlay(
@@ -1311,6 +1369,7 @@ struct WorkoutDetailView: View {
                             .cornerRadius(8)
                     }
                 }
+                let selectedZone = showHRZones ? selectedHRPoint.flatMap { zoneForHeartRate($0.1) } : nil
                 Chart {
                     ForEach(analytics.heartRates, id: \.0) { point in
                         LineMark(
@@ -1326,7 +1385,6 @@ struct WorkoutDetailView: View {
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [5]))
                         }
                     }
-                    let selectedZone = showHRZones ? selectedHRPoint.flatMap { zoneForHeartRate($0.1) } : nil
                     selectionMarks(
                         selected: selectedHRPoint,
                         xLabel: "Time",
@@ -1336,7 +1394,22 @@ struct WorkoutDetailView: View {
                         valueText: { "\(Int($0)) bpm" }
                     )
                 }
+                .chartYScale(
+                    domain: chartYScaleDomain(
+                        for: analytics.heartRates.map(\.1),
+                        including: showHRZones ? heartRateZoneBreakdown.map { $0.range.upperBound } : []
+                    )
+                )
                 .frame(height: heartRateChartHeight)
+                .overlay(alignment: .topLeading) {
+                    selectionBubble(
+                        selected: selectedHRPoint,
+                        color: selectedZone?.color ?? .red,
+                        secondaryText: selectedZone?.name,
+                        valueText: { "\(Int($0)) bpm" }
+                    )
+                    .padding(8)
+                }
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
                         selectionOverlay(
@@ -1367,7 +1440,7 @@ struct WorkoutDetailView: View {
                                         .fill(zone.color.opacity(0.7))
                                         .frame(width: 18, height: 18)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("\(zone.name) \(formattedTime(zone.time)) < \(Int(zone.range.upperBound)) BPM")
+                                        Text("\(zone.name) \(workoutElapsedTimeText(zone.time)) < \(Int(zone.range.upperBound)) BPM")
                                             .font(.caption2)
                                         GeometryReader { geo in
                                             Rectangle()
@@ -1419,7 +1492,21 @@ struct WorkoutDetailView: View {
                         valueText: { "\(Int($0)) bpm" }
                     )
                 }
+                .chartYScale(
+                    domain: chartYScaleDomain(
+                        for: analytics.postWorkoutHRSeries.map(\.1),
+                        including: analytics.peakHR.map { [$0] } ?? []
+                    )
+                )
                 .frame(height: standardChartHeight)
+                .overlay(alignment: .topLeading) {
+                    selectionBubble(
+                        selected: selectedPostHRPoint,
+                        color: .orange,
+                        valueText: { "\(Int($0)) bpm" }
+                    )
+                    .padding(8)
+                }
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
                         selectionOverlay(
@@ -1466,7 +1553,16 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.0f W", $0) }
                         )
                     }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.powerSeries.map(\.1)))
                     .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedPowerPoint,
+                            color: .purple,
+                            valueText: { String(format: "%.0f W", $0) }
+                        )
+                        .padding(8)
+                    }
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
@@ -1511,7 +1607,16 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.1f km/h", $0) }
                         )
                     }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.speedSeries.map { $0.1 * 3.6 }, minimumPadding: 0.5))
                     .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedSpeedPoint,
+                            color: .blue,
+                            valueText: { String(format: "%.1f km/h", $0) }
+                        )
+                        .padding(8)
+                    }
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             let speedSeries = analytics.speedSeries.map { ($0.0, $0.1 * 3.6) }
@@ -1555,7 +1660,16 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.0f rpm", $0) }
                         )
                     }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.cadenceSeries.map(\.1)))
                     .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedCadencePoint,
+                            color: .mint,
+                            valueText: { String(format: "%.0f rpm", $0) }
+                        )
+                        .padding(8)
+                    }
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
@@ -1599,7 +1713,16 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.0f m", $0) }
                         )
                     }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.elevationSeries.map(\.1)))
                     .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedElevationPoint,
+                            color: .green,
+                            valueText: { String(format: "%.0f m", $0) }
+                        )
+                        .padding(8)
+                    }
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             selectionOverlay(
@@ -1645,7 +1768,25 @@ struct WorkoutDetailView: View {
                             valueText: { String(format: "%.2f min/km", $0) }
                         )
                     }
+                    .chartYScale(
+                        domain: chartYScaleDomain(
+                            for: analytics.speedSeries.compactMap { point in
+                                let speedKPH = point.1 * 3.6
+                                guard speedKPH > 0 else { return nil }
+                                return 60 / speedKPH
+                            },
+                            minimumPadding: 0.25
+                        )
+                    )
                     .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedPacePoint,
+                            color: .teal,
+                            valueText: { String(format: "%.2f min/km", $0) }
+                        )
+                        .padding(8)
+                    }
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             let paceSeries = analytics.speedSeries.map { point in
@@ -1682,7 +1823,7 @@ struct WorkoutDetailView: View {
                             Text(String(format: "%.1f km", split.distance))
                                 .font(.caption)
                                 .frame(width: 60, alignment: .leading)
-                            Text(formattedTime(split.time))
+                            Text(workoutElapsedTimeText(split.time))
                                 .font(.caption)
                             if let pace = split.pace {
                                 Text(String(format: "%.1f min/km", pace))
@@ -1702,16 +1843,22 @@ struct WorkoutDetailView: View {
         }
         .padding(.top, 8)
         .onAppear {
-            loadRoute()
+            if showsMapSection || showsSummaryContent {
+                loadRoute()
+            }
         }
         .task(id: analytics.workout.startDate) {
             await loadHistoricalZoneProfile()
         }
         .task(id: routeLocations.map(\.timestamp)) {
-            await loadWeatherSnapshot()
+            if showsSummaryContent {
+                await loadWeatherSnapshot()
+            }
         }
         .task(id: selectedScrubbedDate) {
-            await loadWeatherSnapshot()
+            if showsSummaryContent {
+                await loadWeatherSnapshot()
+            }
         }
         .fullScreenCover(isPresented: $showMapDetail) {
             MapDetailView(
@@ -1762,17 +1909,6 @@ struct WorkoutDetailView: View {
             historicalZoneProfile = rebuiltProfile
         }
         hasResolvedZoneProfile = true
-    }
-
-    private func formattedTime(_ seconds: TimeInterval) -> String {
-        let h = Int(seconds) / 3600
-        let m = (Int(seconds) % 3600) / 60
-        let s = Int(seconds) % 60
-        if h > 0 {
-            return String(format: "%dh %02dm %02ds", h, m, s)
-        } else {
-            return String(format: "%02dm %02ds", m, s)
-        }
     }
 
     private func loadRoute() {
@@ -1904,17 +2040,58 @@ private struct MapDetailView: View {
     let analytics: WorkoutAnalytics
     let hrZoneSettings: HRZoneUserSettings
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedScrubbedDate: Date? = nil
+    @State private var routeLocations: [CLLocation] = []
+    @State private var routeLookupLocations: [CLLocation] = []
+    @State private var coloredSegments: [ColoredRouteSegment] = []
+    @State private var isLoadingRoute = false
+    @State private var showExpandedMap = false
+
+    private var selectedRouteLocation: CLLocation? {
+        let referenceDate = selectedScrubbedDate ?? analytics.workout.startDate
+        let locations = routeLookupLocations.isEmpty ? routeLocations : routeLookupLocations
+        return locations.min { lhs, rhs in
+            abs(lhs.timestamp.timeIntervalSince(referenceDate)) < abs(rhs.timestamp.timeIntervalSince(referenceDate))
+        }
+    }
+
+    private var selectedRouteCoordinateText: String? {
+        guard let coordinate = selectedRouteLocation?.coordinate else { return nil }
+        return String(format: "%.4f, %.4f", coordinate.latitude, coordinate.longitude)
+    }
+
+    private var selectedRouteElapsedText: String? {
+        guard let timestamp = selectedRouteLocation?.timestamp else { return nil }
+        let elapsed = max(0, timestamp.timeIntervalSince(analytics.workout.startDate))
+        return workoutElapsedTimeText(elapsed)
+    }
+
+    private let pinnedMapHeight: CGFloat = 220
+    private let pinnedMapSectionHeight: CGFloat = 274
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                WorkoutDetailView(
-                    analytics: analytics,
-                    hrZoneSettings: hrZoneSettings,
-                    allowsMapExpansion: false,
-                    showsSummaryContent: false
-                )
-                .padding()
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    pinnedMapSection
+                        .frame(height: pinnedMapSectionHeight)
+
+                    ScrollView {
+                        WorkoutDetailView(
+                            analytics: analytics,
+                            hrZoneSettings: hrZoneSettings,
+                            allowsMapExpansion: false,
+                            showsSummaryContent: false,
+                            showsMapSection: false,
+                            scrubbedDate: $selectedScrubbedDate
+                        )
+                        .padding(.horizontal)
+                        .padding(.bottom)
+                    }
+                    .frame(width: geometry.size.width, height: max(0, geometry.size.height - pinnedMapSectionHeight), alignment: .top)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+                .background(Color.black)
             }
             .navigationTitle("Workout Details")
             .navigationBarTitleDisplayMode(.inline)
@@ -1925,6 +2102,146 @@ private struct MapDetailView: View {
                     }
                 }
             }
+            .task(id: analytics.workout.uuid.uuidString) {
+                await loadRoute()
+            }
+            .fullScreenCover(isPresented: $showExpandedMap) {
+                RouteMapFullscreenView(
+                    segments: coloredSegments,
+                    startCoordinate: routeLocations.first?.coordinate,
+                    endCoordinate: routeLocations.last?.coordinate,
+                    highlightedCoordinate: selectedRouteLocation?.coordinate
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var pinnedMapSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                showExpandedMap = true
+            } label: {
+                ZStack {
+                    if !coloredSegments.isEmpty {
+                        RouteMapView(
+                            segments: coloredSegments,
+                            startCoordinate: routeLocations.first?.coordinate,
+                            endCoordinate: routeLocations.last?.coordinate,
+                            highlightedCoordinate: selectedRouteLocation?.coordinate,
+                            isInteractive: false
+                        )
+                    } else if isLoadingRoute {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(.secondarySystemBackground))
+                    } else {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                            .overlay {
+                                Label("No route available", systemImage: "map")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
+
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Label("Open Map", systemImage: "arrow.up.left.and.arrow.down.right")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .padding(12)
+                    }
+                }
+                .frame(height: pinnedMapHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            if let coordinateText = selectedRouteCoordinateText {
+                HStack(spacing: 12) {
+                    Label(selectedScrubbedDate == nil ? "Route Start" : "Selected Route Point", systemImage: "mappin.and.ellipse")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let elapsedText = selectedRouteElapsedText {
+                        Text(elapsedText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Text(coordinateText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+        .background(Color.black)
+    }
+
+    private func loadRoute() async {
+        guard coloredSegments.isEmpty, !isLoadingRoute else { return }
+
+        await MainActor.run {
+            isLoadingRoute = true
+        }
+
+        let allLocations = await WorkoutRouteStore.shared.locations(for: analytics.workout)
+        let displayLocations = sampledLocations(from: allLocations, maxPoints: 700)
+        let displaySegments = buildColoredRouteSegments(
+            locations: displayLocations,
+            heartRates: analytics.heartRates
+        )
+
+        await MainActor.run {
+            routeLookupLocations = allLocations
+            routeLocations = displayLocations
+            coloredSegments = displaySegments
+            isLoadingRoute = false
+        }
+    }
+
+}
+
+private struct RouteMapFullscreenView: View {
+    let segments: [ColoredRouteSegment]
+    let startCoordinate: CLLocationCoordinate2D?
+    let endCoordinate: CLLocationCoordinate2D?
+    let highlightedCoordinate: CLLocationCoordinate2D?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .topTrailing) {
+                RouteMapView(
+                    segments: segments,
+                    startCoordinate: startCoordinate,
+                    endCoordinate: endCoordinate,
+                    highlightedCoordinate: highlightedCoordinate,
+                    isInteractive: true
+                )
+                .ignoresSafeArea()
+
+                Button("Done") {
+                    dismiss()
+                }
+                .font(.headline)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding()
+            }
+            .navigationBarHidden(true)
         }
     }
 }
