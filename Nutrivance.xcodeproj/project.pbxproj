@@ -1062,8 +1062,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Nutrivance for Apple Watch";
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Nutrivance reads Health data on Apple Watch to show live recovery, workouts, mindfulness, and activity metrics.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "This app requires access to Health data to provide useful data in fitness, mental health, and nutrition";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "This app writes data to HealthKit to supplment the logging of health data and allows syncing between this app and Apple Health or other HealthKit enabled apps";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";
@@ -1101,8 +1101,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Nutrivance for Apple Watch";
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Nutrivance reads Health data on Apple Watch to show live recovery, workouts, mindfulness, and activity metrics.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthUpdateUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "This app requires access to Health data to provide useful data in fitness, mental health, and nutrition";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "This app writes data to HealthKit to supplment the logging of health data and allows syncing between this app and Apple Health or other HealthKit enabled apps";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";
@@ -1284,6 +1284,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Nutrivance/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to scan nutrition labels";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID enables security authentication to prevent others using your device from access certain health metrics";
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "";
@@ -1339,6 +1340,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Nutrivance/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to scan nutrition labels";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID enables security authentication to prevent others using your device from access certain health metrics";
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "";

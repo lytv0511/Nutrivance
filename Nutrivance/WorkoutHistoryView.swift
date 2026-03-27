@@ -208,7 +208,7 @@ struct WorkoutHistoryView: View {
         NavigationStack {
             ScrollView {
                 ScrollViewReader { proxy in
-                    LazyVStack(spacing: 16, pinnedViews: .sectionHeaders) {
+                    LazyVStack(spacing: 16) {
                         if isLoading {
                             HStack {
                                 Spacer()
@@ -2278,6 +2278,72 @@ private struct HorizontalChartScrubOverlay: UIViewRepresentable {
     }
 }
 
+private struct VerticalResizeHandleOverlay: UIViewRepresentable {
+    let onChanged: (CGFloat) -> Void
+    let onEnded: (CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChanged: onChanged, onEnded: onEnded)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        panGesture.delegate = context.coordinator
+        panGesture.cancelsTouchesInView = true
+        panGesture.delaysTouchesBegan = false
+        panGesture.delaysTouchesEnded = false
+        view.addGestureRecognizer(panGesture)
+
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGFloat) -> Void
+        var onEnded: (CGFloat) -> Void
+
+        init(onChanged: @escaping (CGFloat) -> Void, onEnded: @escaping (CGFloat) -> Void) {
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+        }
+
+        @objc
+        func handlePan(_ gesture: UIPanGestureRecognizer) {
+            let translationY = gesture.translation(in: gesture.view).y
+
+            switch gesture.state {
+            case .began, .changed:
+                onChanged(translationY)
+            case .ended, .cancelled, .failed:
+                onEnded(translationY)
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let panGesture = gestureRecognizer as? UIPanGestureRecognizer,
+                  let view = panGesture.view else {
+                return false
+            }
+
+            let velocity = panGesture.velocity(in: view)
+            return abs(velocity.y) > abs(velocity.x)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
+    }
+}
+
 private struct MapDetailView: View {
     let analytics: WorkoutAnalytics
     let hrZoneSettings: HRZoneUserSettings
@@ -2288,6 +2354,8 @@ private struct MapDetailView: View {
     @State private var coloredSegments: [ColoredRouteSegment] = []
     @State private var isLoadingRoute = false
     @State private var showExpandedMap = false
+    @State private var preferredMapSectionHeight: CGFloat = 374
+    @State private var liveMapSectionDragTranslation: CGFloat = 0
 
     private var selectedRouteLocation: CLLocation? {
         let referenceDate = selectedScrubbedDate ?? analytics.workout.startDate
@@ -2308,15 +2376,24 @@ private struct MapDetailView: View {
         return workoutElapsedTimeText(elapsed)
     }
 
-    private let pinnedMapHeight: CGFloat = 320
-    private let pinnedMapSectionHeight: CGFloat = 374
+    private let defaultMapSectionHeight: CGFloat = 374
+    private let minimumMapSectionHeight: CGFloat = 250
+    private let minimumScrollSectionHeight: CGFloat = 240
+    private let resizeHandleHeight: CGFloat = 28
 
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
+                let clampedMapSectionHeight = resolvedMapSectionHeight(
+                    for: geometry.size.height,
+                    translation: liveMapSectionDragTranslation
+                )
+
                 VStack(spacing: 0) {
                     pinnedMapSection
-                        .frame(height: pinnedMapSectionHeight)
+                        .frame(height: clampedMapSectionHeight)
+
+                    resizeHandle(maxTotalHeight: geometry.size.height)
 
                     ScrollView {
                         WorkoutDetailView(
@@ -2330,7 +2407,11 @@ private struct MapDetailView: View {
                         .padding(.horizontal)
                         .padding(.bottom)
                     }
-                    .frame(width: geometry.size.width, height: max(0, geometry.size.height - pinnedMapSectionHeight), alignment: .top)
+                    .frame(
+                        width: geometry.size.width,
+                        height: max(0, geometry.size.height - clampedMapSectionHeight - resizeHandleHeight),
+                        alignment: .top
+                    )
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
                 .background(Color.black)
@@ -2345,6 +2426,8 @@ private struct MapDetailView: View {
                 }
             }
             .task(id: analytics.workout.uuid.uuidString) {
+                preferredMapSectionHeight = defaultMapSectionHeight
+                liveMapSectionDragTranslation = 0
                 await loadRoute()
             }
             .fullScreenCover(isPresented: $showExpandedMap) {
@@ -2355,6 +2438,48 @@ private struct MapDetailView: View {
                     highlightedCoordinate: selectedRouteLocation?.coordinate
                 )
             }
+        }
+    }
+
+    private func resolvedMapSectionHeight(
+        for totalHeight: CGFloat,
+        translation: CGFloat = 0
+    ) -> CGFloat {
+        let maxAllowedHeight = max(
+            minimumMapSectionHeight,
+            totalHeight - minimumScrollSectionHeight - resizeHandleHeight
+        )
+        let proposedHeight = preferredMapSectionHeight + translation
+        return min(max(proposedHeight, minimumMapSectionHeight), maxAllowedHeight)
+    }
+
+    @ViewBuilder
+    private func resizeHandle(maxTotalHeight: CGFloat) -> some View {
+        ZStack {
+            Color.black
+
+            Capsule()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 56, height: 6)
+        }
+        .frame(height: resizeHandleHeight)
+        .contentShape(Rectangle())
+        .overlay {
+            VerticalResizeHandleOverlay(
+                onChanged: { translation in
+                    liveMapSectionDragTranslation = translation
+                },
+                onEnded: { translation in
+                    preferredMapSectionHeight = resolvedMapSectionHeight(
+                        for: maxTotalHeight,
+                        translation: translation
+                    )
+                    liveMapSectionDragTranslation = 0
+                }
+            )
+        }
+        .transaction { transaction in
+            transaction.animation = nil
         }
     }
 
@@ -2400,9 +2525,10 @@ private struct MapDetailView: View {
                         .padding(12)
                     }
                 }
-                .frame(height: pinnedMapHeight)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .buttonStyle(.plain)
 
             if let coordinateText = selectedRouteCoordinateText {
