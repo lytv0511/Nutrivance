@@ -24,12 +24,51 @@ private struct DashboardLayoutSettings: Codable, Equatable {
     var summaryCardsOrder: [String]
 }
 
+private enum DashboardSectionID {
+    static let summaryCards = "SummaryCards"
+    static let trainingLoadTrend = "TrainingLoadTrend"
+    static let feelGoodScore = "FeelGoodScore"
+    static let trainingLoadCard = "TrainingLoadCard"
+    static let workoutHistory = "WorkoutHistory"
+
+    static let defaultOrder = [
+        summaryCards,
+        trainingLoadTrend,
+        feelGoodScore,
+        trainingLoadCard,
+        workoutHistory
+    ]
+
+    static func normalizedOrder(from savedOrder: [String]) -> [String] {
+        let validSavedItems = savedOrder.filter { defaultOrder.contains($0) }
+        let missingItems = defaultOrder.filter { validSavedItems.contains($0) == false }
+        return validSavedItems + missingItems
+    }
+
+    static func displayName(for itemID: String) -> String {
+        switch itemID {
+        case summaryCards:
+            return "Summary Cards"
+        case trainingLoadTrend:
+            return "Training Load Trend"
+        case feelGoodScore:
+            return "Feel-Good Score"
+        case trainingLoadCard:
+            return "Training Load"
+        case workoutHistory:
+            return "Workout History"
+        default:
+            return itemID
+        }
+    }
+}
+
 private enum DashboardLayoutPersistence {
     static let storageKey = "dashboard_layout_settings_v1"
 
     static let fallback = DashboardLayoutSettings(
         groupSummaryCards: false,
-        dashboardItemOrder: ["SummaryCards", "HRVTrend"],
+        dashboardItemOrder: DashboardSectionID.defaultOrder,
         summaryCardsOrder: ["Recovery", "Readiness", "Strain", "Allostatic", "Autonomic"]
     )
 
@@ -121,7 +160,7 @@ struct DashboardView: View {
     @State private var showCustomizationSheet: Bool = false
     @State private var showArrangementSheet: Bool = false
     @State private var groupSummaryCards: Bool = false
-    @State private var dashboardItemOrder: [String] = ["SummaryCards", "HRVTrend"]
+    @State private var dashboardItemOrder: [String] = DashboardSectionID.defaultOrder
     @State private var summaryCardsOrder: [String] = ["Recovery", "Readiness", "Strain", "Allostatic", "Autonomic"]
     @State private var hasLoadedLayoutSettings = false
     @State private var isRefreshingDashboardMetrics = false
@@ -140,7 +179,7 @@ struct DashboardView: View {
     init() {
         let saved = DashboardLayoutPersistence.load()
         _groupSummaryCards = State(initialValue: saved.groupSummaryCards)
-        _dashboardItemOrder = State(initialValue: saved.dashboardItemOrder)
+        _dashboardItemOrder = State(initialValue: DashboardSectionID.normalizedOrder(from: saved.dashboardItemOrder))
         _summaryCardsOrder = State(initialValue: saved.summaryCardsOrder)
         _hasLoadedLayoutSettings = State(initialValue: true)
         _liveLoadSnapshot = State(initialValue: DashboardSnapshotPersistence.load() ?? DashboardLoadSnapshot(
@@ -366,9 +405,6 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     dashboardItemsSection()
-                    feelGoodScoreSection()
-                    acwrSection()
-                    workoutHistoryPreviewSection()
                 }
                 .padding(.top)
             }
@@ -425,7 +461,7 @@ struct DashboardView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 let saved = DashboardLayoutPersistence.load()
                 groupSummaryCards = saved.groupSummaryCards
-                dashboardItemOrder = saved.dashboardItemOrder
+                dashboardItemOrder = DashboardSectionID.normalizedOrder(from: saved.dashboardItemOrder)
                 summaryCardsOrder = saved.summaryCardsOrder
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -473,36 +509,43 @@ struct DashboardView: View {
     private func dashboardItemsSection() -> some View {
         ForEach(dashboardItemOrder, id: \.self) { item in
             Group {
-                // Show the collapsible button before Summary Cards
-                if item == "SummaryCards" {
-                    HStack {
-                        Button(action: { withAnimation { groupSummaryCards.toggle() }
-                            let impact = UIImpactFeedbackGenerator(style: .medium)
-                            impact.impactOccurred()}) {
-                            HStack(spacing: 6) {
-                                Image(systemName: groupSummaryCards ? "chevron.down.circle.fill" : "chevron.right.circle.fill")
-                                    .foregroundColor(.orange)
-                                Text("Summary Cards")
-                                    .font(.headline)
-                                    .foregroundColor(.orange)
+                if item == DashboardSectionID.summaryCards {
+                    VStack(spacing: groupSummaryCards ? 8 : 12) {
+                        HStack {
+                            Button(action: { withAnimation { groupSummaryCards.toggle() }
+                                let impact = UIImpactFeedbackGenerator(style: .medium)
+                                impact.impactOccurred()}) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: groupSummaryCards ? "chevron.down.circle.fill" : "chevron.right.circle.fill")
+                                        .foregroundColor(.orange)
+                                    Text("Summary Cards")
+                                        .font(.headline)
+                                        .foregroundColor(.orange)
+                                }
                             }
+                            Spacer()
                         }
-                        Spacer()
+                        .padding(.horizontal)
+
+                        if groupSummaryCards {
+                            summaryCardsTabView()
+                        } else {
+                            summaryCardsInline()
+                        }
                     }
-                    .padding(.horizontal)
-                }
-                
-                switch item {
-                case "SummaryCards":
-                    if groupSummaryCards {
-                        summaryCardsTabView()
-                    } else {
-                        summaryCardsInline()
+                } else {
+                    switch item {
+                    case DashboardSectionID.trainingLoadTrend:
+                        trainingLoadTrendSection()
+                    case DashboardSectionID.feelGoodScore:
+                        feelGoodScoreSection()
+                    case DashboardSectionID.trainingLoadCard:
+                        acwrSection()
+                    case DashboardSectionID.workoutHistory:
+                        workoutHistoryPreviewSection()
+                    default:
+                        EmptyView()
                     }
-                case "HRVTrend":
-                    trainingLoadTrendSection()
-                default:
-                    EmptyView()
                 }
             }
         }
@@ -521,7 +564,6 @@ struct DashboardView: View {
                     color: colorFor(title),
                     metric: metricFor(title)
                 )
-                .padding(.bottom)
                 .padding(.horizontal)
             }
         }
@@ -1488,11 +1530,6 @@ struct DashboardArrangementSheet: View {
     @State private var localDashboardOrder: [String] = []
     @State private var localSummaryCardsOrder: [String] = []
     
-    let mainItems = [
-        ("A", "Summary Cards", ["Recovery", "Readiness", "Strain", "Allostatic", "Autonomic"]),
-        ("B", "Training Load", [])
-    ]
-    
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -1500,7 +1537,7 @@ struct DashboardArrangementSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Arrange Dashboard")
                             .font(.largeTitle.bold())
-                        Text("Reorder the major dashboard blocks and the summary cards inside the summary section.")
+                        Text("Reorder the major dashboard cards and the summary cards inside the summary section.")
                             .foregroundColor(.secondary)
                     }
                     .padding()
@@ -1512,14 +1549,13 @@ struct DashboardArrangementSheet: View {
 
                         ForEach(0..<localDashboardOrder.count, id: \.self) { mainIndex in
                             let mainItemName = localDashboardOrder[mainIndex]
-                            let letter = mainItemName == "SummaryCards" ? "A" : "B"
-                            let displayName = mainItemName == "SummaryCards" ? "Summary Cards" : "Training Load"
+                            let displayName = DashboardSectionID.displayName(for: mainItemName)
 
                             VStack(alignment: .leading, spacing: 12) {
-                                Text(letter + ". " + displayName)
+                                Text("\(mainIndex + 1). " + displayName)
                                     .font(.subheadline.weight(.semibold))
 
-                                if mainItemName == "SummaryCards" {
+                                if mainItemName == DashboardSectionID.summaryCards {
                                     ForEach(0..<localSummaryCardsOrder.count, id: \.self) { itemIndex in
                                         HStack {
                                             Text("\(itemIndex + 1). \(localSummaryCardsOrder[itemIndex])")
@@ -1529,6 +1565,7 @@ struct DashboardArrangementSheet: View {
                                                     Button {
                                                         if itemIndex > 0 {
                                                             localSummaryCardsOrder.swapAt(itemIndex, itemIndex - 1)
+                                                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                                         }
                                                     } label: {
                                                         Image(systemName: "chevron.up")
@@ -1536,6 +1573,7 @@ struct DashboardArrangementSheet: View {
                                                     Button {
                                                         if itemIndex < localSummaryCardsOrder.count - 1 {
                                                             localSummaryCardsOrder.swapAt(itemIndex, itemIndex + 1)
+                                                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                                         }
                                                     } label: {
                                                         Image(systemName: "chevron.down")
@@ -1547,21 +1585,38 @@ struct DashboardArrangementSheet: View {
                                         .font(.caption)
                                     }
                                 }
+                                if isEditingMode {
+                                    HStack(spacing: 8) {
+                                        Button {
+                                            if mainIndex > 0 {
+                                                localDashboardOrder.swapAt(mainIndex, mainIndex - 1)
+                                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                            }
+                                        } label: {
+                                            Label("Move Up", systemImage: "chevron.up")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(.orange)
+                                        .disabled(mainIndex == 0)
+
+                                        Button {
+                                            if mainIndex < localDashboardOrder.count - 1 {
+                                                localDashboardOrder.swapAt(mainIndex, mainIndex + 1)
+                                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                            }
+                                        } label: {
+                                            Label("Move Down", systemImage: "chevron.down")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(.orange)
+                                        .disabled(mainIndex == localDashboardOrder.count - 1)
+                                    }
+                                }
                             }
                             .padding()
                             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        }
-
-                        if isEditingMode {
-                            Button {
-                                if localDashboardOrder.count == 2 {
-                                    localDashboardOrder.swapAt(0, 1)
-                                }
-                            } label: {
-                                Label("Swap A & B", systemImage: "arrow.up.arrow.down")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
                         }
                     }
                     .padding()
@@ -1594,11 +1649,11 @@ struct DashboardArrangementSheet: View {
                         let impact = UIImpactFeedbackGenerator(style: .medium)
                         impact.impactOccurred()
                     }
-                    .foregroundColor(.blue)
+                    .foregroundColor(.orange)
                 }
             }
             .onAppear {
-                localDashboardOrder = dashboardItemOrder
+                localDashboardOrder = DashboardSectionID.normalizedOrder(from: dashboardItemOrder)
                 localSummaryCardsOrder = summaryCardsOrder
             }
         }
