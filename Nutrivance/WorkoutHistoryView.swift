@@ -120,7 +120,9 @@ struct WorkoutHistoryView: View {
     @State private var sportFilter: String? = nil
     @State private var showDatePicker = false
     @State private var selectedDate = Date()
-    @State private var scrollProxy: ScrollViewProxy?
+    @State private var pendingJumpDate: Date?
+    @State private var pendingScrollTargetID: String?
+    @State private var scrollRequestNonce: Int = 0
     @State private var showHRZoneSettings = false
     @State private var hrZoneConfigurationMode: HRZoneConfigurationMode = .intelligent
     @State private var selectedHRZoneSchema: HRZoneSchema = .lactatThreshold
@@ -135,6 +137,7 @@ struct WorkoutHistoryView: View {
     @State private var hasLoadedPersistedHRZoneSettings = false
     @State private var isLoadingHistoricalCoverage = false
     @State private var hasConsumedInitialWorkoutScroll = false
+    @State private var isJumpingToSelectedDate = false
 
     init(initialScrollWorkoutID: String? = nil) {
         self.initialScrollWorkoutID = initialScrollWorkoutID
@@ -212,11 +215,15 @@ struct WorkoutHistoryView: View {
         workoutRowIdentifier(for: pair.workout)
     }
 
+    private func monthSectionID(for dateComponents: DateComponents) -> String {
+        "month-\(dateComponents.year ?? 0)-\(dateComponents.month ?? 0)"
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 ScrollViewReader { proxy in
-                    LazyVStack(spacing: 16) {
+                    LazyVStack(spacing: 16, pinnedViews: .sectionHeaders) {
                         if isLoading {
                             HStack {
                                 Spacer()
@@ -229,13 +236,15 @@ struct WorkoutHistoryView: View {
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(groupedWorkouts.sorted(by: { ($0.key.year! * 12 + $0.key.month!) > ($1.key.year! * 12 + $1.key.month!) }), id: \.key) { (key, workouts) in
-                                VStack(alignment: .leading, spacing: 12) {
-                                    Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))")
+                                Section(
+                                    header:
+                                        Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))")
                                         .font(.headline)
                                         .foregroundColor(.orange)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.vertical, 4)
-
+                                        .id(monthSectionID(for: key))
+                                ) {
                                     ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.analytics.workout.uuid) { pair in
                                         WorkoutCard(
                                             workout: pair.workout,
@@ -265,9 +274,17 @@ struct WorkoutHistoryView: View {
                     .padding(.top, 16)
                     .padding(.bottom)
                     .onAppear {
-                        scrollProxy = proxy
                         handleInitialWorkoutNavigation()
                         handlePendingWorkoutNavigation()
+                        completePendingDateJumpIfPossible()
+                    }
+                    .onChange(of: scrollRequestNonce) { _, _ in
+                        guard let pendingScrollTargetID else { return }
+                        DispatchQueue.main.async {
+                            withAnimation {
+                                proxy.scrollTo(pendingScrollTargetID, anchor: .top)
+                            }
+                        }
                     }
                 }
             }
@@ -348,6 +365,7 @@ struct WorkoutHistoryView: View {
                     }
                     .padding()
                     .foregroundColor(.orange)
+                    .disabled(isJumpingToSelectedDate)
                 }
             }
             .sheet(isPresented: $showHRZoneSettings) {
@@ -383,6 +401,12 @@ struct WorkoutHistoryView: View {
             .onChange(of: navigationState.pendingWorkoutScrollID) { _, _ in
                 handlePendingWorkoutNavigation()
             }
+            .onChange(of: groupedWorkouts.count) { _, _ in
+                completePendingDateJumpIfPossible()
+            }
+            .onChange(of: sportFilter) { _, _ in
+                completePendingDateJumpIfPossible()
+            }
         }
     }
 
@@ -392,23 +416,15 @@ struct WorkoutHistoryView: View {
         hasConsumedInitialWorkoutScroll = true
         sportFilter = nil
         guard filteredWorkouts.contains(where: { workoutRowID(for: $0) == targetID }) else { return }
-        DispatchQueue.main.async {
-            withAnimation {
-                scrollProxy?.scrollTo(targetID, anchor: .top)
-            }
-        }
+        requestScroll(to: targetID)
     }
 
     private func handlePendingWorkoutNavigation() {
         guard let targetID = navigationState.pendingWorkoutScrollID else { return }
         sportFilter = nil
         guard filteredWorkouts.contains(where: { workoutRowID(for: $0) == targetID }) else { return }
-        DispatchQueue.main.async {
-            withAnimation {
-                scrollProxy?.scrollTo(targetID, anchor: .top)
-            }
-            navigationState.pendingWorkoutScrollID = nil
-        }
+        requestScroll(to: targetID)
+        navigationState.pendingWorkoutScrollID = nil
     }
 
     private func loadPersistedHRZoneSettingsIfNeeded() {
@@ -445,31 +461,69 @@ struct WorkoutHistoryView: View {
         }
     }
 
-    func scrollToClosestWorkout(to date: Date) {
-        let closest = filteredWorkouts.min(by: { abs($0.workout.startDate.timeIntervalSince(date)) < abs($1.workout.startDate.timeIntervalSince(date)) })
-        if let closest = closest {
-            withAnimation {
-                scrollProxy?.scrollTo(workoutRowID(for: closest), anchor: .top)
-            }
+    private func requestScroll(to targetID: String) {
+        pendingScrollTargetID = targetID
+        scrollRequestNonce += 1
+    }
+
+    private func scrollToClosestWorkout(to date: Date) -> Bool {
+        let calendar = Calendar.current
+        let monthWorkouts = filteredWorkouts.filter {
+            calendar.isDate($0.workout.startDate, equalTo: date, toGranularity: .month)
         }
+
+        let candidatePool = monthWorkouts.isEmpty ? filteredWorkouts : monthWorkouts
+        let closest = candidatePool.min(by: {
+            abs($0.workout.startDate.timeIntervalSince(date)) < abs($1.workout.startDate.timeIntervalSince(date))
+        })
+
+        guard let closest else { return false }
+        requestScroll(to: workoutRowID(for: closest))
+        return true
+    }
+
+    private func completePendingDateJumpIfPossible() {
+        guard let pendingJumpDate else { return }
+
+        let calendar = Calendar.current
+        let monthComponents = calendar.dateComponents([.year, .month], from: pendingJumpDate)
+        let hasMonthLoaded = groupedWorkouts.keys.contains {
+            $0.year == monthComponents.year && $0.month == monthComponents.month
+        }
+
+        guard hasMonthLoaded else { return }
+
+        if scrollToClosestWorkout(to: pendingJumpDate) == false {
+            requestScroll(to: monthSectionID(for: monthComponents))
+        }
+
+        self.pendingJumpDate = nil
     }
 
     @MainActor
     private func loadCoverageForDatePickerSelection() async {
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: selectedDate)
-        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        let monthInterval = calendar.dateInterval(of: .month, for: selectedDate)
+        let start = monthInterval?.start ?? calendar.startOfDay(for: selectedDate)
+        let end = monthInterval?.end ?? (calendar.date(byAdding: .day, value: 1, to: start) ?? start)
+        let targetDate = selectedDate
+        let monthAlreadyLoadedInMemory = engine.workoutAnalytics.contains {
+            calendar.isDate($0.workout.startDate, equalTo: targetDate, toGranularity: .month)
+        }
 
-        if engine.needsWorkoutAnalyticsCoverage(from: start, to: end) {
+        pendingJumpDate = targetDate
+        showDatePicker = false
+        isJumpingToSelectedDate = true
+        defer { isJumpingToSelectedDate = false }
+
+        if engine.needsWorkoutAnalyticsCoverage(from: start, to: end) || !monthAlreadyLoadedInMemory {
             isLoadingHistoricalCoverage = true
-            isLoading = true
-            await engine.ensureWorkoutAnalyticsCoverage(from: start, to: end)
-            isLoading = false
+            await engine.ensureWorkoutAnalyticsCoverage(from: start, to: end, forceFetch: true)
             isLoadingHistoricalCoverage = false
         }
 
-        scrollToClosestWorkout(to: selectedDate)
-        showDatePicker = false
+        await Task.yield()
+        completePendingDateJumpIfPossible()
     }
 }
 
@@ -491,6 +545,14 @@ struct WorkoutCard: View {
         df.timeStyle = .short
         return df
     }()
+
+    private var workoutEffortScore: Double? {
+        workoutEffortScoreValue(from: workout)
+    }
+
+    private var estimatedWorkoutEffortScore: Double? {
+        estimatedWorkoutEffortScoreValue(from: workout)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -524,6 +586,27 @@ struct WorkoutCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            if workoutEffortScore != nil || estimatedWorkoutEffortScore != nil {
+                let columns = [GridItem(.flexible()), GridItem(.flexible())]
+                LazyVGrid(columns: columns, spacing: 10) {
+                    if let workoutEffortScore {
+                        CompactWorkoutMetricCard(
+                            title: "Effort Score",
+                            value: String(format: "%.1f", workoutEffortScore),
+                            unit: "",
+                            color: .orange
+                        )
+                    }
+                    if let estimatedWorkoutEffortScore {
+                        CompactWorkoutMetricCard(
+                            title: "Estimated Effort",
+                            value: String(format: "%.1f", estimatedWorkoutEffortScore),
+                            unit: "",
+                            color: .yellow
+                        )
+                    }
+                }
+            }
             if isExpanded {
                 WorkoutDetailView(
                     analytics: analytics,
@@ -777,6 +860,7 @@ private func workoutElapsedTimeText(_ seconds: TimeInterval) -> String {
 }
 
 struct WorkoutDetailView: View {
+    @EnvironmentObject private var unitPreferences: UnitPreferencesStore
     let analytics: WorkoutAnalytics
     let hrZoneSettings: HRZoneUserSettings
     var allowsMapExpansion: Bool = true
@@ -841,6 +925,49 @@ struct WorkoutDetailView: View {
     private var avgSpeedKPH: Double? {
         guard let dist = distanceMeters, activeDuration > 0 else { return nil }
         return (dist / 1000) / (activeDuration / 3600)
+    }
+
+    private var formattedDistanceMetric: (value: String, unit: String)? {
+        guard let distanceMeters else { return nil }
+        return unitPreferences.formattedDistance(fromMeters: distanceMeters)
+    }
+
+    private var formattedAvgSpeedMetric: (value: String, unit: String)? {
+        guard let avgSpeedKPH else { return nil }
+        return unitPreferences.formattedSpeed(fromKilometersPerHour: avgSpeedKPH)
+    }
+
+    private var formattedAvgPaceMetric: (value: String, unit: String)? {
+        guard let avgSpeedKPH, avgSpeedKPH > 0 else { return nil }
+        return unitPreferences.formattedPace(fromMinutesPerKilometer: 60 / avgSpeedKPH)
+    }
+
+    private var displaySpeedSeries: [(Date, Double)] {
+        analytics.speedSeries.map { point in
+            let speedKPH = point.1 * 3.6
+            let displayValue = unitPreferences.resolvedSpeedUnit == .milesPerHour
+                ? speedKPH / 1.609344
+                : speedKPH
+            return (point.0, displayValue)
+        }
+    }
+
+    private var displayElevationSeries: [(Date, Double)] {
+        analytics.elevationSeries.map { point in
+            let displayValue = unitPreferences.resolvedElevationUnit == .feet
+                ? point.1 * 3.28084
+                : point.1
+            return (point.0, displayValue)
+        }
+    }
+
+    private var displayStrideLengthSeries: [(Date, Double)] {
+        analytics.strideLengthSeries.map { point in
+            let displayValue = unitPreferences.resolvedElevationUnit == .feet
+                ? point.1 * 3.28084
+                : point.1
+            return (point.0, displayValue)
+        }
     }
 
     private var avgPower: Double? {
@@ -910,8 +1037,7 @@ struct WorkoutDetailView: View {
     }
 
     private var selectedSpeedPoint: (Date, Double)? {
-        let speedSeries = analytics.speedSeries.map { ($0.0, $0.1 * 3.6) }
-        return selectedPoint(in: speedSeries)
+        selectedPoint(in: displaySpeedSeries)
     }
 
     private var selectedPacePoint: (Date, Double)? {
@@ -927,12 +1053,16 @@ struct WorkoutDetailView: View {
         analytics.speedSeries.compactMap { point -> (Date, Double)? in
             let speedKPH = point.1 * 3.6
             guard speedKPH > 0.1 else { return nil }
-            return (point.0, 60 / speedKPH)
+            let pacePerKilometer = 60 / speedKPH
+            let formattedPace = unitPreferences.resolvedPaceUnit == .perMile
+                ? pacePerKilometer * 1.609344
+                : pacePerKilometer
+            return (point.0, formattedPace)
         }
     }
 
     private var selectedElevationPoint: (Date, Double)? {
-        selectedPoint(in: analytics.elevationSeries)
+        selectedPoint(in: displayElevationSeries)
     }
 
     private var selectedVerticalOscillationPoint: (Date, Double)? {
@@ -944,7 +1074,7 @@ struct WorkoutDetailView: View {
     }
 
     private var selectedStrideLengthPoint: (Date, Double)? {
-        selectedPoint(in: analytics.strideLengthSeries)
+        selectedPoint(in: displayStrideLengthSeries)
     }
 
     private var selectedStrokeCountPoint: (Date, Double)? {
@@ -1308,15 +1438,14 @@ struct WorkoutDetailView: View {
             if showsSummaryContent {
                 let columns = [GridItem(.flexible()), GridItem(.flexible())]
                 LazyVGrid(columns: columns, spacing: 12) {
-                    if let dist = distanceMeters {
-                        WorkoutMetricCard(title: "Distance", value: String(format: "%.2f", dist / 1000), unit: "km", icon: "ruler", color: .blue)
+                    if let formattedDistanceMetric {
+                        WorkoutMetricCard(title: "Distance", value: formattedDistanceMetric.value, unit: formattedDistanceMetric.unit, icon: "ruler", color: .blue)
                     }
-                    if let spd = avgSpeedKPH {
-                        WorkoutMetricCard(title: "Avg Speed", value: String(format: "%.1f", spd), unit: "km/h", icon: "speedometer", color: .teal)
+                    if let formattedAvgSpeedMetric {
+                        WorkoutMetricCard(title: "Avg Speed", value: formattedAvgSpeedMetric.value, unit: formattedAvgSpeedMetric.unit, icon: "speedometer", color: .teal)
                     }
-                    if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking), let spd = avgSpeedKPH, spd > 0 {
-                        let pace = 60 / spd
-                        WorkoutMetricCard(title: "Avg Pace", value: String(format: "%.1f", pace), unit: "min/km", icon: "stopwatch", color: .blue)
+                    if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking), let formattedAvgPaceMetric {
+                        WorkoutMetricCard(title: "Avg Pace", value: formattedAvgPaceMetric.value, unit: formattedAvgPaceMetric.unit, icon: "stopwatch", color: .blue)
                     }
                     if let power = avgPower {
                         WorkoutMetricCard(title: "Avg Power", value: String(format: "%.0f", power), unit: "W", icon: "bolt.fill", color: .purple)
@@ -1328,7 +1457,8 @@ struct WorkoutDetailView: View {
                         WorkoutMetricCard(title: "Active KCAL", value: String(format: "%.0f", kcal), unit: "kcal", icon: "flame.fill", color: .orange)
                     }
                     if let elevation = analytics.elevationGain {
-                        WorkoutMetricCard(title: "Elevation Gain", value: String(format: "%.0f", elevation), unit: "m", icon: "mountain.2.fill", color: .green)
+                        let formattedElevation = unitPreferences.formattedElevation(fromMeters: elevation)
+                        WorkoutMetricCard(title: "Elevation Gain", value: formattedElevation.value, unit: formattedElevation.unit, icon: "mountain.2.fill", color: .green)
                     }
                     if let hr = avgHeartRate {
                         WorkoutMetricCard(title: "Avg HR", value: String(format: "%.0f", hr), unit: "bpm", icon: "heart.fill", color: .red)
@@ -1343,7 +1473,8 @@ struct WorkoutDetailView: View {
                         WorkoutMetricCard(title: "GCT", value: String(format: "%.0f", gct), unit: "ms", icon: "figure.run", color: .indigo)
                     }
                     if let sl = analytics.strideLength {
-                        WorkoutMetricCard(title: "Stride", value: String(format: "%.2f", sl), unit: "m", icon: "ruler.fill", color: .pink)
+                        let formattedStride = unitPreferences.formattedElevation(fromMeters: sl, digits: 2)
+                        WorkoutMetricCard(title: "Stride", value: formattedStride.value, unit: formattedStride.unit, icon: "ruler.fill", color: .pink)
                     }
                 }
             }
@@ -1668,10 +1799,10 @@ struct WorkoutDetailView: View {
                         .font(.subheadline)
                         .bold()
                     Chart {
-                        ForEach(analytics.speedSeries, id: \.0) { point in
+                        ForEach(displaySpeedSeries, id: \.0) { point in
                             LineMark(
                                 x: .value("Time", point.0),
-                                y: .value("Speed", point.1 * 3.6)
+                                y: .value("Speed", point.1)
                             )
                             .foregroundStyle(.blue)
                         }
@@ -1680,34 +1811,33 @@ struct WorkoutDetailView: View {
                             xLabel: "Time",
                             yLabel: "Speed",
                             color: .blue,
-                            valueText: { String(format: "%.1f km/h", $0) }
+                            valueText: { String(format: "%.1f %@", $0, unitPreferences.resolvedSpeedUnit == .milesPerHour ? "mph" : "km/h") }
                         )
                     }
-                    .chartYScale(domain: chartYScaleDomain(for: analytics.speedSeries.map { $0.1 * 3.6 }, minimumPadding: 0.5))
+                    .chartYScale(domain: chartYScaleDomain(for: displaySpeedSeries.map(\.1), minimumPadding: 0.5))
                     .frame(height: standardChartHeight)
                     .overlay(alignment: .topLeading) {
                         selectionBubble(
                             selected: selectedSpeedPoint,
                             color: .blue,
-                            valueText: { String(format: "%.1f km/h", $0) }
+                            valueText: { String(format: "%.1f %@", $0, unitPreferences.resolvedSpeedUnit == .milesPerHour ? "mph" : "km/h") }
                         )
                         .padding(8)
                     }
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
-                            let speedSeries = analytics.speedSeries.map { ($0.0, $0.1 * 3.6) }
                             selectionOverlay(
                                 proxy: proxy,
                                 geometry: geometry,
-                                data: speedSeries
+                                data: displaySpeedSeries
                             )
                         }
                     }
                     HStack {
-                        let avgSpeed = analytics.speedSeries.map { $0.1 * 3.6 }.average
-                        Text("Avg Speed: \(avgSpeed.map { String(format: "%.1f", $0) } ?? "-") km/h")
+                        let avgSpeed = displaySpeedSeries.map(\.1).average
+                        Text("Avg Speed: \(avgSpeed.map { String(format: "%.1f", $0) } ?? "-") \(unitPreferences.resolvedSpeedUnit == .milesPerHour ? "mph" : "km/h")")
                         if let point = selectedSpeedPoint {
-                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.1f", point.1)) km/h")
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.1f", point.1)) \(unitPreferences.resolvedSpeedUnit == .milesPerHour ? "mph" : "km/h")")
                         }
                     }
                     .font(.caption)
@@ -1774,7 +1904,7 @@ struct WorkoutDetailView: View {
                         .font(.subheadline)
                         .bold()
                     Chart {
-                        ForEach(analytics.elevationSeries, id: \.0) { point in
+                        ForEach(displayElevationSeries, id: \.0) { point in
                             LineMark(
                                 x: .value("Time", point.0),
                                 y: .value("Elevation", point.1)
@@ -1786,16 +1916,16 @@ struct WorkoutDetailView: View {
                             xLabel: "Time",
                             yLabel: "Elevation",
                             color: .green,
-                            valueText: { String(format: "%.0f m", $0) }
+                            valueText: { String(format: "%.0f %@", $0, unitPreferences.resolvedElevationUnit == .feet ? "ft" : "m") }
                         )
                     }
-                    .chartYScale(domain: chartYScaleDomain(for: analytics.elevationSeries.map(\.1)))
+                    .chartYScale(domain: chartYScaleDomain(for: displayElevationSeries.map(\.1)))
                     .frame(height: standardChartHeight)
                     .overlay(alignment: .topLeading) {
                         selectionBubble(
                             selected: selectedElevationPoint,
                             color: .green,
-                            valueText: { String(format: "%.0f m", $0) }
+                            valueText: { String(format: "%.0f %@", $0, unitPreferences.resolvedElevationUnit == .feet ? "ft" : "m") }
                         )
                         .padding(8)
                     }
@@ -1804,16 +1934,17 @@ struct WorkoutDetailView: View {
                             selectionOverlay(
                             proxy: proxy,
                             geometry: geometry,
-                            data: analytics.elevationSeries
+                            data: displayElevationSeries
                         )
                     }
                 }
                     HStack {
                         if let gain = analytics.elevationGain {
-                            Text("Total Gain: \(String(format: "%.0f", gain)) m")
+                            let formattedGain = unitPreferences.formattedElevation(fromMeters: gain)
+                            Text("Total Gain: \(formattedGain.value) \(formattedGain.unit)")
                         }
                         if let point = selectedElevationPoint {
-                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.0f", point.1)) m")
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.0f", point.1)) \(unitPreferences.resolvedElevationUnit == .feet ? "ft" : "m")")
                         }
                     }
                     .font(.caption)
@@ -1933,7 +2064,7 @@ struct WorkoutDetailView: View {
                         .font(.subheadline)
                         .bold()
                     Chart {
-                        ForEach(analytics.strideLengthSeries, id: \.0) { point in
+                        ForEach(displayStrideLengthSeries, id: \.0) { point in
                             LineMark(
                                 x: .value("Time", point.0),
                                 y: .value("Stride Length", point.1)
@@ -1945,16 +2076,16 @@ struct WorkoutDetailView: View {
                             xLabel: "Time",
                             yLabel: "Stride Length",
                             color: .pink,
-                            valueText: { String(format: "%.2f m", $0) }
+                            valueText: { String(format: "%.2f %@", $0, unitPreferences.resolvedElevationUnit == .feet ? "ft" : "m") }
                         )
                     }
-                    .chartYScale(domain: chartYScaleDomain(for: analytics.strideLengthSeries.map(\.1), minimumPadding: 0.05))
+                    .chartYScale(domain: chartYScaleDomain(for: displayStrideLengthSeries.map(\.1), minimumPadding: 0.05))
                     .frame(height: standardChartHeight)
                     .overlay(alignment: .topLeading) {
                         selectionBubble(
                             selected: selectedStrideLengthPoint,
                             color: .pink,
-                            valueText: { String(format: "%.2f m", $0) }
+                            valueText: { String(format: "%.2f %@", $0, unitPreferences.resolvedElevationUnit == .feet ? "ft" : "m") }
                         )
                         .padding(8)
                     }
@@ -1963,16 +2094,17 @@ struct WorkoutDetailView: View {
                             selectionOverlay(
                                 proxy: proxy,
                                 geometry: geometry,
-                                data: analytics.strideLengthSeries
+                                data: displayStrideLengthSeries
                             )
                         }
                     }
                     HStack {
                         if let sl = analytics.strideLength {
-                            Text("Avg Stride Length: \(String(format: "%.2f", sl)) m")
+                            let formattedStride = unitPreferences.formattedElevation(fromMeters: sl, digits: 2)
+                            Text("Avg Stride Length: \(formattedStride.value) \(formattedStride.unit)")
                         }
                         if let point = selectedStrideLengthPoint {
-                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.2f", point.1)) m")
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.2f", point.1)) \(unitPreferences.resolvedElevationUnit == .feet ? "ft" : "m")")
                         }
                     }
                     .font(.caption)
@@ -1999,7 +2131,7 @@ struct WorkoutDetailView: View {
                             xLabel: "Time",
                             yLabel: "Pace",
                             color: .teal,
-                            valueText: { String(format: "%.2f min/km", $0) }
+                            valueText: { String(format: "%.2f %@", $0, unitPreferences.resolvedPaceUnit == .perMile ? "min/mi" : "min/km") }
                         )
                     }
                     .chartYScale(
@@ -2013,7 +2145,7 @@ struct WorkoutDetailView: View {
                         selectionBubble(
                             selected: selectedPacePoint,
                             color: .teal,
-                            valueText: { String(format: "%.2f min/km", $0) }
+                            valueText: { String(format: "%.2f %@", $0, unitPreferences.resolvedPaceUnit == .perMile ? "min/mi" : "min/km") }
                         )
                         .padding(8)
                     }
@@ -2028,9 +2160,9 @@ struct WorkoutDetailView: View {
                     }
                     HStack {
                         let avgPace = paceSeries.map(\.1).average
-                        Text("Avg Pace: \(avgPace.map { String(format: "%.1f", $0) } ?? "-") min/km")
+                        Text("Avg Pace: \(avgPace.map { String(format: "%.1f", $0) } ?? "-") \(unitPreferences.resolvedPaceUnit == .perMile ? "min/mi" : "min/km")")
                         if let point = selectedPacePoint {
-                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.2f", point.1)) min/km")
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.2f", point.1)) \(unitPreferences.resolvedPaceUnit == .perMile ? "min/mi" : "min/km")")
                         }
                     }
                     .font(.caption)
@@ -2101,13 +2233,13 @@ struct WorkoutDetailView: View {
                     let splits = generateSplits()
                     ForEach(splits, id: \.distance) { split in
                         HStack {
-                            Text(String(format: "%.1f km", split.distance))
+                            Text("\(String(format: "%.1f", split.distance)) \(unitPreferences.resolvedDistanceUnit == .miles ? "mi" : "km")")
                                 .font(.caption)
-                                .frame(width: 60, alignment: .leading)
+                                .frame(width: 72, alignment: .leading)
                             Text(workoutElapsedTimeText(split.time))
                                 .font(.caption)
                             if let pace = split.pace {
-                                Text(String(format: "%.1f min/km", pace))
+                                Text(String(format: "%.1f %@", pace, unitPreferences.resolvedPaceUnit == .perMile ? "min/mi" : "min/km"))
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -2234,16 +2366,17 @@ struct WorkoutDetailView: View {
 
     private func generateSplits() -> [Split] {
         guard let totalDistance = analytics.workout.totalDistance?.doubleValue(for: .meter()) else { return [] }
-        let totalKm = totalDistance / 1000
-        let splitDistance = 1.0 // km
+        let splitDistanceKilometers = unitPreferences.resolvedDistanceUnit == .miles ? 1.609344 : 1.0
+        let totalDistanceInDisplayUnits = totalDistance / (splitDistanceKilometers * 1000)
         var splits: [Split] = []
-        for km in stride(from: splitDistance, through: totalKm, by: splitDistance) {
-            let timeAtKm = analytics.workout.startDate.addingTimeInterval((km / totalKm) * analytics.workout.duration)
+        for displayedSplitDistance in stride(from: 1.0, through: totalDistanceInDisplayUnits, by: 1.0) {
+            let splitDistanceKilometersValue = displayedSplitDistance * splitDistanceKilometers
+            let timeAtKm = analytics.workout.startDate.addingTimeInterval((splitDistanceKilometersValue / (totalDistance / 1000)) * analytics.workout.duration)
             let time = timeAtKm.timeIntervalSince(analytics.workout.startDate)
-            let pace = analytics.speedSeries.isEmpty ? nil : 60 / (analytics.speedSeries.map { $0.1 * 3.6 }.average ?? 0)
+            let pace = analytics.speedSeries.isEmpty ? nil : paceSeries.map(\.1).average
             let hrSamplesInSplit = analytics.heartRates.filter { $0.0 <= timeAtKm }
             let avgHR = hrSamplesInSplit.isEmpty ? nil : hrSamplesInSplit.map { $0.1 }.average
-            splits.append(Split(distance: km, time: time, pace: pace, avgHR: avgHR))
+            splits.append(Split(distance: displayedSplitDistance, time: time, pace: pace, avgHR: avgHR))
         }
         return splits
     }
@@ -3010,6 +3143,39 @@ struct WorkoutMetricCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .stroke(color.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
+
+struct CompactWorkoutMetricCard: View {
+    let title: String
+    let value: String
+    let unit: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(color)
+                if unit.isEmpty == false {
+                    Text(unit)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(color.opacity(0.2), lineWidth: 1)
         )
     }
 }

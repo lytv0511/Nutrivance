@@ -2867,11 +2867,11 @@ final class HealthStateEngine: ObservableObject {
         return true
     }
 
-    func ensureWorkoutAnalyticsCoverage(from start: Date, to end: Date) async {
+    func ensureWorkoutAnalyticsCoverage(from start: Date, to end: Date, forceFetch: Bool = false) async {
         let normalizedStart = Calendar.current.startOfDay(for: start)
         let normalizedEnd = min(end, Date())
         guard normalizedStart < normalizedEnd else { return }
-        guard needsWorkoutAnalyticsCoverage(from: normalizedStart, to: normalizedEnd) else { return }
+        guard forceFetch || needsWorkoutAnalyticsCoverage(from: normalizedStart, to: normalizedEnd) else { return }
 
         let fetched = await hkManager.fetchWorkoutsWithAnalytics(
             from: normalizedStart,

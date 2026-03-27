@@ -1183,10 +1183,364 @@ class SearchState: ObservableObject {
     }
 }
 
+enum DistanceUnitPreference: String, CaseIterable, Codable, Identifiable {
+    case automatic
+    case kilometers
+    case miles
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .kilometers: return "Kilometers"
+        case .miles: return "Miles"
+        }
+    }
+}
+
+enum SpeedUnitPreference: String, CaseIterable, Codable, Identifiable {
+    case automatic
+    case kilometersPerHour
+    case milesPerHour
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .kilometersPerHour: return "km/h"
+        case .milesPerHour: return "mph"
+        }
+    }
+}
+
+enum PaceUnitPreference: String, CaseIterable, Codable, Identifiable {
+    case automatic
+    case perKilometer
+    case perMile
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .perKilometer: return "min/km"
+        case .perMile: return "min/mi"
+        }
+    }
+}
+
+enum ElevationUnitPreference: String, CaseIterable, Codable, Identifiable {
+    case automatic
+    case meters
+    case feet
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .meters: return "Meters"
+        case .feet: return "Feet"
+        }
+    }
+}
+
+enum TemperatureUnitPreference: String, CaseIterable, Codable, Identifiable {
+    case automatic
+    case celsius
+    case fahrenheit
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .celsius: return "Celsius"
+        case .fahrenheit: return "Fahrenheit"
+        }
+    }
+}
+
+private struct UnitDisplaySettings: Codable {
+    var distance: DistanceUnitPreference
+    var speed: SpeedUnitPreference
+    var pace: PaceUnitPreference
+    var elevation: ElevationUnitPreference
+    var temperature: TemperatureUnitPreference
+}
+
+@MainActor
+final class UnitPreferencesStore: ObservableObject {
+    private enum Persistence {
+        static let storageKey = "unit_display_settings_v1"
+    }
+
+    @Published var distance: DistanceUnitPreference {
+        didSet { persist() }
+    }
+    @Published var speed: SpeedUnitPreference {
+        didSet { persist() }
+    }
+    @Published var pace: PaceUnitPreference {
+        didSet { persist() }
+    }
+    @Published var elevation: ElevationUnitPreference {
+        didSet { persist() }
+    }
+    @Published var temperature: TemperatureUnitPreference {
+        didSet { persist() }
+    }
+
+    init() {
+        let saved = Self.loadPersistedSettings() ?? Self.defaultSettings()
+        self.distance = saved.distance
+        self.speed = saved.speed
+        self.pace = saved.pace
+        self.elevation = saved.elevation
+        self.temperature = saved.temperature
+    }
+
+    private static func loadPersistedSettings() -> UnitDisplaySettings? {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+
+        if let cloudData = cloudStore.data(forKey: Persistence.storageKey),
+           let decoded = try? JSONDecoder().decode(UnitDisplaySettings.self, from: cloudData) {
+            return decoded
+        }
+
+        if let localData = UserDefaults.standard.data(forKey: Persistence.storageKey),
+           let decoded = try? JSONDecoder().decode(UnitDisplaySettings.self, from: localData) {
+            return decoded
+        }
+
+        return nil
+    }
+
+    private static func defaultSettings(locale: Locale = .current) -> UnitDisplaySettings {
+        UnitDisplaySettings(
+            distance: .automatic,
+            speed: .automatic,
+            pace: .automatic,
+            elevation: .automatic,
+            temperature: .automatic
+        )
+    }
+
+    private func persist() {
+        let settings = UnitDisplaySettings(
+            distance: distance,
+            speed: speed,
+            pace: pace,
+            elevation: elevation,
+            temperature: temperature
+        )
+        guard let encoded = try? JSONEncoder().encode(settings) else { return }
+        UserDefaults.standard.set(encoded, forKey: Persistence.storageKey)
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.set(encoded, forKey: Persistence.storageKey)
+    }
+
+    func resetToAutomatic() {
+        distance = .automatic
+        speed = .automatic
+        pace = .automatic
+        elevation = .automatic
+        temperature = .automatic
+    }
+
+    private var localeUsesImperialDistance: Bool {
+        !Locale.current.usesMetricSystem
+    }
+
+    private var localeUsesFahrenheit: Bool {
+        !Locale.current.usesMetricSystem
+    }
+
+    var resolvedDistanceUnit: DistanceUnitPreference {
+        switch distance {
+        case .automatic:
+            return localeUsesImperialDistance ? .miles : .kilometers
+        default:
+            return distance
+        }
+    }
+
+    var resolvedSpeedUnit: SpeedUnitPreference {
+        switch speed {
+        case .automatic:
+            return resolvedDistanceUnit == .miles ? .milesPerHour : .kilometersPerHour
+        default:
+            return speed
+        }
+    }
+
+    var resolvedPaceUnit: PaceUnitPreference {
+        switch pace {
+        case .automatic:
+            return resolvedDistanceUnit == .miles ? .perMile : .perKilometer
+        default:
+            return pace
+        }
+    }
+
+    var resolvedElevationUnit: ElevationUnitPreference {
+        switch elevation {
+        case .automatic:
+            return resolvedDistanceUnit == .miles ? .feet : .meters
+        default:
+            return elevation
+        }
+    }
+
+    var resolvedTemperatureUnit: TemperatureUnitPreference {
+        switch temperature {
+        case .automatic:
+            return localeUsesFahrenheit ? .fahrenheit : .celsius
+        default:
+            return temperature
+        }
+    }
+
+    func formattedDistance(fromMeters meters: Double, digits: Int = 2) -> (value: String, unit: String) {
+        let value: Double
+        let unit: String
+        switch resolvedDistanceUnit {
+        case .miles:
+            value = meters / 1609.344
+            unit = "mi"
+        case .kilometers, .automatic:
+            value = meters / 1000
+            unit = "km"
+        }
+        return (String(format: "%.\(digits)f", value), unit)
+    }
+
+    func formattedSpeed(fromKilometersPerHour kilometersPerHour: Double, digits: Int = 1) -> (value: String, unit: String) {
+        let value: Double
+        let unit: String
+        switch resolvedSpeedUnit {
+        case .milesPerHour:
+            value = kilometersPerHour / 1.609344
+            unit = "mph"
+        case .kilometersPerHour, .automatic:
+            value = kilometersPerHour
+            unit = "km/h"
+        }
+        return (String(format: "%.\(digits)f", value), unit)
+    }
+
+    func formattedPace(fromMinutesPerKilometer minutesPerKilometer: Double, digits: Int = 1) -> (value: String, unit: String) {
+        let value: Double
+        let unit: String
+        switch resolvedPaceUnit {
+        case .perMile:
+            value = minutesPerKilometer * 1.609344
+            unit = "min/mi"
+        case .perKilometer, .automatic:
+            value = minutesPerKilometer
+            unit = "min/km"
+        }
+        return (String(format: "%.\(digits)f", value), unit)
+    }
+
+    func formattedElevation(fromMeters meters: Double, digits: Int = 0) -> (value: String, unit: String) {
+        let value: Double
+        let unit: String
+        switch resolvedElevationUnit {
+        case .feet:
+            value = meters * 3.28084
+            unit = "ft"
+        case .meters, .automatic:
+            value = meters
+            unit = "m"
+        }
+        return (String(format: "%.\(digits)f", value), unit)
+    }
+
+    func formattedTemperature(fromCelsius celsius: Double, digits: Int = 0) -> (value: String, unit: String) {
+        let value: Double
+        let unit: String
+        switch resolvedTemperatureUnit {
+        case .fahrenheit:
+            value = (celsius * 9 / 5) + 32
+            unit = "°F"
+        case .celsius, .automatic:
+            value = celsius
+            unit = "°C"
+        }
+        return (String(format: "%.\(digits)f", value), unit)
+    }
+
+    var automaticSummaryText: String {
+        let distanceText = resolvedDistanceUnit == .miles ? "miles" : "kilometers"
+        let speedText = resolvedSpeedUnit == .milesPerHour ? "mph" : "km/h"
+        let paceText = resolvedPaceUnit == .perMile ? "min/mi" : "min/km"
+        let elevationText = resolvedElevationUnit == .feet ? "feet" : "meters"
+        let temperatureText = resolvedTemperatureUnit == .fahrenheit ? "Fahrenheit" : "Celsius"
+        return "Automatic currently resolves to \(distanceText), \(speedText), \(paceText), \(elevationText), and \(temperatureText) based on this device."
+    }
+}
+
+func workoutEffortScoreValue(from workout: HKWorkout) -> Double? {
+    let preferredKeys = [
+        "HKMetadataKeyWorkoutEffortScore"
+    ]
+
+    for key in preferredKeys {
+        if let number = workout.metadata?[key] as? NSNumber {
+            return number.doubleValue
+        }
+        if let value = workout.metadata?[key] as? Double {
+            return value
+        }
+    }
+
+    for (key, value) in workout.metadata ?? [:] where key.localizedCaseInsensitiveContains("effort") && key.localizedCaseInsensitiveContains("estimated") == false {
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let doubleValue = value as? Double {
+            return doubleValue
+        }
+    }
+
+    return nil
+}
+
+func estimatedWorkoutEffortScoreValue(from workout: HKWorkout) -> Double? {
+    let preferredKeys = [
+        "HKMetadataKeyEstimatedWorkoutEffortScore",
+        "HKMetadataKeyEstimatedEffortScore"
+    ]
+
+    for key in preferredKeys {
+        if let number = workout.metadata?[key] as? NSNumber {
+            return number.doubleValue
+        }
+        if let value = workout.metadata?[key] as? Double {
+            return value
+        }
+    }
+
+    for (key, value) in workout.metadata ?? [:] where key.localizedCaseInsensitiveContains("estimated") && key.localizedCaseInsensitiveContains("effort") {
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let doubleValue = value as? Double {
+            return doubleValue
+        }
+    }
+
+    return nil
+}
+
 @main
 struct NutrivanceApp: App {
     @StateObject private var navigationState = NavigationState()
     @StateObject private var searchState = SearchState()
+    @StateObject private var unitPreferences = UnitPreferencesStore()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -1234,6 +1588,7 @@ struct NutrivanceApp: App {
             ContentView()
                 .environmentObject(navigationState)
                 .environmentObject(searchState)
+                .environmentObject(unitPreferences)
                 .onChange(of: scenePhase) { _, newPhase in
                     HealthStateEngine.shared.handleScenePhaseChange(newPhase)
                     StrainRecoveryAggressiveCachingController.shared.handleScenePhaseChange(newPhase)

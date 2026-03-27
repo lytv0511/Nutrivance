@@ -39,6 +39,7 @@ struct StrainRecoveryView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var animationPhase: Double = 0
     @State private var isLoadingHistoricalCoverage = false
+    @State private var showsHistoricalCoverageOverlay = false
     @State private var historicalCoverageMessage = "Loading older strain and recovery history..."
     @State private var historicalCoverageTask: Task<Void, Never>?
 
@@ -286,7 +287,7 @@ struct StrainRecoveryView: View {
 
                     if aggressiveCachingController.isActive {
                         aggressiveCachingOverlay
-                    } else if isLoadingHistoricalCoverage {
+                    } else if showsHistoricalCoverageOverlay {
                         historicalCoverageOverlay
                     }
                 }
@@ -406,7 +407,17 @@ struct StrainRecoveryView: View {
                 ? "Loading \(calendar.component(.year, from: selectedDate)) training and recovery history through \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
                 : "Refreshing recovery history..."
             isLoadingHistoricalCoverage = true
-            defer { isLoadingHistoricalCoverage = false }
+            showsHistoricalCoverageOverlay = false
+            let overlayTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                guard !Task.isCancelled, isLoadingHistoricalCoverage else { return }
+                showsHistoricalCoverageOverlay = true
+            }
+            defer {
+                overlayTask.cancel()
+                isLoadingHistoricalCoverage = false
+                showsHistoricalCoverageOverlay = false
+            }
 
             if needsWorkoutCoverage {
                 await engine.ensureWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
@@ -420,25 +431,35 @@ struct StrainRecoveryView: View {
     }
 
     private var historicalCoverageOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.18)
-                .ignoresSafeArea()
-
-            VStack(spacing: 14) {
-                ProgressView()
-                    .scaleEffect(1.1)
-                Text(historicalCoverageMessage)
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                Text("We are fetching only the missing chart history and caching it for later opens.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+        VStack {
+            HStack {
+                Spacer()
+                VStack(spacing: 10) {
+                    ProgressView()
+                        .scaleEffect(0.95)
+                    Text(historicalCoverageMessage)
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                    Text("Fetching only the missing history in the background.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.16), radius: 18, y: 10)
+                Spacer()
             }
-            .padding(24)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .padding(.horizontal, 28)
+            .padding(.top, 18)
+            Spacer()
         }
+        .allowsHitTesting(false)
         .transition(.opacity)
     }
 

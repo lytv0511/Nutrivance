@@ -115,6 +115,7 @@ private enum DashboardSnapshotPersistence {
 
 struct DashboardView: View {
     @StateObject var engine = HealthStateEngine.shared
+    @EnvironmentObject private var unitPreferences: UnitPreferencesStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedChartRange: ChartRange = .month
     @State private var animationPhase: Double = 0
@@ -159,6 +160,7 @@ struct DashboardView: View {
     // Customization State
     @State private var showCustomizationSheet: Bool = false
     @State private var showArrangementSheet: Bool = false
+    @State private var showUnitSettings = false
     @State private var groupSummaryCards: Bool = false
     @State private var dashboardItemOrder: [String] = DashboardSectionID.defaultOrder
     @State private var summaryCardsOrder: [String] = ["Recovery", "Readiness", "Strain", "Allostatic", "Autonomic"]
@@ -421,6 +423,14 @@ struct DashboardView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showUnitSettings = true
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
+                    }) {
+                        Image(systemName: "gearshape")
+                            .foregroundColor(.orange)
+                    }
                     Button(action: { showArrangementSheet = true
                         let impact = UIImpactFeedbackGenerator(style: .medium)
                         impact.impactOccurred()}) {
@@ -438,6 +448,10 @@ struct DashboardView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
+            }
+            .sheet(isPresented: $showUnitSettings) {
+                UnitSettingsView(isPresented: $showUnitSettings)
+                    .environmentObject(unitPreferences)
             }
             .task {
                 guard !hasStartedBackgroundRefresh else { return }
@@ -510,7 +524,7 @@ struct DashboardView: View {
         ForEach(dashboardItemOrder, id: \.self) { item in
             Group {
                 if item == DashboardSectionID.summaryCards {
-                    VStack(spacing: groupSummaryCards ? 8 : 12) {
+                    VStack(spacing: groupSummaryCards ? 4 : 8) {
                         HStack {
                             Button(action: { withAnimation { groupSummaryCards.toggle() }
                                 let impact = UIImpactFeedbackGenerator(style: .medium)
@@ -567,7 +581,7 @@ struct DashboardView: View {
                 .padding(.horizontal)
             }
         }
-        .frame(height: 200)
+        .frame(height: 140)
         .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
     }
 
@@ -1655,6 +1669,74 @@ struct DashboardArrangementSheet: View {
             .onAppear {
                 localDashboardOrder = DashboardSectionID.normalizedOrder(from: dashboardItemOrder)
                 localSummaryCardsOrder = summaryCardsOrder
+            }
+        }
+    }
+}
+
+struct UnitSettingsView: View {
+    @Binding var isPresented: Bool
+    @EnvironmentObject private var unitPreferences: UnitPreferencesStore
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Automatic Defaults") {
+                    Text(unitPreferences.automaticSummaryText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Distance") {
+                    Picker("Distance", selection: $unitPreferences.distance) {
+                        ForEach(DistanceUnitPreference.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+
+                    Picker("Speed", selection: $unitPreferences.speed) {
+                        ForEach(SpeedUnitPreference.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+
+                    Picker("Pace", selection: $unitPreferences.pace) {
+                        ForEach(PaceUnitPreference.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+
+                    Picker("Elevation", selection: $unitPreferences.elevation) {
+                        ForEach(ElevationUnitPreference.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                }
+
+                Section("Temperature") {
+                    Picker("Temperature", selection: $unitPreferences.temperature) {
+                        ForEach(TemperatureUnitPreference.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                }
+
+                Section("Reset") {
+                    Button("Use Device Defaults") {
+                        unitPreferences.resetToAutomatic()
+                    }
+                    .foregroundStyle(.orange)
+                }
+            }
+            .navigationTitle("Display Units")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        isPresented = false
+                    }
+                    .foregroundColor(.orange)
+                }
             }
         }
     }
