@@ -221,16 +221,13 @@ struct WorkoutHistoryView: View {
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(groupedWorkouts.sorted(by: { ($0.key.year! * 12 + $0.key.month!) > ($1.key.year! * 12 + $1.key.month!) }), id: \.key) { (key, workouts) in
-                                Section(
-                                    header:
-                                        Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))")
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))")
                                         .font(.headline)
                                         .foregroundColor(.orange)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.vertical, 4)
-                                        .background(Color.clear)
-                                        .allowsHitTesting(false)
-                                ) {
+
                                     ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.analytics.workout.uuid) { pair in
                                         WorkoutCard(
                                             workout: pair.workout,
@@ -250,13 +247,15 @@ struct WorkoutHistoryView: View {
                                                 impact.impactOccurred()
                                             }
                                         )
-                                            .id(workoutRowID(for: pair))
+                                        .id(workoutRowID(for: pair))
                                     }
                                 }
                             }
                         }
                     }
-                    .padding()
+                    .padding(.horizontal)
+                    .padding(.top, 16)
+                    .padding(.bottom)
                     .onAppear { scrollProxy = proxy }
                 }
             }
