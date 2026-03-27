@@ -76,11 +76,10 @@ private enum DashboardSnapshotPersistence {
 
 struct DashboardView: View {
     @StateObject var engine = HealthStateEngine.shared
-    @EnvironmentObject private var navigationState: NavigationState
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedChartRange: ChartRange = .month
-    @State private var selectedMetric: MetricType = .recovery
     @State private var animationPhase: Double = 0
+    @State private var selectedTrainingLoadPoint: TrainingLoadChartPoint? = nil
     
     enum DetailViewType {
         case none
@@ -91,7 +90,6 @@ struct DashboardView: View {
     @State private var activeDetailView: DetailViewType = .none
 
     enum ChartRange: String, CaseIterable {
-        case day24h = "24h"
         case week = "7d"
         case month = "30d"
     }
@@ -154,17 +152,6 @@ struct DashboardView: View {
             activeDaysLast28: 0,
             daysSinceLastWorkout: nil
         ))
-    }
-
-    private var workoutPreviewSettings: HRZoneUserSettings {
-        HRZoneUserSettings(
-            mode: .intelligent,
-            customSchema: .lactatThreshold,
-            fixedMaxHR: nil,
-            fixedRestingHR: nil,
-            fixedLTHR: nil,
-            customZoneUpperBounds: [120, 140, 160, 180, 200]
-        )
     }
 
     private var layoutSettings: DashboardLayoutSettings {
@@ -336,8 +323,6 @@ struct DashboardView: View {
     private var hrvTrendSummary: String {
         let score = engine.hrvTrendScore
         switch selectedChartRange {
-        case .day24h:
-            return "The 24h view shows intraday HRV context only. Use it to spot short swings, not long-term readiness."
         case .week:
             if score >= 60 {
                 return "Your 7-day HRV trend is running above baseline, which usually points to stronger recovery capacity."
@@ -404,7 +389,7 @@ struct DashboardView: View {
                         let impact = UIImpactFeedbackGenerator(style: .medium)
                         impact.impactOccurred()}) {
                         Image(systemName: "slider.horizontal.3")
-                            .foregroundColor(.blue)
+                            .foregroundColor(.orange)
                     }
                 }
             }
@@ -496,9 +481,10 @@ struct DashboardView: View {
                             impact.impactOccurred()}) {
                             HStack(spacing: 6) {
                                 Image(systemName: groupSummaryCards ? "chevron.down.circle.fill" : "chevron.right.circle.fill")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.orange)
                                 Text("Summary Cards")
                                     .font(.headline)
+                                    .foregroundColor(.orange)
                             }
                         }
                         Spacer()
@@ -566,18 +552,21 @@ struct DashboardView: View {
         VStack(spacing: 8) {
             HStack(spacing: 12) {
                 ForEach(ChartRange.allCases, id: \.self) { range in
-                    Button(action: { selectedChartRange = range
+                    Button(action: {
+                        selectedChartRange = range
+                        selectedTrainingLoadPoint = trainingLoadChartData().last
                         let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()}) {
+                        impact.impactOccurred()
+                    }) {
                         Text(range.rawValue)
                             .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundColor(selectedChartRange == range ? .white : .accentColor)
+                            .foregroundColor(selectedChartRange == range ? .white : .orange)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
                     .background(
                         Capsule()
-                            .fill(selectedChartRange == range ? Color.accentColor : Color.gray.opacity(0.2))
+                            .fill(selectedChartRange == range ? Color.orange : Color.orange.opacity(0.16))
                     )
                     .buttonStyle(.glass)
                 }
@@ -628,15 +617,53 @@ struct DashboardView: View {
                         .foregroundStyle(.orange)
                         .symbolSize(26)
                     }
+
+                    if let selectedTrainingLoadPoint {
+                        RuleMark(x: .value("Selected Date", selectedTrainingLoadPoint.date))
+                            .foregroundStyle(.orange.opacity(0.35))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+
+                        PointMark(
+                            x: .value("Selected Date", selectedTrainingLoadPoint.date),
+                            y: .value("Selected Load", selectedTrainingLoadPoint.value)
+                        )
+                        .foregroundStyle(.orange)
+                        .symbolSize(80)
+                    }
                 }
                 .chartYScale(domain: 0...(maxValue * 1.18))
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        trainingLoadSelectionOverlay(
+                            proxy: proxy,
+                            geometry: geometry,
+                            points: chartPoints
+                        )
+                    }
+                }
                 .frame(height: 200)
                 .padding(.horizontal)
+
+                if let selectedTrainingLoadPoint {
+                    HStack {
+                        Text(selectedTrainingLoadPoint.date, format: selectedChartRange == .week ? .dateTime.weekday(.abbreviated).month().day() : .dateTime.month().day())
+                        Spacer()
+                        Text(String(format: "%.0f TL", selectedTrainingLoadPoint.value))
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal)
+                }
 
                 Text(trainingLoadTrendSummary)
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.horizontal)
+            }
+        }
+        .onAppear {
+            if selectedTrainingLoadPoint == nil {
+                selectedTrainingLoadPoint = trainingLoadChartData().last
             }
         }
     }
@@ -697,9 +724,8 @@ struct DashboardView: View {
     @ViewBuilder
     private func workoutHistoryPreviewSection() -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Button {
-                navigationState.navigateToWorkoutHistory()
-                HapticFeedback.selection()
+            NavigationLink {
+                WorkoutHistoryView()
             } label: {
                 HStack {
                     Text("Workout History")
@@ -742,18 +768,17 @@ struct DashboardView: View {
                     .padding(.vertical, 6)
             } else {
                 ForEach(workouts, id: \.analytics.workout.uuid) { pair in
-                    WorkoutCard(
-                        workout: pair.workout,
-                        analytics: pair.analytics,
-                        isExpanded: false,
-                        hrZoneSettings: workoutPreviewSettings,
-                        onHeaderTap: {
-                            navigationState.navigateToWorkoutHistory(
-                                scrollTo: workoutRowIdentifier(for: pair.workout)
-                            )
-                            HapticFeedback.selection()
-                        }
-                    )
+                    NavigationLink {
+                        WorkoutHistoryView(
+                            initialScrollWorkoutID: workoutRowIdentifier(for: pair.workout)
+                        )
+                    } label: {
+                        DashboardWorkoutPreviewCard(
+                            workout: pair.workout,
+                            analytics: pair.analytics
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -772,11 +797,13 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Feel-Good Score")
                     .font(.headline)
+                    .foregroundColor(.orange)
                     .padding(.horizontal)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if isAvailable {
                         Text(String(format: "%.0f", score))
                             .font(.system(size: 36, weight: .bold))
+                            .foregroundColor(.orange)
                         Text("/100")
                             .foregroundColor(.secondary)
                             .font(.subheadline)
@@ -801,6 +828,10 @@ struct DashboardView: View {
             .background(
                 RoundedRectangle(cornerRadius: 18)
                     .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color.orange.opacity(0.28), lineWidth: 1)
             )
             .cornerRadius(12)
             .shadow(radius: 2)
@@ -892,9 +923,8 @@ struct DashboardView: View {
 
     // Summary Card Factory
     private func summaryCard(icon: String, title: String, value: Double, baseline: Double?, description: String, color: Color, metric: MetricType) -> some View {
-        Button {
-            HapticFeedback.selection()
-            navigateToMetric(metric)
+        NavigationLink {
+            metricDestination(metric)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -935,11 +965,6 @@ struct DashboardView: View {
         let calendar = Calendar.current
         let now = Date()
         switch selectedChartRange {
-        case .day24h:
-            guard let start = calendar.date(byAdding: .hour, value: -24, to: now) else { return [] }
-            return sampleHistory
-                .filter { $0.date >= start && $0.date <= now }
-                .map { HRVChartPoint(date: $0.date, value: $0.value) }
         case .week:
             guard let start = calendar.date(byAdding: .day, value: -7, to: now) else { return [] }
             return dailyHRV
@@ -954,21 +979,9 @@ struct DashboardView: View {
     }
 
     private func trainingLoadChartData() -> [TrainingLoadChartPoint] {
-        let calendar = Calendar.current
         let now = Date()
 
         switch selectedChartRange {
-        case .day24h:
-            guard let start = calendar.date(byAdding: .hour, value: -24, to: now) else { return [] }
-            return engine.workoutAnalytics
-                .filter { $0.workout.startDate >= start && $0.workout.startDate <= now }
-                .sorted { $0.workout.startDate < $1.workout.startDate }
-                .map { pair in
-                    TrainingLoadChartPoint(
-                        date: pair.workout.startDate,
-                        value: sessionLoad(for: pair.workout, analytics: pair.analytics)
-                    )
-                }
         case .week:
             return dailyTrainingLoadPoints(days: 7, endingAt: now)
         case .month:
@@ -994,13 +1007,83 @@ struct DashboardView: View {
 
     private var trainingLoadTrendSummary: String {
         switch selectedChartRange {
-        case .day24h:
-            return "This view shows the last 24 hours of workout load so you can spot short-term spikes."
         case .week:
             return dashboardLoadSummary.detail
         case .month:
             return "The 30-day view helps you see whether your load is building steadily, flattening out, or spiking."
         }
+    }
+
+    private func nearestTrainingLoadPoint(in points: [TrainingLoadChartPoint], to date: Date) -> TrainingLoadChartPoint? {
+        points.min { lhs, rhs in
+            abs(lhs.date.timeIntervalSince(date)) < abs(rhs.date.timeIntervalSince(date))
+        }
+    }
+
+    private func updateTrainingLoadSelection(
+        location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy,
+        points: [TrainingLoadChartPoint]
+    ) {
+        let plotFrame = geometry[proxy.plotAreaFrame]
+        guard plotFrame.contains(location) else { return }
+
+        let plotX = location.x - plotFrame.origin.x
+        guard plotX >= 0, plotX <= plotFrame.size.width,
+              let date = proxy.value(atX: plotX) as Date? else { return }
+
+        guard let nearestPoint = nearestTrainingLoadPoint(in: points, to: date) else { return }
+        let previousSelectionDate = selectedTrainingLoadPoint?.date
+        selectedTrainingLoadPoint = nearestPoint
+        if previousSelectionDate != nearestPoint.date {
+            UISelectionFeedbackGenerator().selectionChanged()
+        }
+    }
+
+    @ViewBuilder
+    private func trainingLoadSelectionOverlay(
+        proxy: ChartProxy,
+        geometry: GeometryProxy,
+        points: [TrainingLoadChartPoint]
+    ) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .contentShape(Rectangle())
+            .overlay {
+                DashboardHorizontalChartScrubOverlay { location in
+                    updateTrainingLoadSelection(
+                        location: location,
+                        proxy: proxy,
+                        geometry: geometry,
+                        points: points
+                    )
+                }
+            }
+            .simultaneousGesture(
+                SpatialTapGesture()
+                    .onEnded { value in
+                        updateTrainingLoadSelection(
+                            location: value.location,
+                            proxy: proxy,
+                            geometry: geometry,
+                            points: points
+                        )
+                    }
+            )
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    updateTrainingLoadSelection(
+                        location: location,
+                        proxy: proxy,
+                        geometry: geometry,
+                        points: points
+                    )
+                case .ended:
+                    break
+                }
+            }
     }
 
     private func workoutsForPreview(dayOffset: Int) -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
@@ -1011,17 +1094,75 @@ struct DashboardView: View {
             .sorted { $0.workout.startDate > $1.workout.startDate }
     }
 
-    private func navigateToMetric(_ metric: MetricType) {
+    @ViewBuilder
+    private func metricDestination(_ metric: MetricType) -> some View {
         switch metric {
         case .recovery:
-            navigationState.navigate(focus: .fitness, view: "Recovery Score", tab: .recoveryScore)
+            RecoveryScoreView()
         case .readiness:
-            navigationState.navigate(focus: .fitness, view: "Readiness", tab: .readiness)
+            ReadinessCheckView()
         case .strain:
-            navigationState.navigate(focus: .fitness, view: "Strain vs Recovery", tab: .strainRecovery)
+            StrainRecoveryView()
         case .allostatic, .autonomic:
-            navigationState.navigate(focus: .mentalHealth, view: "Stress", tab: .stress)
+            StressView()
         }
+    }
+}
+
+private struct DashboardWorkoutPreviewCard: View {
+    let workout: HKWorkout
+    let analytics: WorkoutAnalytics
+
+    private static let dateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.setLocalizedDateFormatFromTemplate("MMM d yyyy")
+        return df
+    }()
+
+    private static let timeFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.timeStyle = .short
+        return df
+    }()
+
+    var body: some View {
+        HStack {
+            Image(systemName: workout.workoutActivityType.activityTypeSymbol)
+                .foregroundColor(.orange)
+            VStack(alignment: .leading) {
+                Text(workout.workoutActivityType.name.capitalized)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(Self.dateFormatter.string(from: workout.startDate)) + Text(" • ") + Text(Self.timeFormatter.string(from: workout.startDate)) + Text(" • \(Int(workout.duration / 60)) min")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing) {
+                if let avgHR = analytics.heartRates.map({ $0.1 }).average {
+                    Text("Avg HR: \(Int(avgHR)) bpm")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                }
+                if let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                    Text("Kcal: \(Int(kcal))")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                }
+                if let met = analytics.metTotal {
+                    Text("MET-min: \(Int(met))")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.ultraThinMaterial)
+        )
+        .cornerRadius(12)
+        .shadow(radius: 2)
     }
 }
 
@@ -1042,6 +1183,64 @@ private struct DashboardLoadMetricPill: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct DashboardHorizontalChartScrubOverlay: UIViewRepresentable {
+    let onChanged: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChanged: onChanged)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        panGesture.delegate = context.coordinator
+        panGesture.cancelsTouchesInView = true
+        panGesture.delaysTouchesBegan = false
+        panGesture.delaysTouchesEnded = false
+        view.addGestureRecognizer(panGesture)
+
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChanged = onChanged
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGPoint) -> Void
+
+        init(onChanged: @escaping (CGPoint) -> Void) {
+            self.onChanged = onChanged
+        }
+
+        @objc
+        func handlePan(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .began, .changed, .ended:
+                onChanged(gesture.location(in: gesture.view))
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let panGesture = gestureRecognizer as? UIPanGestureRecognizer,
+                  let view = panGesture.view else {
+                return false
+            }
+
+            let velocity = panGesture.velocity(in: view)
+            return abs(velocity.x) > abs(velocity.y)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
     }
 }
 

@@ -113,6 +113,7 @@ func workoutRowIdentifier(for workout: HKWorkout) -> String {
 struct WorkoutHistoryView: View {
     @ObservedObject var engine = HealthStateEngine.shared
     @EnvironmentObject private var navigationState: NavigationState
+    let initialScrollWorkoutID: String?
     @State private var expandedWorkoutIDs: Set<String> = []
     @State private var isLoading = false
     @State private var animationPhase: Double = 0
@@ -133,8 +134,10 @@ struct WorkoutHistoryView: View {
     @State private var customZone5Upper: Double = 200
     @State private var hasLoadedPersistedHRZoneSettings = false
     @State private var isLoadingHistoricalCoverage = false
+    @State private var hasConsumedInitialWorkoutScroll = false
 
-    init() {
+    init(initialScrollWorkoutID: String? = nil) {
+        self.initialScrollWorkoutID = initialScrollWorkoutID
         let persisted = HRZoneSettingsPersistence.load() ?? .fallback
         let mode = HRZoneConfigurationMode(rawValue: persisted.modeRawValue) ?? .intelligent
         let schema = HRZoneSchema(rawValue: persisted.schemaRawValue) ?? .lactatThreshold
@@ -263,6 +266,7 @@ struct WorkoutHistoryView: View {
                     .padding(.bottom)
                     .onAppear {
                         scrollProxy = proxy
+                        handleInitialWorkoutNavigation()
                         handlePendingWorkoutNavigation()
                     }
                 }
@@ -378,6 +382,19 @@ struct WorkoutHistoryView: View {
             }
             .onChange(of: navigationState.pendingWorkoutScrollID) { _, _ in
                 handlePendingWorkoutNavigation()
+            }
+        }
+    }
+
+    private func handleInitialWorkoutNavigation() {
+        guard hasConsumedInitialWorkoutScroll == false,
+              let targetID = initialScrollWorkoutID else { return }
+        hasConsumedInitialWorkoutScroll = true
+        sportFilter = nil
+        guard filteredWorkouts.contains(where: { workoutRowID(for: $0) == targetID }) else { return }
+        DispatchQueue.main.async {
+            withAnimation {
+                scrollProxy?.scrollTo(targetID, anchor: .top)
             }
         }
     }

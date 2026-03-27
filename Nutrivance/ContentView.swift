@@ -54,8 +54,8 @@ struct ContentView: View {
     //                        .environmentObject(appState)
     //                }
                 } else if UIDevice.current.userInterfaceIdiom == .phone {
-    //                ContentView_iPhone_alt()
                     ContentView_iPhone_alt()
+//                    ContentView_iPad_alt()
                 }
             }
 

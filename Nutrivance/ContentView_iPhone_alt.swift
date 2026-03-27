@@ -108,36 +108,6 @@ struct ContentView_iPhone_alt: View {
                 .customizationID( "iPad.tab.macros")
                 .defaultVisibility(.visible, for: .tabBar)
                 .customizationBehavior(.disabled, for: .sidebar)
-
-                Tab("Recovery", systemImage: "heart.circle.fill", value: RootTabSelection.recoveryScore) {
-                    RecoveryScoreView()
-                }
-                .customizationID("iPhone.tab.recovery")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Readiness", systemImage: "bolt.heart.fill", value: RootTabSelection.readiness) {
-                    ReadinessCheckView()
-                }
-                .customizationID("iPhone.tab.readiness")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Strain", systemImage: "flame.fill", value: RootTabSelection.strainRecovery) {
-                    StrainRecoveryView()
-                }
-                .customizationID("iPhone.tab.strain")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Workouts", systemImage: "clock.arrow.circlepath", value: RootTabSelection.workoutHistory) {
-                    WorkoutHistoryView()
-                }
-                .customizationID("iPhone.tab.workouts")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Stress", systemImage: "waveform.path.ecg", value: RootTabSelection.stress) {
-                    StressView()
-                }
-                .customizationID("iPhone.tab.stress")
-                .defaultVisibility(.hidden, for: .tabBar)
                 
                 Tab(value: RootTabSelection.search, role: .search) {
                     SearchView_iPhone()
