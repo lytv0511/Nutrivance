@@ -104,7 +104,7 @@ private extension HRZonePersistedSettings {
 
 struct WorkoutHistoryView: View {
     @ObservedObject var engine = HealthStateEngine.shared
-    @State private var expandedWorkoutID: String? = nil
+    @State private var expandedWorkoutIDs: Set<String> = []
     @State private var isLoading = false
     @State private var animationPhase: Double = 0
     @State private var sportFilter: String? = nil
@@ -197,14 +197,11 @@ struct WorkoutHistoryView: View {
     }
 
     private func workoutRowID(for pair: (workout: HKWorkout, analytics: WorkoutAnalytics)) -> String {
-        [
-            pair.workout.startDate.timeIntervalSinceReferenceDate,
-            pair.workout.endDate.timeIntervalSinceReferenceDate,
-            pair.workout.duration,
-            Double(pair.workout.workoutActivityType.rawValue)
-        ]
-        .map { String(format: "%.6f", $0) }
-        .joined(separator: "|")
+        if let cachedWorkoutID = pair.workout.metadata?["NutrivanceCachedWorkoutUUID"] as? String,
+           !cachedWorkoutID.isEmpty {
+            return cachedWorkoutID
+        }
+        return pair.workout.uuid.uuidString
     }
 
     var body: some View {
@@ -224,17 +221,30 @@ struct WorkoutHistoryView: View {
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(groupedWorkouts.sorted(by: { ($0.key.year! * 12 + $0.key.month!) > ($1.key.year! * 12 + $1.key.month!) }), id: \.key) { (key, workouts) in
-                                Section(header: Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))").font(.headline).foregroundColor(.orange)) {
-                                    ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.workout.uuid) { pair in
+                                Section(
+                                    header:
+                                        Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))")
+                                        .font(.headline)
+                                        .foregroundColor(.orange)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 4)
+                                        .background(Color.clear)
+                                        .allowsHitTesting(false)
+                                ) {
+                                    ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.analytics.workout.uuid) { pair in
                                         WorkoutCard(
                                             workout: pair.workout,
                                             analytics: pair.analytics,
-                                            isExpanded: expandedWorkoutID == workoutRowID(for: pair),
+                                            isExpanded: expandedWorkoutIDs.contains(workoutRowID(for: pair)),
                                             hrZoneSettings: hrZoneSettings,
                                             onHeaderTap: {
                                                 withAnimation {
                                                     let workoutID = workoutRowID(for: pair)
-                                                    expandedWorkoutID = expandedWorkoutID == workoutID ? nil : workoutID
+                                                    if expandedWorkoutIDs.contains(workoutID) {
+                                                        expandedWorkoutIDs.remove(workoutID)
+                                                    } else {
+                                                        expandedWorkoutIDs.insert(workoutID)
+                                                    }
                                                 }
                                                 let impact = UIImpactFeedbackGenerator(style: .medium)
                                                 impact.impactOccurred()
@@ -445,34 +455,36 @@ struct WorkoutCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: workout.workoutActivityType.activityTypeSymbol)
-                    .foregroundColor(.orange)
-                VStack(alignment: .leading) {
-                    Text(workout.workoutActivityType.name.capitalized)
-                        .font(.headline)
-                    Text(Self.dateFormatter.string(from: workout.startDate)) + Text(" • ") + Text(Self.timeFormatter.string(from: workout.startDate)) + Text(" • \(Int(workout.duration/60)) min")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            Button(action: onHeaderTap) {
+                HStack {
+                    Image(systemName: workout.workoutActivityType.activityTypeSymbol)
+                        .foregroundColor(.orange)
+                    VStack(alignment: .leading) {
+                        Text(workout.workoutActivityType.name.capitalized)
+                            .font(.headline)
+                        Text(Self.dateFormatter.string(from: workout.startDate)) + Text(" • ") + Text(Self.timeFormatter.string(from: workout.startDate)) + Text(" • \(Int(workout.duration/60)) min")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing) {
+                        if let avgHR = analytics.heartRates.map({ $0.1 }).average {
+                            Text("Avg HR: \(Int(avgHR)) bpm")
+                                .font(.caption)
+                        }
+                        if let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                            Text("Kcal: \(Int(kcal))")
+                                .font(.caption)
+                        }
+                        if let met = analytics.metTotal {
+                            Text("MET-min: \(Int(met))")
+                                .font(.caption)
+                        }
+                    }
                 }
-                Spacer()
-                VStack(alignment: .trailing) {
-                    if let avgHR = analytics.heartRates.map({ $0.1 }).average {
-                        Text("Avg HR: \(Int(avgHR)) bpm")
-                            .font(.caption)
-                    }
-                    if let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
-                        Text("Kcal: \(Int(kcal))")
-                            .font(.caption)
-                    }
-                    if let met = analytics.metTotal {
-                        Text("MET-min: \(Int(met))")
-                            .font(.caption)
-                    }
-                }
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onHeaderTap)
+            .buttonStyle(.plain)
             if isExpanded {
                 WorkoutDetailView(
                     analytics: analytics,
@@ -1200,7 +1212,7 @@ struct WorkoutDetailView: View {
                     endCoordinate: routeLocations.last?.coordinate,
                     highlightedCoordinate: selectedRouteLocation?.coordinate
                 )
-                    .frame(height: 210)
+                    .frame(height: 300)
                     .cornerRadius(16)
 
                 if let coordinateText = selectedRouteCoordinateText {
@@ -2296,8 +2308,8 @@ private struct MapDetailView: View {
         return workoutElapsedTimeText(elapsed)
     }
 
-    private let pinnedMapHeight: CGFloat = 220
-    private let pinnedMapSectionHeight: CGFloat = 274
+    private let pinnedMapHeight: CGFloat = 320
+    private let pinnedMapSectionHeight: CGFloat = 374
 
     var body: some View {
         NavigationStack {
@@ -2933,6 +2945,7 @@ struct RouteMapView: UIViewRepresentable {
 
             mapView.addOverlays(polylines)
             context.coordinator.routeSignature = routeSignature
+            context.coordinator.didSetInitialRegion = false
             context.coordinator.updateStaticAnnotations(
                 on: mapView,
                 startCoordinate: startCoordinate,
@@ -2945,14 +2958,23 @@ struct RouteMapView: UIViewRepresentable {
             coordinate: highlightedCoordinate
         )
 
-        if context.coordinator.didSetInitialRegion == false, let first = segments.first?.coordinates.first {
-            let region = MKCoordinateRegion(
-                center: first,
-                latitudinalMeters: 1000,
-                longitudinalMeters: 1000
-            )
-            mapView.setRegion(region, animated: true)
-            context.coordinator.didSetInitialRegion = true
+        if context.coordinator.didSetInitialRegion == false {
+            if let routeRect = Coordinator.boundingMapRect(for: segments), routeRect.isNull == false {
+                let fittedRect = mapView.mapRectThatFits(
+                    routeRect,
+                    edgePadding: UIEdgeInsets(top: 44, left: 28, bottom: 44, right: 28)
+                )
+                mapView.setVisibleMapRect(fittedRect, animated: false)
+                context.coordinator.didSetInitialRegion = true
+            } else if let first = segments.first?.coordinates.first {
+                let region = MKCoordinateRegion(
+                    center: first,
+                    latitudinalMeters: 1000,
+                    longitudinalMeters: 1000
+                )
+                mapView.setRegion(region, animated: false)
+                context.coordinator.didSetInitialRegion = true
+            }
         }
     }
 
@@ -2992,6 +3014,37 @@ struct RouteMapView: UIViewRepresentable {
             let firstPoint = first.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
             let lastPoint = last.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
             return "\(segments.count)|\(firstPoint)|\(lastPoint)|\(start)|\(end)"
+        }
+
+        static func boundingMapRect(for segments: [ColoredRouteSegment]) -> MKMapRect? {
+            let coordinates = segments.flatMap(\.coordinates)
+            guard let first = coordinates.first else { return nil }
+
+            var rect = MKMapRect(
+                origin: MKMapPoint(first),
+                size: MKMapSize(width: 0, height: 0)
+            )
+
+            for coordinate in coordinates.dropFirst() {
+                let point = MKMapPoint(coordinate)
+                let pointRect = MKMapRect(
+                    origin: point,
+                    size: MKMapSize(width: 0, height: 0)
+                )
+                rect = rect.union(pointRect)
+            }
+
+            if rect.size.width < 1 || rect.size.height < 1 {
+                let point = MKMapPoint(first)
+                rect = MKMapRect(
+                    x: point.x - 600,
+                    y: point.y - 600,
+                    width: 1200,
+                    height: 1200
+                )
+            }
+
+            return rect
         }
 
         func updateStaticAnnotations(
