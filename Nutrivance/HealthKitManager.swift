@@ -1,3 +1,5 @@
+import CoreLocation
+
 // MARK: - Heart Rate Zone Types
 
 final class AppResourceCoordinator {
@@ -85,6 +87,10 @@ struct WorkoutAnalytics {
     let cadenceSeries: [(Date, Double)] // Cadence in rpm
     let elevationSeries: [(Date, Double)] // Elevation in meters
     let elevationGain: Double? // Total elevation gain in meters
+    let verticalOscillationSeries: [(Date, Double)] // cm
+    let groundContactTimeSeries: [(Date, Double)] // ms
+    let strideLengthSeries: [(Date, Double)] // m
+    let strokeCountSeries: [(Date, Double)] // count per sample
     let verticalOscillation: Double? // For running, in cm
     let groundContactTime: Double? // For running, in ms
     let strideLength: Double? // For running, in meters
@@ -110,6 +116,108 @@ extension Array where Element == (Date, Double) {
 }
 
 extension HealthKitManager {
+    private func fetchDiscreteAverageSeries(
+        for identifier: HKQuantityTypeIdentifier,
+        unit: HKUnit,
+        workout: HKWorkout,
+        intervalSeconds: Int = 15
+    ) async -> [(Date, Double)] {
+        guard let quantityType = HKQuantityType.quantityType(forIdentifier: identifier) else {
+            return []
+        }
+
+        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+        var interval = DateComponents()
+        interval.second = intervalSeconds
+
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: quantityType,
+                quantitySamplePredicate: predicate,
+                options: .discreteAverage,
+                anchorDate: workout.startDate,
+                intervalComponents: interval
+            )
+
+            query.initialResultsHandler = { _, results, _ in
+                guard let results else {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                var series: [(Date, Double)] = []
+                results.enumerateStatistics(from: workout.startDate, to: workout.endDate) { statistics, _ in
+                    if let quantity = statistics.averageQuantity() {
+                        series.append((statistics.startDate, quantity.doubleValue(for: unit)))
+                    }
+                }
+                continuation.resume(returning: series)
+            }
+
+            self.healthStore.execute(query)
+        }
+    }
+
+    private func fetchCumulativeSumSeries(
+        for identifier: HKQuantityTypeIdentifier,
+        unit: HKUnit,
+        workout: HKWorkout,
+        intervalSeconds: Int = 15
+    ) async -> [(Date, Double)] {
+        guard let quantityType = HKQuantityType.quantityType(forIdentifier: identifier) else {
+            return []
+        }
+
+        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+        var interval = DateComponents()
+        interval.second = intervalSeconds
+
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: quantityType,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum,
+                anchorDate: workout.startDate,
+                intervalComponents: interval
+            )
+
+            query.initialResultsHandler = { _, results, _ in
+                guard let results else {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                var series: [(Date, Double)] = []
+                results.enumerateStatistics(from: workout.startDate, to: workout.endDate) { statistics, _ in
+                    if let quantity = statistics.sumQuantity() {
+                        series.append((statistics.startDate, quantity.doubleValue(for: unit)))
+                    }
+                }
+                continuation.resume(returning: series)
+            }
+
+            self.healthStore.execute(query)
+        }
+    }
+
+    private func deriveSpeedSeries(from routeLocations: [CLLocation]) -> [(Date, Double)] {
+        guard routeLocations.count > 1 else { return [] }
+
+        var series: [(Date, Double)] = []
+        series.reserveCapacity(routeLocations.count - 1)
+
+        for pair in zip(routeLocations, routeLocations.dropFirst()) {
+            let deltaT = pair.1.timestamp.timeIntervalSince(pair.0.timestamp)
+            guard deltaT > 0 else { continue }
+            let distance = pair.1.distance(from: pair.0)
+            let speed = max(0, distance / deltaT)
+            let timestamp = pair.1.timestamp
+            series.append((timestamp, speed))
+        }
+
+        return series
+    }
+
     /// Compute analytics for a given workout: VO2 max, METs, post-workout HR time series, HRR
     func computeWorkoutAnalytics(for workout: HKWorkout) async -> WorkoutAnalytics {
         // Fetch heart rate samples for the workout
@@ -188,36 +296,39 @@ extension HealthKitManager {
         }
 
         // --- Speed Series ---
+        let routeLocations = await fetchWorkoutRouteLocations(for: workout)
         var speedSeries: [(Date, Double)] = []
-        if let speedType = HKQuantityType.quantityType(forIdentifier: .runningSpeed) {
-            let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
-            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
-            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                let query = HKSampleQuery(sampleType: speedType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
-                    continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
-                }
-                self.healthStore.execute(query)
+        let speedIdentifier: HKQuantityTypeIdentifier? = {
+            switch activityType {
+            case .cycling:
+                return .cyclingSpeed
+            case .walking, .hiking:
+                return .walkingSpeed
+            case .running:
+                return .runningSpeed
+            default:
+                return .runningSpeed
             }
-            speedSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .meter().unitDivided(by: .second()))) }
+        }()
+        if let speedIdentifier {
+            speedSeries = await fetchDiscreteAverageSeries(
+                for: speedIdentifier,
+                unit: .meter().unitDivided(by: .second()),
+                workout: workout
+            )
+        }
+        if speedSeries.count <= 1 {
+            speedSeries = deriveSpeedSeries(from: routeLocations)
         }
 
         // --- Cadence Series ---
         var cadenceSeries: [(Date, Double)] = []
-        if let cadenceType = HKQuantityType.quantityType(forIdentifier: .cyclingCadence) ?? HKQuantityType.quantityType(forIdentifier: .runningStrideLength) {
-            let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
-            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
-            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                let query = HKSampleQuery(sampleType: cadenceType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
-                    continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
-                }
-                self.healthStore.execute(query)
-            }
-            if cadenceType.identifier == HKQuantityTypeIdentifier.cyclingCadence.rawValue {
-                cadenceSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: HKUnit.minute()))) }
-            } else {
-                // For running stride length, maybe not cadence, but we'll use it as is
-                cadenceSeries = samples.map { ($0.startDate, $0.quantity.doubleValue(for: .meter())) }
-            }
+        if activityType == .cycling {
+            cadenceSeries = await fetchDiscreteAverageSeries(
+                for: .cyclingCadence,
+                unit: HKUnit.count().unitDivided(by: HKUnit.minute()),
+                workout: workout
+            )
         }
 
         // --- Elevation Series and Gain ---
@@ -227,42 +338,67 @@ extension HealthKitManager {
         if let elevationQuantity = workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity {
             elevationGain = elevationQuantity.doubleValue(for: .meter())
         }
+        elevationSeries = routeLocations.compactMap { location in
+            guard location.verticalAccuracy >= 0 else { return nil }
+            return (location.timestamp, location.altitude)
+        }
+        if elevationGain == nil, elevationSeries.count > 1 {
+            var computedGain = 0.0
+            for pair in zip(elevationSeries, elevationSeries.dropFirst()) {
+                let delta = pair.1.1 - pair.0.1
+                if delta > 0 {
+                    computedGain += delta
+                }
+            }
+            elevationGain = computedGain > 0 ? computedGain : nil
+        }
 
         // --- Running Metrics ---
+        var verticalOscillationSeries: [(Date, Double)] = []
+        var groundContactTimeSeries: [(Date, Double)] = []
+        var strideLengthSeries: [(Date, Double)] = []
+        var strokeCountSeries: [(Date, Double)] = []
         var verticalOscillation: Double? = nil
         var groundContactTime: Double? = nil
         var strideLength: Double? = nil
         if activityType == .running {
-            if let voType = HKQuantityType.quantityType(forIdentifier: .runningVerticalOscillation) {
-                let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
-                let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                    let query = HKSampleQuery(sampleType: voType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
-                        continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
-                    }
-                    self.healthStore.execute(query)
+            verticalOscillationSeries = await fetchDiscreteAverageSeries(
+                for: .runningVerticalOscillation,
+                unit: .meter(),
+                workout: workout
+            ).map { ($0.0, $0.1 * 100) }
+            verticalOscillation = verticalOscillationSeries.map(\.1).average
+
+            groundContactTimeSeries = await fetchDiscreteAverageSeries(
+                for: .runningGroundContactTime,
+                unit: .secondUnit(with: .milli),
+                workout: workout
+            )
+            groundContactTime = groundContactTimeSeries.map(\.1).average
+
+            strideLengthSeries = await fetchDiscreteAverageSeries(
+                for: .runningStrideLength,
+                unit: .meter(),
+                workout: workout
+            )
+            strideLength = strideLengthSeries.map(\.1).average
+
+            if cadenceSeries.isEmpty, !speedSeries.isEmpty, !strideLengthSeries.isEmpty {
+                cadenceSeries = strideLengthSeries.compactMap { point in
+                    guard point.1 > 0 else { return nil }
+                    let nearestSpeed = speedSeries.min { lhs, rhs in
+                        abs(lhs.0.timeIntervalSince(point.0)) < abs(rhs.0.timeIntervalSince(point.0))
+                    }?.1 ?? 0
+                    guard nearestSpeed > 0 else { return nil }
+                    return (point.0, (nearestSpeed / point.1) * 60)
                 }
-                verticalOscillation = samples.map { $0.quantity.doubleValue(for: .meter()) * 100 }.average // Convert to cm
             }
-            if let gctType = HKQuantityType.quantityType(forIdentifier: .runningGroundContactTime) {
-                let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
-                let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                    let query = HKSampleQuery(sampleType: gctType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
-                        continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
-                    }
-                    self.healthStore.execute(query)
-                }
-                groundContactTime = samples.map { $0.quantity.doubleValue(for: .secondUnit(with: .milli)) }.average
-            }
-            if let slType = HKQuantityType.quantityType(forIdentifier: .runningStrideLength) {
-                let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
-                let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                    let query = HKSampleQuery(sampleType: slType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
-                        continuation.resume(returning: samples as? [HKQuantitySample] ?? [])
-                    }
-                    self.healthStore.execute(query)
-                }
-                strideLength = samples.map { $0.quantity.doubleValue(for: .meter()) }.average
-            }
+        } else if activityType == .swimming {
+            strokeCountSeries = await fetchCumulativeSumSeries(
+                for: .swimmingStrokeCount,
+                unit: .count(),
+                workout: workout
+            )
         }
 
         // --- METs ---
@@ -377,6 +513,10 @@ extension HealthKitManager {
             cadenceSeries: cadenceSeries,
             elevationSeries: elevationSeries,
             elevationGain: elevationGain,
+            verticalOscillationSeries: verticalOscillationSeries,
+            groundContactTimeSeries: groundContactTimeSeries,
+            strideLengthSeries: strideLengthSeries,
+            strokeCountSeries: strokeCountSeries,
             verticalOscillation: verticalOscillation,
             groundContactTime: groundContactTime,
             strideLength: strideLength,
@@ -1174,12 +1314,15 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             // Cycling Metrics
             HKQuantityType.quantityType(forIdentifier: .cyclingPower)!,
             HKQuantityType.quantityType(forIdentifier: .cyclingCadence)!,
+            HKQuantityType.quantityType(forIdentifier: .cyclingSpeed)!,
             
             // Running Metrics
+            HKQuantityType.quantityType(forIdentifier: .walkingSpeed)!,
             HKQuantityType.quantityType(forIdentifier: .runningSpeed)!,
             HKQuantityType.quantityType(forIdentifier: .runningVerticalOscillation)!,
             HKQuantityType.quantityType(forIdentifier: .runningGroundContactTime)!,
             HKQuantityType.quantityType(forIdentifier: .runningStrideLength)!,
+            HKQuantityType.quantityType(forIdentifier: .swimmingStrokeCount)!,
             
             // METs and Effort
             HKQuantityType.quantityType(forIdentifier: .physicalEffort)!,
@@ -1208,6 +1351,50 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async {
                 completion(success, error)
             }
+        }
+    }
+
+    private func fetchWorkoutRouteLocations(for workout: HKWorkout) async -> [CLLocation] {
+        let predicate = HKQuery.predicateForObjects(from: workout)
+        let routeType = HKSeriesType.workoutRoute()
+
+        let route: HKWorkoutRoute? = await withCheckedContinuation { continuation in
+            let sampleQuery = HKSampleQuery(
+                sampleType: routeType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                guard error == nil,
+                      let routes = samples as? [HKWorkoutRoute],
+                      let route = routes.first else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: route)
+            }
+            self.healthStore.execute(sampleQuery)
+        }
+
+        guard let route else { return [] }
+
+        return await withCheckedContinuation { continuation in
+            var allLocations: [CLLocation] = []
+            let routeQuery = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
+                guard error == nil else {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                if let locations {
+                    allLocations.append(contentsOf: locations)
+                }
+
+                if done {
+                    continuation.resume(returning: allLocations)
+                }
+            }
+            self.healthStore.execute(routeQuery)
         }
     }
 

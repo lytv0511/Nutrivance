@@ -73,6 +73,7 @@ final class HealthStateEngine: ObservableObject {
     }
 
     struct PersistedWorkoutAnalyticsEntry: Codable {
+        let schemaVersion: Int
         let workoutUUID: String
         let workoutStartDate: Date
         let workoutEndDate: Date
@@ -96,14 +97,126 @@ final class HealthStateEngine: ObservableObject {
         let cadenceSeries: [PersistedWorkoutSeriesPoint]
         let elevationSeries: [PersistedWorkoutSeriesPoint]
         let elevationGain: Double?
+        let verticalOscillationSeries: [PersistedWorkoutSeriesPoint]
+        let groundContactTimeSeries: [PersistedWorkoutSeriesPoint]
+        let strideLengthSeries: [PersistedWorkoutSeriesPoint]
+        let strokeCountSeries: [PersistedWorkoutSeriesPoint]
         let verticalOscillation: Double?
         let groundContactTime: Double?
         let strideLength: Double?
         let hrZoneProfile: HRZoneProfile?
         let hrZoneBreakdown: [PersistedWorkoutZoneBreakdown]
+
+        init(
+            schemaVersion: Int,
+            workoutUUID: String,
+            workoutStartDate: Date,
+            workoutEndDate: Date,
+            workoutDuration: Double,
+            workoutTypeRawValue: UInt,
+            totalEnergyBurnedKilocalories: Double?,
+            totalDistanceMeters: Double?,
+            metadata: [String : Double],
+            heartRates: [PersistedWorkoutSeriesPoint],
+            vo2Max: Double?,
+            metTotal: Double?,
+            metAverage: Double?,
+            metSeries: [PersistedWorkoutSeriesPoint],
+            postWorkoutHRSeries: [PersistedWorkoutSeriesPoint],
+            peakHR: Double?,
+            hrr0: Double?,
+            hrr1: Double?,
+            hrr2: Double?,
+            powerSeries: [PersistedWorkoutSeriesPoint],
+            speedSeries: [PersistedWorkoutSeriesPoint],
+            cadenceSeries: [PersistedWorkoutSeriesPoint],
+            elevationSeries: [PersistedWorkoutSeriesPoint],
+            elevationGain: Double?,
+            verticalOscillationSeries: [PersistedWorkoutSeriesPoint],
+            groundContactTimeSeries: [PersistedWorkoutSeriesPoint],
+            strideLengthSeries: [PersistedWorkoutSeriesPoint],
+            strokeCountSeries: [PersistedWorkoutSeriesPoint],
+            verticalOscillation: Double?,
+            groundContactTime: Double?,
+            strideLength: Double?,
+            hrZoneProfile: HRZoneProfile?,
+            hrZoneBreakdown: [PersistedWorkoutZoneBreakdown]
+        ) {
+            self.schemaVersion = schemaVersion
+            self.workoutUUID = workoutUUID
+            self.workoutStartDate = workoutStartDate
+            self.workoutEndDate = workoutEndDate
+            self.workoutDuration = workoutDuration
+            self.workoutTypeRawValue = workoutTypeRawValue
+            self.totalEnergyBurnedKilocalories = totalEnergyBurnedKilocalories
+            self.totalDistanceMeters = totalDistanceMeters
+            self.metadata = metadata
+            self.heartRates = heartRates
+            self.vo2Max = vo2Max
+            self.metTotal = metTotal
+            self.metAverage = metAverage
+            self.metSeries = metSeries
+            self.postWorkoutHRSeries = postWorkoutHRSeries
+            self.peakHR = peakHR
+            self.hrr0 = hrr0
+            self.hrr1 = hrr1
+            self.hrr2 = hrr2
+            self.powerSeries = powerSeries
+            self.speedSeries = speedSeries
+            self.cadenceSeries = cadenceSeries
+            self.elevationSeries = elevationSeries
+            self.elevationGain = elevationGain
+            self.verticalOscillationSeries = verticalOscillationSeries
+            self.groundContactTimeSeries = groundContactTimeSeries
+            self.strideLengthSeries = strideLengthSeries
+            self.strokeCountSeries = strokeCountSeries
+            self.verticalOscillation = verticalOscillation
+            self.groundContactTime = groundContactTime
+            self.strideLength = strideLength
+            self.hrZoneProfile = hrZoneProfile
+            self.hrZoneBreakdown = hrZoneBreakdown
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+            workoutUUID = try container.decode(String.self, forKey: .workoutUUID)
+            workoutStartDate = try container.decode(Date.self, forKey: .workoutStartDate)
+            workoutEndDate = try container.decode(Date.self, forKey: .workoutEndDate)
+            workoutDuration = try container.decode(Double.self, forKey: .workoutDuration)
+            workoutTypeRawValue = try container.decode(UInt.self, forKey: .workoutTypeRawValue)
+            totalEnergyBurnedKilocalories = try container.decodeIfPresent(Double.self, forKey: .totalEnergyBurnedKilocalories)
+            totalDistanceMeters = try container.decodeIfPresent(Double.self, forKey: .totalDistanceMeters)
+            metadata = try container.decode([String: Double].self, forKey: .metadata)
+            heartRates = try container.decode([PersistedWorkoutSeriesPoint].self, forKey: .heartRates)
+            vo2Max = try container.decodeIfPresent(Double.self, forKey: .vo2Max)
+            metTotal = try container.decodeIfPresent(Double.self, forKey: .metTotal)
+            metAverage = try container.decodeIfPresent(Double.self, forKey: .metAverage)
+            metSeries = try container.decode([PersistedWorkoutSeriesPoint].self, forKey: .metSeries)
+            postWorkoutHRSeries = try container.decode([PersistedWorkoutSeriesPoint].self, forKey: .postWorkoutHRSeries)
+            peakHR = try container.decodeIfPresent(Double.self, forKey: .peakHR)
+            hrr0 = try container.decodeIfPresent(Double.self, forKey: .hrr0)
+            hrr1 = try container.decodeIfPresent(Double.self, forKey: .hrr1)
+            hrr2 = try container.decodeIfPresent(Double.self, forKey: .hrr2)
+            powerSeries = try container.decode([PersistedWorkoutSeriesPoint].self, forKey: .powerSeries)
+            speedSeries = try container.decode([PersistedWorkoutSeriesPoint].self, forKey: .speedSeries)
+            cadenceSeries = try container.decode([PersistedWorkoutSeriesPoint].self, forKey: .cadenceSeries)
+            elevationSeries = try container.decode([PersistedWorkoutSeriesPoint].self, forKey: .elevationSeries)
+            elevationGain = try container.decodeIfPresent(Double.self, forKey: .elevationGain)
+            verticalOscillationSeries = try container.decodeIfPresent([PersistedWorkoutSeriesPoint].self, forKey: .verticalOscillationSeries) ?? []
+            groundContactTimeSeries = try container.decodeIfPresent([PersistedWorkoutSeriesPoint].self, forKey: .groundContactTimeSeries) ?? []
+            strideLengthSeries = try container.decodeIfPresent([PersistedWorkoutSeriesPoint].self, forKey: .strideLengthSeries) ?? []
+            strokeCountSeries = try container.decodeIfPresent([PersistedWorkoutSeriesPoint].self, forKey: .strokeCountSeries) ?? []
+            verticalOscillation = try container.decodeIfPresent(Double.self, forKey: .verticalOscillation)
+            groundContactTime = try container.decodeIfPresent(Double.self, forKey: .groundContactTime)
+            strideLength = try container.decodeIfPresent(Double.self, forKey: .strideLength)
+            hrZoneProfile = try container.decodeIfPresent(HRZoneProfile.self, forKey: .hrZoneProfile)
+            hrZoneBreakdown = try container.decodeIfPresent([PersistedWorkoutZoneBreakdown].self, forKey: .hrZoneBreakdown) ?? []
+        }
     }
 
     private static let cachedWorkoutUUIDMetadataKey = "NutrivanceCachedWorkoutUUID"
+    private static let workoutAnalyticsSchemaVersion = 3
 
     struct MetricsSnapshot: Codable {
         let updatedAt: Date
@@ -621,6 +734,7 @@ final class HealthStateEngine: ObservableObject {
             }
 
             return PersistedWorkoutAnalyticsEntry(
+                schemaVersion: Self.workoutAnalyticsSchemaVersion,
                 workoutUUID: canonicalWorkoutID(for: pair.workout),
                 workoutStartDate: pair.workout.startDate,
                 workoutEndDate: pair.workout.endDate,
@@ -644,6 +758,10 @@ final class HealthStateEngine: ObservableObject {
                 cadenceSeries: pair.analytics.cadenceSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
                 elevationSeries: pair.analytics.elevationSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
                 elevationGain: pair.analytics.elevationGain,
+                verticalOscillationSeries: pair.analytics.verticalOscillationSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                groundContactTimeSeries: pair.analytics.groundContactTimeSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                strideLengthSeries: pair.analytics.strideLengthSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
+                strokeCountSeries: pair.analytics.strokeCountSeries.map { PersistedWorkoutSeriesPoint(date: $0.0, value: $0.1) },
                 verticalOscillation: pair.analytics.verticalOscillation,
                 groundContactTime: pair.analytics.groundContactTime,
                 strideLength: pair.analytics.strideLength,
@@ -714,6 +832,10 @@ final class HealthStateEngine: ObservableObject {
                 cadenceSeries: entry.cadenceSeries.map { ($0.date, $0.value) },
                 elevationSeries: entry.elevationSeries.map { ($0.date, $0.value) },
                 elevationGain: entry.elevationGain,
+                verticalOscillationSeries: entry.verticalOscillationSeries.map { ($0.date, $0.value) },
+                groundContactTimeSeries: entry.groundContactTimeSeries.map { ($0.date, $0.value) },
+                strideLengthSeries: entry.strideLengthSeries.map { ($0.date, $0.value) },
+                strokeCountSeries: entry.strokeCountSeries.map { ($0.date, $0.value) },
                 verticalOscillation: entry.verticalOscillation,
                 groundContactTime: entry.groundContactTime,
                 strideLength: entry.strideLength,
@@ -722,6 +844,25 @@ final class HealthStateEngine: ObservableObject {
             )
 
             return (workout, analytics)
+        }
+    }
+
+    private func workoutAnalyticsNeedsSeriesBackfill(_ analytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) -> Bool {
+        analytics.contains { pair in
+            switch pair.workout.workoutActivityType {
+            case .running:
+                return (pair.analytics.elevationGain != nil && pair.analytics.elevationSeries.isEmpty)
+                    || (pair.analytics.verticalOscillation != nil && pair.analytics.verticalOscillationSeries.isEmpty)
+                    || (pair.analytics.groundContactTime != nil && pair.analytics.groundContactTimeSeries.isEmpty)
+                    || (pair.analytics.strideLength != nil && pair.analytics.strideLengthSeries.isEmpty)
+            case .cycling:
+                return (pair.analytics.elevationGain != nil && pair.analytics.elevationSeries.isEmpty)
+                    || (pair.workout.totalDistance != nil && pair.analytics.speedSeries.isEmpty)
+            case .swimming:
+                return pair.workout.totalDistance != nil && pair.analytics.strokeCountSeries.isEmpty
+            default:
+                return false
+            }
         }
     }
 
@@ -736,6 +877,10 @@ final class HealthStateEngine: ObservableObject {
         do {
             let data = try Data(contentsOf: url)
             let cacheEntries = try JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data)
+            guard cacheEntries.allSatisfy({ $0.schemaVersion >= Self.workoutAnalyticsSchemaVersion }) else {
+                print("[Cache] Workout analytics cache schema is outdated, ignoring disk cache")
+                return []
+            }
             print("[Cache] Cache file exists with \(cacheEntries.count) workouts")
             let summaries = cacheEntries.map { entry in
                 CachedWorkoutSummary(
@@ -764,8 +909,14 @@ final class HealthStateEngine: ObservableObject {
               let data = try? Data(contentsOf: url) else {
             return []
         }
-
-        return (try? JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data)) ?? []
+        guard let entries = try? JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data) else {
+            return []
+        }
+        guard entries.allSatisfy({ $0.schemaVersion >= Self.workoutAnalyticsSchemaVersion }) else {
+            print("[Cache] Persisted workout analytics cache is outdated, forcing refresh")
+            return []
+        }
+        return entries
     }
     
     private func loadPersistentCache() {
@@ -777,6 +928,11 @@ final class HealthStateEngine: ObservableObject {
         do {
             let data = try Data(contentsOf: url)
             let cacheEntries = try JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data)
+            guard cacheEntries.allSatisfy({ $0.schemaVersion >= Self.workoutAnalyticsSchemaVersion }) else {
+                print("Failed to load persistent cache: outdated workout analytics schema")
+                diskCacheLoaded = true
+                return
+            }
             lastCachedWorkoutDate = cacheEntries.map(\.workoutStartDate).max()
             earliestRequestedWorkoutDate = cacheEntries.map(\.workoutStartDate).min()
             diskCacheLoaded = true
@@ -2394,7 +2550,8 @@ final class HealthStateEngine: ObservableObject {
 
         if !forceRefresh,
            !workoutAnalytics.isEmpty,
-           !needsWorkoutAnalyticsCoverage(from: start, to: end) {
+           !needsWorkoutAnalyticsCoverage(from: start, to: end),
+           !workoutAnalyticsNeedsSeriesBackfill(workoutAnalytics) {
             workoutAnalyticsCacheTimestamp = Date()
             lastCacheDaysRequested = days
             hasInitializedWorkoutAnalytics = true
@@ -2437,6 +2594,7 @@ final class HealthStateEngine: ObservableObject {
         // 3. Cache has expired (older than cacheValidityDuration)
         guard let timestamp = workoutAnalyticsCacheTimestamp else { return false }
         guard requestedDays == lastCacheDaysRequested else { return false }
+        guard !workoutAnalyticsNeedsSeriesBackfill(workoutAnalytics) else { return false }
         return Date().timeIntervalSince(timestamp) < cacheValidityDuration
     }
     

@@ -104,7 +104,7 @@ private extension HRZonePersistedSettings {
 
 struct WorkoutHistoryView: View {
     @ObservedObject var engine = HealthStateEngine.shared
-    @State private var expandedWorkout: HKWorkout? = nil
+    @State private var expandedWorkoutID: String? = nil
     @State private var isLoading = false
     @State private var animationPhase: Double = 0
     @State private var sportFilter: String? = nil
@@ -225,15 +225,16 @@ struct WorkoutHistoryView: View {
                         } else {
                             ForEach(groupedWorkouts.sorted(by: { ($0.key.year! * 12 + $0.key.month!) > ($1.key.year! * 12 + $1.key.month!) }), id: \.key) { (key, workouts) in
                                 Section(header: Text("\(Calendar.current.monthSymbols[key.month! - 1]) \(String(format: "%d", key.year!))").font(.headline).foregroundColor(.orange)) {
-                                    ForEach(Array(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }).enumerated()), id: \.offset) { _, pair in
+                                    ForEach(workouts.sorted(by: { $0.workout.startDate > $1.workout.startDate }), id: \.workout.uuid) { pair in
                                         WorkoutCard(
                                             workout: pair.workout,
                                             analytics: pair.analytics,
-                                            isExpanded: expandedWorkout == pair.workout,
+                                            isExpanded: expandedWorkoutID == workoutRowID(for: pair),
                                             hrZoneSettings: hrZoneSettings,
                                             onHeaderTap: {
                                                 withAnimation {
-                                                    expandedWorkout = expandedWorkout == pair.workout ? nil : pair.workout
+                                                    let workoutID = workoutRowID(for: pair)
+                                                    expandedWorkoutID = expandedWorkoutID == workoutID ? nil : workoutID
                                                 }
                                                 let impact = UIImpactFeedbackGenerator(style: .medium)
                                                 impact.impactOccurred()
@@ -399,7 +400,7 @@ struct WorkoutHistoryView: View {
         let closest = filteredWorkouts.min(by: { abs($0.workout.startDate.timeIntervalSince(date)) < abs($1.workout.startDate.timeIntervalSince(date)) })
         if let closest = closest {
             withAnimation {
-                scrollProxy?.scrollTo(closest.workout.startDate, anchor: .top)
+                scrollProxy?.scrollTo(workoutRowID(for: closest), anchor: .top)
             }
         }
     }
@@ -864,8 +865,32 @@ struct WorkoutDetailView: View {
         return selectedPoint(in: paceSeries)
     }
 
+    private var paceSeries: [(Date, Double)] {
+        analytics.speedSeries.compactMap { point -> (Date, Double)? in
+            let speedKPH = point.1 * 3.6
+            guard speedKPH > 0.1 else { return nil }
+            return (point.0, 60 / speedKPH)
+        }
+    }
+
     private var selectedElevationPoint: (Date, Double)? {
         selectedPoint(in: analytics.elevationSeries)
+    }
+
+    private var selectedVerticalOscillationPoint: (Date, Double)? {
+        selectedPoint(in: analytics.verticalOscillationSeries)
+    }
+
+    private var selectedGroundContactTimePoint: (Date, Double)? {
+        selectedPoint(in: analytics.groundContactTimeSeries)
+    }
+
+    private var selectedStrideLengthPoint: (Date, Double)? {
+        selectedPoint(in: analytics.strideLengthSeries)
+    }
+
+    private var selectedStrokeCountPoint: (Date, Double)? {
+        selectedPoint(in: analytics.strokeCountSeries)
     }
 
     private var selectedRouteElapsedText: String? {
@@ -1745,18 +1770,176 @@ struct WorkoutDetailView: View {
                 }
             }
 
+            if !analytics.verticalOscillationSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Vertical Oscillation")
+                        .font(.subheadline)
+                        .bold()
+                    Chart {
+                        ForEach(analytics.verticalOscillationSeries, id: \.0) { point in
+                            LineMark(
+                                x: .value("Time", point.0),
+                                y: .value("Vertical Oscillation", point.1)
+                            )
+                            .foregroundStyle(.cyan)
+                        }
+                        selectionMarks(
+                            selected: selectedVerticalOscillationPoint,
+                            xLabel: "Time",
+                            yLabel: "Vertical Oscillation",
+                            color: .cyan,
+                            valueText: { String(format: "%.1f cm", $0) }
+                        )
+                    }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.verticalOscillationSeries.map(\.1), minimumPadding: 0.2))
+                    .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedVerticalOscillationPoint,
+                            color: .cyan,
+                            valueText: { String(format: "%.1f cm", $0) }
+                        )
+                        .padding(8)
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: analytics.verticalOscillationSeries
+                            )
+                        }
+                    }
+                    HStack {
+                        if let vo = analytics.verticalOscillation {
+                            Text("Avg Vertical Oscillation: \(String(format: "%.1f", vo)) cm")
+                        }
+                        if let point = selectedVerticalOscillationPoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.1f", point.1)) cm")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            if !analytics.groundContactTimeSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Ground Contact Time")
+                        .font(.subheadline)
+                        .bold()
+                    Chart {
+                        ForEach(analytics.groundContactTimeSeries, id: \.0) { point in
+                            LineMark(
+                                x: .value("Time", point.0),
+                                y: .value("Ground Contact Time", point.1)
+                            )
+                            .foregroundStyle(.indigo)
+                        }
+                        selectionMarks(
+                            selected: selectedGroundContactTimePoint,
+                            xLabel: "Time",
+                            yLabel: "Ground Contact Time",
+                            color: .indigo,
+                            valueText: { String(format: "%.0f ms", $0) }
+                        )
+                    }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.groundContactTimeSeries.map(\.1), minimumPadding: 1))
+                    .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedGroundContactTimePoint,
+                            color: .indigo,
+                            valueText: { String(format: "%.0f ms", $0) }
+                        )
+                        .padding(8)
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: analytics.groundContactTimeSeries
+                            )
+                        }
+                    }
+                    HStack {
+                        if let gct = analytics.groundContactTime {
+                            Text("Avg GCT: \(String(format: "%.0f", gct)) ms")
+                        }
+                        if let point = selectedGroundContactTimePoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.0f", point.1)) ms")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            if !analytics.strideLengthSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Stride Length")
+                        .font(.subheadline)
+                        .bold()
+                    Chart {
+                        ForEach(analytics.strideLengthSeries, id: \.0) { point in
+                            LineMark(
+                                x: .value("Time", point.0),
+                                y: .value("Stride Length", point.1)
+                            )
+                            .foregroundStyle(.pink)
+                        }
+                        selectionMarks(
+                            selected: selectedStrideLengthPoint,
+                            xLabel: "Time",
+                            yLabel: "Stride Length",
+                            color: .pink,
+                            valueText: { String(format: "%.2f m", $0) }
+                        )
+                    }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.strideLengthSeries.map(\.1), minimumPadding: 0.05))
+                    .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedStrideLengthPoint,
+                            color: .pink,
+                            valueText: { String(format: "%.2f m", $0) }
+                        )
+                        .padding(8)
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: analytics.strideLengthSeries
+                            )
+                        }
+                    }
+                    HStack {
+                        if let sl = analytics.strideLength {
+                            Text("Avg Stride Length: \(String(format: "%.2f", sl)) m")
+                        }
+                        if let point = selectedStrideLengthPoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.2f", point.1)) m")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
             // Pace for running/hiking
-            if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking) && !analytics.speedSeries.isEmpty {
+            if (analytics.workout.workoutActivityType == .running || analytics.workout.workoutActivityType == .hiking || analytics.workout.workoutActivityType == .walking || analytics.workout.workoutActivityType == .cycling) && !analytics.speedSeries.isEmpty {
                 VStack(alignment: .leading) {
                     Text("Pace")
                         .font(.subheadline)
                         .bold()
                     Chart {
-                        ForEach(analytics.speedSeries, id: \.0) { point in
-                            let paceMinKm = 60 / (point.1 * 3.6) // min/km
-                            BarMark(
+                        ForEach(paceSeries, id: \.0) { point in
+                            LineMark(
                                 x: .value("Time", point.0),
-                                y: .value("Pace", paceMinKm)
+                                y: .value("Pace", point.1)
                             )
                             .foregroundStyle(.teal)
                         }
@@ -1770,11 +1953,7 @@ struct WorkoutDetailView: View {
                     }
                     .chartYScale(
                         domain: chartYScaleDomain(
-                            for: analytics.speedSeries.compactMap { point in
-                                let speedKPH = point.1 * 3.6
-                                guard speedKPH > 0 else { return nil }
-                                return 60 / speedKPH
-                            },
+                            for: paceSeries.map(\.1),
                             minimumPadding: 0.25
                         )
                     )
@@ -1789,9 +1968,6 @@ struct WorkoutDetailView: View {
                     }
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
-                            let paceSeries = analytics.speedSeries.map { point in
-                                (point.0, 60 / (point.1 * 3.6))
-                            }
                             selectionOverlay(
                                 proxy: proxy,
                                 geometry: geometry,
@@ -1800,10 +1976,64 @@ struct WorkoutDetailView: View {
                         }
                     }
                     HStack {
-                        let avgPace = analytics.speedSeries.map { 60 / ($0.1 * 3.6) }.average
+                        let avgPace = paceSeries.map(\.1).average
                         Text("Avg Pace: \(avgPace.map { String(format: "%.1f", $0) } ?? "-") min/km")
                         if let point = selectedPacePoint {
                             Text("Selected: \(point.0, style: .time) - \(String(format: "%.2f", point.1)) min/km")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            if !analytics.strokeCountSeries.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Stroke Count")
+                        .font(.subheadline)
+                        .bold()
+                    Chart {
+                        ForEach(analytics.strokeCountSeries, id: \.0) { point in
+                            BarMark(
+                                x: .value("Time", point.0),
+                                y: .value("Stroke Count", point.1)
+                            )
+                            .foregroundStyle(.blue)
+                        }
+                        selectionMarks(
+                            selected: selectedStrokeCountPoint,
+                            xLabel: "Time",
+                            yLabel: "Stroke Count",
+                            color: .blue,
+                            valueText: { String(format: "%.0f strokes", $0) }
+                        )
+                    }
+                    .chartYScale(domain: chartYScaleDomain(for: analytics.strokeCountSeries.map(\.1), minimumPadding: 1))
+                    .frame(height: standardChartHeight)
+                    .overlay(alignment: .topLeading) {
+                        selectionBubble(
+                            selected: selectedStrokeCountPoint,
+                            color: .blue,
+                            valueText: { String(format: "%.0f strokes", $0) }
+                        )
+                        .padding(8)
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            selectionOverlay(
+                                proxy: proxy,
+                                geometry: geometry,
+                                data: analytics.strokeCountSeries
+                            )
+                        }
+                    }
+                    HStack {
+                        let averageStrokeCount = analytics.strokeCountSeries.map(\.1).average
+                        if let averageStrokeCount {
+                            Text("Avg Stroke Count: \(String(format: "%.0f", averageStrokeCount))")
+                        }
+                        if let point = selectedStrokeCountPoint {
+                            Text("Selected: \(point.0, style: .time) - \(String(format: "%.0f", point.1)) strokes")
                         }
                     }
                     .font(.caption)
