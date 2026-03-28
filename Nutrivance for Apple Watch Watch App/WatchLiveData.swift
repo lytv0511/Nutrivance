@@ -68,11 +68,21 @@ struct WatchSleepStagePayload: Codable {
     let colorName: String
 }
 
+private struct WatchLocalSleepSnapshot {
+    let recommendedSleepHours: Double
+    let sleepDebtHours: Double
+    let sleepScheduleText: String
+    let sleepHours: Double
+    let sleepConsistencyScore: Double
+    let sleepStages: [(name: String, hours: Double, color: Color)]
+}
+
 @MainActor
 extension WatchDashboardStore {
     func startLiveServices() {
         connectivityBridge.attach(to: self)
         healthBridge.attach(to: self)
+        workoutManager.activate()
     }
 
     func refreshLiveData() {
@@ -166,6 +176,15 @@ extension WatchDashboardStore {
             ("Active", "\(Int(exerciseMinutes.rounded())) min", "bolt.heart.fill", .cyan),
             ("Move", String(format: "%.1f km", distanceMeters / 1000), "location.fill", .yellow)
         ]
+    }
+
+    fileprivate func applyLocalSleepSnapshot(_ snapshot: WatchLocalSleepSnapshot) {
+        recommendedSleepHours = snapshot.recommendedSleepHours
+        sleepDebtHours = snapshot.sleepDebtHours
+        sleepScheduleText = snapshot.sleepScheduleText
+        sleepHours = snapshot.sleepHours
+        sleepConsistency = snapshot.sleepConsistencyScore
+        sleepStages = snapshot.sleepStages
     }
 
     func mergeLocalWorkouts(_ localWorkouts: [WorkoutSession]) {
@@ -291,6 +310,7 @@ final class WatchHealthBridge {
             async let distanceMeters = fetchTodaySum(for: .distanceWalkingRunning, unit: .meter())
             async let mindfulnessByDay = fetchMindfulnessMinutesByDay(days: 7)
             async let localWorkouts = fetchRecentWorkouts(days: 2)
+            async let localSleepSnapshot = fetchSleepSnapshot(days: 14)
 
             store?.applyLocalStats(
                 activeEnergy: await activeEnergy,
@@ -300,6 +320,9 @@ final class WatchHealthBridge {
             )
             store?.applyLocalMindfulness(minutesByDay: await mindfulnessByDay)
             store?.mergeLocalWorkouts(await localWorkouts)
+            if let localSleepSnapshot = await localSleepSnapshot {
+                store?.applyLocalSleepSnapshot(localSleepSnapshot)
+            }
         }
     }
 
@@ -314,7 +337,8 @@ final class WatchHealthBridge {
             HKQuantityType.quantityType(forIdentifier: .stepCount)!,
             HKQuantityType.quantityType(forIdentifier: .appleExerciseTime)!,
             HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)!,
-            HKObjectType.categoryType(forIdentifier: .mindfulSession)!
+            HKObjectType.categoryType(forIdentifier: .mindfulSession)!,
+            HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!
         ]
 
         let success = await withCheckedContinuation { continuation in
@@ -588,6 +612,150 @@ final class WatchHealthBridge {
         }
 
         return "\(localizedWorkoutName(workout.workoutActivityType)) synced from local HealthKit with duration, energy, and distance."
+    }
+
+    private func fetchSleepSnapshot(days: Int) async -> WatchLocalSleepSnapshot? {
+        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
+
+        let calendar = Calendar.current
+        let endDate = Date()
+        let latestAnchor = calendar.startOfDay(for: endDate)
+        guard let startDate = calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: latestAnchor) else {
+            return nil
+        }
+
+        let samples: [HKCategorySample] = await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+            let query = HKSampleQuery(
+                sampleType: sleepType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, results, _ in
+                continuation.resume(returning: results as? [HKCategorySample] ?? [])
+            }
+            healthStore.execute(query)
+        }
+
+        let asleepSamples = samples.filter { isAsleepCategory($0.value) }
+        guard !asleepSamples.isEmpty else { return nil }
+
+        let groupedByDay = Dictionary(grouping: asleepSamples) { sample in
+            calendar.startOfDay(for: sample.endDate)
+        }
+
+        var sleepHoursByDay: [Date: Double] = [:]
+        var sleepStagesByDay: [Date: [String: Double]] = [:]
+        var bedtimeHourByDay: [Date: Double] = [:]
+
+        for (day, daySamples) in groupedByDay {
+            var stages: [String: Double] = [:]
+            for sample in daySamples {
+                let hours = sample.endDate.timeIntervalSince(sample.startDate) / 3600
+                stages[sleepStageName(for: sample.value), default: 0] += hours
+            }
+
+            sleepHoursByDay[day] = stages.values.reduce(0, +)
+            sleepStagesByDay[day] = stages
+
+            if let firstStart = daySamples.map(\.startDate).min() {
+                let components = calendar.dateComponents([.hour, .minute], from: firstStart)
+                bedtimeHourByDay[day] = Double(components.hour ?? 0) + Double(components.minute ?? 0) / 60
+            }
+        }
+
+        guard let latestDay = sleepHoursByDay.keys.max(),
+              let latestSleepHours = sleepHoursByDay[latestDay] else {
+            return nil
+        }
+
+        let recommendedSleepHours = min(
+            9.0,
+            max(
+                7.0,
+                sleepHoursByDay.values.isEmpty
+                    ? 8.0
+                    : sleepHoursByDay.values.reduce(0, +) / Double(sleepHoursByDay.count)
+            )
+        )
+        let sleepDebtHours = max(0, recommendedSleepHours - latestSleepHours)
+        let averageBedtimeHour = bedtimeHourByDay.values.isEmpty
+            ? 22.5
+            : bedtimeHourByDay.values.reduce(0, +) / Double(bedtimeHourByDay.count)
+        let stageOrder = ["Core", "REM", "Deep", "Asleep"]
+        let latestStages = stageOrder.compactMap { name -> (String, Double, Color)? in
+            guard let hours = sleepStagesByDay[latestDay]?[name], hours > 0.01 else { return nil }
+            return (name, hours, sleepStageColor(named: name))
+        }
+
+        return WatchLocalSleepSnapshot(
+            recommendedSleepHours: recommendedSleepHours,
+            sleepDebtHours: sleepDebtHours,
+            sleepScheduleText: sleepScheduleText(
+                bedtimeHour: averageBedtimeHour,
+                sleepGoalHours: recommendedSleepHours
+            ),
+            sleepHours: latestSleepHours,
+            sleepConsistencyScore: sleepConsistencyScore(from: bedtimeHourByDay),
+            sleepStages: latestStages.isEmpty ? [("Asleep", latestSleepHours, .cyan)] : latestStages
+        )
+    }
+
+    private func isAsleepCategory(_ value: Int) -> Bool {
+        if #available(watchOS 9.0, *) {
+            return value == HKCategoryValueSleepAnalysis.asleep.rawValue
+                || value == HKCategoryValueSleepAnalysis.asleepCore.rawValue
+                || value == HKCategoryValueSleepAnalysis.asleepDeep.rawValue
+                || value == HKCategoryValueSleepAnalysis.asleepREM.rawValue
+                || value == HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue
+        }
+
+        return value == HKCategoryValueSleepAnalysis.asleep.rawValue
+    }
+
+    private func sleepStageName(for value: Int) -> String {
+        if #available(watchOS 9.0, *) {
+            switch value {
+            case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
+                return "Core"
+            case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
+                return "REM"
+            case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
+                return "Deep"
+            default:
+                return "Asleep"
+            }
+        }
+
+        return "Asleep"
+    }
+
+    private func sleepConsistencyScore(from bedtimeHourByDay: [Date: Double]) -> Double {
+        let values = bedtimeHourByDay.values
+        guard values.count > 1 else { return 100 }
+
+        let mean = values.reduce(0, +) / Double(values.count)
+        let variance = values.reduce(0.0) { partial, value in
+            partial + pow(value - mean, 2)
+        } / Double(values.count)
+        let stdMinutes = sqrt(variance) * 60
+        return max(45, min(100, 100 - stdMinutes * 0.9))
+    }
+
+    private func sleepScheduleText(bedtimeHour: Double, sleepGoalHours: Double) -> String {
+        let bedtime = date(forHourValue: bedtimeHour)
+        let wakeDate = bedtime.addingTimeInterval(sleepGoalHours * 3600)
+        return "\(bedtime.formatted(date: .omitted, time: .shortened)) - \(wakeDate.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private func date(forHourValue hourValue: Double) -> Date {
+        let calendar = Calendar.current
+        let base = calendar.startOfDay(for: Date())
+        let normalized = hourValue.truncatingRemainder(dividingBy: 24)
+        let hour = Int(normalized)
+        let minute = Int((((normalized - floor(normalized)) * 60)).rounded()) % 60
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) ?? base
     }
 }
 

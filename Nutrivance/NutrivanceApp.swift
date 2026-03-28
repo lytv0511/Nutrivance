@@ -116,6 +116,8 @@ final class WatchDashboardSyncBridge: NSObject {
         static let dashboardPayload = "dashboardPayload"
         static let request = "request"
         static let dashboardSnapshot = "dashboardSnapshot"
+        static let showLiveWorkout = "showLiveWorkout"
+        static let accepted = "accepted"
     }
 
     private let session: WCSession? = WCSession.isSupported() ? WCSession.default : nil
@@ -302,19 +304,30 @@ extension WatchDashboardSyncBridge: WCSessionDelegate {
         didReceiveMessage message: [String : Any],
         replyHandler: @escaping ([String : Any]) -> Void
     ) {
-        guard (message[Keys.request] as? String) == Keys.dashboardSnapshot else {
-            replyHandler([:])
-            return
+        Task { @MainActor in
+            switch message[Keys.request] as? String {
+            case Keys.dashboardSnapshot:
+                if self.latestPayloadData == nil {
+                    self.publishLatestSnapshot(reason: "watch-request")
+                }
+
+                replyHandler([
+                    Keys.dashboardPayload: self.latestPayloadData ?? Data()
+                ])
+            case Keys.showLiveWorkout:
+                CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
+                replyHandler([Keys.accepted: true])
+            default:
+                replyHandler([:])
+            }
         }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
+        guard (userInfo[Keys.request] as? String) == Keys.showLiveWorkout else { return }
 
         Task { @MainActor in
-            if self.latestPayloadData == nil {
-                self.publishLatestSnapshot(reason: "watch-request")
-            }
-
-            replyHandler([
-                Keys.dashboardPayload: self.latestPayloadData ?? Data()
-            ])
+            CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
         }
     }
 }
@@ -1547,6 +1560,7 @@ struct NutrivanceApp: App {
     init() {
         StrainRecoveryAggressiveCachingController.shared.registerBackgroundTasks()
         WatchDashboardSyncBridge.shared.activateIfNeeded()
+        CompanionWorkoutLiveManager.shared.activateIfNeeded()
     }
 
     private func navigate(

@@ -3,7 +3,6 @@ import HealthKit
 import Charts
 import MapKit
 import CoreLocation
-import WeatherKit
 
 enum HRZoneConfigurationMode: String, CaseIterable, Identifiable {
     case intelligent
@@ -772,75 +771,6 @@ struct Split {
     let avgHR: Double?
 }
 
-private struct WorkoutWeatherSnapshot {
-    let requestedDay: Date
-    let temperatureCelsius: Double
-    let humidityFraction: Double
-    let airQualityLabel: String
-    let sourceLabel: String
-
-    var temperatureText: String {
-        String(format: "%.0f", temperatureCelsius)
-    }
-
-    var humidityText: String {
-        String(format: "%.0f", humidityFraction * 100)
-    }
-}
-
-private actor WorkoutWeatherService {
-    static let shared = WorkoutWeatherService()
-
-    private var cache: [String: WorkoutWeatherSnapshot?] = [:]
-    private let service = WeatherService.shared
-
-    func snapshot(for location: CLLocation, on day: Date) async -> WorkoutWeatherSnapshot? {
-        let roundedLat = (location.coordinate.latitude * 1000).rounded() / 1000
-        let roundedLon = (location.coordinate.longitude * 1000).rounded() / 1000
-        let dayStart = Calendar.current.startOfDay(for: day)
-        let cacheKey = "\(roundedLat)|\(roundedLon)|\(Int(dayStart.timeIntervalSince1970))"
-
-        if let cached = cache[cacheKey] {
-            return cached
-        }
-
-        do {
-            let weather = try await service.weather(for: location)
-            let calendar = Calendar.current
-            let sameDayHours = weather.hourlyForecast.forecast.filter {
-                calendar.isDate($0.date, inSameDayAs: dayStart)
-            }
-
-            if sameDayHours.isEmpty == false {
-                let averageTemperature = sameDayHours.map { $0.temperature.value }.average ?? sameDayHours[0].temperature.value
-                let averageHumidity = sameDayHours.map(\.humidity).average ?? sameDayHours[0].humidity
-                let snapshot = WorkoutWeatherSnapshot(
-                    requestedDay: dayStart,
-                    temperatureCelsius: averageTemperature,
-                    humidityFraction: averageHumidity,
-                    airQualityLabel: "Unavailable",
-                    sourceLabel: "Daily average conditions"
-                )
-                cache[cacheKey] = snapshot
-                return snapshot
-            }
-
-            let snapshot = WorkoutWeatherSnapshot(
-                requestedDay: dayStart,
-                temperatureCelsius: weather.currentWeather.temperature.value,
-                humidityFraction: weather.currentWeather.humidity,
-                airQualityLabel: "Unavailable",
-                sourceLabel: "Current conditions fallback"
-            )
-            cache[cacheKey] = snapshot
-            return snapshot
-        } catch {
-            cache[cacheKey] = nil
-            return nil
-        }
-    }
-}
-
 private struct HRZone {
     let name: String
     let color: Color
@@ -881,8 +811,6 @@ struct WorkoutDetailView: View {
     @State private var historicalRestingHR: Double? = nil
     @State private var hasResolvedZoneProfile = false
     @State private var localSelectedScrubbedDate: Date? = nil
-    @State private var weatherSnapshot: WorkoutWeatherSnapshot? = nil
-    @State private var isLoadingWeather = false
     @State private var showMapDetail = false
 
     private var activeDuration: TimeInterval {
@@ -993,22 +921,6 @@ struct WorkoutDetailView: View {
     private var selectedRouteLocation: CLLocation? {
         let referenceDate = selectedScrubbedDate ?? analytics.workout.startDate
         return nearestRouteLocation(to: referenceDate)
-    }
-
-    private var weatherReferenceLocation: CLLocation? {
-        if routeLookupLocations.isEmpty == false {
-            let coordinate = routeLookupLocations[routeLookupLocations.count / 2].coordinate
-            return CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        }
-        if routeLocations.isEmpty == false {
-            let coordinate = routeLocations[routeLocations.count / 2].coordinate
-            return CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        }
-        return nil
-    }
-
-    private var weatherReferenceDay: Date {
-        Calendar.current.startOfDay(for: analytics.workout.startDate)
     }
 
     private var selectedRouteCoordinateText: String? {
@@ -2340,30 +2252,6 @@ struct WorkoutDetailView: View {
         }
     }
 
-    private func loadWeatherSnapshot() async {
-        guard let location = weatherReferenceLocation else {
-            await MainActor.run {
-                weatherSnapshot = nil
-                isLoadingWeather = false
-            }
-            return
-        }
-
-        await MainActor.run {
-            isLoadingWeather = true
-        }
-
-        let snapshot = await WorkoutWeatherService.shared.snapshot(
-            for: location,
-            on: weatherReferenceDay
-        )
-
-        await MainActor.run {
-            weatherSnapshot = snapshot
-            isLoadingWeather = false
-        }
-    }
-
     private func generateSplits() -> [Split] {
         guard let totalDistance = analytics.workout.totalDistance?.doubleValue(for: .meter()) else { return [] }
         let splitDistanceKilometers = unitPreferences.resolvedDistanceUnit == .miles ? 1.609344 : 1.0
@@ -3177,52 +3065,6 @@ struct CompactWorkoutMetricCard: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(color.opacity(0.2), lineWidth: 1)
         )
-    }
-}
-
-private struct WorkoutWeatherCard: View {
-    let snapshot: WorkoutWeatherSnapshot?
-    let isLoading: Bool
-    let selectedDate: Date?
-
-    private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Weather")
-                    .font(.subheadline.bold())
-                Spacer()
-                if let snapshot {
-                    Text(snapshot.requestedDay, format: .dateTime.month().day())
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else if let selectedDate {
-                    Text(selectedDate, format: .dateTime.month().day())
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if let snapshot {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    WorkoutMetricCard(title: "Temp", value: snapshot.temperatureText, unit: "°C", icon: "thermometer.medium", color: .orange)
-                    WorkoutMetricCard(title: "Humidity", value: snapshot.humidityText, unit: "%", icon: "humidity.fill", color: .blue)
-                    WorkoutMetricCard(title: "Air Quality", value: snapshot.airQualityLabel, unit: "", icon: "aqi.medium", color: .green)
-                }
-
-                Text(snapshot.sourceLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Weather data is unavailable for this workout day.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 }
 

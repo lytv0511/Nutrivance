@@ -6,8 +6,13 @@
 //
 
 import Combine
+import CoreLocation
 import Foundation
+import HealthKit
+import MapKit
 import SwiftUI
+import WatchKit
+import WorkoutKit
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -15,29 +20,35 @@ struct ContentView: View {
     @State private var selectedTab: DashboardTab = .overview
 
     var body: some View {
-        NavigationStack {
-            TabView(selection: $selectedTab) {
-                OverviewDashboardPage(store: store, selectedTab: $selectedTab)
-                    .tag(DashboardTab.overview)
+        Group {
+            if store.workoutManager.isSessionActive {
+                ActiveWorkoutCardsView(manager: store.workoutManager)
+            } else {
+                NavigationStack {
+                    TabView(selection: $selectedTab) {
+                        OverviewDashboardPage(store: store, selectedTab: $selectedTab)
+                            .tag(DashboardTab.overview)
 
-                StrainDashboardPage(store: store, selectedTab: $selectedTab)
-                    .tag(DashboardTab.strain)
+                        StrainDashboardPage(store: store, selectedTab: $selectedTab)
+                            .tag(DashboardTab.strain)
 
-                RecoveryDashboardPage(store: store, selectedTab: $selectedTab)
-                    .tag(DashboardTab.recovery)
+                        RecoveryDashboardPage(store: store, selectedTab: $selectedTab)
+                            .tag(DashboardTab.recovery)
 
-                MindfulnessDashboardPage(store: store, selectedTab: $selectedTab)
-                    .tag(DashboardTab.mindfulness)
+                        MindfulnessDashboardPage(store: store, selectedTab: $selectedTab)
+                            .tag(DashboardTab.mindfulness)
 
-                WorkoutHistoryDashboardPage(store: store)
-                    .tag(DashboardTab.history)
-            }
-            .tabViewStyle(.verticalPage)
-            .ignoresSafeArea()
-            .containerBackground(.clear, for: .navigation)
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: WatchDestination.self) { destination in
-                destinationView(for: destination)
+                        WorkoutHistoryDashboardPage(store: store)
+                            .tag(DashboardTab.history)
+                    }
+                    .tabViewStyle(.verticalPage)
+                    .ignoresSafeArea()
+                    .containerBackground(.clear, for: .navigation)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .navigationDestination(for: WatchDestination.self) { destination in
+                        destinationView(for: destination)
+                    }
+                }
             }
         }
         .background(
@@ -116,6 +127,586 @@ struct ContentView: View {
             }
         }
     }
+}
+
+private enum ActiveWorkoutCard: Int {
+    case metrics
+    case zones
+    case map
+}
+
+private enum ActiveWorkoutSidePane: Int {
+    case controls
+    case main
+    case media
+}
+
+private struct ActiveWorkoutCardsView: View {
+    @ObservedObject var manager: WatchWorkoutManager
+    @StateObject private var mapTracker = WatchWorkoutMapTracker()
+    @State private var verticalSelection: ActiveWorkoutCard = .metrics
+    @State private var horizontalSelection: ActiveWorkoutSidePane = .main
+    @State private var shouldPrewarmMap = true
+
+    var body: some View {
+        TabView(selection: $horizontalSelection) {
+            WorkoutControlsCard(
+                manager: manager,
+                onWaterLock: {
+                    verticalSelection = .metrics
+                    horizontalSelection = .main
+                    mapTracker.setActive(false)
+                    manager.enableWaterLock()
+                }
+            )
+                .tag(ActiveWorkoutSidePane.controls)
+
+            TabView(selection: $verticalSelection) {
+                WorkoutMetricsCard(manager: manager)
+                    .tag(ActiveWorkoutCard.metrics)
+
+                WorkoutZonesCard(manager: manager)
+                    .tag(ActiveWorkoutCard.zones)
+
+                WorkoutMapCard(mapTracker: mapTracker)
+                    .tag(ActiveWorkoutCard.map)
+            }
+            .tabViewStyle(.verticalPage(transitionStyle: .automatic))
+            .tag(ActiveWorkoutSidePane.main)
+
+            WorkoutMediaCard()
+                .tag(ActiveWorkoutSidePane.media)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .background(Color.black.ignoresSafeArea())
+        .overlay {
+            if shouldPrewarmMap {
+                WorkoutMapPrewarmView(mapTracker: mapTracker)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .onAppear {
+            mapTracker.activate()
+            mapTracker.setActive(verticalSelection == .map)
+            Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                shouldPrewarmMap = false
+            }
+        }
+        .onChange(of: verticalSelection) { _, newValue in
+            mapTracker.setActive(newValue == .map)
+            if newValue == .map {
+                shouldPrewarmMap = false
+            }
+        }
+    }
+}
+
+private struct WorkoutMetricsCard: View {
+    @ObservedObject var manager: WatchWorkoutManager
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(alignment: .leading, spacing: 1) {
+                Image(systemName: watchWorkoutSymbol(manager.activeActivity))
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.green)
+                    .frame(width: 32, height: 32)
+                    .background(Color.green.opacity(0.18))
+                    .clipShape(Circle())
+
+                Text(preciseWorkoutElapsedString(manager.elapsedTime))
+                    .font(.system(size: 25, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                    .foregroundStyle(.yellow)
+                    .privacySensitive()
+
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
+                    Text(manager.currentHeartRate.map { "\(Int($0.rounded()))" } ?? "--")
+                        .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                        .fontWidth(.condensed)
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 17, weight: .black))
+                        .foregroundStyle(.red)
+                }
+                .padding(.bottom, 1)
+
+                ForEach(primaryWorkoutLines(for: manager)) { line in
+                    HStack(alignment: .lastTextBaseline, spacing: 6) {
+                        Text(line.value)
+                            .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
+                            .fontWidth(.condensed)
+                        if !line.label.isEmpty {
+                            Text(line.label)
+                                .font(.system(size: 9, weight: .black, design: .rounded))
+                                .fontWidth(.compressed)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            .offset(y: -8)
+            .padding(.horizontal, 7)
+            .padding(.top, 0)
+            .padding(.bottom, 2)
+        }
+    }
+}
+
+private struct WorkoutZonesCard: View {
+    @ObservedObject var manager: WatchWorkoutManager
+
+    var body: some View {
+        GeometryReader { geometry in
+            let currentZone = manager.currentZoneIndex ?? 0
+            let timeInZone = manager.liveZoneDurations[safe: currentZone] ?? 0
+            let contentWidth = min(geometry.size.width - 22, 154.0)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .top) {
+                    Image(systemName: watchWorkoutSymbol(manager.activeActivity))
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.green)
+                        .frame(width: 30, height: 30)
+                        .background(Color.green.opacity(0.18))
+                        .clipShape(Circle())
+                    Spacer(minLength: 0)
+                }
+
+                Text(preciseWorkoutElapsedString(manager.elapsedTime))
+                    .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                    .foregroundStyle(.yellow)
+
+                WorkoutZoneStrip(currentZone: currentZone)
+                    .padding(.vertical, 1)
+
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
+                    Text(manager.currentHeartRate.map { "\(Int($0.rounded()))" } ?? "--")
+                        .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                        .fontWidth(.condensed)
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 17, weight: .black))
+                        .foregroundStyle(.red)
+                }
+
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(shortElapsedString(timeInZone))
+                        .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
+                        .fontWidth(.condensed)
+                    Text("TIME\nIN ZONE")
+                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .fontWidth(.compressed)
+                        .foregroundStyle(.white.opacity(0.82))
+                }
+
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(manager.averageHeartRate.map { "\(Int($0.rounded()))BPM" } ?? "--")
+                        .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
+                        .fontWidth(.condensed)
+                    Text("AVERAGE\nHR")
+                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .fontWidth(.condensed)
+                        .foregroundStyle(.white.opacity(0.82))
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(width: contentWidth, height: geometry.size.height, alignment: .topLeading)
+            .padding(.leading, 8)
+            .padding(.top, 0)
+            .padding(.bottom, 2)
+        }
+    }
+}
+
+private struct WorkoutMapCard: View {
+    @ObservedObject var mapTracker: WatchWorkoutMapTracker
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            if mapTracker.hasRenderableMap {
+                WorkoutMapSurface(mapTracker: mapTracker)
+                    .ignoresSafeArea()
+            } else {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .tint(.white)
+                        Text(mapTracker.statusText)
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .fontWidth(.compressed)
+                            .foregroundStyle(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.horizontal, 14)
+                }
+            }
+
+            Text("MAP")
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .fontWidth(.compressed)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(8)
+        }
+    }
+}
+
+private struct WorkoutMapSurface: View {
+    @ObservedObject var mapTracker: WatchWorkoutMapTracker
+
+    var body: some View {
+        Map(position: $mapTracker.position, interactionModes: []) {
+            if let coordinate = mapTracker.userCoordinate {
+                Annotation("", coordinate: coordinate, anchor: .center) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue.opacity(0.22))
+                            .frame(width: 28, height: 28)
+                        Circle()
+                            .fill(Color.blue)
+                            .frame(width: 12, height: 12)
+                        Image(systemName: "location.north.fill")
+                            .font(.system(size: 10, weight: .black))
+                            .foregroundStyle(.white)
+                            .offset(y: -13)
+                    }
+                }
+            }
+        }
+        .mapStyle(.standard)
+    }
+}
+
+private struct WorkoutMapPrewarmView: View {
+    @ObservedObject var mapTracker: WatchWorkoutMapTracker
+
+    var body: some View {
+        Group {
+            if mapTracker.hasRenderableMap {
+                WorkoutMapSurface(mapTracker: mapTracker)
+                    .frame(width: 2, height: 2)
+                    .opacity(0.01)
+                    .clipped()
+            }
+        }
+    }
+}
+
+private struct WorkoutMediaCard: View {
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+            Color.black.ignoresSafeArea()
+            NowPlayingView()
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
+}
+
+private struct WorkoutControlsCard: View {
+    @ObservedObject var manager: WatchWorkoutManager
+    let onWaterLock: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let gridWidth = max(geometry.size.width - 10, 160.0)
+
+            VStack(spacing: 6) {
+                let columns = [GridItem(.fixed((gridWidth - 4) / 2), spacing: 4), GridItem(.fixed((gridWidth - 4) / 2), spacing: 4)]
+
+                LazyVGrid(columns: columns, spacing: 4) {
+                    if manager.displayState == .running {
+                        WorkoutControlPill(symbol: "pause.fill", title: "Pause", tint: Color(red: 0.58, green: 0.52, blue: 0.22)) {
+                            manager.pause()
+                        }
+                    } else if manager.displayState == .paused {
+                        WorkoutControlPill(symbol: "play.fill", title: "Resume", tint: Color(red: 0.22, green: 0.55, blue: 0.36)) {
+                            manager.resume()
+                        }
+                    } else {
+                        Color.clear
+                            .frame(height: 38)
+                    }
+
+                    WorkoutControlPill(symbol: "flag.checkered", title: "Split", tint: Color(red: 0.27, green: 0.42, blue: 0.58)) {
+                        manager.markSplit()
+                    }
+
+                    WorkoutControlPill(symbol: "drop.fill", title: "Lock", tint: Color(red: 0.24, green: 0.47, blue: 0.52)) {
+                        onWaterLock()
+                    }
+
+                    WorkoutControlPill(symbol: "iphone", title: "Phone", tint: Color(red: 0.31, green: 0.51, blue: 0.49)) {
+                        manager.showOnPhone()
+                    }
+
+                    WorkoutControlPill(symbol: "plus.circle.fill", title: "New", tint: Color(red: 0.52, green: 0.38, blue: 0.23)) {
+                        manager.newWorkout()
+                    }
+
+                    WorkoutControlPill(symbol: "stop.fill", title: "Stop", tint: Color(red: 0.56, green: 0.24, blue: 0.24)) {
+                        manager.end()
+                    }
+                }
+                .frame(width: gridWidth)
+
+                Text(manager.statusMessage)
+                    .font(.system(size: 8, weight: .black, design: .rounded))
+                    .fontWidth(.compressed)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                    .frame(width: gridWidth)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+
+                Spacer(minLength: 0)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+            .padding(.top, 4)
+            .padding(.bottom, 0)
+        }
+    }
+}
+
+private struct WorkoutZoneStrip: View {
+    let currentZone: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            zoneItem(0)
+            zoneItem(1)
+            zoneItem(2)
+            zoneItem(3)
+            zoneItem(4)
+        }
+        .frame(width: 150, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func zoneItem(_ index: Int) -> some View {
+        let isCurrent = index == currentZone
+
+        if isCurrent {
+            VStack(spacing: 1) {
+                HStack(spacing: 4) {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 8, weight: .black))
+                    Text("ZONE \(index + 1)")
+                        .font(.system(size: 8, weight: .black, design: .rounded))
+                        .fontWidth(.compressed)
+                }
+                .foregroundStyle(.black)
+                .frame(width: 84, height: 24)
+                .background(zoneColor(index).opacity(0.98))
+                .clipShape(Capsule())
+
+                Image(systemName: "arrowtriangle.up.fill")
+                    .font(.system(size: 7, weight: .black))
+                    .foregroundStyle(.white)
+            }
+        } else {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(zoneColor(index).opacity(0.45))
+                .frame(width: 18, height: 24)
+                .padding(.bottom, 9)
+        }
+    }
+}
+
+private struct WorkoutControlPill: View {
+    let symbol: String
+    let title: String
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .black))
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.system(size: 8, weight: .black, design: .rounded))
+                    .fontWidth(.compressed)
+                    .foregroundStyle(.white.opacity(0.88))
+            }
+            .frame(width: 78, height: 48)
+            .background(
+                LinearGradient(
+                    colors: [Color(white: 0.19), Color(white: 0.11)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                Capsule()
+                    .stroke(tint.opacity(0.45), lineWidth: 1)
+            )
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                WKInterfaceDevice.current().play(.click)
+            }
+        )
+    }
+}
+
+@MainActor
+private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published var position: MapCameraPosition = .automatic
+    @Published var userCoordinate: CLLocationCoordinate2D?
+    @Published var statusText = "Locating..."
+
+    private let locationManager = CLLocationManager()
+    private var hasActivated = false
+    private var isActive = false
+    private var isPrewarming = false
+    private var lastLocation: CLLocation?
+    private var lastHeading: CLLocationDirection?
+    private var lastCameraUpdate = Date.distantPast
+
+    var hasRenderableMap: Bool {
+        userCoordinate != nil
+    }
+
+    override init() {
+        super.init()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        locationManager.activityType = .fitness
+        locationManager.distanceFilter = 10
+        locationManager.headingFilter = 10
+    }
+
+    func activate() {
+        guard !hasActivated else { return }
+        hasActivated = true
+        locationManager.requestWhenInUseAuthorization()
+        if let currentLocation = locationManager.location {
+            lastLocation = currentLocation
+            userCoordinate = currentLocation.coordinate
+            statusText = "Following your route"
+            updateCamera(force: true)
+        }
+        beginPrewarm()
+        setActive(isActive)
+    }
+
+    func setActive(_ active: Bool) {
+        isActive = active
+        guard hasActivated else { return }
+
+        if active {
+            isPrewarming = false
+            statusText = userCoordinate == nil ? "Locating..." : "Following your route"
+            locationManager.startUpdatingLocation()
+            locationManager.startUpdatingHeading()
+            locationManager.requestLocation()
+            if let currentLocation = locationManager.location {
+                lastLocation = currentLocation
+                userCoordinate = currentLocation.coordinate
+                statusText = "Following your route"
+            }
+            updateCamera(force: true)
+        } else {
+            locationManager.stopUpdatingHeading()
+            if !isPrewarming {
+                locationManager.stopUpdatingLocation()
+            }
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            statusText = "Locating..."
+            setActive(isActive)
+        case .denied, .restricted:
+            statusText = "Location access needed"
+        default:
+            break
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        let previousLocation = lastLocation
+        lastLocation = location
+        userCoordinate = location.coordinate
+        statusText = "Following your route"
+        updateCamera(previousLocation: previousLocation)
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        let heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        guard heading >= 0 else { return }
+        lastHeading = heading
+        updateCamera(previousLocation: lastLocation)
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        if userCoordinate == nil {
+            statusText = "Waiting for GPS"
+        }
+    }
+
+    private func updateCamera(previousLocation: CLLocation? = nil, force: Bool = false) {
+        guard (isActive || isPrewarming), let location = lastLocation else { return }
+
+        let now = Date()
+        let movedEnough = previousLocation.map { previous in
+            location.distance(from: previous) >= 10
+        } ?? true
+        let headingChangedEnough = lastHeading.map { heading in
+            let prior = (positionHeading ?? heading)
+            return abs(heading - prior) >= 8
+        } ?? false
+
+        guard force || movedEnough || headingChangedEnough || now.timeIntervalSince(lastCameraUpdate) > 1.0 else {
+            return
+        }
+
+        let heading = lastHeading ?? location.course.clamped(to: 0...359)
+        let camera = MapCamera(
+            centerCoordinate: location.coordinate,
+            distance: 243.84,
+            heading: heading.isFinite ? heading : 0,
+            pitch: 0
+        )
+        position = .camera(camera)
+        positionHeading = heading
+        lastCameraUpdate = now
+    }
+
+    private func beginPrewarm() {
+        guard !isActive else { return }
+        isPrewarming = true
+        locationManager.startUpdatingLocation()
+        locationManager.requestLocation()
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self else { return }
+            self.isPrewarming = false
+            if !self.isActive {
+                self.locationManager.stopUpdatingLocation()
+                self.locationManager.stopUpdatingHeading()
+            }
+        }
+    }
+
+    private var positionHeading: CLLocationDirection?
 }
 
 private enum DashboardTab: Int, CaseIterable, Hashable {
@@ -312,7 +903,9 @@ final class WatchDashboardStore: ObservableObject {
         ("REM", 1.7, Color.purple),
         ("Deep", 1.1, Color.indigo)
     ]
-    let workoutTemplates = ["Outdoor Run", "Strength", "Cycle", "HIIT", "Walk"]
+    let workoutTemplates = WatchWorkoutTemplate.defaults
+    let wakeScheduler = WatchWakeScheduler()
+    let workoutManager = WatchWorkoutManager.shared
     @Published var stats: [(title: String, value: String, symbol: String, tint: Color)] = [
         ("Calories", "742 kcal", "flame.fill", .orange),
         ("Steps", "11,082", "figure.walk", .green),
@@ -1713,10 +2306,13 @@ private struct SleepManagerView: View {
                 SectionCard(title: "Wake-Up Timer") {
                     DatePicker("Wake Time", selection: $store.wakeUpTime, displayedComponents: .hourAndMinute)
                         .labelsHidden()
+                    Text(store.wakeScheduler.statusText)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.68))
                 }
 
                 SectionCard(title: "Suggestion") {
-                    Text("Aim to start your wind-down by 10:05 PM to clear the current sleep debt inside the next two nights.")
+                    Text(store.wakeSuggestionText)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.78))
                 }
@@ -1724,48 +2320,223 @@ private struct SleepManagerView: View {
             .padding(10)
         }
         .navigationTitle("Sleep Manager")
+        .task {
+            await store.wakeScheduler.scheduleWakeNotification(for: store.wakeUpTime)
+        }
+        .onChange(of: store.wakeUpTime) { _, newValue in
+            Task {
+                await store.wakeScheduler.scheduleWakeNotification(for: newValue)
+            }
+        }
     }
 }
 
 private struct WorkoutLauncherView: View {
     @ObservedObject var store: WatchDashboardStore
 
+    private func draftBinding<Value>(_ keyPath: WritableKeyPath<WatchCustomWorkoutDraft, Value>) -> Binding<Value> {
+        Binding {
+            store.workoutManager.customDraft[keyPath: keyPath]
+        } set: { newValue in
+            var updatedDraft = store.workoutManager.customDraft
+            updatedDraft[keyPath: keyPath] = newValue
+            store.workoutManager.customDraft = updatedDraft
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
-                if let queuedWorkout = store.queuedWorkout {
-                    SectionCard(title: "Ready") {
-                        Text("\(queuedWorkout) is queued for start.")
+                if store.workoutManager.isSessionActive {
+                    SectionCard(title: store.workoutManager.activeTitle ?? "Live Workout") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let subtitle = store.workoutManager.activeSubtitle {
+                                Text(subtitle)
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.68))
+                            }
+
+                            HStack {
+                                Text(elapsedWorkoutString(store.workoutManager.elapsedTime))
+                                    .font(.headline.monospacedDigit())
+                                Spacer()
+                                Text(store.workoutManager.displayState.rawValue.capitalized)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(store.workoutManager.displayState == .paused ? Color.yellow : Color.green)
+                            }
+
+                            ForEach(store.workoutManager.metrics) { metric in
+                                HStack {
+                                    Label(metric.title, systemImage: metric.symbol)
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.72))
+                                    Spacer()
+                                    Text(metric.valueText)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(metric.tint)
+                                }
+                            }
+
+                            HStack(spacing: 8) {
+                                if store.workoutManager.displayState == .running {
+                                    Button("Pause") {
+                                        store.workoutManager.pause()
+                                    }
+                                    .buttonStyle(.bordered)
+                                } else if store.workoutManager.displayState == .paused {
+                                    Button("Resume") {
+                                        store.workoutManager.resume()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.green)
+                                }
+
+                                Button("End") {
+                                    store.workoutManager.end()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.red)
+                            }
+                        }
+                    }
+                }
+
+                SectionCard(title: "Quick Start") {
+                    VStack(spacing: 8) {
+                        ForEach(store.workoutTemplates) { workout in
+                            Button {
+                                store.queuedWorkout = workout.title
+                                store.workoutManager.start(template: workout)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Label(workout.title, systemImage: workout.symbol)
+                                            .font(.caption.weight(.semibold))
+                                        Text(workout.subtitle)
+                                            .font(.caption2)
+                                            .foregroundStyle(.white.opacity(0.68))
+                                    }
+                                    Spacer()
+                                    Image(systemName: "play.fill")
+                                        .font(.caption.weight(.bold))
+                                }
+                                .padding(10)
+                                .background(Color.white.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                SectionCard(title: "Custom Workout") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Name", text: draftBinding(\.displayName))
+                            .padding(8)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        Picker("Activity", selection: draftBinding(\.activity)) {
+                            ForEach(store.workoutTemplates) { workout in
+                                Text(workout.title).tag(workout.activity)
+                            }
+                        }
+                        .labelsHidden()
+
+                        Picker("Location", selection: draftBinding(\.location)) {
+                            ForEach(WatchWorkoutLocationChoice.allCases) { choice in
+                                Text(choice.rawValue.capitalized).tag(choice)
+                            }
+                        }
+                        .labelsHidden()
+
+                        Picker("Goal", selection: draftBinding(\.goalMode)) {
+                            ForEach(WatchWorkoutGoalMode.allCases) { mode in
+                                Text(mode.rawValue.capitalized).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+
+                        if store.workoutManager.customDraft.goalMode != .open {
+                            Stepper(value: draftBinding(\.goalValue), in: 1...240, step: store.workoutManager.customDraft.goalMode == .distance ? 0.5 : 5) {
+                                Text(customGoalLabel(for: store.workoutManager.customDraft))
+                                    .font(.caption2)
+                            }
+                        }
+
+                        Stepper(value: draftBinding(\.warmupMinutes), in: 0...20, step: 1) {
+                            Text("Warm-up \(Int(store.workoutManager.customDraft.warmupMinutes)) min")
+                                .font(.caption2)
+                        }
+                        Stepper(value: draftBinding(\.workMinutes), in: 1...20, step: 1) {
+                            Text("Work \(Int(store.workoutManager.customDraft.workMinutes)) min")
+                                .font(.caption2)
+                        }
+                        Stepper(value: draftBinding(\.recoveryMinutes), in: 1...10, step: 1) {
+                            Text("Recovery \(Int(store.workoutManager.customDraft.recoveryMinutes)) min")
+                                .font(.caption2)
+                        }
+                        Stepper(value: draftBinding(\.repeats), in: 1...12, step: 1) {
+                            Text("Repeats \(store.workoutManager.customDraft.repeats)")
+                                .font(.caption2)
+                        }
+                        Stepper(value: draftBinding(\.cooldownMinutes), in: 0...20, step: 1) {
+                            Text("Cooldown \(Int(store.workoutManager.customDraft.cooldownMinutes)) min")
+                                .font(.caption2)
+                        }
+
+                        HStack(spacing: 8) {
+                            Button("Start") {
+                                store.queuedWorkout = store.workoutManager.customDraft.displayName
+                                store.workoutManager.startCustomWorkout()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+
+                            Button("Schedule") {
+                                store.workoutManager.scheduleCustomWorkoutForTomorrow()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Text("Start launches a live custom session here. Schedule sends the structured interval workout to WorkoutKit for Apple Watch.")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+                }
+
+                if !store.workoutManager.statusMessage.isEmpty {
+                    SectionCard(title: "Status") {
+                        Text(store.workoutManager.statusMessage)
                             .font(.caption2)
                     }
                 }
 
-                ForEach(store.workoutTemplates, id: \.self) { workout in
-                    Button {
-                        store.queuedWorkout = workout
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(workout)
-                                    .font(.caption.weight(.semibold))
-                                Text("Tap to stage")
+                if #available(watchOS 10.0, *), !store.workoutManager.scheduledPlans.isEmpty {
+                    SectionCard(title: "Scheduled") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if store.workoutManager.scheduledPlans.indices.contains(0) {
+                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[0].date))
                                     .font(.caption2)
-                                    .foregroundStyle(.white.opacity(0.68))
                             }
-                            Spacer()
-                            Image(systemName: "play.fill")
-                                .font(.caption.weight(.bold))
+                            if store.workoutManager.scheduledPlans.indices.contains(1) {
+                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[1].date))
+                                    .font(.caption2)
+                            }
+                            if store.workoutManager.scheduledPlans.indices.contains(2) {
+                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[2].date))
+                                    .font(.caption2)
+                            }
                         }
-                        .padding(10)
-                        .background(Color.white.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(10)
         }
         .navigationTitle("Workout")
+        .task {
+            store.workoutManager.activate()
+        }
     }
 }
 
@@ -2479,6 +3250,44 @@ private func relativeDate(_ date: Date) -> String {
     return formatter.localizedString(for: date, relativeTo: Date())
 }
 
+private func elapsedWorkoutString(_ elapsed: TimeInterval) -> String {
+    let formatter = DateComponentsFormatter()
+    formatter.allowedUnits = elapsed >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
+    formatter.zeroFormattingBehavior = [.pad]
+    return formatter.string(from: elapsed) ?? "00:00"
+}
+
+private func customGoalLabel(for draft: WatchCustomWorkoutDraft) -> String {
+    switch draft.goalMode {
+    case .open:
+        return "Open goal"
+    case .time:
+        return "Goal \(Int(draft.goalValue)) min"
+    case .distance:
+        return String(format: "Goal %.1f km", draft.goalValue)
+    case .energy:
+        return "Goal \(Int(draft.goalValue)) kcal"
+    }
+}
+
+private func scheduledWorkoutText(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
+}
+
+private func scheduledWorkoutText(_ components: DateComponents) -> String {
+    guard let date = Calendar.current.date(from: components) else {
+        return "Scheduled workout"
+    }
+
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
+}
+
 private func shortMetricLabel(_ value: Double) -> String {
     if value >= 100 {
         return String(format: "%.0f", value)
@@ -2543,6 +3352,161 @@ private func hoursString(_ hours: Double) -> String {
     let wholeHours = Int(hours)
     let minutes = Int(((hours - Double(wholeHours)) * 60).rounded())
     return "\(wholeHours)h \(minutes)m"
+}
+
+private struct WorkoutPrimaryLine: Identifiable {
+    let id: String
+    let value: String
+    let label: String
+}
+
+private func primaryWorkoutLines(for manager: WatchWorkoutManager) -> [WorkoutPrimaryLine] {
+    let distanceMiles = manager.totalDistanceMeters / 1609.344
+    let distanceKilometers = manager.totalDistanceMeters / 1000
+    let elapsedHours = max(manager.elapsedTime / 3600, 0.0001)
+    let averageSpeedMPH = distanceMiles / elapsedHours
+    let averageSpeedKPH = distanceKilometers / elapsedHours
+    let averagePaceSecondsPerMile = distanceMiles > 0 ? manager.elapsedTime / distanceMiles : 0
+    let rollingPaceSecondsPerMile = (manager.currentSpeedMetersPerSecond ?? 0) > 0
+        ? 1609.344 / max(manager.currentSpeedMetersPerSecond ?? 0, 0.01)
+        : 0
+
+    switch manager.activeActivity {
+    case .some(.running), .some(.walking):
+        return [
+            WorkoutPrimaryLine(id: "rolling-mile", value: paceString(secondsPerMile: rollingPaceSecondsPerMile), label: "ROLLING MILE"),
+            WorkoutPrimaryLine(id: "avg-pace", value: paceString(secondsPerMile: averagePaceSecondsPerMile), label: "AVERAGE PACE"),
+            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "")
+        ]
+    case .some(.cycling):
+        return [
+            WorkoutPrimaryLine(id: "avg-speed", value: speedString(mph: averageSpeedMPH), label: "AVERAGE SPEED"),
+            WorkoutPrimaryLine(id: "power", value: manager.currentPowerWatts.map { "\(Int($0.rounded()))W" } ?? "--", label: "POWER"),
+            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "")
+        ]
+    case .some(.swimming):
+        return [
+            WorkoutPrimaryLine(id: "distance", value: distanceString(kilometers: distanceKilometers), label: "DISTANCE"),
+            WorkoutPrimaryLine(id: "strokes", value: manager.strokeCount.map { "\(Int($0.rounded()))" } ?? "--", label: "STROKES"),
+            WorkoutPrimaryLine(id: "avg-hr", value: manager.averageHeartRate.map { "\(Int($0.rounded()))" } ?? "--", label: "AVERAGE HR")
+        ]
+    case .some(.hiking):
+        return [
+            WorkoutPrimaryLine(id: "avg-speed", value: speedString(kph: averageSpeedKPH), label: "AVERAGE SPEED"),
+            WorkoutPrimaryLine(id: "climb", value: manager.flightsClimbed.map { "\(Int($0.rounded())) FL" } ?? "--", label: "ELEVATION"),
+            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "")
+        ]
+    default:
+        return [
+            WorkoutPrimaryLine(id: "energy", value: manager.metrics.first(where: { $0.id == "energy" })?.valueText ?? "--", label: "ENERGY"),
+            WorkoutPrimaryLine(id: "avg-hr", value: manager.averageHeartRate.map { "\(Int($0.rounded())) BPM" } ?? "--", label: "AVERAGE HR"),
+            WorkoutPrimaryLine(id: "time", value: preciseWorkoutElapsedString(manager.elapsedTime), label: "ELAPSED")
+        ]
+    }
+}
+
+private func summaryMetricCards(from metrics: [WatchLiveMetric]) -> [WatchLiveMetric] {
+    let preferredIDs = ["hr-current", "distance", "energy", "speed-current", "hr-avg", "power-current"]
+    let filtered = metrics.filter { preferredIDs.contains($0.id) }
+    return filtered.isEmpty ? Array(metrics.prefix(6)) : filtered
+}
+
+private func specificMetricCards(
+    from metrics: [WatchLiveMetric],
+    activity: HKWorkoutActivityType?
+) -> [WatchLiveMetric] {
+    let preferredIDs: [String]
+
+    switch activity {
+    case .running:
+        preferredIDs = ["speed-current", "stride", "gct", "vo", "power-current", "hr-avg"]
+    case .cycling:
+        preferredIDs = ["power-current", "power-avg", "cadence", "speed-current", "distance", "hr-avg"]
+    case .swimming:
+        preferredIDs = ["distance", "strokes", "energy", "hr-avg"]
+    case .walking, .hiking:
+        preferredIDs = ["speed-current", "distance", "flights", "energy", "hr-avg"]
+    default:
+        preferredIDs = ["power-current", "cadence", "stride", "gct", "vo", "flights", "strokes", "hr-avg"]
+    }
+
+    let filtered = metrics.filter { preferredIDs.contains($0.id) }
+    return filtered.isEmpty ? metrics : filtered
+}
+
+private func shortElapsedString(_ elapsed: TimeInterval) -> String {
+    let formatter = DateComponentsFormatter()
+    formatter.allowedUnits = elapsed >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
+    formatter.zeroFormattingBehavior = [.pad]
+    return formatter.string(from: elapsed) ?? "00:00"
+}
+
+private func preciseWorkoutElapsedString(_ elapsed: TimeInterval) -> String {
+    let totalCentiseconds = Int((elapsed * 100).rounded())
+    let centiseconds = totalCentiseconds % 100
+    let totalSeconds = totalCentiseconds / 100
+    let seconds = totalSeconds % 60
+    let totalMinutes = totalSeconds / 60
+    let minutes = totalMinutes % 60
+    let hours = totalMinutes / 60
+
+    if hours > 0 {
+        return String(format: "%02d:%02d:%02d.%02d", hours, minutes, seconds, centiseconds)
+    }
+    if minutes > 0 {
+        return String(format: "%02d:%02d.%02d", minutes, seconds, centiseconds)
+    }
+    return String(format: "%02d.%02d", seconds, centiseconds)
+}
+
+private func paceString(secondsPerMile: Double) -> String {
+    guard secondsPerMile.isFinite, secondsPerMile > 0 else { return "--" }
+    let minutes = Int(secondsPerMile) / 60
+    let seconds = Int(secondsPerMile) % 60
+    return String(format: "%d'%02d''", minutes, seconds)
+}
+
+private func speedString(mph: Double) -> String {
+    guard mph.isFinite, mph > 0 else { return "--" }
+    return String(format: "%.1fMPH", mph)
+}
+
+private func speedString(kph: Double) -> String {
+    guard kph.isFinite, kph > 0 else { return "--" }
+    return String(format: "%.1fKM/H", kph)
+}
+
+private func distanceString(miles: Double) -> String {
+    guard miles.isFinite, miles > 0 else { return "0.00MI" }
+    return String(format: "%.2fMI", miles)
+}
+
+private func distanceString(kilometers: Double) -> String {
+    guard kilometers.isFinite, kilometers > 0 else { return "0.00KM" }
+    return String(format: "%.2fKM", kilometers)
+}
+
+private func watchWorkoutSymbol(_ activityType: HKWorkoutActivityType?) -> String {
+    switch activityType {
+    case .some(.running):
+        return "figure.run"
+    case .some(.walking):
+        return "figure.walk"
+    case .some(.cycling):
+        return "bicycle"
+    case .some(.swimming):
+        return "figure.pool.swim"
+    case .some(.hiking):
+        return "figure.hiking"
+    case .some(.traditionalStrengthTraining), .some(.functionalStrengthTraining):
+        return "dumbbell.fill"
+    case .some(.highIntensityIntervalTraining):
+        return "flame.fill"
+    case .some(.yoga):
+        return "figure.mind.and.body"
+    default:
+        return "figure.run"
+    }
 }
 
 private extension Comparable {
