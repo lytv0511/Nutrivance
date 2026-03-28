@@ -149,14 +149,14 @@ final class WatchDashboardSyncBridge: NSObject {
 
     private func configureObservers() {
         engine.objectWillChange
-            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .debounce(for: .milliseconds(350), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 self?.scheduleSnapshotRefresh(reason: "engine")
             }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 self?.scheduleSnapshotRefresh(reason: "defaults")
             }
@@ -165,7 +165,7 @@ final class WatchDashboardSyncBridge: NSObject {
 
     private func scheduleSnapshotRefresh(
         reason: String,
-        delayNanoseconds: UInt64 = 250_000_000
+        delayNanoseconds: UInt64 = 100_000_000
     ) {
         pendingSyncTask?.cancel()
         pendingSyncTask = Task { [weak self] in
@@ -541,9 +541,11 @@ private func watchReadinessScore(
         hrvTrendComponent = engine.hrvTrendScore
     }
 
-    let normalizedStrain = HealthStateEngine.normalizedStrainPercent(from: strainScore)
-    let readiness = (recoveryScore * 0.70) + (hrvTrendComponent * 0.10) - (normalizedStrain * 0.25) + 25
-    return max(0, min(100, readiness))
+    return HealthStateEngine.proReadinessScore(
+        recoveryScore: recoveryScore,
+        strainScore: strainScore,
+        hrvTrendComponent: hrvTrendComponent
+    )
 }
 
 private func watchDailyLoadSnapshots(

@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 import HealthKit
 #if canImport(WatchConnectivity)
 import WatchConnectivity
@@ -224,6 +225,11 @@ struct CompanionWorkoutPacerTarget: Hashable {
     let unitLabel: String
 }
 
+private enum CompanionWorkoutSource {
+    case appleWatch
+    case thisDevice
+}
+
 @MainActor
 final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     static let shared = CompanionWorkoutLiveManager()
@@ -234,6 +240,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         case split
         case stop
         case newWorkout
+    }
+
+    private enum SessionStateText {
+        static let watchConnecting = "Connecting to Apple Watch..."
+        static let watchLive = "Live on Apple Watch"
+        static let phoneRunning = "Running on iPhone"
+        static let phonePaused = "Paused on iPhone"
+        static let ended = "Ended"
     }
 
     private struct MirroredMetricPayload: Codable {
@@ -329,16 +343,45 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     @Published private(set) var elevationGainFeet: Double = 0
     @Published private(set) var pacerTarget: CompanionWorkoutPacerTarget?
     @Published private(set) var isWorkoutActive = false
+    private var source: CompanionWorkoutSource = .appleWatch
+    @Published private(set) var launchStatusMessage: String?
 
     private let healthStore = HKHealthStore()
+    private let locationManager = CLLocationManager()
     private var mirroredSession: HKWorkoutSession?
+    private var localSession: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var startedAt: Date?
     private var elapsedTimer: Timer?
     private var hasActivated = false
+    private var authorizationRequestInFlight = false
+    private var locationAuthorizationContinuation: CheckedContinuation<Bool, Never>?
+    private var lastLocation: CLLocation?
+    private var localWorkoutTitle = "Workout"
+    private var localWorkoutSubtitle = ""
+    private var pendingLocalEndAction: WorkoutControlCommand?
+
+    private enum CompanionLifecycleKeys {
+        static let workoutLifecycle = "workoutLifecycle"
+        static let state = "state"
+        static let reason = "reason"
+    }
 
     var canReopenLiveView: Bool {
         isWorkoutActive && !isVisible
+    }
+
+    var isPaused: Bool {
+        stateText.localizedCaseInsensitiveContains("paused")
+    }
+
+    override init() {
+        super.init()
+        locationManager.delegate = self
+        locationManager.activityType = .fitness
+        locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        locationManager.distanceFilter = 5
+        locationManager.pausesLocationUpdatesAutomatically = false
     }
 
     func activateIfNeeded() {
@@ -349,14 +392,27 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                 self?.attachMirroredSession(session)
             }
         }
+#if canImport(WatchConnectivity)
+        if WCSession.isSupported() {
+            let session = WCSession.default
+            session.delegate = self
+            if session.activationState != .activated {
+                session.activate()
+            }
+        }
+#endif
     }
 
     private func attachMirroredSession(_ session: HKWorkoutSession) {
+        resetForNewSession()
         mirroredSession = session
+        localSession = nil
         session.delegate = self
         activityType = session.workoutConfiguration.activityType
         title = session.workoutConfiguration.activityType.name
-        stateText = "Live on Apple Watch"
+        stateText = SessionStateText.watchLive
+        source = .appleWatch
+        launchStatusMessage = nil
         startedAt = Date()
         startElapsedTimer()
         isWorkoutActive = true
@@ -392,6 +448,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         if let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate),
            let heartStats = builder.statistics(for: heartRateType),
            let current = heartStats.mostRecentQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+            currentHeartRate = current
+            averageHeartRate = heartStats.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
             updated.append(.init(id: "hr", title: "Heart Rate", value: "\(Int(current.rounded())) bpm", symbol: "heart.fill", tint: .red))
         }
 
@@ -403,7 +461,13 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let distanceTypes: [HKQuantityTypeIdentifier] = [.distanceWalkingRunning, .distanceCycling, .distanceSwimming]
         if let distanceType = distanceTypes.compactMap(HKQuantityType.quantityType(forIdentifier:)).first(where: { builder.statistics(for: $0) != nil }),
            let distance = builder.statistics(for: distanceType)?.sumQuantity()?.doubleValue(for: .meter()) {
+            totalDistanceMeters = max(totalDistanceMeters, distance)
             let label = distance >= 1000 ? String(format: "%.2f km", distance / 1000) : "\(Int(distance.rounded())) m"
+            updated.append(.init(id: "distance", title: "Distance", value: label, symbol: "location.fill", tint: .green))
+        } else if totalDistanceMeters > 0 {
+            let label = totalDistanceMeters >= 1000
+                ? String(format: "%.2f km", totalDistanceMeters / 1000)
+                : "\(Int(totalDistanceMeters.rounded())) m"
             updated.append(.init(id: "distance", title: "Distance", value: label, symbol: "location.fill", tint: .green))
         }
 
@@ -411,6 +475,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             .compactMap(HKQuantityType.quantityType(forIdentifier:))
             .first(where: { builder.statistics(for: $0) != nil }),
            let power = builder.statistics(for: powerType)?.mostRecentQuantity()?.doubleValue(for: .watt()) {
+            currentPowerWatts = power
+            averagePowerWatts = builder.statistics(for: powerType)?.averageQuantity()?.doubleValue(for: .watt())
             updated.append(.init(id: "power", title: "Power", value: "\(Int(power.rounded())) W", symbol: "bolt.fill", tint: .yellow))
         }
 
@@ -418,20 +484,41 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             .compactMap(HKQuantityType.quantityType(forIdentifier:))
             .first(where: { builder.statistics(for: $0) != nil }),
            let speed = builder.statistics(for: speedType)?.mostRecentQuantity()?.doubleValue(for: HKUnit.meter().unitDivided(by: .second())) {
+            currentSpeedMetersPerSecond = speed
+            updated.append(.init(id: "speed", title: "Speed", value: String(format: "%.1f km/h", speed * 3.6), symbol: "speedometer", tint: .cyan))
+        } else if let speed = currentSpeedMetersPerSecond, speed > 0 {
             updated.append(.init(id: "speed", title: "Speed", value: String(format: "%.1f km/h", speed * 3.6), symbol: "speedometer", tint: .cyan))
         }
 
         if let cadenceType = HKQuantityType.quantityType(forIdentifier: .cyclingCadence),
            let cadence = builder.statistics(for: cadenceType)?.mostRecentQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
+            currentCadence = cadence
             updated.append(.init(id: "cadence", title: "Cadence", value: "\(Int(cadence.rounded())) rpm", symbol: "metronome.fill", tint: .mint))
+        } else if let cadence = currentCadence {
+            updated.append(.init(id: "cadence", title: "Cadence", value: "\(Int(cadence.rounded())) rpm", symbol: "metronome.fill", tint: .mint))
+        }
+
+        if source == .thisDevice && currentElevationFeet != 0 {
+            updated.append(.init(id: "elevation", title: "Elevation", value: "\(Int(currentElevationFeet.rounded())) ft", symbol: "mountain.2.fill", tint: .green))
         }
 
         metrics = updated
     }
 
     private func applyRemoteSnapshot(_ payload: MirroredWorkoutSnapshotPayload) {
+        let normalizedState = payload.stateText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["ended", "failed", "idle"].contains(normalizedState) {
+            launchStatusMessage = normalizedState == "failed"
+                ? "Apple Watch workout became unavailable."
+                : "Apple Watch workout finished."
+            finishSession()
+            return
+        }
+
         title = payload.title
         stateText = payload.stateText
+        source = .appleWatch
+        launchStatusMessage = nil
         activityType = HKWorkoutActivityType(rawValue: payload.activityRawValue) ?? .running
         elapsedTime = payload.elapsedTime
         startedAt = Date().addingTimeInterval(-payload.elapsedTime)
@@ -477,8 +564,24 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         pacerTarget = payload.pacerTarget.map {
             CompanionWorkoutPacerTarget(lowerBound: $0.lowerBound, upperBound: $0.upperBound, unitLabel: $0.unitLabel)
         }
-        isWorkoutActive = payload.stateText != "Ended"
+        isWorkoutActive = true
         isVisible = true
+    }
+
+    private func handleWatchLifecycleState(_ state: String, reason: String?) {
+        let normalizedState = state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["ended", "failed", "idle"].contains(normalizedState) else { return }
+        guard source == .appleWatch || mirroredSession != nil || isWorkoutActive else { return }
+
+        switch normalizedState {
+        case "failed":
+            launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout became unavailable."
+        case "idle":
+            launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout cleared."
+        default:
+            launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout finished."
+        }
+        finishSession()
     }
 
     func primePresentationFromWatchRequest() {
@@ -486,9 +589,105 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         isWorkoutActive = true
         if !isVisible {
             title = "Watch Workout"
-            stateText = mirroredSession == nil ? "Connecting..." : stateText
+            stateText = mirroredSession == nil ? SessionStateText.watchConnecting : stateText
+            source = .appleWatch
             isVisible = true
         }
+    }
+
+    func startWorkoutOnThisDevice(
+        title: String,
+        subtitle: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType
+    ) {
+        Task {
+            launchStatusMessage = nil
+            guard await requestWorkoutAuthorization() else {
+                launchStatusMessage = "Health permissions are required to start on iPhone."
+                return
+            }
+
+            if location == .outdoor {
+                guard await requestLocationAuthorizationIfNeeded() else {
+                    launchStatusMessage = "Location permission is required for outdoor workout tracking."
+                    return
+                }
+            }
+
+            do {
+                try beginLocalWorkout(title: title, subtitle: subtitle, activity: activity, location: location)
+                launchStatusMessage = location == .outdoor
+                    ? "Started on iPhone. GPS and connected HealthKit-compatible sensors will appear here."
+                    : "Started on iPhone."
+            } catch {
+                launchStatusMessage = "Could not start the workout on iPhone."
+            }
+        }
+    }
+
+    func startWorkoutOnWatch(
+        title: String,
+        subtitle: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        routeName: String? = nil,
+        trailheadCoordinate: CLLocationCoordinate2D? = nil,
+        routeCoordinates: [CLLocationCoordinate2D] = []
+    ) {
+#if canImport(WatchConnectivity)
+        activateIfNeeded()
+        guard WCSession.isSupported() else {
+            launchStatusMessage = "Apple Watch is unavailable on this device."
+            return
+        }
+
+        let session = WCSession.default
+        var payload: [String: Any] = [
+            "workoutStart": true,
+            "title": title,
+            "subtitle": subtitle,
+            "activityRawValue": Int(activity.rawValue),
+            "locationRawValue": location.rawValue
+        ]
+        if let routeName, !routeName.isEmpty {
+            payload["routeName"] = routeName
+        }
+        if let trailheadCoordinate {
+            payload["trailheadLatitude"] = trailheadCoordinate.latitude
+            payload["trailheadLongitude"] = trailheadCoordinate.longitude
+        }
+        if !routeCoordinates.isEmpty {
+            payload["routeCoordinates"] = routeCoordinates.map { [$0.latitude, $0.longitude] }
+        }
+
+        launchStatusMessage = "Starting on Apple Watch..."
+        primePresentationFromWatchRequest()
+
+        if session.activationState != .activated {
+            session.activate()
+        }
+
+        if session.isReachable {
+            session.sendMessage(payload) { [weak self] reply in
+                Task { @MainActor in
+                    if (reply["accepted"] as? Bool) == true {
+                        self?.launchStatusMessage = "Apple Watch workout started."
+                    } else {
+                        self?.launchStatusMessage = "Apple Watch did not confirm the workout start."
+                    }
+                }
+            } errorHandler: { [weak self] _ in
+                Task { @MainActor in
+                    self?.launchStatusMessage = "Watch is not reachable. The start request was queued."
+                }
+            }
+        } else {
+            session.transferUserInfo(payload)
+        }
+#else
+        launchStatusMessage = "Watch connectivity is unavailable."
+#endif
     }
 
     func dismissLiveView() {
@@ -502,58 +701,303 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     }
 
     func sendControl(_ command: WorkoutControlCommand) {
+        if source == .thisDevice {
+            handleLocalControl(command)
+            return
+        }
+
 #if canImport(WatchConnectivity)
         activateIfNeeded()
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
+        let payload: [String: Any] = ["workoutControl": command.rawValue]
+        applyOptimisticWatchControlState(command)
 
-        guard session.activationState == .activated else {
+        if session.activationState != .activated {
             session.activate()
-            return
         }
 
-        let payload: [String: Any] = ["workoutControl": command.rawValue]
         if session.isReachable {
-            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+            session.sendMessage(payload) { [weak self] _ in
+                Task { @MainActor in
+                    self?.launchStatusMessage = nil
+                }
+            } errorHandler: { [weak self] _ in
+                Task { @MainActor in
+                    self?.launchStatusMessage = "Watch control was queued and will sync when reachable."
+                }
+            }
         } else {
             session.transferUserInfo(payload)
         }
 #endif
     }
 
+    private func handleLocalControl(_ command: WorkoutControlCommand) {
+        switch command {
+        case .pause:
+            guard let localSession else { return }
+            stateText = SessionStateText.phonePaused
+            localSession.pause()
+            stopElapsedTimer()
+        case .resume:
+            guard let localSession else { return }
+            startedAt = Date().addingTimeInterval(-elapsedTime)
+            stateText = SessionStateText.phoneRunning
+            localSession.resume()
+            startElapsedTimer()
+        case .split:
+            appendSplit()
+        case .stop:
+            pendingLocalEndAction = .stop
+            endLocalWorkout()
+        case .newWorkout:
+            pendingLocalEndAction = .newWorkout
+            endLocalWorkout()
+        }
+    }
+
+    private func applyOptimisticWatchControlState(_ command: WorkoutControlCommand) {
+        switch command {
+        case .pause:
+            stateText = "Paused"
+        case .resume:
+            stateText = "Running"
+        case .split:
+            launchStatusMessage = "Split sent to Apple Watch."
+        case .stop:
+            stateText = SessionStateText.ended
+        case .newWorkout:
+            launchStatusMessage = "Requested next workout on Apple Watch."
+        }
+    }
+
+    private func requestWorkoutAuthorization() async -> Bool {
+        guard HKHealthStore.isHealthDataAvailable() else { return false }
+        if authorizationRequestInFlight { return false }
+        authorizationRequestInFlight = true
+        defer { authorizationRequestInFlight = false }
+
+        let readTypes: Set<HKObjectType> = Set([
+            HKObjectType.workoutType(),
+            HKSeriesType.workoutRoute(),
+            HKQuantityType.quantityType(forIdentifier: .heartRate),
+            HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned),
+            HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning),
+            HKQuantityType.quantityType(forIdentifier: .distanceCycling),
+            HKQuantityType.quantityType(forIdentifier: .distanceSwimming),
+            HKQuantityType.quantityType(forIdentifier: .runningSpeed),
+            HKQuantityType.quantityType(forIdentifier: .walkingSpeed),
+            HKQuantityType.quantityType(forIdentifier: .runningPower),
+            HKQuantityType.quantityType(forIdentifier: .cyclingPower),
+            HKQuantityType.quantityType(forIdentifier: .cyclingCadence),
+            HKQuantityType.quantityType(forIdentifier: .flightsClimbed)
+        ].compactMap { $0 })
+
+        let shareTypes: Set<HKSampleType> = Set([
+            HKObjectType.workoutType(),
+            HKSeriesType.workoutRoute()
+        ])
+
+        do {
+            try await healthStore.requestAuthorization(toShare: shareTypes, read: readTypes)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func requestLocationAuthorizationIfNeeded() async -> Bool {
+        let status = locationManager.authorizationStatus
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return true
+        case .restricted, .denied:
+            return false
+        case .notDetermined:
+            return await withCheckedContinuation { continuation in
+                locationAuthorizationContinuation = continuation
+                locationManager.requestWhenInUseAuthorization()
+            }
+        @unknown default:
+            return false
+        }
+    }
+
+    private func beginLocalWorkout(
+        title: String,
+        subtitle: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType
+    ) throws {
+        resetForNewSession()
+
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = activity
+        configuration.locationType = location
+
+        let session = try HKWorkoutSession(healthStore: healthStore, configuration: configuration)
+        let builder = session.associatedWorkoutBuilder()
+        builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuration)
+
+        localWorkoutTitle = title
+        localWorkoutSubtitle = subtitle
+        localSession = session
+        mirroredSession = nil
+        self.builder = builder
+        self.title = title
+        self.activityType = activity
+        self.source = .thisDevice
+        self.stateText = SessionStateText.phoneRunning
+        self.pageKinds = localPageKinds(for: activity, location: location)
+        self.isWorkoutActive = true
+        self.isVisible = true
+        self.pendingLocalEndAction = nil
+
+        session.delegate = self
+        builder.delegate = self
+
+        let startDate = Date()
+        startedAt = startDate
+        session.startActivity(with: startDate)
+        startElapsedTimer()
+
+        if location == .outdoor {
+            lastLocation = nil
+            locationManager.startUpdatingLocation()
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await builder.beginCollection(at: startDate)
+                self.rebuildMetrics()
+            } catch {
+                self.launchStatusMessage = "Could not begin live workout collection."
+                self.finishSession()
+            }
+        }
+    }
+
+    private func localPageKinds(for activity: HKWorkoutActivityType, location: HKWorkoutSessionLocationType) -> [CompanionWorkoutPageKind] {
+        var pages: [CompanionWorkoutPageKind] = [.metricsPrimary, .heartRateZones, .segments, .splits]
+        if activity == .cycling {
+            pages.append(.powerGraph)
+        }
+        if location == .outdoor {
+            pages.append(.map)
+            pages.append(.elevationGraph)
+        }
+        return pages
+    }
+
+    private func appendSplit() {
+        let splitElapsed = max(elapsedTime - (splits.last?.elapsedTime ?? 0), 0)
+        let previousDistance = splits.reduce(0) { $0 + $1.splitDistanceMeters }
+        let splitDistance = max(totalDistanceMeters - previousDistance, 0)
+        let nextIndex = splits.count + 1
+
+        splits.append(
+            CompanionWorkoutSplit(
+                index: nextIndex,
+                elapsedTime: elapsedTime,
+                splitDuration: splitElapsed,
+                splitDistanceMeters: splitDistance,
+                averageHeartRate: averageHeartRate,
+                averageSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+                averagePowerWatts: averagePowerWatts ?? currentPowerWatts,
+                averageCadence: currentCadence
+            )
+        )
+    }
+
+    private func appendHistoryPoint(_ value: Double?, to series: inout [CompanionWorkoutSeriesPoint], elapsedTime: TimeInterval) {
+        guard let value, value.isFinite else { return }
+        if let lastPoint = series.last, abs(lastPoint.elapsedTime - elapsedTime) < 10 {
+            series[series.count - 1] = .init(elapsedTime: elapsedTime, value: value)
+        } else {
+            series.append(.init(elapsedTime: elapsedTime, value: value))
+        }
+
+        if series.count > 120 {
+            series.removeFirst(series.count - 120)
+        }
+    }
+
+    private func updateDerivedSeries() {
+        let elapsed = max(elapsedTime, 1)
+        appendHistoryPoint(currentHeartRate, to: &heartRateHistory, elapsedTime: elapsed)
+        if let currentSpeedMetersPerSecond, currentSpeedMetersPerSecond > 0 {
+            appendHistoryPoint(currentSpeedMetersPerSecond * 2.23694, to: &speedHistory, elapsedTime: elapsed)
+            appendHistoryPoint(1609.344 / currentSpeedMetersPerSecond, to: &paceHistory, elapsedTime: elapsed)
+        }
+        appendHistoryPoint(currentPowerWatts, to: &powerHistory, elapsedTime: elapsed)
+        appendHistoryPoint(currentCadence, to: &cadenceHistory, elapsedTime: elapsed)
+        appendHistoryPoint(currentElevationFeet, to: &elevationHistory, elapsedTime: elapsed)
+    }
+
+    private func endLocalWorkout() {
+        guard let localSession else { return }
+        stateText = SessionStateText.ended
+        stopElapsedTimer()
+        locationManager.stopUpdatingLocation()
+        localSession.end()
+    }
+
+    private func finalizeLocalWorkoutSave() async {
+        guard let builder else { return }
+        let endDate = Date()
+        do {
+            try await builder.endCollection(at: endDate)
+            _ = try await builder.finishWorkout()
+        } catch {
+            launchStatusMessage = "Workout ended, but HealthKit could not save the final sample."
+        }
+    }
+
+    private func resetForNewSession() {
+        stopElapsedTimer()
+        metrics = []
+        pageKinds = [.metricsPrimary, .heartRateZones, .map]
+        speedHistory = []
+        paceHistory = []
+        powerHistory = []
+        elevationHistory = []
+        cadenceHistory = []
+        heartRateHistory = []
+        splits = []
+        heartRateZoneDurations = Array(repeating: 0, count: 5)
+        powerZoneDurations = Array(repeating: 0, count: 5)
+        totalDistanceMeters = 0
+        currentHeartRate = nil
+        averageHeartRate = nil
+        currentSpeedMetersPerSecond = nil
+        currentPowerWatts = nil
+        averagePowerWatts = nil
+        currentCadence = nil
+        currentElevationFeet = 0
+        elevationGainFeet = 0
+        pacerTarget = nil
+        builder = nil
+        lastLocation = nil
+        locationManager.stopUpdatingLocation()
+        elapsedTime = 0
+        startedAt = nil
+        pendingLocalEndAction = nil
+    }
+
     fileprivate func finishSession() {
         stopElapsedTimer()
         isWorkoutActive = false
-        stateText = "Ended"
+        stateText = SessionStateText.ended
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
             guard let self else { return }
             self.isVisible = false
-            self.metrics = []
-            self.pageKinds = [.metricsPrimary, .heartRateZones, .map]
-            self.speedHistory = []
-            self.paceHistory = []
-            self.powerHistory = []
-            self.elevationHistory = []
-            self.cadenceHistory = []
-            self.heartRateHistory = []
-            self.splits = []
-            self.heartRateZoneDurations = Array(repeating: 0, count: 5)
-            self.powerZoneDurations = Array(repeating: 0, count: 5)
-            self.totalDistanceMeters = 0
-            self.currentHeartRate = nil
-            self.averageHeartRate = nil
-            self.currentSpeedMetersPerSecond = nil
-            self.currentPowerWatts = nil
-            self.averagePowerWatts = nil
-            self.currentCadence = nil
-            self.currentElevationFeet = 0
-            self.elevationGainFeet = 0
-            self.pacerTarget = nil
-            self.builder = nil
+            self.resetForNewSession()
             self.mirroredSession = nil
+            self.localSession = nil
             self.startedAt = nil
-            self.elapsedTime = 0
-            self.isWorkoutActive = false
+            self.source = .appleWatch
         }
     }
 }
@@ -568,14 +1012,27 @@ extension CompanionWorkoutLiveManager: HKWorkoutSessionDelegate {
         Task { @MainActor in
             switch toState {
             case .running:
-                stateText = "Running"
+                stateText = source == .thisDevice ? SessionStateText.phoneRunning : "Running"
                 if startedAt == nil {
                     startedAt = date
                 }
+                if source == .thisDevice {
+                    startElapsedTimer()
+                }
             case .paused:
-                stateText = "Paused"
+                stateText = source == .thisDevice ? SessionStateText.phonePaused : "Paused"
             case .ended:
-                finishSession()
+                if source == .thisDevice {
+                    Task { @MainActor in
+                        await finalizeLocalWorkoutSave()
+                        if pendingLocalEndAction == .newWorkout {
+                            launchStatusMessage = "Workout finished. Choose the next one from Program Builder."
+                        }
+                        finishSession()
+                    }
+                } else {
+                    finishSession()
+                }
             default:
                 break
             }
@@ -607,9 +1064,80 @@ extension CompanionWorkoutLiveManager: HKLiveWorkoutBuilderDelegate {
     nonisolated func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder, didCollectDataOf collectedTypes: Set<HKSampleType>) {
         Task { @MainActor in
             rebuildMetrics()
+            updateDerivedSeries()
         }
     }
 }
+
+extension CompanionWorkoutLiveManager: CLLocationManagerDelegate {
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let authorized = manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse
+        Task { @MainActor in
+            locationAuthorizationContinuation?.resume(returning: authorized)
+            locationAuthorizationContinuation = nil
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        Task { @MainActor in
+            guard source == .thisDevice, isWorkoutActive else { return }
+            for location in locations where location.horizontalAccuracy >= 0 {
+                if let lastLocation {
+                    let distance = max(location.distance(from: lastLocation), 0)
+                    if distance > 0 {
+                        totalDistanceMeters += distance
+                        if location.altitude > lastLocation.altitude {
+                            elevationGainFeet += (location.altitude - lastLocation.altitude) * 3.28084
+                        }
+                    }
+                }
+
+                if location.speed >= 0 {
+                    currentSpeedMetersPerSecond = location.speed
+                }
+                currentElevationFeet = location.altitude * 3.28084
+                self.lastLocation = location
+            }
+            updateDerivedSeries()
+            rebuildMetrics()
+        }
+    }
+}
+
+#if canImport(WatchConnectivity)
+extension CompanionWorkoutLiveManager: WCSessionDelegate {
+    nonisolated func session(
+        _ session: WCSession,
+        activationDidCompleteWith activationState: WCSessionActivationState,
+        error: Error?
+    ) { }
+
+    nonisolated func sessionDidBecomeInactive(_ session: WCSession) { }
+
+    nonisolated func sessionDidDeactivate(_ session: WCSession) {
+        session.activate()
+    }
+
+    nonisolated func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String : Any]
+    ) {
+        Task { @MainActor in
+            guard let state = message[CompanionLifecycleKeys.workoutLifecycle] as? String else { return }
+            let reason = message[CompanionLifecycleKeys.reason] as? String
+            self.handleWatchLifecycleState(state, reason: reason)
+        }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
+        Task { @MainActor in
+            guard let state = userInfo[CompanionLifecycleKeys.workoutLifecycle] as? String else { return }
+            let reason = userInfo[CompanionLifecycleKeys.reason] as? String
+            self.handleWatchLifecycleState(state, reason: reason)
+        }
+    }
+}
+#endif
 
 private struct CompanionWorkoutLiveOverlay: View {
     @ObservedObject var manager: CompanionWorkoutLiveManager
@@ -679,15 +1207,15 @@ private struct CompanionWorkoutControlsDrawer: View {
     @Binding var isExpanded: Bool
 
     private var primaryControlLabel: String {
-        manager.stateText == "Paused" ? "Resume" : "Pause"
+        manager.isPaused ? "Resume" : "Pause"
     }
 
     private var primaryControlSymbol: String {
-        manager.stateText == "Paused" ? "play.fill" : "pause.fill"
+        manager.isPaused ? "play.fill" : "pause.fill"
     }
 
     private var primaryControlCommand: CompanionWorkoutLiveManager.WorkoutControlCommand {
-        manager.stateText == "Paused" ? .resume : .pause
+        manager.isPaused ? .resume : .pause
     }
 
     var body: some View {

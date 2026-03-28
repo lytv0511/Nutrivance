@@ -138,6 +138,7 @@ private enum ActiveWorkoutSidePane: Int {
     case controls
     case main
     case media
+    case map
 }
 
 private enum WorkoutMetricsVariant {
@@ -147,18 +148,17 @@ private enum WorkoutMetricsVariant {
 
 private struct ActiveWorkoutCardsView: View {
     @ObservedObject var manager: WatchWorkoutManager
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
     @StateObject private var mapTracker = WatchWorkoutMapTracker()
     @State private var verticalSelection: WatchWorkoutPageKind = .metricsPrimary
     @State private var horizontalSelection: ActiveWorkoutSidePane = .main
-    @State private var shouldPrewarmMap = true
-    @State private var shouldActivateMapTracker = false
 
     private var verticalPages: [WatchWorkoutPageKind] {
-        manager.orderedWorkoutPages
+        manager.orderedWorkoutPages.filter { $0 != .map }
     }
 
     private var supportsMapPage: Bool {
-        verticalPages.contains(.map)
+        manager.orderedWorkoutPages.contains(.map)
     }
 
     var body: some View {
@@ -189,52 +189,95 @@ private struct ActiveWorkoutCardsView: View {
 
             WorkoutMediaCard()
                 .tag(ActiveWorkoutSidePane.media)
+
+            if supportsMapPage {
+                WorkoutMapCard(
+                    mapTracker: mapTracker,
+                    onClose: {
+                        verticalSelection = .metricsPrimary
+                        horizontalSelection = .main
+                    }
+                )
+                .tag(ActiveWorkoutSidePane.map)
+            }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .background(Color.black.ignoresSafeArea())
-        .overlay {
-            if shouldActivateMapTracker && shouldPrewarmMap && supportsMapPage {
-                WorkoutMapPrewarmView(mapTracker: mapTracker)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+        .overlay(alignment: .topTrailing) {
+            if isLuminanceReduced {
+                WorkoutAlwaysOnClock()
+                    .padding(.top, 8)
+                    .padding(.trailing, 10)
             }
         }
         .onAppear {
             verticalSelection = verticalPages.first ?? .metricsPrimary
             mapTracker.setActive(false)
-            Task {
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                guard !Task.isCancelled else { return }
-                guard supportsMapPage else {
-                    shouldPrewarmMap = false
-                    return
-                }
-                shouldActivateMapTracker = true
-                mapTracker.activate()
-                mapTracker.setActive(verticalSelection == .map)
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: 3_200_000_000)
-                guard !Task.isCancelled else { return }
-                shouldPrewarmMap = false
-            }
+            mapTracker.configureRouteGuidance(
+                name: manager.routeName,
+                trailhead: manager.routeTrailhead,
+                routeCoordinates: manager.routeCoordinates
+            )
         }
         .onChange(of: manager.orderedWorkoutPages) { _, newPages in
-            guard let firstPage = newPages.first else { return }
-            if !newPages.contains(verticalSelection) {
+            let contentPages = newPages.filter { $0 != .map }
+            guard let firstPage = contentPages.first else { return }
+            if !contentPages.contains(verticalSelection) {
                 verticalSelection = firstPage
+            }
+            if !newPages.contains(.map), horizontalSelection == .map {
+                horizontalSelection = .main
+                mapTracker.setActive(false)
             }
         }
         .onChange(of: verticalSelection) { _, newValue in
-            if newValue == .map && !shouldActivateMapTracker {
-                shouldActivateMapTracker = true
-                mapTracker.activate()
-            }
-            mapTracker.setActive(newValue == .map)
-            if newValue == .map {
-                shouldPrewarmMap = false
+            if !verticalPages.contains(newValue) {
+                verticalSelection = verticalPages.first ?? .metricsPrimary
             }
         }
+        .onChange(of: horizontalSelection) { _, newValue in
+            if newValue == .map {
+                mapTracker.activate()
+            }
+            let isMapActive = newValue == .map
+            mapTracker.setActive(isMapActive)
+        }
+        .onChange(of: manager.routeTrailhead?.latitude) { _, _ in
+            mapTracker.configureRouteGuidance(
+                name: manager.routeName,
+                trailhead: manager.routeTrailhead,
+                routeCoordinates: manager.routeCoordinates
+            )
+        }
+        .onChange(of: manager.routeTrailhead?.longitude) { _, _ in
+            mapTracker.configureRouteGuidance(
+                name: manager.routeName,
+                trailhead: manager.routeTrailhead,
+                routeCoordinates: manager.routeCoordinates
+            )
+        }
+        .onChange(of: manager.routeCoordinates.count) { _, _ in
+            mapTracker.configureRouteGuidance(
+                name: manager.routeName,
+                trailhead: manager.routeTrailhead,
+                routeCoordinates: manager.routeCoordinates
+            )
+        }
+    }
+}
+
+private struct WorkoutAlwaysOnClock: View {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(workoutAlwaysOnClockString(from: context.date))
+                .font(.system(size: 16, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.88))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.black.opacity(0.55), in: Capsule())
+        }
+        .allowsHitTesting(false)
+        .accessibilityLabel("Current time")
     }
 }
 
@@ -265,11 +308,11 @@ private struct WorkoutLivePageView: View {
             case .pacer:
                 WorkoutPacerCard(manager: manager)
             case .map:
-                WorkoutMapCard(mapTracker: mapTracker)
+                EmptyView()
             }
         }
-        .padding(.horizontal, page == .map ? 0 : 2)
-        .padding(.vertical, page == .map ? 0 : 2)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
@@ -837,9 +880,11 @@ private struct WorkoutPacerBar: View {
 
 private struct WorkoutMapCard: View {
     @ObservedObject var mapTracker: WatchWorkoutMapTracker
+    let onClose: () -> Void
+    @State private var isDirectionsVisible = true
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack {
             if mapTracker.hasRenderableMap {
                 WorkoutMapSurface(mapTracker: mapTracker)
                     .ignoresSafeArea()
@@ -860,13 +905,138 @@ private struct WorkoutMapCard: View {
                 }
             }
 
+            if mapTracker.isGuidingToTrailhead || mapTracker.hasRouteGuidance {
+                if isDirectionsVisible {
+                    VStack {
+                        Spacer()
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: mapTracker.isGuidingToTrailhead ? "figure.hiking" : mapTracker.nextTurnSymbolName)
+                                    .font(.system(size: 11, weight: .black))
+                                    .foregroundStyle(.white.opacity(0.82))
+                                    .frame(width: 26, height: 26)
+                                    .background(Color.white.opacity(0.12), in: Circle())
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mapTracker.routeGuidanceTitle)
+                                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                                        .fontWidth(.compressed)
+                                        .foregroundStyle(.white.opacity(0.72))
+                                    Text(mapTracker.routeGuidanceDistanceText)
+                                        .font(.system(size: 16, weight: .black, design: .rounded).monospacedDigit())
+                                        .foregroundStyle(.white)
+                                }
+                                Spacer(minLength: 0)
+                                Button {
+                                    isDirectionsVisible = false
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 11, weight: .black))
+                                        .foregroundStyle(.white.opacity(0.9))
+                                        .frame(width: 28, height: 28)
+                                        .background(Color.white.opacity(0.12), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .allowsHitTesting(true)
+                            }
+                            Text(mapTracker.routeGuidanceStatusText)
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .fontWidth(.compressed)
+                                .foregroundStyle(.white.opacity(0.78))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        )
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 14)
+                        .allowsHitTesting(true)
+                    }
+                    .allowsHitTesting(false)
+                } else {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Button {
+                                isDirectionsVisible = true
+                            } label: {
+                                Image(systemName: mapTracker.isGuidingToTrailhead ? "figure.hiking" : mapTracker.nextTurnSymbolName)
+                                    .font(.system(size: 12, weight: .black))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 34, height: 34)
+                                    .background(Color.black.opacity(0.68), in: Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .allowsHitTesting(true)
+                            .padding(.leading, 16)
+                            .padding(.bottom, 16)
+
+                            Spacer()
+                        }
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+
             Text("MAP")
                 .font(.system(size: 10, weight: .heavy, design: .rounded))
                 .fontWidth(.compressed)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
-                .padding(8)
+                .padding(.top, 18)
+                .padding(.leading, 60)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .allowsHitTesting(false)
+
+            VStack {
+                HStack {
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .black))
+                            .foregroundStyle(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.black.opacity(0.68), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .allowsHitTesting(true)
+                    .padding(.leading, 18)
+                    .padding(.top, 18)
+
+                    Spacer()
+                }
+                Spacer()
+            }
+            .allowsHitTesting(false)
+
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button {
+                        mapTracker.resumeFollowingUser()
+                    } label: {
+                        Image(systemName: mapTracker.isFollowingUser ? "location.north.line.fill" : "location.north.fill")
+                            .font(.system(size: 14, weight: .black))
+                            .foregroundStyle(mapTracker.isFollowingUser ? .black : .white)
+                            .frame(width: 34, height: 34)
+                            .background(
+                                Circle()
+                                    .fill(mapTracker.isFollowingUser ? Color.white.opacity(0.86) : Color.black.opacity(0.68))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .allowsHitTesting(true)
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 18)
+                }
+            }
+            .allowsHitTesting(false)
         }
         .ignoresSafeArea()
     }
@@ -876,7 +1046,7 @@ private struct WorkoutMapSurface: View {
     @ObservedObject var mapTracker: WatchWorkoutMapTracker
 
     var body: some View {
-        Map(position: $mapTracker.position, interactionModes: []) {
+        Map(position: $mapTracker.position, interactionModes: [.pan, .zoom]) {
             if let coordinate = mapTracker.userCoordinate {
                 Annotation("", coordinate: coordinate, anchor: .center) {
                     ZStack {
@@ -890,25 +1060,42 @@ private struct WorkoutMapSurface: View {
                             .font(.system(size: 10, weight: .black))
                             .foregroundStyle(.white)
                             .offset(y: -13)
+                            .rotationEffect(.degrees(mapTracker.displayHeading))
                     }
                 }
             }
+            if mapTracker.routeCoordinates.count > 1 {
+                MapPolyline(coordinates: mapTracker.routeCoordinates)
+                    .stroke(Color.green.opacity(0.88), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+            }
+            if let trailhead = mapTracker.trailheadCoordinate {
+                Annotation("", coordinate: trailhead, anchor: .bottom) {
+                    VStack(spacing: 2) {
+                        Image(systemName: "flag.pattern.checkered")
+                            .font(.system(size: 12, weight: .black))
+                            .foregroundStyle(.orange)
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 8, height: 8)
+                    }
+                }
+            }
+            if let user = mapTracker.userCoordinate, let trailhead = mapTracker.trailheadCoordinate, mapTracker.isGuidingToTrailhead {
+                MapPolyline(coordinates: [user, trailhead])
+                    .stroke(Color.orange.opacity(0.8), lineWidth: 3)
+            }
+            if let user = mapTracker.userCoordinate,
+               let nearestRouteCoordinate = mapTracker.nearestRouteCoordinate,
+               let offRouteDistanceMeters = mapTracker.offRouteDistanceMeters,
+               !mapTracker.isGuidingToTrailhead,
+               offRouteDistanceMeters > 35 {
+                MapPolyline(coordinates: [user, nearestRouteCoordinate])
+                    .stroke(Color.orange.opacity(0.85), style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [6, 4]))
+            }
         }
         .mapStyle(.standard)
-    }
-}
-
-private struct WorkoutMapPrewarmView: View {
-    @ObservedObject var mapTracker: WatchWorkoutMapTracker
-
-    var body: some View {
-        Group {
-            if mapTracker.hasRenderableMap {
-                WorkoutMapSurface(mapTracker: mapTracker)
-                    .frame(width: 2, height: 2)
-                    .opacity(0.01)
-                    .clipped()
-            }
+        .onMapCameraChange(frequency: .onEnd) { _ in
+            mapTracker.handleMapGestureCameraChange()
         }
     }
 }
@@ -1080,26 +1267,83 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
     @Published var position: MapCameraPosition = .automatic
     @Published var userCoordinate: CLLocationCoordinate2D?
     @Published var statusText = "Locating..."
+    @Published private(set) var trailheadCoordinate: CLLocationCoordinate2D?
+    @Published private(set) var routeCoordinates: [CLLocationCoordinate2D] = []
+    @Published private(set) var routeGuidanceName: String?
+    @Published private(set) var trailheadDistanceMeters: Double?
+    @Published private(set) var hasConfirmedTrailheadArrival = false
+    @Published private(set) var isFollowingUser = true
+    @Published private(set) var nearestRouteCoordinate: CLLocationCoordinate2D?
+    @Published private(set) var offRouteDistanceMeters: Double?
+    @Published private(set) var routeRemainingDistanceMeters: Double?
+    @Published private(set) var nextTurnDistanceMeters: Double?
+    @Published private(set) var nextTurnInstruction = "Follow the route"
+    @Published private(set) var nextTurnSymbolName = "arrow.up"
+    @Published private(set) var displayHeading: CLLocationDirection = 0
 
     private let locationManager = CLLocationManager()
     private var hasActivated = false
     private var isActive = false
-    private var isPrewarming = false
     private var lastLocation: CLLocation?
     private var lastHeading: CLLocationDirection?
     private var lastCameraUpdate = Date.distantPast
+    private var isPerformingProgrammaticCameraUpdate = false
 
     var hasRenderableMap: Bool {
         userCoordinate != nil
     }
 
+    var hasRouteGuidance: Bool {
+        routeCoordinates.count > 1
+    }
+
+    var isGuidingToTrailhead: Bool {
+        trailheadCoordinate != nil && !hasConfirmedTrailheadArrival
+    }
+
+    var routeGuidanceTitle: String {
+        if isGuidingToTrailhead {
+            return routeGuidanceName?.uppercased() ?? "TRAILHEAD"
+        }
+        return routeGuidanceName?.uppercased() ?? "ROUTE"
+    }
+
+    var routeGuidanceDistanceText: String {
+        if isGuidingToTrailhead {
+            return formatDistance(trailheadDistanceMeters)
+        }
+        if let nextTurnDistanceMeters {
+            return formatDistance(nextTurnDistanceMeters)
+        }
+        if let routeRemainingDistanceMeters {
+            return formatDistance(routeRemainingDistanceMeters)
+        }
+        return "--"
+    }
+
+    var routeGuidanceStatusText: String {
+        if hasConfirmedTrailheadArrival {
+            if hasRouteGuidance {
+                return nextTurnInstruction
+            }
+            return "Trailhead confirmed"
+        }
+        if isGuidingToTrailhead {
+            return "Head to the trailhead. Directions will update as you move."
+        }
+        if let offRouteDistanceMeters, offRouteDistanceMeters > 35 {
+            return "Off route by \(formatDistance(offRouteDistanceMeters)). Head back to the green line."
+        }
+        return nextTurnInstruction
+    }
+
     override init() {
         super.init()
         locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.activityType = .fitness
-        locationManager.distanceFilter = 10
-        locationManager.headingFilter = 10
+        locationManager.distanceFilter = 2
+        locationManager.headingFilter = 2
     }
 
     func activate() {
@@ -1112,8 +1356,42 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
             statusText = "Following your route"
             updateCamera(force: true)
         }
-        beginPrewarm()
-        setActive(isActive)
+    }
+
+    func configureRouteGuidance(name: String?, trailhead: CLLocationCoordinate2D?, routeCoordinates: [CLLocationCoordinate2D]) {
+        routeGuidanceName = name
+        trailheadCoordinate = trailhead
+        self.routeCoordinates = sampledRouteCoordinates(from: routeCoordinates, maximumPoints: 48)
+        hasConfirmedTrailheadArrival = false
+        isFollowingUser = true
+        nearestRouteCoordinate = nil
+        offRouteDistanceMeters = nil
+        routeRemainingDistanceMeters = nil
+        nextTurnDistanceMeters = nil
+        nextTurnInstruction = routeCoordinates.count > 1 ? "Follow the route" : "Follow your route"
+        nextTurnSymbolName = "arrow.up"
+        updateTrailheadProgress(with: lastLocation)
+        updateRouteProgress(with: lastLocation)
+        updateCamera(force: true)
+    }
+
+    func confirmTrailheadArrival() {
+        hasConfirmedTrailheadArrival = true
+        statusText = "At trailhead"
+        updateRouteProgress(with: lastLocation)
+        updateCamera(force: true)
+    }
+
+    func handleMapGestureCameraChange() {
+        guard !isPerformingProgrammaticCameraUpdate else { return }
+        isFollowingUser = false
+    }
+
+    func resumeFollowingUser() {
+        isFollowingUser = true
+        applyProgrammaticPosition(userFollowCamera())
+        positionHeading = 0
+        lastCameraUpdate = Date()
     }
 
     func setActive(_ active: Bool) {
@@ -1121,7 +1399,6 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
         guard hasActivated else { return }
 
         if active {
-            isPrewarming = false
             statusText = userCoordinate == nil ? "Locating..." : "Following your route"
             locationManager.startUpdatingLocation()
             locationManager.startUpdatingHeading()
@@ -1134,9 +1411,7 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
             updateCamera(force: true)
         } else {
             locationManager.stopUpdatingHeading()
-            if !isPrewarming {
-                locationManager.stopUpdatingLocation()
-            }
+            locationManager.stopUpdatingLocation()
         }
     }
 
@@ -1157,7 +1432,9 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
         let previousLocation = lastLocation
         lastLocation = location
         userCoordinate = location.coordinate
-        statusText = "Following your route"
+        updateDisplayHeading(with: location)
+        updateTrailheadProgress(with: location)
+        updateRouteProgress(with: location)
         updateCamera(previousLocation: previousLocation)
     }
 
@@ -1165,7 +1442,7 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
         let heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
         guard heading >= 0 else { return }
         lastHeading = heading
-        updateCamera(previousLocation: lastLocation)
+        displayHeading = heading
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -1175,47 +1452,249 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
     }
 
     private func updateCamera(previousLocation: CLLocation? = nil, force: Bool = false) {
-        guard (isActive || isPrewarming), let location = lastLocation else { return }
+        guard isActive, let location = lastLocation else { return }
 
         let now = Date()
         let movedEnough = previousLocation.map { previous in
-            location.distance(from: previous) >= 10
+            location.distance(from: previous) >= 2
         } ?? true
-        let headingChangedEnough = lastHeading.map { heading in
-            let prior = (positionHeading ?? heading)
-            return abs(heading - prior) >= 8
-        } ?? false
 
-        guard force || movedEnough || headingChangedEnough || now.timeIntervalSince(lastCameraUpdate) > 1.0 else {
+        guard force || movedEnough || now.timeIntervalSince(lastCameraUpdate) > 0.35 else {
             return
         }
 
-        let heading = lastHeading ?? location.course.clamped(to: 0...359)
-        let camera = MapCamera(
-            centerCoordinate: location.coordinate,
-            distance: 243.84,
-            heading: heading.isFinite ? heading : 0,
-            pitch: 0
-        )
-        position = .camera(camera)
-        positionHeading = heading
+        guard isFollowingUser || force else { return }
+
+        applyProgrammaticPosition(userFollowCamera())
+        positionHeading = 0
         lastCameraUpdate = now
     }
 
-    private func beginPrewarm() {
-        guard !isActive else { return }
-        isPrewarming = true
-        locationManager.startUpdatingLocation()
-        locationManager.requestLocation()
+    private func userFollowCamera() -> MapCameraPosition {
+        guard let location = lastLocation else { return .automatic }
+        return .camera(
+            MapCamera(
+                centerCoordinate: location.coordinate,
+                distance: 60.96,
+                heading: 0,
+                pitch: 0
+            )
+        )
+    }
 
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            guard let self else { return }
-            self.isPrewarming = false
-            if !self.isActive {
-                self.locationManager.stopUpdatingLocation()
-                self.locationManager.stopUpdatingHeading()
+    private func updateTrailheadProgress(with location: CLLocation?) {
+        guard let trailheadCoordinate else {
+            trailheadDistanceMeters = nil
+            statusText = userCoordinate == nil ? "Locating..." : "Following your route"
+            return
+        }
+
+        guard let location else {
+            trailheadDistanceMeters = nil
+            statusText = "Locating trailhead..."
+            return
+        }
+
+        let trailheadLocation = CLLocation(latitude: trailheadCoordinate.latitude, longitude: trailheadCoordinate.longitude)
+        let distance = location.distance(from: trailheadLocation)
+        trailheadDistanceMeters = distance
+
+        if distance <= 60 {
+            hasConfirmedTrailheadArrival = true
+            statusText = "At trailhead"
+        } else {
+            statusText = "Trailhead ahead"
+        }
+    }
+
+    private func updateDisplayHeading(with location: CLLocation) {
+        if location.course >= 0, location.speed >= 0.5 {
+            displayHeading = location.course
+            lastHeading = location.course
+        } else if let lastHeading {
+            displayHeading = lastHeading
+        }
+    }
+
+    private func updateRouteProgress(with location: CLLocation?) {
+        guard hasRouteGuidance, let location else {
+            nearestRouteCoordinate = nil
+            offRouteDistanceMeters = nil
+            routeRemainingDistanceMeters = nil
+            nextTurnDistanceMeters = nil
+            if !isGuidingToTrailhead {
+                nextTurnInstruction = "Follow the route"
+                nextTurnSymbolName = "arrow.up"
             }
+            return
+        }
+
+        let nearestIndex = nearestRouteIndex(to: location.coordinate)
+        let nearestCoordinate = routeCoordinates[nearestIndex]
+        nearestRouteCoordinate = nearestCoordinate
+
+        let nearestLocation = CLLocation(latitude: nearestCoordinate.latitude, longitude: nearestCoordinate.longitude)
+        let offRouteDistance = location.distance(from: nearestLocation)
+        offRouteDistanceMeters = offRouteDistance
+        routeRemainingDistanceMeters = remainingRouteDistance(startingAt: nearestIndex)
+
+        let cue = nextRouteCue(startingAt: nearestIndex)
+        nextTurnInstruction = cue.instruction
+        nextTurnSymbolName = cue.symbolName
+        nextTurnDistanceMeters = cue.distanceMeters
+
+        if !isGuidingToTrailhead {
+            statusText = offRouteDistance > 35 ? "Return to route" : "Following route"
+        }
+    }
+
+    private func nearestRouteIndex(to coordinate: CLLocationCoordinate2D) -> Int {
+        var bestIndex = 0
+        var bestDistance = CLLocationDistance.greatestFiniteMagnitude
+        let currentLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+
+        for (index, routeCoordinate) in routeCoordinates.enumerated() {
+            let distance = currentLocation.distance(
+                from: CLLocation(latitude: routeCoordinate.latitude, longitude: routeCoordinate.longitude)
+            )
+            if distance < bestDistance {
+                bestDistance = distance
+                bestIndex = index
+            }
+        }
+
+        return bestIndex
+    }
+
+    private func sampledRouteCoordinates(from coordinates: [CLLocationCoordinate2D], maximumPoints: Int) -> [CLLocationCoordinate2D] {
+        guard coordinates.count > maximumPoints, maximumPoints > 1 else { return coordinates }
+
+        let step = Double(coordinates.count - 1) / Double(maximumPoints - 1)
+        return (0..<maximumPoints).map { index in
+            let sampledIndex = Int((Double(index) * step).rounded())
+            return coordinates[min(coordinates.count - 1, sampledIndex)]
+        }
+    }
+
+    private func remainingRouteDistance(startingAt index: Int) -> Double {
+        guard routeCoordinates.count > 1 else { return 0 }
+        let clampedIndex = min(max(index, 0), routeCoordinates.count - 1)
+        guard clampedIndex < routeCoordinates.count - 1 else { return 0 }
+
+        var total = 0.0
+        for routeIndex in clampedIndex..<(routeCoordinates.count - 1) {
+            let start = routeCoordinates[routeIndex]
+            let end = routeCoordinates[routeIndex + 1]
+            total += CLLocation(latitude: start.latitude, longitude: start.longitude)
+                .distance(from: CLLocation(latitude: end.latitude, longitude: end.longitude))
+        }
+        return total
+    }
+
+    private func nextRouteCue(startingAt index: Int) -> (instruction: String, symbolName: String, distanceMeters: Double?) {
+        guard routeCoordinates.count > 2 else {
+            return ("Follow the route", "arrow.up", routeRemainingDistanceMeters)
+        }
+
+        let clampedIndex = min(max(index, 0), routeCoordinates.count - 1)
+        if clampedIndex >= routeCoordinates.count - 1 {
+            return ("Route complete", "flag.checkered", 0)
+        }
+
+        var traveledDistance = 0.0
+        for pointIndex in max(clampedIndex, 1)..<(routeCoordinates.count - 1) {
+            let current = routeCoordinates[pointIndex]
+            let next = routeCoordinates[pointIndex + 1]
+            let previous = routeCoordinates[pointIndex - 1]
+            let lookAheadIndex = min(pointIndex + 5, routeCoordinates.count - 1)
+            let future = routeCoordinates[lookAheadIndex]
+
+            traveledDistance += CLLocation(latitude: current.latitude, longitude: current.longitude)
+                .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
+
+            let incoming = bearing(from: previous, to: current)
+            let outgoing = bearing(from: current, to: future)
+            let delta = normalizedBearingDelta(from: incoming, to: outgoing)
+            let absoluteDelta = abs(delta)
+
+            guard absoluteDelta >= 30 else { continue }
+
+            switch absoluteDelta {
+            case 135...:
+                return (
+                    delta > 0 ? "Sharp right ahead" : "Sharp left ahead",
+                    delta > 0 ? "arrow.turn.up.right" : "arrow.turn.up.left",
+                    traveledDistance
+                )
+            case 60...:
+                return (
+                    delta > 0 ? "Turn right ahead" : "Turn left ahead",
+                    delta > 0 ? "arrow.turn.right.up" : "arrow.turn.left.up",
+                    traveledDistance
+                )
+            default:
+                return (
+                    delta > 0 ? "Bear right ahead" : "Bear left ahead",
+                    delta > 0 ? "arrow.up.right" : "arrow.up.left",
+                    traveledDistance
+                )
+            }
+        }
+
+        return ("Continue on route", "arrow.up", routeRemainingDistanceMeters)
+    }
+
+    private func bearing(from start: CLLocationCoordinate2D, to end: CLLocationCoordinate2D) -> CLLocationDirection {
+        let startLatitude = start.latitude * .pi / 180
+        let startLongitude = start.longitude * .pi / 180
+        let endLatitude = end.latitude * .pi / 180
+        let endLongitude = end.longitude * .pi / 180
+        let deltaLongitude = endLongitude - startLongitude
+
+        let y = sin(deltaLongitude) * cos(endLatitude)
+        let x = cos(startLatitude) * sin(endLatitude) - sin(startLatitude) * cos(endLatitude) * cos(deltaLongitude)
+        let degrees = atan2(y, x) * 180 / .pi
+        return (degrees + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private func normalizedBearingDelta(from current: CLLocationDirection, to next: CLLocationDirection) -> CLLocationDirection {
+        var delta = next - current
+        while delta > 180 { delta -= 360 }
+        while delta < -180 { delta += 360 }
+        return delta
+    }
+
+    private func formatDistance(_ meters: Double?) -> String {
+        guard let meters, meters.isFinite else { return "--" }
+        if meters >= 1000 {
+            return String(format: "%.1f km", meters / 1000)
+        }
+        let miles = meters / 1609.344
+        return miles >= 0.2 ? String(format: "%.1f mi", miles) : "\(Int(meters.rounded())) m"
+    }
+
+    private func rectEnclosing(_ coordinates: [CLLocationCoordinate2D]) -> MKMapRect {
+        let uniqueCoordinates = coordinates.filter { CLLocationCoordinate2DIsValid($0) }
+        let points = uniqueCoordinates.map(MKMapPoint.init)
+        guard let first = points.first else { return .world }
+
+        var rect = MKMapRect(origin: first, size: MKMapSize(width: 0, height: 0))
+        for point in points.dropFirst() {
+            let pointRect = MKMapRect(origin: point, size: MKMapSize(width: 0, height: 0))
+            rect = rect.union(pointRect)
+        }
+
+        let insetX = max(rect.size.width * 0.35, 1200)
+        let insetY = max(rect.size.height * 0.35, 1200)
+        return rect.insetBy(dx: -insetX, dy: -insetY)
+    }
+
+    private func applyProgrammaticPosition(_ newPosition: MapCameraPosition) {
+        isPerformingProgrammaticCameraUpdate = true
+        position = newPosition
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            self?.isPerformingProgrammaticCameraUpdate = false
         }
     }
 
@@ -3965,6 +4444,10 @@ private func weekdayLetter(_ date: Date) -> String {
 
 private func shortTime(_ date: Date) -> String {
     date.formatted(.dateTime.hour().minute())
+}
+
+private func workoutAlwaysOnClockString(from date: Date) -> String {
+    date.formatted(.dateTime.hour().minute().second())
 }
 
 private func todayLabel() -> String {

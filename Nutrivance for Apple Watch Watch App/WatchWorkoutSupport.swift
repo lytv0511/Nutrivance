@@ -1,4 +1,5 @@
 import Combine
+import CoreLocation
 import Foundation
 import HealthKit
 import SwiftUI
@@ -298,6 +299,19 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         case newWorkout
     }
 
+    private enum CompanionLaunchKeys {
+        static let workoutStart = "workoutStart"
+        static let title = "title"
+        static let subtitle = "subtitle"
+        static let activityRawValue = "activityRawValue"
+        static let locationRawValue = "locationRawValue"
+        static let routeName = "routeName"
+        static let trailheadLatitude = "trailheadLatitude"
+        static let trailheadLongitude = "trailheadLongitude"
+        static let routeCoordinates = "routeCoordinates"
+        static let accepted = "accepted"
+    }
+
     enum SessionDisplayState: String {
         case idle
         case preparing
@@ -357,6 +371,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published private(set) var currentElevationFeet: Double = 0
     @Published private(set) var elevationGainFeet: Double = 0
     @Published private(set) var pacerTarget: WatchPacerTarget?
+    @Published private(set) var routeName: String?
+    @Published private(set) var routeTrailhead: CLLocationCoordinate2D?
+    @Published private(set) var routeCoordinates: [CLLocationCoordinate2D] = []
+
+    private enum CompanionLifecycleKeys {
+        static let workoutLifecycle = "workoutLifecycle"
+        static let reason = "reason"
+    }
     @Published private(set) var postWorkoutDestination: PostWorkoutDestination = .none
     @Published private(set) var lastCompletedWorkoutTitle: String?
     @Published private(set) var lastCompletedWorkoutSubtitle: String?
@@ -628,7 +650,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         title: String,
         subtitle: String,
         activity: HKWorkoutActivityType,
-        location: HKWorkoutSessionLocationType
+        location: HKWorkoutSessionLocationType,
+        resetRouteGuidance: Bool = true
     ) {
         displayState = .preparing
         activeTitle = title
@@ -659,6 +682,11 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         currentSplitStartDistanceMeters = 0
         autoSplitLengthMeters = defaultSplitLength(for: activity)
         pacerTarget = defaultPacerTarget(for: activity)
+        if resetRouteGuidance {
+            routeName = nil
+            routeTrailhead = nil
+            routeCoordinates = []
+        }
 
         Task {
             let ready: Bool
@@ -764,6 +792,41 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         case .newWorkout:
             newWorkout()
         }
+    }
+
+    private func handleCompanionLaunchRequest(_ payload: [String: Any]) -> Bool {
+        guard
+            (payload[CompanionLaunchKeys.workoutStart] as? Bool) == true,
+            let title = payload[CompanionLaunchKeys.title] as? String,
+            let subtitle = payload[CompanionLaunchKeys.subtitle] as? String,
+            let activityRawValue = payload[CompanionLaunchKeys.activityRawValue] as? Int
+        else {
+            return false
+        }
+
+        let activity = HKWorkoutActivityType(rawValue: UInt(activityRawValue)) ?? .running
+        let locationRawValue = payload[CompanionLaunchKeys.locationRawValue] as? Int ?? HKWorkoutSessionLocationType.unknown.rawValue
+        let location = HKWorkoutSessionLocationType(rawValue: locationRawValue) ?? .unknown
+        routeName = payload[CompanionLaunchKeys.routeName] as? String
+        if let latitude = payload[CompanionLaunchKeys.trailheadLatitude] as? Double,
+           let longitude = payload[CompanionLaunchKeys.trailheadLongitude] as? Double {
+            routeTrailhead = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        } else {
+            routeTrailhead = nil
+        }
+        routeCoordinates = (payload[CompanionLaunchKeys.routeCoordinates] as? [[Double]])?.compactMap { pair in
+            guard pair.count == 2 else { return nil }
+            return CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1])
+        } ?? []
+
+        startWorkout(
+            title: title,
+            subtitle: subtitle,
+            activity: activity,
+            location: location,
+            resetRouteGuidance: false
+        )
+        return true
     }
 
     private func appendHistoryPoint(_ value: Double?, to series: inout [WatchWorkoutSeriesPoint], elapsedTime: TimeInterval) {
@@ -1124,6 +1187,29 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 #endif
     }
 
+    private func sendCompanionLifecycleUpdate(state: String, reason: String? = nil) {
+#if canImport(WatchConnectivity)
+        guard WCSession.isSupported() else { return }
+
+        let session = WCSession.default
+        if session.activationState != .activated {
+            session.activate()
+        }
+
+        var payload: [String: Any] = [
+            CompanionLifecycleKeys.workoutLifecycle: state
+        ]
+        if let reason, !reason.isEmpty {
+            payload[CompanionLifecycleKeys.reason] = reason
+        }
+
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
+        session.transferUserInfo(payload)
+#endif
+    }
+
     private func zoneIndex(for heartRate: Double) -> Int {
         let ratio = heartRate / max(estimatedMaxHeartRate, 1)
         switch ratio {
@@ -1265,6 +1351,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 displayState = .ended
                 statusMessage = "Workout ended"
                 broadcastCompanionSnapshot()
+                sendCompanionLifecycleUpdate(state: "ended", reason: "Apple Watch workout finished.")
                 stopElapsedTimer()
                 if let workoutBuilder {
                     try? await workoutBuilder.endCollection(at: date)
@@ -1305,6 +1392,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
             displayState = .failed
             statusMessage = "Workout failed"
             broadcastCompanionSnapshot()
+            sendCompanionLifecycleUpdate(state: "failed", reason: "Apple Watch workout ended unexpectedly.")
             stopElapsedTimer()
             isMirroringToPhone = false
             pauseStartedAt = nil
@@ -1346,7 +1434,9 @@ extension WatchWorkoutManager: WCSessionDelegate {
         Task { @MainActor in
             if let command = message["workoutControl"] as? String {
                 self.handleCompanionControlCommand(command)
-                replyHandler(["accepted": true])
+                replyHandler([CompanionLaunchKeys.accepted: true])
+            } else if self.handleCompanionLaunchRequest(message) {
+                replyHandler([CompanionLaunchKeys.accepted: true])
             } else {
                 replyHandler([:])
             }
@@ -1354,9 +1444,12 @@ extension WatchWorkoutManager: WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
-        guard let command = userInfo["workoutControl"] as? String else { return }
         Task { @MainActor in
-            self.handleCompanionControlCommand(command)
+            if let command = userInfo["workoutControl"] as? String {
+                self.handleCompanionControlCommand(command)
+            } else {
+                _ = self.handleCompanionLaunchRequest(userInfo)
+            }
         }
     }
 }

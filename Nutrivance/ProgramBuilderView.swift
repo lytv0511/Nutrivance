@@ -8,6 +8,7 @@ import FoundationModels
 struct ProgramBuilderView: View {
     @StateObject private var engine = HealthStateEngine.shared
     @StateObject private var planner = ProgramBuilderAIPlanner()
+    @StateObject private var liveWorkoutManager = CompanionWorkoutLiveManager.shared
 
     @State private var searchText = ""
     @State private var selectedMode: ProgramBuilderMode = .guided
@@ -22,6 +23,7 @@ struct ProgramBuilderView: View {
     @State private var routeObjectiveName = ""
     @State private var routeRepeats = 1
     @State private var selectedRouteTemplateID: UUID?
+    @State private var plannedRouteLaunchMetadata: RouteLaunchMetadata?
 
     private var catalog: [ProgramWorkoutType] {
         ProgramWorkoutType.catalog + customActivities
@@ -115,6 +117,18 @@ struct ProgramBuilderView: View {
         .onChange(of: selectedActivityIDs) { _, newValue in
             rebalanceWeights(for: newValue)
             syncTargetMetric()
+        }
+        .onChange(of: selectedMode) { _, _ in
+            plannedRouteLaunchMetadata = nil
+        }
+        .onChange(of: selectedRouteTemplateID) { _, _ in
+            plannedRouteLaunchMetadata = nil
+        }
+        .onChange(of: routeObjectiveName) { _, _ in
+            plannedRouteLaunchMetadata = nil
+        }
+        .onChange(of: routeRepeats) { _, _ in
+            plannedRouteLaunchMetadata = nil
         }
         .onAppear {
             rebalanceWeights(for: selectedActivityIDs)
@@ -268,6 +282,10 @@ struct ProgramBuilderView: View {
             }
 
             ProgramSectionCard {
+                workoutLaunchSection
+            }
+
+            ProgramSectionCard {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
@@ -282,6 +300,7 @@ struct ProgramBuilderView: View {
                         Button {
                             Task {
                                 await planner.generateBlueprint(for: buildPlannerRequest(), engine: engine)
+                                plannedRouteLaunchMetadata = await routeLaunchMetadata()
                             }
                         } label: {
                             if planner.isGeneratingPlan {
@@ -313,6 +332,89 @@ struct ProgramBuilderView: View {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private var workoutLaunchSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Start This Workout")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("Run it here on iPhone or hand it straight to Apple Watch. Outdoor starts use device GPS, and connected HealthKit-compatible sensors can flow into the live view.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                Spacer()
+                if liveWorkoutManager.isWorkoutActive {
+                    Text("Live")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.orange, in: Capsule())
+                }
+            }
+
+            if let activity = selectedActivities.first {
+                let launchTitle = planner.generatedBlueprint?.title ?? activity.title
+                let launchSubtitle = launchSubtitle(for: activity)
+
+                HStack(spacing: 12) {
+                    ProgramLaunchButton(
+                        title: "Start on iPhone",
+                        subtitle: activity.routeFriendly ? "GPS + phone-connected feeds" : "Local live workout",
+                        symbol: "iphone",
+                        tint: .cyan
+                    ) {
+                        liveWorkoutManager.startWorkoutOnThisDevice(
+                            title: launchTitle,
+                            subtitle: launchSubtitle,
+                            activity: activity.hkWorkoutActivityType,
+                            location: activity.preferredLocationType(for: selectedMode)
+                        )
+                    }
+
+                    ProgramLaunchButton(
+                        title: "Start on Watch",
+                        subtitle: "Mirror back to phone",
+                        symbol: "applewatch",
+                        tint: .orange
+                    ) {
+                        Task {
+                            let routeLaunch: RouteLaunchMetadata
+                            if let plannedRouteLaunchMetadata {
+                                routeLaunch = plannedRouteLaunchMetadata
+                            } else if let fetchedRouteLaunch = await routeLaunchMetadata() {
+                                routeLaunch = fetchedRouteLaunch
+                            } else {
+                                routeLaunch = RouteLaunchMetadata(name: "", trailhead: nil, coordinates: [])
+                            }
+                            liveWorkoutManager.startWorkoutOnWatch(
+                                title: launchTitle,
+                                subtitle: launchSubtitle,
+                                activity: activity.hkWorkoutActivityType,
+                                location: activity.preferredLocationType(for: selectedMode),
+                                routeName: routeLaunch.name.isEmpty ? nil : routeLaunch.name,
+                                trailheadCoordinate: routeLaunch.trailhead,
+                                routeCoordinates: routeLaunch.coordinates
+                            )
+                        }
+                    }
+                }
+
+                if let launchStatusMessage = liveWorkoutManager.launchStatusMessage, !launchStatusMessage.isEmpty {
+                    Text(launchStatusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            } else {
+                ProgramEmptyState(
+                    title: "Pick the primary activity first",
+                    subtitle: "The first selected activity becomes the live workout type for iPhone or Apple Watch."
+                )
             }
         }
     }
@@ -578,6 +680,86 @@ struct ProgramBuilderView: View {
             readinessScore: engine.readinessScore,
             strainScore: engine.strainScore
         )
+    }
+
+    private func launchSubtitle(for activity: ProgramWorkoutType) -> String {
+        switch selectedMode {
+        case .guided:
+            return "\(Int(availableMinutes.rounded())) min • \(activity.title)"
+        case .target:
+            let detail = selectedTargetMetric == .heartRateZone
+                ? "Zone \(selectedZone)"
+                : targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return detail.isEmpty
+                ? "\(Int(availableMinutes.rounded())) min • \(activity.title)"
+                : "\(Int(availableMinutes.rounded())) min • \(selectedTargetMetric.title): \(detail)"
+        case .route:
+            let routeName = routeObjectiveName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if routeName.isEmpty {
+                return "\(Int(availableMinutes.rounded())) min • Route session"
+            }
+            return "\(routeName) • \(routeRepeats)x"
+        }
+    }
+
+    private func routeLaunchMetadata() async -> RouteLaunchMetadata? {
+        guard selectedMode == .route else { return nil }
+
+        let name = routeObjectiveName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let workout = selectedRouteTemplate?.workout else {
+            return name.isEmpty ? nil : RouteLaunchMetadata(name: name, trailhead: nil, coordinates: [])
+        }
+
+        let coordinates = await fetchRouteCoordinates(for: workout, maximumPoints: 120)
+        let trailhead = coordinates.first
+        let resolvedName = name.isEmpty ? workout.workoutActivityType.name.capitalized : name
+        return RouteLaunchMetadata(name: resolvedName, trailhead: trailhead, coordinates: coordinates)
+    }
+
+    private func fetchRouteCoordinates(for workout: HKWorkout, maximumPoints: Int) async -> [CLLocationCoordinate2D] {
+        let healthStore = HKHealthStore()
+        let predicate = HKQuery.predicateForObjects(from: workout)
+        let routeType = HKSeriesType.workoutRoute()
+
+        let route: HKWorkoutRoute? = await withCheckedContinuation { continuation in
+            let sampleQuery = HKSampleQuery(
+                sampleType: routeType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKWorkoutRoute])?.first)
+            }
+            healthStore.execute(sampleQuery)
+        }
+
+        guard let route else { return [] }
+
+        let locations: [CLLocation] = await withCheckedContinuation { continuation in
+            var resolvedLocations: [CLLocation] = []
+            let query = HKWorkoutRouteQuery(route: route) { _, locations, done, _ in
+                if let locations {
+                    resolvedLocations.append(contentsOf: locations)
+                }
+
+                if done {
+                    continuation.resume(returning: resolvedLocations)
+                }
+            }
+            healthStore.execute(query)
+        }
+
+        return sampledCoordinates(from: locations.map(\.coordinate), maximumPoints: maximumPoints)
+    }
+
+    private func sampledCoordinates(from coordinates: [CLLocationCoordinate2D], maximumPoints: Int) -> [CLLocationCoordinate2D] {
+        guard coordinates.count > maximumPoints, maximumPoints > 1 else { return coordinates }
+
+        let step = Double(coordinates.count - 1) / Double(maximumPoints - 1)
+        return (0..<maximumPoints).map { index in
+            let sampledIndex = Int((Double(index) * step).rounded())
+            return coordinates[min(coordinates.count - 1, sampledIndex)]
+        }
     }
 }
 
@@ -873,6 +1055,38 @@ private struct ProgramEmptyState: View {
     }
 }
 
+private struct ProgramLaunchButton: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.68))
+            }
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+            .padding(16)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(tint.opacity(0.45), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct AdaptiveChipGrid<Data: RandomAccessCollection, Content: View>: View where Data.Element: Identifiable {
     let data: Data
     let content: (Data.Element) -> Content
@@ -1078,6 +1292,74 @@ private struct ProgramWorkoutType: Identifiable, Hashable {
         var seen: Set<String> = []
         return combined.filter { seen.insert($0.id).inserted }
     }
+
+    var hkWorkoutActivityType: HKWorkoutActivityType {
+        switch id {
+        case "running", "trail-running":
+            return .running
+        case "walking":
+            return .walking
+        case "hiking":
+            return .hiking
+        case "cycling", "mountain-biking":
+            return .cycling
+        case "swimming":
+            return .swimming
+        case "triathlon":
+            return .transition
+        case "rowing":
+            return .rowing
+        case "skiing":
+            return .crossCountrySkiing
+        case "snowboarding":
+            return .snowboarding
+        case "strength":
+            return .traditionalStrengthTraining
+        case "hiit":
+            return .highIntensityIntervalTraining
+        case "bootcamp":
+            return .mixedCardio
+        case "yoga":
+            return .yoga
+        case "pilates":
+            return .pilates
+        case "mobility", "stretching":
+            return .flexibility
+        case "cooldown":
+            return .cooldown
+        case "boxing":
+            return .kickboxing
+        case "dance":
+            return .dance
+        case "elliptical":
+            return .elliptical
+        case "stair-stepper":
+            return .stairClimbing
+        case "skating":
+            return .skatingSports
+        case "paddling":
+            return .paddleSports
+        case "surfing":
+            return .surfingSports
+        case "climbing":
+            return .climbing
+        case "soccer":
+            return .soccer
+        case "basketball":
+            return .basketball
+        case "tennis":
+            return .tennis
+        default:
+            return .other
+        }
+    }
+
+    func preferredLocationType(for mode: ProgramBuilderMode) -> HKWorkoutSessionLocationType {
+        if mode == .route || routeFriendly {
+            return .outdoor
+        }
+        return .indoor
+    }
 }
 
 private struct ProgramPlannerRequest {
@@ -1102,6 +1384,12 @@ private struct ProgramPlannerRequest {
     let recoveryScore: Double
     let readinessScore: Double
     let strainScore: Double
+}
+
+private struct RouteLaunchMetadata {
+    let name: String
+    let trailhead: CLLocationCoordinate2D?
+    let coordinates: [CLLocationCoordinate2D]
 }
 
 private struct ProgramRecentWorkout: Identifiable {

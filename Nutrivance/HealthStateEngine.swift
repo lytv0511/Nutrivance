@@ -1937,6 +1937,16 @@ final class HealthStateEngine: ObservableObject {
         return max(0, min(100, (strainScore / maxScore) * 100))
     }
 
+    nonisolated static func proReadinessScore(
+        recoveryScore: Double,
+        strainScore: Double,
+        hrvTrendComponent: Double
+    ) -> Double {
+        let normalizedStrain = normalizedStrainPercent(from: strainScore)
+        let readiness = (recoveryScore * 0.70) + (hrvTrendComponent * 0.10) - (normalizedStrain * 0.25) + 25
+        return max(0, min(100, readiness))
+    }
+
     nonisolated static func proZoneWeight(for zoneNumber: Int) -> Double {
         switch zoneNumber {
         case 1: return 1.0
@@ -4120,14 +4130,12 @@ final class HealthStateEngine: ObservableObject {
         allostaticStressScore = calculateAllostaticStress()
         autonomicBalanceScore = calculateAutonomicBalance()
 
-        // Morning readiness model
-        let readiness = (recoveryScore * 0.55)
-                      + (hrvTrendScore * 0.15)
-                      + (circadianHRVScore * 0.10)
-                      + (sleepHRVScore * 0.20)
-                      - (Self.normalizedStrainPercent(from: strainScore) * 0.30)
-
-        readinessScore = max(0, min(100, readiness))
+        // Keep the primary readiness score aligned with the strain/recovery views and watch sync.
+        readinessScore = Self.proReadinessScore(
+            recoveryScore: recoveryScore,
+            strainScore: strainScore,
+            hrvTrendComponent: hrvTrendScore
+        )
         
         // Update 7-day rolling averages for score baselines
         updateScoreBaselines()

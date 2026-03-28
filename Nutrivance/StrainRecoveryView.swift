@@ -5016,9 +5016,11 @@ private func readinessScore(
         hrvTrendComponent = engine.hrvTrendScore
     }
 
-    let normalizedStrain = HealthStateEngine.normalizedStrainPercent(from: strainScore)
-    let readiness = (recoveryScore * 0.70) + (hrvTrendComponent * 0.10) - (normalizedStrain * 0.25) + 25
-    return max(0, min(100, readiness))
+    return HealthStateEngine.proReadinessScore(
+        recoveryScore: recoveryScore,
+        strainScore: strainScore,
+        hrvTrendComponent: hrvTrendComponent
+    )
 }
 
 private func dailyLoadSnapshots(
