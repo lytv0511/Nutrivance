@@ -1,39 +1,23 @@
 import SwiftUI
 
+enum ComingSoonBackgroundStyle {
+    case warm
+    case natural
+    case bold
+    case spirit
+    case burning
+    case nature
+    case forest
+    case realm
+    case sleep
+}
+
 struct ComingSoonView: View {
     let feature: String
     let description: String
+    var backgroundStyle: ComingSoonBackgroundStyle = .burning
     @State private var animationPhase: Double = 0
-    
-    private var gradientBackground: some View {
-        MeshGradient(
-            width: 3, height: 3,
-            points: [
-                [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
-                [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
-            ],
-            colors: [
-                Color(red: 0.75, green: 0.0, blue: 0),  // Deep red
-                Color(red: 1.0, green: 0.4, blue: 0),   // Vibrant orange
-                Color(red: 0.95, green: 0.6, blue: 0),  // Warm yellow
-                Color(red: 0.8, green: 0.2, blue: 0),   // Rich red-orange
-                Color(red: 1.0, green: 0.5, blue: 0),   // Pure orange
-                Color(red: 0.9, green: 0.3, blue: 0),   // Bright red-orange
-                Color(red: 0.8, green: 0.1, blue: 0),   // Deep red
-                Color(red: 1.0, green: 0.45, blue: 0),  // Bright orange
-                Color(red: 0.85, green: 0.25, blue: 0)  // Rich red-orange
-            ]
-        )
-        .ignoresSafeArea()
-        .hueRotation(.degrees(animationPhase))
-        .onAppear {
-            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                animationPhase = 20  // Doubled the range
-            }
-        }
-    }
-    
+
     var body: some View {
         HStack {
             Spacer()
@@ -41,7 +25,7 @@ struct ComingSoonView: View {
                 Spacer()
                 Image(systemName: "hammer.fill")
                     .font(.system(size: 60))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(iconColor)
                 Text(feature)
                     .font(.title)
                     .bold()
@@ -53,12 +37,47 @@ struct ComingSoonView: View {
             Spacer()
         }
         .background(
-           GradientBackgrounds().burningGradientFull(animationPhase: $animationPhase)
+           backgroundView
                .onAppear {
                    withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                        animationPhase = 20
                    }
                }
        )
+    }
+
+    @ViewBuilder
+    private var backgroundView: some View {
+        switch backgroundStyle {
+        case .warm:
+            GradientBackgrounds().warmGradientFull(animationPhase: $animationPhase)
+        case .natural:
+            GradientBackgrounds().naturalGradientFull(animationPhase: $animationPhase)
+        case .bold:
+            GradientBackgrounds().boldGradientFull(animationPhase: $animationPhase)
+        case .spirit:
+            GradientBackgrounds().spiritGradientFull(animationPhase: $animationPhase)
+        case .burning:
+            GradientBackgrounds().burningGradientFull(animationPhase: $animationPhase)
+        case .nature:
+            GradientBackgrounds().natureGradientFull(animationPhase: $animationPhase)
+        case .forest:
+            GradientBackgrounds().forestGradientFull(animationPhase: $animationPhase)
+        case .realm:
+            GradientBackgrounds().realmGradientFull(animationPhase: $animationPhase)
+        case .sleep:
+            GradientBackgrounds().sleepGradientFull(animationPhase: $animationPhase)
+        }
+    }
+
+    private var iconColor: Color {
+        switch backgroundStyle {
+        case .nature, .natural, .forest:
+            return .green
+        case .spirit, .realm, .bold:
+            return .purple
+        case .burning, .warm, .sleep:
+            return .orange
+        }
     }
 }

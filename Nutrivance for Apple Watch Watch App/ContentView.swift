@@ -17,12 +17,17 @@ import WorkoutKit
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store = WatchDashboardStore()
+    @StateObject private var workoutManager = WatchWorkoutManager.shared
     @State private var selectedTab: DashboardTab = .overview
 
     var body: some View {
         Group {
-            if store.workoutManager.isSessionActive {
-                ActiveWorkoutCardsView(manager: store.workoutManager)
+            if workoutManager.isSessionActive {
+                ActiveWorkoutCardsView(manager: workoutManager)
+            } else if workoutManager.postWorkoutDestination == .effortPrompt {
+                WorkoutEffortPromptView(manager: workoutManager)
+            } else if workoutManager.postWorkoutDestination == .nextWorkoutPicker {
+                WorkoutLauncherView(store: store)
             } else {
                 NavigationStack {
                     TabView(selection: $selectedTab) {
@@ -206,6 +211,7 @@ private struct ActiveWorkoutCardsView: View {
 
 private struct WorkoutMetricsCard: View {
     @ObservedObject var manager: WatchWorkoutManager
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
     var body: some View {
         GeometryReader { geometry in
@@ -217,7 +223,7 @@ private struct WorkoutMetricsCard: View {
                     .background(Color.green.opacity(0.18))
                     .clipShape(Circle())
 
-                Text(preciseWorkoutElapsedString(manager.elapsedTime))
+                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
                     .font(.system(size: 25, weight: .black, design: .rounded).monospacedDigit())
                     .fontWidth(.condensed)
                     .foregroundStyle(.yellow)
@@ -259,6 +265,7 @@ private struct WorkoutMetricsCard: View {
 
 private struct WorkoutZonesCard: View {
     @ObservedObject var manager: WatchWorkoutManager
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
     var body: some View {
         GeometryReader { geometry in
@@ -277,7 +284,7 @@ private struct WorkoutZonesCard: View {
                     Spacer(minLength: 0)
                 }
 
-                Text(preciseWorkoutElapsedString(manager.elapsedTime))
+                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
                     .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
                     .fontWidth(.condensed)
                     .foregroundStyle(.yellow)
@@ -2347,6 +2354,21 @@ private struct WorkoutLauncherView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
+                if store.workoutManager.postWorkoutDestination == .nextWorkoutPicker {
+                    SectionCard(title: "Next Workout") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Your last workout was saved. Pick the next one to keep going.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.78))
+
+                            Button("Return to App") {
+                                store.workoutManager.dismissPostWorkoutFlow()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+
                 if store.workoutManager.isSessionActive {
                     SectionCard(title: store.workoutManager.activeTitle ?? "Live Workout") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -2537,6 +2559,67 @@ private struct WorkoutLauncherView: View {
         .task {
             store.workoutManager.activate()
         }
+    }
+}
+
+private struct WorkoutEffortPromptView: View {
+    @ObservedObject var manager: WatchWorkoutManager
+
+    private let effortLabels: [Int: String] = [
+        1: "Very Easy",
+        2: "Easy",
+        3: "Steady",
+        4: "Moderate",
+        5: "Working",
+        6: "Challenging",
+        7: "Hard",
+        8: "Very Hard",
+        9: "Max",
+        10: "All Out"
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 10) {
+                SectionCard(title: "Rank Effort") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(manager.lastCompletedWorkoutTitle ?? "Workout Complete")
+                            .font(.headline)
+                        if let subtitle = manager.lastCompletedWorkoutSubtitle {
+                            Text(subtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.68))
+                        }
+                        Text("How hard did that feel?")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.78))
+                    }
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    ForEach(1...10, id: \.self) { score in
+                        Button {
+                            manager.submitEffortScore(score)
+                        } label: {
+                            VStack(spacing: 4) {
+                                Text("\(score)")
+                                    .font(.title3.weight(.black))
+                                    .foregroundStyle(.white)
+                                Text(effortLabels[score] ?? "")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.72))
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(10)
+        }
+        .background(Color.black.ignoresSafeArea())
     }
 }
 
@@ -3439,6 +3522,13 @@ private func shortElapsedString(_ elapsed: TimeInterval) -> String {
     formatter.allowedUnits = elapsed >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
     formatter.zeroFormattingBehavior = [.pad]
     return formatter.string(from: elapsed) ?? "00:00"
+}
+
+private func workoutElapsedDisplayString(_ elapsed: TimeInterval, reducedLuminance: Bool) -> String {
+    if reducedLuminance {
+        return shortElapsedString(elapsed.rounded(.down))
+    }
+    return preciseWorkoutElapsedString(elapsed)
 }
 
 private func preciseWorkoutElapsedString(_ elapsed: TimeInterval) -> String {

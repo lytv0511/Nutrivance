@@ -668,6 +668,63 @@ extension HealthKitManager {
 import HealthKit
 import SwiftUI
 
+extension HKWorkoutActivityType {
+    var name: String {
+        switch self {
+        case .running:
+            return "running"
+        case .walking:
+            return "walking"
+        case .cycling:
+            return "cycling"
+        case .swimming:
+            return "swimming"
+        case .hiking:
+            return "hiking"
+        case .traditionalStrengthTraining:
+            return "strength"
+        case .functionalStrengthTraining:
+            return "functional strength"
+        case .highIntensityIntervalTraining:
+            return "hiit"
+        case .yoga:
+            return "yoga"
+        case .mixedCardio:
+            return "mixed cardio"
+        case .elliptical:
+            return "elliptical"
+        case .rowing:
+            return "rowing"
+        case .stairClimbing:
+            return "stair climbing"
+        case .cooldown:
+            return "cooldown"
+        case .flexibility:
+            return "flexibility"
+        case .coreTraining:
+            return "core training"
+        case .pilates:
+            return "pilates"
+        case .dance:
+            return "dance"
+        case .barre:
+            return "barre"
+        case .mindAndBody:
+            return "mind and body"
+        case .preparationAndRecovery:
+            return "preparation and recovery"
+        case .other:
+            return "other"
+        default:
+            return String(describing: self)
+                .replacingOccurrences(of: "HKWorkoutActivityType", with: "")
+                .replacingOccurrences(of: ".", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        }
+    }
+}
+
 enum HealthError: Error {
     case invalidType
     case noData

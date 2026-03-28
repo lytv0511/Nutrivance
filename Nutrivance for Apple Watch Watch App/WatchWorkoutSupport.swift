@@ -190,6 +190,18 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         case failed
     }
 
+    enum PostWorkoutDestination {
+        case none
+        case effortPrompt
+        case nextWorkoutPicker
+    }
+
+    private enum EndAction {
+        case none
+        case promptEffort
+        case startAnotherWorkout
+    }
+
     @Published private(set) var displayState: SessionDisplayState = .idle
     @Published private(set) var metrics: [WatchLiveMetric] = []
     @Published private(set) var elapsedTime: TimeInterval = 0
@@ -217,6 +229,10 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published private(set) var strideMeters: Double?
     @Published private(set) var groundContactTimeMilliseconds: Double?
     @Published private(set) var verticalOscillationCentimeters: Double?
+    @Published private(set) var postWorkoutDestination: PostWorkoutDestination = .none
+    @Published private(set) var lastCompletedWorkoutTitle: String?
+    @Published private(set) var lastCompletedWorkoutSubtitle: String?
+    @Published private(set) var lastEffortScore: Int?
     @Published var customDraft = WatchCustomWorkoutDraft()
     @Published var statusMessage = "Choose a workout to begin."
 
@@ -234,6 +250,9 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private var elapsedTimer: Timer?
     private var estimatedMaxHeartRate: Double = 190
     private var lastZoneSampleDate: Date?
+    private var accumulatedElapsedTime: TimeInterval = 0
+    private var pauseStartedAt: Date?
+    private var pendingEndAction: EndAction = .none
 
     private var sessionState: HKWorkoutSessionState? {
         workoutSession?.state
@@ -306,6 +325,10 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
 
         statusMessage = "Pausing workout..."
+        accumulatedElapsedTime = currentElapsedTime(at: Date())
+        pauseStartedAt = Date()
+        elapsedTime = accumulatedElapsedTime
+        displayState = .paused
         workoutSession.pause()
         broadcastCompanionSnapshot()
     }
@@ -321,13 +344,25 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
 
         statusMessage = "Resuming workout..."
+        if pauseStartedAt != nil {
+            workoutStartDate = Date()
+            pauseStartedAt = nil
+        }
+        displayState = .running
         workoutSession.resume()
         broadcastCompanionSnapshot()
     }
 
     func end() {
         guard let workoutSession else { return }
+        elapsedTime = currentElapsedTime(at: Date())
         statusMessage = "Ending workout..."
+        displayState = .ended
+        stopElapsedTimer()
+        pendingEndAction = .promptEffort
+        lastCompletedWorkoutTitle = activeTitle
+        lastCompletedWorkoutSubtitle = activeSubtitle
+        postWorkoutDestination = .effortPrompt
         workoutSession.end()
     }
 
@@ -375,12 +410,42 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     func newWorkout() {
         guard isSessionActive else {
-            statusMessage = "Choose the next workout from the launcher."
+            postWorkoutDestination = .nextWorkoutPicker
+            statusMessage = "Choose your next workout."
             return
         }
 
-        statusMessage = "Ending workout. Pick a new one from the launcher."
-        end()
+        elapsedTime = currentElapsedTime(at: Date())
+        statusMessage = "Ending workout. Choose your next workout."
+        displayState = .ended
+        stopElapsedTimer()
+        pendingEndAction = .startAnotherWorkout
+        lastCompletedWorkoutTitle = activeTitle
+        lastCompletedWorkoutSubtitle = activeSubtitle
+        postWorkoutDestination = .nextWorkoutPicker
+        workoutSession?.end()
+    }
+
+    func submitEffortScore(_ score: Int) {
+        lastEffortScore = score
+        postWorkoutDestination = .none
+        displayState = .idle
+        lastCompletedWorkoutTitle = nil
+        lastCompletedWorkoutSubtitle = nil
+        statusMessage = "Effort logged as \(score)/10"
+    }
+
+    func dismissPostWorkoutFlow() {
+        postWorkoutDestination = .none
+        displayState = .idle
+        lastCompletedWorkoutTitle = nil
+        lastCompletedWorkoutSubtitle = nil
+    }
+
+    func prepareForNewWorkoutSelection() {
+        postWorkoutDestination = .nextWorkoutPicker
+        displayState = .idle
+        statusMessage = "Choose your next workout."
     }
 
     private func startWorkout(
@@ -394,7 +459,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         activeSubtitle = subtitle
         activeActivity = activity
         activeLocation = location
-        workoutStartDate = Date()
+        postWorkoutDestination = .none
+        lastCompletedWorkoutTitle = nil
+        lastCompletedWorkoutSubtitle = nil
+        workoutStartDate = nil
+        elapsedTime = 0
+        accumulatedElapsedTime = 0
+        pauseStartedAt = nil
+        pendingEndAction = .none
 
         Task {
             authorizationGranted = await requestAuthorizationIfNeeded()
@@ -440,6 +512,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 builder.delegate = self
 
                 let startDate = Date()
+                workoutStartDate = startDate
                 session.startActivity(with: startDate)
                 try await builder.beginCollection(at: startDate)
                 isMirroringToPhone = await ensureCompanionMirroring()
@@ -509,9 +582,11 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         elapsedTimer?.invalidate()
         elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let workoutStartDate = self.workoutStartDate else { return }
-                if self.displayState == .running || self.displayState == .paused {
-                    self.elapsedTime = Date().timeIntervalSince(workoutStartDate)
+                guard let self else { return }
+                if self.displayState == .running {
+                    self.elapsedTime = self.currentElapsedTime(at: Date())
+                } else if self.displayState == .paused {
+                    self.elapsedTime = self.accumulatedElapsedTime
                 }
             }
         }
@@ -520,6 +595,15 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private func stopElapsedTimer() {
         elapsedTimer?.invalidate()
         elapsedTimer = nil
+    }
+
+    private func currentElapsedTime(at date: Date) -> TimeInterval {
+        if displayState == .paused || pauseStartedAt != nil {
+            return accumulatedElapsedTime
+        }
+
+        guard let workoutStartDate else { return accumulatedElapsedTime }
+        return accumulatedElapsedTime + max(0, date.timeIntervalSince(workoutStartDate))
     }
 
     private func rebuildMetrics() {
@@ -753,14 +837,24 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
         Task { @MainActor in
             switch toState {
             case .running:
+                if fromState == .paused, pauseStartedAt != nil {
+                    pauseStartedAt = nil
+                    workoutStartDate = date
+                } else if workoutStartDate == nil {
+                    workoutStartDate = date
+                }
                 displayState = .running
                 statusMessage = "Workout in progress"
                 broadcastCompanionSnapshot()
             case .paused:
+                accumulatedElapsedTime = currentElapsedTime(at: date)
+                pauseStartedAt = date
+                elapsedTime = accumulatedElapsedTime
                 displayState = .paused
                 statusMessage = "Workout paused"
                 broadcastCompanionSnapshot()
             case .ended:
+                elapsedTime = currentElapsedTime(at: date)
                 displayState = .ended
                 statusMessage = "Workout ended"
                 broadcastCompanionSnapshot()
@@ -769,6 +863,8 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                     try? await workoutBuilder.endCollection(at: date)
                     try? await workoutBuilder.finishWorkout()
                 }
+                let completedTitle = self.activeTitle
+                let completedSubtitle = self.activeSubtitle
                 self.workoutSession = nil
                 self.workoutBuilder = nil
                 self.activeActivity = nil
@@ -776,6 +872,21 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 self.lastZoneSampleDate = nil
                 self.currentSpeedMetersPerSecond = nil
                 self.isMirroringToPhone = false
+                self.workoutStartDate = nil
+                self.pauseStartedAt = nil
+                self.accumulatedElapsedTime = 0
+                self.lastCompletedWorkoutTitle = completedTitle
+                self.lastCompletedWorkoutSubtitle = completedSubtitle
+                switch self.pendingEndAction {
+                case .promptEffort:
+                    self.postWorkoutDestination = .effortPrompt
+                case .startAnotherWorkout:
+                    self.postWorkoutDestination = .nextWorkoutPicker
+                case .none:
+                    self.postWorkoutDestination = .none
+                    self.displayState = .idle
+                }
+                self.pendingEndAction = .none
             default:
                 break
             }
@@ -789,6 +900,8 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
             broadcastCompanionSnapshot()
             stopElapsedTimer()
             isMirroringToPhone = false
+            pauseStartedAt = nil
+            accumulatedElapsedTime = 0
         }
     }
 }
