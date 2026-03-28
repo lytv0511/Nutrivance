@@ -198,6 +198,7 @@ private struct ActiveWorkoutCardsView: View {
                         horizontalSelection = .main
                     }
                 )
+                .focusable(false)
                 .tag(ActiveWorkoutSidePane.map)
             }
         }
@@ -324,38 +325,31 @@ private struct WorkoutMetricsCard: View {
 
     var body: some View {
         GeometryReader { geometry in
-            VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: watchWorkoutSymbol(manager.activeActivity))
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.green)
-                    .frame(width: 34, height: 34)
-                    .background(Color.green.opacity(0.18))
-                    .clipShape(Circle())
-
+            VStack(alignment: .leading, spacing: 4) {
                 Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 28, weight: .black, design: .rounded).monospacedDigit())
+                    .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
                     .fontWidth(.condensed)
                     .foregroundStyle(.yellow)
                     .privacySensitive()
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(manager.currentHeartRate.map { "\(Int($0.rounded()))" } ?? "--")
-                        .font(.system(size: 25, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
                         .fontWidth(.condensed)
                     Image(systemName: "heart.fill")
-                        .font(.system(size: 18, weight: .black))
+                        .font(.system(size: 15, weight: .black))
                         .foregroundStyle(.red)
                 }
-                .padding(.bottom, 2)
+                .padding(.bottom, 1)
 
                 ForEach(metricLines(for: manager, variant: variant)) { line in
-                    HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    HStack(alignment: .lastTextBaseline, spacing: 4) {
                         Text(line.value)
-                            .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                             .fontWidth(.condensed)
                         if !line.label.isEmpty {
                             Text(line.label)
-                                .font(.system(size: 10, weight: .black, design: .rounded))
+                                .font(.system(size: 8, weight: .black, design: .rounded))
                                 .fontWidth(.compressed)
                                 .foregroundStyle(.white.opacity(0.8))
                         }
@@ -364,9 +358,9 @@ private struct WorkoutMetricsCard: View {
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
+            .padding(.bottom, 3)
         }
     }
 }
@@ -380,50 +374,40 @@ private struct WorkoutZonesCard: View {
             let currentZone = manager.currentZoneIndex ?? 0
             let timeInZone = manager.liveZoneDurations[safe: currentZone] ?? 0
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top) {
-                    Image(systemName: watchWorkoutSymbol(manager.activeActivity))
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.green)
-                        .frame(width: 34, height: 34)
-                        .background(Color.green.opacity(0.18))
-                        .clipShape(Circle())
-                    Spacer(minLength: 0)
-                }
-
+            VStack(alignment: .leading, spacing: 5) {
                 Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 27, weight: .black, design: .rounded).monospacedDigit())
+                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
                     .fontWidth(.condensed)
                     .foregroundStyle(.yellow)
 
                 WorkoutZoneStrip(currentZone: currentZone)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 1)
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(manager.currentHeartRate.map { "\(Int($0.rounded()))" } ?? "--")
-                        .font(.system(size: 26, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 22, weight: .black, design: .rounded).monospacedDigit())
                         .fontWidth(.condensed)
                     Image(systemName: "heart.fill")
-                        .font(.system(size: 18, weight: .black))
+                        .font(.system(size: 15, weight: .black))
                         .foregroundStyle(.red)
                 }
 
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(shortElapsedString(timeInZone))
-                        .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                         .fontWidth(.condensed)
                     Text("TIME\nIN ZONE")
-                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .font(.system(size: 8, weight: .black, design: .rounded))
                         .fontWidth(.compressed)
                         .foregroundStyle(.white.opacity(0.82))
                 }
 
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(manager.averageHeartRate.map { "\(Int($0.rounded()))BPM" } ?? "--")
-                        .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                         .fontWidth(.condensed)
                     Text("AVERAGE\nHR")
-                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .font(.system(size: 8, weight: .black, design: .rounded))
                         .fontWidth(.condensed)
                         .foregroundStyle(.white.opacity(0.82))
                 }
@@ -431,9 +415,9 @@ private struct WorkoutZonesCard: View {
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
+            .padding(.bottom, 3)
         }
     }
 }
@@ -512,42 +496,42 @@ private struct WorkoutSplitsCard: View {
 
     var body: some View {
         GeometryReader { geometry in
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 27, weight: .black, design: .rounded).monospacedDigit())
+                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
                     .foregroundStyle(.yellow)
 
                 Text(shortElapsedString(currentSplitDuration))
-                    .font(.system(size: 28, weight: .black, design: .rounded).monospacedDigit())
+                    .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
                     .foregroundStyle(.white)
                 Text("CURRENT SPLIT")
-                    .font(.system(size: 10, weight: .black, design: .rounded))
+                    .font(.system(size: 8, weight: .black, design: .rounded))
                     .foregroundStyle(.white.opacity(0.6))
 
-                HStack(alignment: .lastTextBaseline, spacing: 8) {
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(splitSpeedValue(for: manager, splitDistanceMeters: currentSplitDistanceMeters, splitDuration: currentSplitDuration))
-                            .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                         Text(splitSpeedLabel(for: manager))
-                            .font(.system(size: 9, weight: .black, design: .rounded))
+                            .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.62))
                     }
                     Spacer(minLength: 12)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(splitDistanceValue(for: manager, splitDistanceMeters: currentSplitDistanceMeters))
-                            .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                         Text("SPLIT DIST")
-                            .font(.system(size: 9, weight: .black, design: .rounded))
+                            .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.62))
                     }
                 }
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(manager.currentHeartRate.map { "\(Int($0.rounded()))" } ?? "--")
-                        .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                     Text("BPM")
-                        .font(.system(size: 11, weight: .black, design: .rounded))
+                        .font(.system(size: 9, weight: .black, design: .rounded))
                         .foregroundStyle(.red.opacity(0.9))
                 }
                 .foregroundStyle(.white)
@@ -558,18 +542,18 @@ private struct WorkoutSplitsCard: View {
                         .padding(.vertical, 2)
 
                     Text("LAST \(latest.index)")
-                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .font(.system(size: 8, weight: .black, design: .rounded))
                         .foregroundStyle(.white.opacity(0.55))
                     Text(shortElapsedString(latest.splitDuration))
-                        .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 17, weight: .black, design: .rounded).monospacedDigit())
                         .foregroundStyle(.cyan)
                 }
 
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
         }
     }
 }
@@ -606,43 +590,43 @@ private struct WorkoutPowerZonesCard: View {
     var body: some View {
         GeometryReader { geometry in
             let timeInZone = manager.powerZoneDurations[safe: currentZone] ?? 0
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 27, weight: .black, design: .rounded).monospacedDigit())
+                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
                     .foregroundStyle(.yellow)
 
                 WorkoutPowerZoneStrip(currentZone: currentZone)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 2)
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(manager.currentPowerWatts.map { "\(Int($0.rounded()))" } ?? "--")
-                        .font(.system(size: 30, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
                     Text("W")
-                        .font(.system(size: 14, weight: .black, design: .rounded))
+                        .font(.system(size: 11, weight: .black, design: .rounded))
                         .foregroundStyle(.yellow.opacity(0.9))
                 }
 
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(shortElapsedString(timeInZone))
-                        .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                     Text("TIME\nIN ZONE")
-                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .font(.system(size: 8, weight: .black, design: .rounded))
                         .foregroundStyle(.white.opacity(0.8))
                 }
 
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(manager.currentCadence.map { "\(Int($0.rounded()))" } ?? "--")
-                        .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                     Text("CADENCE")
-                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .font(.system(size: 8, weight: .black, design: .rounded))
                         .foregroundStyle(.white.opacity(0.8))
                 }
 
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
         }
     }
 }
@@ -653,9 +637,9 @@ private struct WorkoutPacerCard: View {
 
     var body: some View {
         GeometryReader { geometry in
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 27, weight: .black, design: .rounded).monospacedDigit())
+                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
                     .foregroundStyle(.yellow)
 
                 if let pacerTarget = manager.pacerTarget {
@@ -667,19 +651,19 @@ private struct WorkoutPacerCard: View {
 
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text(pacerAverageValue(for: manager))
-                            .font(.system(size: 28, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(.mint)
                         Text("AVERAGE")
-                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .font(.system(size: 9, weight: .black, design: .rounded))
                             .foregroundStyle(.mint.opacity(0.85))
                     }
 
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text(pacerCurrentValue(for: manager))
-                            .font(.system(size: 28, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(.white)
                         Text("CURRENT")
-                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .font(.system(size: 9, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.7))
                     }
                 } else {
@@ -689,14 +673,14 @@ private struct WorkoutPacerCard: View {
                 }
 
                 Text(distanceSummaryValue(for: manager))
-                    .font(.system(size: 30, weight: .black, design: .rounded).monospacedDigit())
+                    .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
                     .foregroundStyle(.white)
 
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
         }
     }
 }
@@ -715,37 +699,21 @@ private struct WorkoutMetricGraphScaffold: View {
 
     var body: some View {
         GeometryReader { geometry in
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .center) {
-                    Image(systemName: activitySymbol)
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(accent)
-                        .frame(width: 34, height: 34)
-                        .background(accent.opacity(0.18))
-                        .clipShape(Circle())
-                    Spacer(minLength: 0)
-                    Image(systemName: symbol)
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(accent.opacity(0.85))
-                }
-
-                HStack(alignment: .top) {
-                    Text(workoutElapsedDisplayString(elapsedTime, reducedLuminance: isLuminanceReduced))
-                        .font(.system(size: 27, weight: .black, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.yellow)
-                    Spacer(minLength: 0)
-                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(workoutElapsedDisplayString(elapsedTime, reducedLuminance: isLuminanceReduced))
+                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.yellow)
 
                 WorkoutHistorySparkline(points: points, accent: accent)
-                    .frame(height: max(72, geometry.size.height * 0.34))
+                    .frame(height: max(56, geometry.size.height * 0.28))
 
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(topValue)
-                            .font(.system(size: 26, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(accent)
                         Text(topLabel)
-                            .font(.system(size: 10, weight: .black, design: .rounded))
+                            .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(accent.opacity(0.78))
                     }
                     Spacer(minLength: 0)
@@ -753,10 +721,10 @@ private struct WorkoutMetricGraphScaffold: View {
                         Text(topValue)
                             .hidden()
                         Text(bottomValue)
-                            .font(.system(size: 26, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(.white)
                         Text(bottomLabel)
-                            .font(.system(size: 10, weight: .black, design: .rounded))
+                            .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.72))
                     }
                 }
@@ -764,8 +732,8 @@ private struct WorkoutMetricGraphScaffold: View {
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
         }
     }
 }
@@ -904,11 +872,57 @@ private struct WorkoutMapCard: View {
                     .padding(.horizontal, 14)
                 }
             }
-
+        }
+        .overlay(alignment: .topLeading) {
+            Button {
+                onClose()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(Color.black.opacity(0.72), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 18)
+            .padding(.top, 18)
+            .zIndex(20)
+        }
+        .overlay(alignment: .topLeading) {
+            Text("MAP")
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .fontWidth(.compressed)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(.top, 18)
+                .padding(.leading, 62)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                mapTracker.resumeFollowingUser()
+            } label: {
+                Image(systemName: mapTracker.isFollowingUser ? "location.north.line.fill" : "location.north.fill")
+                    .font(.system(size: 14, weight: .black))
+                    .foregroundStyle(mapTracker.isFollowingUser ? .black : .white)
+                    .frame(width: 48, height: 48)
+                    .background(
+                        Circle()
+                            .fill(mapTracker.isFollowingUser ? Color.white.opacity(0.9) : Color.black.opacity(0.72))
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 18)
+            .padding(.bottom, 18)
+            .zIndex(20)
+        }
+        .overlay(alignment: .bottomLeading) {
             if mapTracker.isGuidingToTrailhead || mapTracker.hasRouteGuidance {
-                if isDirectionsVisible {
-                    VStack {
-                        Spacer()
+                Group {
+                    if isDirectionsVisible {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
                                 Image(systemName: mapTracker.isGuidingToTrailhead ? "figure.hiking" : mapTracker.nextTurnSymbolName)
@@ -932,113 +946,48 @@ private struct WorkoutMapCard: View {
                                     Image(systemName: "chevron.down")
                                         .font(.system(size: 11, weight: .black))
                                         .foregroundStyle(.white.opacity(0.9))
-                                        .frame(width: 28, height: 28)
+                                        .frame(width: 38, height: 38)
                                         .background(Color.white.opacity(0.12), in: Circle())
+                                        .contentShape(Circle())
                                 }
                                 .buttonStyle(.plain)
-                                .allowsHitTesting(true)
                             }
                             Text(mapTracker.routeGuidanceStatusText)
                                 .font(.system(size: 9, weight: .bold, design: .rounded))
                                 .fontWidth(.compressed)
                                 .foregroundStyle(.white.opacity(0.78))
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(width: 148, alignment: .leading)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 24, style: .continuous)
                                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
                         )
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 14)
-                        .allowsHitTesting(true)
-                    }
-                    .allowsHitTesting(false)
-                } else {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Button {
-                                isDirectionsVisible = true
-                            } label: {
-                                Image(systemName: mapTracker.isGuidingToTrailhead ? "figure.hiking" : mapTracker.nextTurnSymbolName)
-                                    .font(.system(size: 12, weight: .black))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 34, height: 34)
-                                    .background(Color.black.opacity(0.68), in: Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .allowsHitTesting(true)
-                            .padding(.leading, 16)
-                            .padding(.bottom, 16)
-
-                            Spacer()
+                        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    } else {
+                        Button {
+                            isDirectionsVisible = true
+                        } label: {
+                            Image(systemName: mapTracker.isGuidingToTrailhead ? "figure.hiking" : mapTracker.nextTurnSymbolName)
+                                .font(.system(size: 12, weight: .black))
+                                .foregroundStyle(.white)
+                                .frame(width: 48, height: 48)
+                                .background(Color.black.opacity(0.72), in: Circle())
+                                .contentShape(Circle())
                         }
+                        .buttonStyle(.plain)
                     }
-                    .allowsHitTesting(false)
                 }
+                .padding(.leading, 16)
+                .padding(.bottom, 16)
+                .zIndex(20)
             }
-
-            Text("MAP")
-                .font(.system(size: 10, weight: .heavy, design: .rounded))
-                .fontWidth(.compressed)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
-                .padding(.top, 18)
-                .padding(.leading, 60)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .allowsHitTesting(false)
-
-            VStack {
-                HStack {
-                    Button {
-                        onClose()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 12, weight: .black))
-                            .foregroundStyle(.white)
-                            .frame(width: 30, height: 30)
-                            .background(Color.black.opacity(0.68), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .allowsHitTesting(true)
-                    .padding(.leading, 18)
-                    .padding(.top, 18)
-
-                    Spacer()
-                }
-                Spacer()
-            }
-            .allowsHitTesting(false)
-
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Button {
-                        mapTracker.resumeFollowingUser()
-                    } label: {
-                        Image(systemName: mapTracker.isFollowingUser ? "location.north.line.fill" : "location.north.fill")
-                            .font(.system(size: 14, weight: .black))
-                            .foregroundStyle(mapTracker.isFollowingUser ? .black : .white)
-                            .frame(width: 34, height: 34)
-                            .background(
-                                Circle()
-                                    .fill(mapTracker.isFollowingUser ? Color.white.opacity(0.86) : Color.black.opacity(0.68))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .allowsHitTesting(true)
-                    .padding(.trailing, 18)
-                    .padding(.bottom, 18)
-                }
-            }
-            .allowsHitTesting(false)
         }
         .ignoresSafeArea()
+        .focusable(false)
     }
 }
 
@@ -1097,6 +1046,7 @@ private struct WorkoutMapSurface: View {
         .onMapCameraChange(frequency: .onEnd) { _ in
             mapTracker.handleMapGestureCameraChange()
         }
+        .focusable(false)
     }
 }
 
@@ -1288,6 +1238,7 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
     private var lastHeading: CLLocationDirection?
     private var lastCameraUpdate = Date.distantPast
     private var isPerformingProgrammaticCameraUpdate = false
+    private var ignoreMapCameraChangesUntil = Date.distantPast
 
     var hasRenderableMap: Bool {
         userCoordinate != nil
@@ -1342,8 +1293,8 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.activityType = .fitness
-        locationManager.distanceFilter = 2
-        locationManager.headingFilter = 2
+        locationManager.distanceFilter = kCLDistanceFilterNone
+        locationManager.headingFilter = 1
     }
 
     func activate() {
@@ -1384,6 +1335,7 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
 
     func handleMapGestureCameraChange() {
         guard !isPerformingProgrammaticCameraUpdate else { return }
+        guard Date() >= ignoreMapCameraChangesUntil else { return }
         isFollowingUser = false
     }
 
@@ -1431,7 +1383,7 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
         guard let location = locations.last else { return }
         let previousLocation = lastLocation
         lastLocation = location
-        userCoordinate = location.coordinate
+        userCoordinate = smoothedDisplayCoordinate(for: location)
         updateDisplayHeading(with: location)
         updateTrailheadProgress(with: location)
         updateRouteProgress(with: location)
@@ -1456,10 +1408,10 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
 
         let now = Date()
         let movedEnough = previousLocation.map { previous in
-            location.distance(from: previous) >= 2
+            location.distance(from: previous) >= 0.5
         } ?? true
 
-        guard force || movedEnough || now.timeIntervalSince(lastCameraUpdate) > 0.35 else {
+        guard force || movedEnough || now.timeIntervalSince(lastCameraUpdate) > 0.08 else {
             return
         }
 
@@ -1471,15 +1423,34 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
     }
 
     private func userFollowCamera() -> MapCameraPosition {
-        guard let location = lastLocation else { return .automatic }
+        guard let centerCoordinate = userCoordinate ?? lastLocation?.coordinate else { return .automatic }
         return .camera(
             MapCamera(
-                centerCoordinate: location.coordinate,
+                centerCoordinate: centerCoordinate,
                 distance: 60.96,
                 heading: 0,
                 pitch: 0
             )
         )
+    }
+
+    private func smoothedDisplayCoordinate(for location: CLLocation) -> CLLocationCoordinate2D {
+        guard let existing = userCoordinate else { return location.coordinate }
+
+        let speed = max(location.speed, 0)
+        let blendFactor: Double
+        switch speed {
+        case 0..<1.5:
+            blendFactor = 0.18
+        case 1.5..<4:
+            blendFactor = 0.28
+        default:
+            blendFactor = 0.4
+        }
+
+        let latitude = existing.latitude + ((location.coordinate.latitude - existing.latitude) * blendFactor)
+        let longitude = existing.longitude + ((location.coordinate.longitude - existing.longitude) * blendFactor)
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 
     private func updateTrailheadProgress(with location: CLLocation?) {
@@ -1691,9 +1662,12 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
 
     private func applyProgrammaticPosition(_ newPosition: MapCameraPosition) {
         isPerformingProgrammaticCameraUpdate = true
-        position = newPosition
+        ignoreMapCameraChangesUntil = Date().addingTimeInterval(0.45)
+        withAnimation(.linear(duration: 0.08)) {
+            position = newPosition
+        }
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            try? await Task.sleep(nanoseconds: 60_000_000)
             self?.isPerformingProgrammaticCameraUpdate = false
         }
     }
