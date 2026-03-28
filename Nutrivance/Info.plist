@@ -12,6 +12,10 @@
 	<false/>
 	<key>MKDirectionsApplicationSupportedModes</key>
 	<array/>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>OpenWaterPageIntentIntent</string>

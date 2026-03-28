@@ -110,6 +110,72 @@ struct WatchLiveMetric: Identifiable, Hashable {
     let tint: Color
 }
 
+enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable {
+    case metricsPrimary
+    case metricsSecondary
+    case heartRateZones
+    case segments
+    case splits
+    case elevationGraph
+    case powerGraph
+    case powerZones
+    case pacer
+    case map
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .metricsPrimary:
+            return "Main Metrics"
+        case .metricsSecondary:
+            return "Detail Metrics"
+        case .heartRateZones:
+            return "HR Zones"
+        case .segments:
+            return "Segments"
+        case .splits:
+            return "Splits"
+        case .elevationGraph:
+            return "Elevation"
+        case .powerGraph:
+            return "Power"
+        case .powerZones:
+            return "Power Zones"
+        case .pacer:
+            return "Pacer"
+        case .map:
+            return "Map"
+        }
+    }
+}
+
+struct WatchWorkoutSeriesPoint: Codable, Hashable, Identifiable {
+    let elapsedTime: TimeInterval
+    let value: Double
+
+    var id: TimeInterval { elapsedTime }
+}
+
+struct WatchWorkoutSplit: Codable, Hashable, Identifiable {
+    let index: Int
+    let elapsedTime: TimeInterval
+    let splitDuration: TimeInterval
+    let splitDistanceMeters: Double
+    let averageHeartRate: Double?
+    let averageSpeedMetersPerSecond: Double?
+    let averagePowerWatts: Double?
+    let averageCadence: Double?
+
+    var id: Int { index }
+}
+
+struct WatchPacerTarget: Codable, Hashable {
+    let lowerBound: Double
+    let upperBound: Double
+    let unitLabel: String
+}
+
 private struct CompanionWorkoutMetricPayload: Codable {
     let id: String
     let title: String
@@ -118,11 +184,54 @@ private struct CompanionWorkoutMetricPayload: Codable {
     let tintName: String
 }
 
+private struct CompanionWorkoutSeriesPointPayload: Codable {
+    let elapsedTime: TimeInterval
+    let value: Double
+}
+
+private struct CompanionWorkoutSplitPayload: Codable {
+    let index: Int
+    let elapsedTime: TimeInterval
+    let splitDuration: TimeInterval
+    let splitDistanceMeters: Double
+    let averageHeartRate: Double?
+    let averageSpeedMetersPerSecond: Double?
+    let averagePowerWatts: Double?
+    let averageCadence: Double?
+}
+
+private struct CompanionWorkoutPacerPayload: Codable {
+    let lowerBound: Double
+    let upperBound: Double
+    let unitLabel: String
+}
+
 private struct CompanionWorkoutSnapshotPayload: Codable {
     let title: String
     let stateText: String
+    let activityRawValue: UInt
     let elapsedTime: TimeInterval
     let metrics: [CompanionWorkoutMetricPayload]
+    let pageKinds: [String]
+    let speedHistory: [CompanionWorkoutSeriesPointPayload]
+    let paceHistory: [CompanionWorkoutSeriesPointPayload]
+    let powerHistory: [CompanionWorkoutSeriesPointPayload]
+    let elevationHistory: [CompanionWorkoutSeriesPointPayload]
+    let cadenceHistory: [CompanionWorkoutSeriesPointPayload]
+    let heartRateHistory: [CompanionWorkoutSeriesPointPayload]
+    let splits: [CompanionWorkoutSplitPayload]
+    let heartRateZoneDurations: [TimeInterval]
+    let powerZoneDurations: [TimeInterval]
+    let totalDistanceMeters: Double
+    let currentHeartRate: Double?
+    let averageHeartRate: Double?
+    let currentSpeedMetersPerSecond: Double?
+    let currentPowerWatts: Double?
+    let averagePowerWatts: Double?
+    let currentCadence: Double?
+    let currentElevationFeet: Double
+    let elevationGainFeet: Double
+    let pacerTarget: CompanionWorkoutPacerPayload?
 }
 
 @MainActor
@@ -181,6 +290,14 @@ final class WatchWakeScheduler: ObservableObject {
 final class WatchWorkoutManager: NSObject, ObservableObject {
     static let shared = WatchWorkoutManager()
 
+    private enum CompanionControlCommand: String {
+        case pause
+        case resume
+        case split
+        case stop
+        case newWorkout
+    }
+
     enum SessionDisplayState: String {
         case idle
         case preparing
@@ -229,6 +346,17 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published private(set) var strideMeters: Double?
     @Published private(set) var groundContactTimeMilliseconds: Double?
     @Published private(set) var verticalOscillationCentimeters: Double?
+    @Published private(set) var speedHistory: [WatchWorkoutSeriesPoint] = []
+    @Published private(set) var paceHistory: [WatchWorkoutSeriesPoint] = []
+    @Published private(set) var powerHistory: [WatchWorkoutSeriesPoint] = []
+    @Published private(set) var elevationHistory: [WatchWorkoutSeriesPoint] = []
+    @Published private(set) var cadenceHistory: [WatchWorkoutSeriesPoint] = []
+    @Published private(set) var heartRateHistory: [WatchWorkoutSeriesPoint] = []
+    @Published private(set) var splits: [WatchWorkoutSplit] = []
+    @Published private(set) var powerZoneDurations: [TimeInterval] = Array(repeating: 0, count: 5)
+    @Published private(set) var currentElevationFeet: Double = 0
+    @Published private(set) var elevationGainFeet: Double = 0
+    @Published private(set) var pacerTarget: WatchPacerTarget?
     @Published private(set) var postWorkoutDestination: PostWorkoutDestination = .none
     @Published private(set) var lastCompletedWorkoutTitle: String?
     @Published private(set) var lastCompletedWorkoutSubtitle: String?
@@ -253,9 +381,57 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private var accumulatedElapsedTime: TimeInterval = 0
     private var pauseStartedAt: Date?
     private var pendingEndAction: EndAction = .none
+    private var lastPowerSampleDate: Date?
+    private var lastHistorySampleElapsedTime: TimeInterval = 0
+    private var currentSplitStartElapsedTime: TimeInterval = 0
+    private var currentSplitStartDistanceMeters: Double = 0
+    private var autoSplitLengthMeters: Double?
+    private let workoutTabPreferences = WatchWorkoutTabPreferences()
 
     private var sessionState: HKWorkoutSessionState? {
         workoutSession?.state
+    }
+
+    var orderedWorkoutPages: [WatchWorkoutPageKind] {
+        orderedPages(for: activeActivity ?? .running)
+    }
+
+    func orderedPages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
+        workoutTabPreferences.orderedPages(for: activity)
+    }
+
+    func isPageEnabled(_ page: WatchWorkoutPageKind, for activity: HKWorkoutActivityType) -> Bool {
+        orderedPages(for: activity).contains(page)
+    }
+
+    func setPageEnabled(_ isEnabled: Bool, page: WatchWorkoutPageKind, for activity: HKWorkoutActivityType) {
+        var pages = orderedPages(for: activity)
+        if isEnabled {
+            if !pages.contains(page) {
+                let defaultPages = WatchWorkoutTabPreferences.defaultPages(for: activity)
+                let insertionIndex = defaultPages.firstIndex(of: page).map { desiredIndex in
+                    pages.firstIndex(where: { current in
+                        guard let currentIndex = defaultPages.firstIndex(of: current) else { return false }
+                        return currentIndex > desiredIndex
+                    }) ?? pages.count
+                } ?? pages.count
+                pages.insert(page, at: insertionIndex)
+            }
+        } else {
+            pages.removeAll { $0 == page }
+        }
+        workoutTabPreferences.setOrderedPages(pages, for: activity)
+        objectWillChange.send()
+    }
+
+    func movePage(_ page: WatchWorkoutPageKind, direction: Int, for activity: HKWorkoutActivityType) {
+        var pages = orderedPages(for: activity)
+        guard let index = pages.firstIndex(of: page) else { return }
+        let destination = min(max(index + direction, 0), pages.count - 1)
+        guard destination != index else { return }
+        pages.move(fromOffsets: IndexSet(integer: index), toOffset: destination > index ? destination + 1 : destination)
+        workoutTabPreferences.setOrderedPages(pages, for: activity)
+        objectWillChange.send()
     }
 
     func activate() {
@@ -372,7 +548,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return
         }
 
-        splitCount += 1
+        appendSplitSnapshot(isAutomatic: false)
         statusMessage = "Split \(splitCount) at \(shortWorkoutElapsedString(elapsedTime))"
         broadcastCompanionSnapshot()
     }
@@ -467,65 +643,199 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         accumulatedElapsedTime = 0
         pauseStartedAt = nil
         pendingEndAction = .none
+        lastHistorySampleElapsedTime = 0
+        lastPowerSampleDate = nil
+        speedHistory = []
+        paceHistory = []
+        powerHistory = []
+        elevationHistory = []
+        cadenceHistory = []
+        heartRateHistory = []
+        splits = []
+        powerZoneDurations = Array(repeating: 0, count: 5)
+        currentElevationFeet = 0
+        elevationGainFeet = 0
+        currentSplitStartElapsedTime = 0
+        currentSplitStartDistanceMeters = 0
+        autoSplitLengthMeters = defaultSplitLength(for: activity)
+        pacerTarget = defaultPacerTarget(for: activity)
 
         Task {
-            authorizationGranted = await requestAuthorizationIfNeeded()
-            guard authorizationGranted else {
+            let ready: Bool
+            if authorizationGranted {
+                ready = true
+            } else {
+                ready = await requestAuthorizationIfNeeded()
+            }
+            authorizationGranted = ready
+            guard ready else {
                 displayState = .failed
                 statusMessage = "Health permissions are required."
                 return
             }
 
             do {
-                statusMessage = "Preparing workout..."
-
-                let configuration = HKWorkoutConfiguration()
-                configuration.activityType = activity
-                configuration.locationType = location
-
-                let session = try HKWorkoutSession(healthStore: healthStore, configuration: configuration)
-                let builder = session.associatedWorkoutBuilder()
-                builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuration)
-
-                workoutSession = session
-                workoutBuilder = builder
-                metrics = []
-                liveZoneDurations = Array(repeating: 0, count: 5)
-                currentHeartRate = nil
-                averageHeartRate = nil
-                currentZoneIndex = nil
-                splitCount = 0
-                isMirroringToPhone = false
-                lastZoneSampleDate = nil
-                totalDistanceMeters = 0
-                currentSpeedMetersPerSecond = nil
-                currentPowerWatts = nil
-                averagePowerWatts = nil
-                currentCadence = nil
-                flightsClimbed = nil
-                strokeCount = nil
-                strideMeters = nil
-                groundContactTimeMilliseconds = nil
-                verticalOscillationCentimeters = nil
-
-                session.delegate = self
-                builder.delegate = self
-
-                let startDate = Date()
-                workoutStartDate = startDate
-                session.startActivity(with: startDate)
-                try await builder.beginCollection(at: startDate)
-                isMirroringToPhone = await ensureCompanionMirroring()
-
-                displayState = .running
-                statusMessage = "Workout in progress"
-                startElapsedTimer()
-                rebuildMetrics()
-                broadcastCompanionSnapshot()
+                try beginWorkoutSession(activity: activity, location: location)
             } catch {
                 displayState = .failed
                 statusMessage = "Could not start workout."
             }
+        }
+    }
+
+    private func beginWorkoutSession(
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType
+    ) throws {
+        statusMessage = "Preparing workout..."
+
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = activity
+        configuration.locationType = location
+
+        let session = try HKWorkoutSession(healthStore: healthStore, configuration: configuration)
+        let builder = session.associatedWorkoutBuilder()
+        builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuration)
+
+        workoutSession = session
+        workoutBuilder = builder
+        metrics = []
+        liveZoneDurations = Array(repeating: 0, count: 5)
+        currentHeartRate = nil
+        averageHeartRate = nil
+        currentZoneIndex = nil
+        splitCount = 0
+        isMirroringToPhone = false
+        lastZoneSampleDate = nil
+        totalDistanceMeters = 0
+        currentSpeedMetersPerSecond = nil
+        currentPowerWatts = nil
+        averagePowerWatts = nil
+        currentCadence = nil
+        flightsClimbed = nil
+        strokeCount = nil
+        strideMeters = nil
+        groundContactTimeMilliseconds = nil
+        verticalOscillationCentimeters = nil
+        currentElevationFeet = 0
+        elevationGainFeet = 0
+
+        session.delegate = self
+        builder.delegate = self
+
+        let startDate = Date()
+        workoutStartDate = startDate
+        session.startActivity(with: startDate)
+
+        displayState = .running
+        statusMessage = "Workout in progress"
+        startElapsedTimer()
+        rebuildMetrics()
+        broadcastCompanionSnapshot()
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await builder.beginCollection(at: startDate)
+            } catch {
+                self.displayState = .failed
+                self.statusMessage = "Could not start workout."
+                self.stopElapsedTimer()
+                return
+            }
+
+            self.isMirroringToPhone = await self.ensureCompanionMirroring()
+            self.broadcastCompanionSnapshot()
+        }
+    }
+
+    private func handleCompanionControlCommand(_ rawValue: String) {
+        guard let command = CompanionControlCommand(rawValue: rawValue) else { return }
+
+        switch command {
+        case .pause:
+            pause()
+        case .resume:
+            resume()
+        case .split:
+            markSplit()
+        case .stop:
+            end()
+        case .newWorkout:
+            newWorkout()
+        }
+    }
+
+    private func appendHistoryPoint(_ value: Double?, to series: inout [WatchWorkoutSeriesPoint], elapsedTime: TimeInterval) {
+        guard let value, value.isFinite else { return }
+        if let lastPoint = series.last, abs(lastPoint.elapsedTime - elapsedTime) < 10 {
+            series[series.count - 1] = WatchWorkoutSeriesPoint(elapsedTime: elapsedTime, value: value)
+        } else {
+            series.append(WatchWorkoutSeriesPoint(elapsedTime: elapsedTime, value: value))
+        }
+
+        if series.count > 120 {
+            series.removeFirst(series.count - 120)
+        }
+    }
+
+    private func updateDerivedLiveSeries(elapsedTime: TimeInterval) {
+        let elapsed = max(elapsedTime, 1)
+
+        if let currentHeartRate {
+            appendHistoryPoint(currentHeartRate, to: &heartRateHistory, elapsedTime: elapsed)
+        }
+
+        if let currentSpeedMetersPerSecond, currentSpeedMetersPerSecond > 0 {
+            appendHistoryPoint(currentSpeedMetersPerSecond * 2.23694, to: &speedHistory, elapsedTime: elapsed)
+            appendHistoryPoint(1609.344 / currentSpeedMetersPerSecond, to: &paceHistory, elapsedTime: elapsed)
+        }
+
+        if let currentPowerWatts {
+            appendHistoryPoint(currentPowerWatts, to: &powerHistory, elapsedTime: elapsed)
+        }
+
+        if let currentCadence {
+            appendHistoryPoint(currentCadence, to: &cadenceHistory, elapsedTime: elapsed)
+        }
+
+        let estimatedElevationFeet = max((flightsClimbed ?? 0) * 10, elevationGainFeet)
+        currentElevationFeet = estimatedElevationFeet
+        elevationGainFeet = max(elevationGainFeet, estimatedElevationFeet)
+        appendHistoryPoint(currentElevationFeet, to: &elevationHistory, elapsedTime: elapsed)
+    }
+
+    private func appendSplitSnapshot(isAutomatic: Bool) {
+        let splitElapsed = max(elapsedTime - currentSplitStartElapsedTime, 0)
+        let splitDistance = max(totalDistanceMeters - currentSplitStartDistanceMeters, 0)
+        guard splitElapsed > 0.5 || splitDistance > 1 else { return }
+
+        splitCount += 1
+        splits.append(
+            WatchWorkoutSplit(
+                index: splitCount,
+                elapsedTime: elapsedTime,
+                splitDuration: splitElapsed,
+                splitDistanceMeters: splitDistance,
+                averageHeartRate: averageHeartRate,
+                averageSpeedMetersPerSecond: splitDistance > 0 ? splitDistance / max(splitElapsed, 1) : currentSpeedMetersPerSecond,
+                averagePowerWatts: averagePowerWatts ?? currentPowerWatts,
+                averageCadence: currentCadence
+            )
+        )
+
+        currentSplitStartElapsedTime = elapsedTime
+        currentSplitStartDistanceMeters = totalDistanceMeters
+
+        if isAutomatic {
+            statusMessage = "Auto split \(splitCount)"
+        }
+    }
+
+    private func updateAutomaticSplitsIfNeeded() {
+        guard let autoSplitLengthMeters, autoSplitLengthMeters > 0 else { return }
+        while totalDistanceMeters - currentSplitStartDistanceMeters >= autoSplitLengthMeters {
+            appendSplitSnapshot(isAutomatic: true)
         }
     }
 
@@ -613,6 +923,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
 
         var cards: [WatchLiveMetric] = []
+        let sampleElapsedTime = currentElapsedTime(at: Date())
 
         if let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate),
            let heartStats = workoutBuilder.statistics(for: heartRateType) {
@@ -654,6 +965,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             if let current = powerStats.mostRecentQuantity()?.doubleValue(for: .watt()) {
                 currentPowerWatts = current
                 cards.append(.init(id: "power-current", title: "Power", valueText: "\(Int(current.rounded())) W", symbol: "bolt.fill", tint: .yellow))
+                let powerZone = powerZoneIndex(for: current)
+                let now = Date()
+                let sampleDate = lastPowerSampleDate ?? now
+                let delta = max(0, min(now.timeIntervalSince(sampleDate), 15))
+                powerZoneDurations[powerZone] += delta
+                lastPowerSampleDate = now
             }
             if let average = powerStats.averageQuantity()?.doubleValue(for: .watt()) {
                 averagePowerWatts = average
@@ -699,6 +1016,11 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
 
         metrics = cards
+        if sampleElapsedTime - lastHistorySampleElapsedTime >= 8 || lastHistorySampleElapsedTime == 0 {
+            updateDerivedLiveSeries(elapsedTime: sampleElapsedTime)
+            lastHistorySampleElapsedTime = sampleElapsedTime
+        }
+        updateAutomaticSplitsIfNeeded()
         broadcastCompanionSnapshot()
     }
 
@@ -709,6 +1031,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         let payload = CompanionWorkoutSnapshotPayload(
             title: activeTitle ?? watchWorkoutDisplayName(activeActivity ?? .running),
             stateText: displayState.rawValue.capitalized,
+            activityRawValue: activeActivity?.rawValue ?? HKWorkoutActivityType.running.rawValue,
             elapsedTime: elapsedTime,
             metrics: metrics.map {
                 CompanionWorkoutMetricPayload(
@@ -718,7 +1041,38 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     symbol: $0.symbol,
                     tintName: companionTintName(for: $0.id)
                 )
-            }
+            },
+            pageKinds: orderedWorkoutPages.map(\.rawValue),
+            speedHistory: speedHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            paceHistory: paceHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            powerHistory: powerHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            elevationHistory: elevationHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            cadenceHistory: cadenceHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            heartRateHistory: heartRateHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            splits: splits.map {
+                .init(
+                    index: $0.index,
+                    elapsedTime: $0.elapsedTime,
+                    splitDuration: $0.splitDuration,
+                    splitDistanceMeters: $0.splitDistanceMeters,
+                    averageHeartRate: $0.averageHeartRate,
+                    averageSpeedMetersPerSecond: $0.averageSpeedMetersPerSecond,
+                    averagePowerWatts: $0.averagePowerWatts,
+                    averageCadence: $0.averageCadence
+                )
+            },
+            heartRateZoneDurations: liveZoneDurations,
+            powerZoneDurations: powerZoneDurations,
+            totalDistanceMeters: totalDistanceMeters,
+            currentHeartRate: currentHeartRate,
+            averageHeartRate: averageHeartRate,
+            currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+            currentPowerWatts: currentPowerWatts,
+            averagePowerWatts: averagePowerWatts,
+            currentCadence: currentCadence,
+            currentElevationFeet: currentElevationFeet,
+            elevationGainFeet: elevationGainFeet,
+            pacerTarget: pacerTarget.map { .init(lowerBound: $0.lowerBound, upperBound: $0.upperBound, unitLabel: $0.unitLabel) }
         )
 
         Task {
@@ -823,6 +1177,59 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         ]
         return identifiers.compactMap(HKQuantityType.quantityType(forIdentifier:)).first {
             workoutBuilder?.statistics(for: $0) != nil
+        }
+    }
+
+    private func powerZoneIndex(for power: Double) -> Int {
+        let referencePower: Double
+
+        switch activeActivity {
+        case .some(.cycling):
+            referencePower = 240
+        case .some(.running):
+            referencePower = 280
+        default:
+            referencePower = 220
+        }
+
+        let ratio = power / max(referencePower, 1)
+        switch ratio {
+        case ..<0.60:
+            return 0
+        case ..<0.75:
+            return 1
+        case ..<0.90:
+            return 2
+        case ..<1.05:
+            return 3
+        default:
+            return 4
+        }
+    }
+
+    private func defaultSplitLength(for activity: HKWorkoutActivityType) -> Double? {
+        switch activity {
+        case .running, .walking, .hiking:
+            return 1609.344
+        case .cycling:
+            return 5000
+        case .swimming:
+            return 100
+        default:
+            return nil
+        }
+    }
+
+    private func defaultPacerTarget(for activity: HKWorkoutActivityType) -> WatchPacerTarget? {
+        switch activity {
+        case .running, .walking, .hiking:
+            return WatchPacerTarget(lowerBound: 8 * 60 + 35, upperBound: 9 * 60 + 5, unitLabel: "PACE")
+        case .cycling:
+            return WatchPacerTarget(lowerBound: 15, upperBound: 19, unitLabel: "MPH")
+        case .swimming:
+            return WatchPacerTarget(lowerBound: 95, upperBound: 115, unitLabel: "/100M")
+        default:
+            return nil
         }
     }
 }
@@ -930,6 +1337,28 @@ extension WatchWorkoutManager: WCSessionDelegate {
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
     ) { }
+
+    nonisolated func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String : Any],
+        replyHandler: @escaping ([String : Any]) -> Void
+    ) {
+        Task { @MainActor in
+            if let command = message["workoutControl"] as? String {
+                self.handleCompanionControlCommand(command)
+                replyHandler(["accepted": true])
+            } else {
+                replyHandler([:])
+            }
+        }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
+        guard let command = userInfo["workoutControl"] as? String else { return }
+        Task { @MainActor in
+            self.handleCompanionControlCommand(command)
+        }
+    }
 }
 #endif
 
@@ -943,6 +1372,56 @@ extension WatchDashboardStore {
             return "Your schedule is drifting. A steadier bedtime should improve recovery faster than pushing for more load."
         }
         return "Sleep is trending well. Keep the same wind-down routine and use the wake timer to protect consistency."
+    }
+}
+
+@MainActor
+private final class WatchWorkoutTabPreferences {
+    private let defaults = UserDefaults.standard
+    private let storageKey = "watch.workout.tabPreferences"
+
+    func orderedPages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
+        let defaultPages = Self.defaultPages(for: activity)
+        guard
+            let data = defaults.data(forKey: storageKey),
+            let stored = try? JSONDecoder().decode([String: [String]].self, from: data),
+            let rawPages = stored[activity.preferenceKey]
+        else {
+            return defaultPages
+        }
+
+        let decoded = rawPages.compactMap(WatchWorkoutPageKind.init(rawValue:))
+        let sanitized = decoded.filter(defaultPages.contains)
+        let missing = defaultPages.filter { !sanitized.contains($0) }
+        return sanitized + missing
+    }
+
+    func setOrderedPages(_ pages: [WatchWorkoutPageKind], for activity: HKWorkoutActivityType) {
+        var stored: [String: [String]] = [:]
+        if
+            let data = defaults.data(forKey: storageKey),
+            let decoded = try? JSONDecoder().decode([String: [String]].self, from: data)
+        {
+            stored = decoded
+        }
+
+        stored[activity.preferenceKey] = pages.map(\.rawValue)
+        if let data = try? JSONEncoder().encode(stored) {
+            defaults.set(data, forKey: storageKey)
+        }
+    }
+
+    static func defaultPages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
+        switch activity {
+        case .cycling:
+            return [.metricsPrimary, .metricsSecondary, .heartRateZones, .splits, .elevationGraph, .powerGraph, .powerZones, .pacer, .map]
+        case .running, .walking, .hiking:
+            return [.metricsPrimary, .metricsSecondary, .heartRateZones, .segments, .splits, .elevationGraph, .pacer, .map]
+        case .swimming:
+            return [.metricsPrimary, .heartRateZones, .splits, .segments]
+        default:
+            return [.metricsPrimary, .metricsSecondary, .heartRateZones, .splits, .map]
+        }
     }
 }
 
@@ -1003,4 +1482,10 @@ private func shortWorkoutElapsedString(_ elapsed: TimeInterval) -> String {
     formatter.allowedUnits = elapsed >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
     formatter.zeroFormattingBehavior = [.pad]
     return formatter.string(from: elapsed) ?? "00:00"
+}
+
+private extension HKWorkoutActivityType {
+    var preferenceKey: String {
+        String(rawValue)
+    }
 }
