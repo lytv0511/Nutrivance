@@ -5,6 +5,38 @@ import MapKit
 import FoundationModels
 #endif
 
+private enum ProgramBuilderTab: String, CaseIterable, Identifiable {
+    case overview
+    case workoutStages
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .overview:
+            return "Overview"
+        case .workoutStages:
+            return "Workout Stages"
+        }
+    }
+}
+
+private struct ProgramStageCardHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct ProgramLaunchButtonHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct ProgramBuilderView: View {
     @StateObject private var engine = HealthStateEngine.shared
     @StateObject private var planner = ProgramBuilderAIPlanner()
@@ -25,14 +57,21 @@ struct ProgramBuilderView: View {
     @State private var routeObjectiveName = ""
     @State private var routeRepeats = 1
     @State private var selectedRouteTemplateID: UUID?
-    @State private var customMicroStages: [ProgramCustomWorkoutMicroStage] = []
-    @State private var coachRegenerationNote = ""
+    @State private var selectedBuilderTab: ProgramBuilderTab = .overview
+    @State private var selectedStageActivityID: String?
+    @State private var customMicroStagesByActivityID: [String: [ProgramCustomWorkoutMicroStage]] = [:]
+    @State private var customCircuitGroupsByActivityID: [String: [ProgramWorkoutCircuitGroup]] = [:]
+    @State private var coachRegenerationNotesByActivityID: [String: String] = [:]
+    @State private var stagePromptTextByStageID: [UUID: String] = [:]
+    @State private var stageCardHeightByActivityID: [String: CGFloat] = [:]
+    @State private var launchButtonHeight: CGFloat = 0
     @State private var plannedRouteLaunchMetadata: RouteLaunchMetadata?
     @State private var routeTemplateIDsWithSavedRoutes: Set<UUID> = []
     @State private var hasLoadedRouteTemplateAvailability = false
     @State private var isSearchSectionExpanded = false
     @State private var hasRestoredCachedDraft = false
     @State private var planSyncStatusMessage: String?
+    @State private var stageRegenerationStatusByActivityID: [String: String] = [:]
 
     private var catalog: [ProgramWorkoutType] {
         ProgramWorkoutType.catalog + customActivities
@@ -75,10 +114,17 @@ struct ProgramBuilderView: View {
     }
 
     private var routeTemplateCandidates: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
-        engine.workoutAnalytics
+        let routeFriendlyRawValues = Set(
+            selectedActivities
+                .filter(\.routeFriendly)
+                .map { $0.hkWorkoutActivityType.rawValue }
+        )
+        return engine.workoutAnalytics
             .filter { pair in
-                let activity = pair.workout.workoutActivityType
-                return [.running, .walking, .hiking, .cycling].contains(activity)
+                if routeFriendlyRawValues.isEmpty {
+                    return [.running, .walking, .hiking, .cycling].contains(pair.workout.workoutActivityType)
+                }
+                return routeFriendlyRawValues.contains(pair.workout.workoutActivityType.rawValue)
             }
             .sorted { $0.workout.startDate > $1.workout.startDate }
             .prefix(8)
@@ -125,17 +171,35 @@ struct ProgramBuilderView: View {
             .sorted { $0.key < $1.key }
             .map { "\($0.key):\($0.value)" }
             .joined(separator: ",")
+        let customStageKey = customMicroStagesByActivityID
+            .sorted { $0.key < $1.key }
+            .map { key, stages in
+                "\(key):" + stages.map { "\($0.title):\($0.plannedMinutes):\($0.repeats):\($0.repeatSetLabel):\($0.circuitGroupID?.uuidString ?? "none"):\($0.targetBehavior.rawValue)" }.joined(separator: ",")
+            }
+            .joined(separator: "|")
+        let circuitGroupKey = customCircuitGroupsByActivityID
+            .sorted { $0.key < $1.key }
+            .map { key, groups in
+                "\(key):" + groups.map { "\($0.id.uuidString):\($0.title):\($0.repeats)" }.joined(separator: ",")
+            }
+            .joined(separator: "|")
+        let regenerationKey = coachRegenerationNotesByActivityID
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: "|")
         return [
             selectedMode.rawValue,
             selectedPlanDepth.rawValue,
+            selectedBuilderTab.rawValue,
             selectedActivityIDs.joined(separator: ","),
             String(availableMinutes),
             allocationKey,
             selectedTargetMetric.rawValue,
             String(selectedZone),
             targetValueText,
-            customMicroStages.map { "\($0.title):\($0.plannedMinutes):\($0.repeats)" }.joined(separator: ","),
-            coachRegenerationNote,
+            customStageKey,
+            circuitGroupKey,
+            regenerationKey,
             routeObjectiveName,
             String(routeRepeats),
             selectedRouteTemplateID?.uuidString ?? "",
@@ -150,10 +214,20 @@ struct ProgramBuilderView: View {
                 contentLayout(for: proxy.size.width)
             }
             .scrollBounceBehavior(.basedOnSize)
+            .foregroundStyle(.orange)
+            .tint(.orange)
             .background(programBuilderBackground.ignoresSafeArea())
         }
         .navigationTitle("Program Builder")
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    dismissProgramBuilderKeyboard()
+                }
+            }
+        }
         .task(id: coachContextID) {
             await planner.refreshCoachAdvice(
                 for: buildPlannerRequest(),
@@ -166,6 +240,7 @@ struct ProgramBuilderView: View {
         .onChange(of: selectedActivityIDs) { _, newValue in
             rebalanceWeights(for: newValue)
             syncTargetMetric()
+            syncStageActivitySelection()
             ensureMicroStagesAreReady()
         }
         .onChange(of: selectedPlanDepth) { _, _ in
@@ -176,6 +251,9 @@ struct ProgramBuilderView: View {
         }
         .onChange(of: draftCacheID) { _, _ in
             persistBuilderDraft()
+        }
+        .onChange(of: customMicroStagesByActivityID) { _, _ in
+            syncAvailableMinutesWithStages()
         }
         .onAppear {
             handleViewAppear()
@@ -210,27 +288,30 @@ struct ProgramBuilderView: View {
         restoreCachedDraftIfNeeded()
         rebalanceWeights(for: selectedActivityIDs)
         syncTargetMetric()
+        syncStageActivitySelection()
         ensureMicroStagesAreReady()
+        syncAvailableMinutesWithStages()
+    }
+
+    private func syncAvailableMinutesWithStages() {
+        guard selectedPlanDepth == .comprehensive else { return }
+        let requiredMinutes = selectedActivities.reduce(0) { partial, activity in
+            let stages = customMicroStagesByActivityID[activity.id] ?? []
+            guard !stages.isEmpty else { return partial }
+            return partial + stageTotalMinutes(stages)
+        }
+        if requiredMinutes > Int(availableMinutes.rounded()) {
+            availableMinutes = Double(requiredMinutes)
+        }
+    }
+
+    private func stageTotalMinutes(_ stages: [ProgramCustomWorkoutMicroStage]) -> Int {
+        max(stages.reduce(0) { $0 + max($1.plannedMinutes, 1) * max($1.repeats, 1) }, 0)
     }
 
     private func buildPlanPhases() -> [ProgramWorkoutPlanPhase] {
         let activities = selectedActivities
         guard !activities.isEmpty else { return [] }
-
-        if activities.count == 1, let activity = activities.first {
-            let generatedMicroStages = resolvedMicroStages(for: activity)
-            return [
-                ProgramWorkoutPlanPhase(
-                    title: activity.title,
-                    subtitle: "Planned phase",
-                    activityID: activity.id,
-                    activityRawValue: activity.hkWorkoutActivityType.rawValue,
-                    locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
-                    plannedMinutes: max(Int(availableMinutes.rounded()), 1),
-                    microStages: generatedMicroStages.isEmpty ? nil : generatedMicroStages
-                )
-            ]
-        }
 
         let normalizedWeights = activities.reduce(into: [String: Double]()) { result, activity in
             result[activity.id] = max(0.15, allocationWeights[activity.id, default: 1])
@@ -263,7 +344,8 @@ struct ProgramBuilderView: View {
                 activityRawValue: activity.hkWorkoutActivityType.rawValue,
                 locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
                 plannedMinutes: max(plannedMinutesByActivity[activity.id] ?? 1, 1),
-                microStages: nil
+                microStages: resolvedMicroStages(for: activity, totalMinutes: plannedMinutesByActivity[activity.id] ?? 1),
+                circuitGroups: resolvedCircuitGroups(for: activity, totalMinutes: plannedMinutesByActivity[activity.id] ?? 1)
             )
         }
     }
@@ -353,8 +435,8 @@ struct ProgramBuilderView: View {
                             Button("Add") {
                                 addCustomActivity()
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.orange)
+                            .buttonStyle(.glass)
+                            .foregroundStyle(.white)
                             .disabled(customActivityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
 
@@ -420,39 +502,24 @@ struct ProgramBuilderView: View {
 
             ProgramSectionCard {
                 VStack(alignment: .leading, spacing: 18) {
-                    Picker("Planning Mode", selection: $selectedMode) {
-                        ForEach(ProgramBuilderMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
+                    Picker("Builder Tab", selection: $selectedBuilderTab) {
+                        ForEach(ProgramBuilderTab.allCases) { tab in
+                            Text(tab.title).tag(tab)
                         }
                     }
                     .pickerStyle(.segmented)
 
-                    Picker("Plan Depth", selection: $selectedPlanDepth) {
-                        ForEach(ProgramPlanDepth.allCases) { depth in
-                            Text(depth.title).tag(depth)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    switch selectedMode {
-                    case .guided:
-                        guidedPlanningView
-                    case .target:
-                        targetPlanningView
-                    case .route:
-                        routePlanningView
+                    switch selectedBuilderTab {
+                    case .overview:
+                        planningOverviewTab
+                    case .workoutStages:
+                        workoutStagesTab
                     }
                 }
             }
 
             ProgramSectionCard {
                 workoutLaunchSection
-            }
-
-            if selectedActivities.count == 1, let primary = selectedActivities.first {
-                ProgramSectionCard {
-                    singleActivityCustomWorkoutSection(for: primary)
-                }
             }
 
             ProgramSectionCard {
@@ -475,15 +542,15 @@ struct ProgramBuilderView: View {
                         } label: {
                             if planner.isGeneratingPlan {
                                 ProgressView()
-                                    .tint(.black)
+                                    .tint(.white)
                                     .frame(width: 30, height: 30)
                             } else {
                                 Text("Generate")
                                     .font(.headline.weight(.bold))
                             }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
+                        .buttonStyle(.glass)
+                        .foregroundStyle(.white)
                         .disabled(selectedActivities.isEmpty || planner.isGeneratingPlan)
                     }
 
@@ -565,7 +632,8 @@ struct ProgramBuilderView: View {
                         title: "Save Plan & Send to iPhone",
                         subtitle: "Shows on iPhone and Apple Watch for 24 hours",
                         symbol: "iphone.badge.arrow.forward",
-                        tint: .orange
+                        tint: .orange,
+                        fixedHeight: nil
                     ) {
                         Task {
                             await sendCurrentPlanToIPhone()
@@ -578,7 +646,8 @@ struct ProgramBuilderView: View {
                             title: "Start on iPhone",
                             subtitle: activity.routeFriendly ? "GPS + phone-connected feeds" : "Local live workout",
                             symbol: "iphone",
-                            tint: .cyan
+                            tint: .cyan,
+                            fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
                         ) {
                             liveWorkoutManager.startWorkoutOnThisDevice(
                                 title: launchTitle,
@@ -592,7 +661,8 @@ struct ProgramBuilderView: View {
                             title: "Start on Watch",
                             subtitle: "Mirror back to phone",
                             symbol: "applewatch",
-                            tint: .orange
+                            tint: .orange,
+                            fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
                         ) {
                             Task {
                                 let routeLaunch: RouteLaunchMetadata
@@ -621,7 +691,8 @@ struct ProgramBuilderView: View {
                                 title: "Workout App",
                                 subtitle: "Open in first-party Apple Workout",
                                 symbol: "figure.outdoor.cycle",
-                                tint: .white
+                                tint: .white,
+                                fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
                             ) {
                                 liveWorkoutManager.sendWorkoutToAppleWorkoutAppOnWatch(
                                     title: launchTitle,
@@ -632,6 +703,10 @@ struct ProgramBuilderView: View {
                                 )
                             }
                         }
+                    }
+                    .onPreferenceChange(ProgramLaunchButtonHeightPreferenceKey.self) { newHeight in
+                        guard newHeight > 0 else { return }
+                        launchButtonHeight = newHeight
                     }
 
                     if let launchStatusMessage = liveWorkoutManager.launchStatusMessage, !launchStatusMessage.isEmpty {
@@ -732,40 +807,34 @@ struct ProgramBuilderView: View {
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.72))
 
-            if let primary = selectedActivities.first {
+            if !selectedActivities.isEmpty {
                 HStack(spacing: 12) {
-                    Label(primary.title, systemImage: primary.symbol)
+                    Text(targetApplicabilitySummary)
                         .font(.subheadline.weight(.semibold))
                     Spacer()
-                    Text(primary.category.title)
+                    Text("\(targetCompatibleActivities.count)/\(selectedActivities.count) workouts")
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(primary.tint)
+                        .foregroundStyle(.orange)
                 }
 
                 Picker("Target", selection: $selectedTargetMetric) {
-                    ForEach(primary.supportedTargets) { metric in
+                    ForEach(availableTargetMetrics) { metric in
                         Text(metric.title).tag(metric)
                     }
                 }
                 .pickerStyle(.segmented)
 
-                if selectedTargetMetric == .heartRateZone {
-                    Stepper("Zone \(selectedZone)", value: $selectedZone, in: 1...5)
-                        .foregroundStyle(.white)
-                } else {
-                    TextField(
-                        selectedTargetMetric.placeholder,
-                        text: $targetValueText
-                    )
-                    .textInputAutocapitalization(.never)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
+                targetMetricEditor
 
                 Text(selectedTargetMetric.guidance)
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.62))
+
+                if !targetIncompatibleActivities.isEmpty {
+                    Text("Time-led handling for: \(targetIncompatibleActivities.map(\.title).joined(separator: ", "))")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.62))
+                }
             } else {
                 ProgramEmptyState(
                     title: "Pick a sport first",
@@ -775,13 +844,109 @@ struct ProgramBuilderView: View {
         }
     }
 
+    @ViewBuilder
+    private var targetMetricEditor: some View {
+        switch selectedTargetMetric {
+        case .heartRateZone:
+            Picker("HR Zone", selection: targetZoneWheelBinding) {
+                ForEach(zoneWheelOptions, id: \.self) { zone in
+                    Text(zone).tag(zone)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: 120)
+            .clipped()
+
+        case .power, .cadence:
+            HStack(spacing: 10) {
+                wheelMetricPicker(title: "Min", selection: targetRangeComponentBinding(.lower), options: targetWheelOptions)
+                wheelMetricPicker(title: "Max", selection: targetRangeComponentBinding(.upper), options: targetWheelOptions)
+            }
+
+        case .distance:
+            wheelMetricPicker(title: "Distance", selection: targetSingleValueBinding(), options: targetWheelOptions)
+
+        case .pace:
+            HStack(spacing: 10) {
+                wheelMetricPicker(title: "Start Pace", selection: targetRangeComponentBinding(.lower), options: targetWheelOptions)
+                wheelMetricPicker(title: "End Pace", selection: targetRangeComponentBinding(.upper), options: targetWheelOptions)
+            }
+        }
+    }
+
+    private enum TargetRangeComponent {
+        case lower
+        case upper
+    }
+
+    private var targetWheelOptions: [String] {
+        switch selectedTargetMetric {
+        case .power:
+            return wheelOptions(for: .power)
+        case .cadence:
+            return wheelOptions(for: .cadence)
+        case .distance:
+            return wheelOptions(for: .distance)
+        case .pace:
+            return wheelOptions(for: .pace)
+        case .heartRateZone:
+            return zoneWheelOptions
+        }
+    }
+
+    private var targetZoneWheelBinding: Binding<String> {
+        Binding(
+            get: { "Zone \(selectedZone)" },
+            set: { newValue in
+                let zone = newValue.captureGroups(for: #"zone\s*(\d+)"#).first?.first.flatMap(Int.init) ?? 3
+                selectedZone = min(max(zone, 1), 5)
+            }
+        )
+    }
+
+    private func targetRangeComponentBinding(_ component: TargetRangeComponent) -> Binding<String> {
+        Binding(
+            get: {
+                let options = targetWheelOptions
+                let parts = targetValueText.components(separatedBy: "-").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                switch component {
+                case .lower:
+                    return nearestWheelOption(for: parts.first ?? "", options: options, fallback: options.first ?? "")
+                case .upper:
+                    return nearestWheelOption(for: parts.count > 1 ? parts[1] : "", options: options, fallback: options.dropFirst().first ?? options.first ?? "")
+                }
+            },
+            set: { newValue in
+                var parts = targetValueText.components(separatedBy: "-").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if parts.isEmpty { parts = ["", ""] }
+                if parts.count == 1 { parts.append("") }
+                switch component {
+                case .lower:
+                    parts[0] = newValue
+                case .upper:
+                    parts[1] = newValue
+                }
+                targetValueText = parts.filter { !$0.isEmpty }.joined(separator: "-")
+            }
+        )
+    }
+
+    private func targetSingleValueBinding() -> Binding<String> {
+        Binding(
+            get: { nearestWheelOption(for: targetValueText, options: targetWheelOptions, fallback: targetWheelOptions.first ?? "") },
+            set: { newValue in
+                targetValueText = newValue
+            }
+        )
+    }
+
     private var routePlanningView: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Route-Led Session Design")
                 .font(.headline.weight(.bold))
                 .foregroundStyle(.white)
 
-            Text("Use a course, trail, or familiar loop as the anchor. The watch can show the route while the phone handles the planning step.")
+            Text(routePlanningDescription)
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.72))
 
@@ -790,10 +955,26 @@ struct ProgramBuilderView: View {
                 .padding(.vertical, 12)
                 .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            Stepper("Repeats: \(routeRepeats)", value: $routeRepeats, in: 1...10)
-                .foregroundStyle(.white)
+            wheelMetricPicker(title: "Repeats", selection: routeRepeatsWheelBinding, options: (1...10).map(String.init))
 
-            if routeTemplates.isEmpty {
+            if !routeCompatibleActivities.isEmpty {
+                Text("Route-aware phases: \(routeCompatibleActivities.map(\.title).joined(separator: ", "))")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+
+            if !routeIncompatibleActivities.isEmpty {
+                Text("Non-route phases stay local: \(routeIncompatibleActivities.map(\.title).joined(separator: ", "))")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+
+            if routeCompatibleActivities.isEmpty {
+                ProgramEmptyState(
+                    title: "No route-friendly workout selected",
+                    subtitle: "Add running, walking, hiking, cycling, or another outdoor-capable activity to anchor the plan to a route."
+                )
+            } else if routeTemplates.isEmpty {
                 ProgramEmptyState(
                     title: "No recent route templates",
                     subtitle: "Outdoor workouts with saved routes will show up here for reuse."
@@ -850,8 +1031,8 @@ struct ProgramBuilderView: View {
                     Button("Use Plan") {
                         applyPlan(plan)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
+                    .buttonStyle(.glass)
+                    .foregroundStyle(.white)
 
                     Button("Save") {
                         var saved = plan
@@ -922,8 +1103,8 @@ struct ProgramBuilderView: View {
                                 Button("Load") {
                                     applyPlan(plan)
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.orange)
+                                .buttonStyle(.glass)
+                                .foregroundStyle(.white)
 
                                 Button("Delete", role: .destructive) {
                                     planStore.deleteRepositoryPlan(id: plan.id)
@@ -1026,7 +1207,19 @@ struct ProgramBuilderView: View {
         routeRepeats = plan.routeRepeats
         selectedRouteTemplateID = plan.selectedRouteTemplateID
         planner.generatedBlueprint = plan.blueprint
-        customMicroStages = plan.resolvedPhases.first?.microStages ?? []
+        let hydratedPhases = plan.resolvedPhases.map { phase -> (String, [ProgramCustomWorkoutMicroStage], [ProgramWorkoutCircuitGroup]) in
+            let hydratedStages = hydratedCircuitStages(
+                phase.microStages ?? [],
+                existingGroups: phase.circuitGroups ?? []
+            )
+            return (phase.activityID, hydratedStages, inferredCircuitGroups(from: hydratedStages))
+        }
+        customMicroStagesByActivityID = Dictionary(
+            uniqueKeysWithValues: hydratedPhases.map { ($0.0, $0.1) }
+        )
+        customCircuitGroupsByActivityID = Dictionary(
+            uniqueKeysWithValues: hydratedPhases.map { ($0.0, $0.2) }
+        )
         plannedRouteLaunchMetadata = RouteLaunchMetadata(
             name: plan.routeName ?? "",
             trailhead: plan.trailheadCoordinate,
@@ -1037,6 +1230,7 @@ struct ProgramBuilderView: View {
             : "Loaded temporary plan from \(plan.sourceDeviceLabel)."
         rebalanceWeights(for: selectedActivityIDs)
         syncTargetMetric()
+        syncStageActivitySelection()
         persistBuilderDraft()
     }
 
@@ -1053,8 +1247,11 @@ struct ProgramBuilderView: View {
             routeObjectiveName: routeObjectiveName,
             routeRepeats: routeRepeats,
             selectedRouteTemplateID: selectedRouteTemplateID,
-            customMicroStages: customMicroStages,
-            coachRegenerationNote: coachRegenerationNote,
+            selectedBuilderTabRawValue: selectedBuilderTab.rawValue,
+            selectedStageActivityID: selectedStageActivityID,
+            customMicroStagesByActivityID: customMicroStagesByActivityID,
+            customCircuitGroupsByActivityID: customCircuitGroupsByActivityID,
+            coachRegenerationNotesByActivityID: coachRegenerationNotesByActivityID,
             coachAdvice: planner.coachAdvice,
             generatedBlueprint: planner.generatedBlueprint,
             updatedAt: Date()
@@ -1078,12 +1275,16 @@ struct ProgramBuilderView: View {
         routeObjectiveName = draft.routeObjectiveName
         routeRepeats = draft.routeRepeats
         selectedRouteTemplateID = draft.selectedRouteTemplateID
-        customMicroStages = draft.customMicroStages
-        coachRegenerationNote = draft.coachRegenerationNote
+        selectedBuilderTab = ProgramBuilderTab(rawValue: draft.selectedBuilderTabRawValue ?? ProgramBuilderTab.overview.rawValue) ?? .overview
+        selectedStageActivityID = draft.selectedStageActivityID
+        customMicroStagesByActivityID = draft.customMicroStagesByActivityID
+        customCircuitGroupsByActivityID = draft.customCircuitGroupsByActivityID
+        coachRegenerationNotesByActivityID = draft.coachRegenerationNotesByActivityID
         if let coachAdvice = draft.coachAdvice, !coachAdvice.isEmpty {
             planner.coachAdvice = coachAdvice
         }
         planner.generatedBlueprint = draft.generatedBlueprint
+        syncStageActivitySelection()
     }
 
     private func toggleActivity(_ id: String) {
@@ -1098,6 +1299,9 @@ struct ProgramBuilderView: View {
     private func removeActivity(_ id: String) {
         selectedActivityIDs.removeAll { $0 == id }
         allocationWeights.removeValue(forKey: id)
+        customMicroStagesByActivityID.removeValue(forKey: id)
+        customCircuitGroupsByActivityID.removeValue(forKey: id)
+        coachRegenerationNotesByActivityID.removeValue(forKey: id)
         if selectedActivities.isEmpty {
             targetValueText = ""
         }
@@ -1144,10 +1348,19 @@ struct ProgramBuilderView: View {
     }
 
     private func syncTargetMetric() {
-        guard let primary = selectedActivities.first else { return }
-        if !primary.supportedTargets.contains(selectedTargetMetric) {
-            selectedTargetMetric = primary.supportedTargets.first ?? .heartRateZone
+        let supportedTargets = availableTargetMetrics
+        guard !supportedTargets.isEmpty else { return }
+        if !supportedTargets.contains(selectedTargetMetric) {
+            selectedTargetMetric = supportedTargets.first ?? .heartRateZone
         }
+    }
+
+    private func syncStageActivitySelection() {
+        if let selectedStageActivityID,
+           selectedActivityIDs.contains(selectedStageActivityID) {
+            return
+        }
+        self.selectedStageActivityID = selectedActivities.first?.id
     }
 
     private func allocationText(for id: String) -> String {
@@ -1184,8 +1397,12 @@ struct ProgramBuilderView: View {
             },
             target: target,
             route: route,
-            microStages: selectedActivities.count == 1 ? resolvedMicroStages(for: selectedActivities[0]) : [],
-            normalizedRegenerationNote: normalizedCoachRegenerationNote,
+            microStagesByActivity: Dictionary(
+                uniqueKeysWithValues: selectedActivities.map { activity in
+                    (activity.title, resolvedMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id)))
+                }
+            ),
+            normalizedRegenerationNote: selectedStageActivity.flatMap { normalizedCoachRegenerationNote(for: $0) } ?? "",
             recentWorkouts: engine.workoutAnalytics.prefix(8).map { insight(from: $0.workout, analytics: $0.analytics) },
             recoveryScore: engine.recoveryScore,
             readinessScore: engine.readinessScore,
@@ -1193,175 +1410,87 @@ struct ProgramBuilderView: View {
         )
     }
 
-    private var normalizedCoachRegenerationNote: String {
-        normalizeCoachRegenerationText(coachRegenerationNote)
+    private func normalizedCoachRegenerationNote(for activity: ProgramWorkoutType) -> String {
+        normalizeCoachRegenerationText(coachRegenerationNotesByActivityID[activity.id, default: ""])
     }
 
     private func ensureMicroStagesAreReady() {
-        guard selectedActivities.count == 1, let activity = selectedActivities.first else {
-            customMicroStages = []
-            return
-        }
+        let activeIDs = Set(selectedActivityIDs)
+        customMicroStagesByActivityID = customMicroStagesByActivityID.filter { activeIDs.contains($0.key) }
+        customCircuitGroupsByActivityID = customCircuitGroupsByActivityID.filter { activeIDs.contains($0.key) }
+        coachRegenerationNotesByActivityID = coachRegenerationNotesByActivityID.filter { activeIDs.contains($0.key) }
 
+        guard selectedPlanDepth == .comprehensive else { return }
+
+        for activity in selectedActivities where (customMicroStagesByActivityID[activity.id] ?? []).isEmpty {
+            customMicroStagesByActivityID[activity.id] = defaultMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id))
+            customCircuitGroupsByActivityID[activity.id] = defaultCircuitGroups(for: activity, stages: customMicroStagesByActivityID[activity.id] ?? [])
+        }
+    }
+
+    private func resolvedMicroStages(for activity: ProgramWorkoutType, totalMinutes: Int? = nil) -> [ProgramCustomWorkoutMicroStage] {
+        let resolvedMinutes = max(totalMinutes ?? allocationMinutes(for: activity.id), 5)
         guard selectedPlanDepth == .comprehensive else {
-            if customMicroStages.isEmpty {
-                customMicroStages = [ProgramCustomWorkoutMicroStage.simpleDefault(for: activity, totalMinutes: Int(availableMinutes.rounded()))]
-            }
-            return
+            return [simpleStage(for: activity, totalMinutes: resolvedMinutes)]
         }
-
-        if customMicroStages.isEmpty {
-            customMicroStages = defaultMicroStages(for: activity)
+        if let stored = customMicroStagesByActivityID[activity.id], !stored.isEmpty {
+            return hydratedCircuitStages(
+                stored.map { normalizeStage($0, for: activity) },
+                existingGroups: customCircuitGroupsByActivityID[activity.id] ?? []
+            )
         }
+        return hydratedCircuitStages(
+            defaultMicroStages(for: activity, totalMinutes: resolvedMinutes),
+            existingGroups: customCircuitGroupsByActivityID[activity.id] ?? []
+        )
     }
 
-    private func resolvedMicroStages(for activity: ProgramWorkoutType) -> [ProgramCustomWorkoutMicroStage] {
-        if !customMicroStages.isEmpty {
-            return customMicroStages
+    private func resolvedCircuitGroups(for activity: ProgramWorkoutType, totalMinutes: Int? = nil) -> [ProgramWorkoutCircuitGroup] {
+        let resolvedStages = resolvedMicroStages(for: activity, totalMinutes: totalMinutes)
+        let stored = customCircuitGroupsByActivityID[activity.id] ?? []
+        let groups = inferredCircuitGroups(from: resolvedStages, existing: stored)
+        if !groups.isEmpty {
+            return groups
         }
-        return selectedPlanDepth == .comprehensive
-            ? defaultMicroStages(for: activity)
-            : [ProgramCustomWorkoutMicroStage.simpleDefault(for: activity, totalMinutes: Int(availableMinutes.rounded()))]
+        return defaultCircuitGroups(for: activity, stages: resolvedStages)
     }
 
-    private func defaultMicroStages(for activity: ProgramWorkoutType) -> [ProgramCustomWorkoutMicroStage] {
-        let totalMinutes = max(Int(availableMinutes.rounded()), 15)
-        let warmupMinutes = max(8, min(15, Int((Double(totalMinutes) * 0.15).rounded())))
-        let cooldownMinutes = max(8, min(15, Int((Double(totalMinutes) * 0.12).rounded())))
-        let workMinutes = max(totalMinutes - warmupMinutes - cooldownMinutes, 10)
+    private func simpleStage(for activity: ProgramWorkoutType, totalMinutes: Int) -> ProgramCustomWorkoutMicroStage {
+        let goal: ProgramMicroStageGoal
+        let targetValue: String
 
-        switch activity.id {
-        case "cycling", "mountain-biking":
-            let primarySetRepeats = max(3, min(5, workMinutes / 12))
-            let secondarySetRepeats = max(2, min(3, workMinutes / 18))
-            return [
-                ProgramCustomWorkoutMicroStage(
-                    title: "Warmup",
-                    notes: "Spin smooth and open the legs before the main set.",
-                    role: .warmup,
-                    goal: .time,
-                    plannedMinutes: warmupMinutes,
-                    repeats: 1,
-                    targetValueText: "",
-                    repeatSetLabel: ""
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "Pacer Stage",
-                    notes: "Settle into trail rhythm before the next reset.",
-                    role: .work,
-                    goal: .pace,
-                    plannedMinutes: 4,
-                    repeats: primarySetRepeats,
-                    targetValueText: "steady trail pace",
-                    repeatSetLabel: "Trail Rhythm Set"
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "HR Reset",
-                    notes: "Bring HR back into the planned aerobic zone before the next hit.",
-                    role: .recovery,
-                    goal: .heartRateZone,
-                    plannedMinutes: 3,
-                    repeats: primarySetRepeats,
-                    targetValueText: "Zone 2",
-                    repeatSetLabel: "Trail Rhythm Set"
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "Power Stage",
-                    notes: "Ride the stronger section with smooth torque and clean exits.",
-                    role: .work,
-                    goal: .power,
-                    plannedMinutes: 6,
-                    repeats: secondarySetRepeats,
-                    targetValueText: "220-260 W",
-                    repeatSetLabel: "Power Control Set"
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "HR Settle",
-                    notes: "Let breathing come down without fully losing momentum.",
-                    role: .recovery,
-                    goal: .heartRateZone,
-                    plannedMinutes: 4,
-                    repeats: secondarySetRepeats,
-                    targetValueText: "Zone 2",
-                    repeatSetLabel: "Power Control Set"
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "Cooldown",
-                    notes: "Ride easy and bring breathing all the way down.",
-                    role: .cooldown,
-                    goal: .time,
-                    plannedMinutes: cooldownMinutes,
-                    repeats: 1,
-                    targetValueText: "",
-                    repeatSetLabel: ""
-                )
-            ]
-        case "running", "trail-running":
-            return [
-                ProgramCustomWorkoutMicroStage(
-                    title: "Warmup",
-                    notes: "Ease in and let cadence come up naturally.",
-                    role: .warmup,
-                    goal: .time,
-                    plannedMinutes: warmupMinutes,
-                    repeats: 1,
-                    targetValueText: "",
-                    repeatSetLabel: ""
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "Main Set",
-                    notes: "Stay on the target without drifting harder than planned.",
-                    role: .work,
-                    goal: selectedMode == .target ? mappedGoal(for: selectedTargetMetric) : .pace,
-                    plannedMinutes: max(workMinutes, 10),
-                    repeats: 1,
-                    targetValueText: selectedMode == .target ? normalizedTargetDescriptor() : "controlled pace",
-                    repeatSetLabel: ""
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "Cooldown",
-                    notes: "Bring it home easy and relaxed.",
-                    role: .cooldown,
-                    goal: .time,
-                    plannedMinutes: cooldownMinutes,
-                    repeats: 1,
-                    targetValueText: "",
-                    repeatSetLabel: ""
-                )
-            ]
-        default:
-            return [
-                ProgramCustomWorkoutMicroStage(
-                    title: "Warmup",
-                    notes: "Start controlled and prepare for the work set.",
-                    role: .warmup,
-                    goal: .time,
-                    plannedMinutes: warmupMinutes,
-                    repeats: 1,
-                    targetValueText: "",
-                    repeatSetLabel: ""
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "Main Set",
-                    notes: "The core work of the session.",
-                    role: .work,
-                    goal: selectedMode == .target ? mappedGoal(for: selectedTargetMetric) : .time,
-                    plannedMinutes: max(workMinutes, 10),
-                    repeats: 1,
-                    targetValueText: selectedMode == .target ? normalizedTargetDescriptor() : "",
-                    repeatSetLabel: ""
-                ),
-                ProgramCustomWorkoutMicroStage(
-                    title: "Cooldown",
-                    notes: "Ease down gradually and finish clean.",
-                    role: .cooldown,
-                    goal: .time,
-                    plannedMinutes: cooldownMinutes,
-                    repeats: 1,
-                    targetValueText: "",
-                    repeatSetLabel: ""
-                )
-            ]
+        if selectedMode == .target, activity.supportedTargets.contains(selectedTargetMetric) {
+            goal = mappedGoal(for: selectedTargetMetric)
+            targetValue = normalizedTargetDescriptor()
+        } else if selectedMode == .route, activity.routeFriendly {
+            goal = .distance
+            let routeName = routeObjectiveName.trimmingCharacters(in: .whitespacesAndNewlines)
+            targetValue = routeName.isEmpty ? "route x\(routeRepeats)" : "\(routeName) x\(routeRepeats)"
+        } else {
+            goal = .time
+            targetValue = ""
+        }
+
+        return normalizeStage(ProgramCustomWorkoutMicroStage(
+            title: activity.title,
+            notes: "",
+            role: .goal,
+            goal: goal,
+            plannedMinutes: max(totalMinutes, 5),
+            repeats: 1,
+            targetValueText: targetValue,
+            repeatSetLabel: "",
+            targetBehavior: .completionGoal
+        ), for: activity)
+    }
+
+    private func defaultMicroStages(for activity: ProgramWorkoutType, totalMinutes: Int) -> [ProgramCustomWorkoutMicroStage] {
+        [simpleStage(for: activity, totalMinutes: max(totalMinutes, 5))]
+    }
+
+    private func defaultCircuitGroups(for activity: ProgramWorkoutType, stages: [ProgramCustomWorkoutMicroStage]) -> [ProgramWorkoutCircuitGroup] {
+        inferredCircuitGroups(from: stages).map { group in
+            ProgramWorkoutCircuitGroup(id: group.id, title: group.title, repeats: group.repeats)
         }
     }
 
@@ -1370,6 +1499,158 @@ struct ProgramBuilderView: View {
             return "Zone \(selectedZone)"
         }
         return targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func goalForActivity(_ activity: ProgramWorkoutType, defaultGoal: ProgramMicroStageGoal) -> ProgramMicroStageGoal {
+        guard selectedMode == .target, activity.supportedTargets.contains(selectedTargetMetric) else {
+            return defaultGoal
+        }
+        return mappedGoal(for: selectedTargetMetric)
+    }
+
+    private func targetDescriptorForActivity(_ activity: ProgramWorkoutType, defaultValue: String) -> String {
+        guard selectedMode == .target, activity.supportedTargets.contains(selectedTargetMetric) else {
+            return defaultValue
+        }
+        return normalizedTargetDescriptor()
+    }
+
+    private func allowedGoals(for role: ProgramMicroStageRole, activity: ProgramWorkoutType) -> [ProgramMicroStageGoal] {
+        activity.supportedMicroStageGoals(for: role)
+    }
+
+    private func defaultMainGoal(for activity: ProgramWorkoutType) -> ProgramMicroStageGoal {
+        if selectedMode == .target, activity.supportedTargets.contains(selectedTargetMetric) {
+            let mapped = mappedGoal(for: selectedTargetMetric)
+            if allowedGoals(for: .goal, activity: activity).contains(mapped) {
+                return mapped
+            }
+        }
+        return allowedGoals(for: .goal, activity: activity).first ?? .time
+    }
+
+    private func preferredSteadyOrWorkGoal(for activity: ProgramWorkoutType) -> ProgramMicroStageGoal {
+        if selectedMode == .target, activity.supportedTargets.contains(selectedTargetMetric) {
+            let mapped = mappedGoal(for: selectedTargetMetric)
+            if allowedGoals(for: .steady, activity: activity).contains(mapped) {
+                return mapped
+            }
+        }
+        return allowedGoals(for: .steady, activity: activity).first ?? .time
+    }
+
+    private func defaultDescriptor(for goal: ProgramMicroStageGoal) -> String {
+        switch goal {
+        case .heartRateZone:
+            return "Zone 2"
+        case .power:
+            return "220-260 W"
+        case .pace:
+            return "7:10-7:30 /mi"
+        case .speed:
+            return "18-20 mph"
+        case .cadence:
+            return "100-110 rpm"
+        case .distance:
+            return "5 km"
+        case .energy:
+            return "300 kcal"
+        case .open, .time:
+            return ""
+        }
+    }
+
+    private func normalizeStage(_ stage: ProgramCustomWorkoutMicroStage, for activity: ProgramWorkoutType?) -> ProgramCustomWorkoutMicroStage {
+        guard let activity else { return stage }
+        var updated = stage
+        let allowed = allowedGoals(for: updated.role, activity: activity)
+        if !allowed.contains(updated.goal) {
+            updated.goal = allowed.first ?? .time
+        }
+        updated.targetBehavior = updated.role.defaultTargetBehavior
+        if updated.goal.requiresDescriptorInput && updated.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.targetValueText = defaultDescriptor(for: updated.goal)
+        }
+        if !updated.goal.requiresDescriptorInput {
+            updated.targetValueText = ""
+        }
+        if updated.circuitGroupID == nil {
+            updated.repeatSetLabel = ""
+        }
+        return updated
+    }
+
+    private func inferredCircuitGroups(from stages: [ProgramCustomWorkoutMicroStage]) -> [ProgramWorkoutCircuitGroup] {
+        Dictionary(grouping: hydratedCircuitStages(stages).compactMap { stage -> (UUID, String, Int)? in
+            guard let circuitGroupID = stage.circuitGroupID else { return nil }
+            return (circuitGroupID, stage.repeatSetLabel.isEmpty ? "Coupled Circuit" : stage.repeatSetLabel, max(stage.repeats, 1))
+        }, by: { $0.0 }).values.compactMap { entries in
+            guard let first = entries.first else { return nil }
+            return ProgramWorkoutCircuitGroup(id: first.0, title: first.1, repeats: first.2)
+        }
+        .sorted { $0.title < $1.title }
+    }
+
+    private func inferredCircuitGroups(
+        from stages: [ProgramCustomWorkoutMicroStage],
+        existing: [ProgramWorkoutCircuitGroup]
+    ) -> [ProgramWorkoutCircuitGroup] {
+        let hydrated = hydratedCircuitStages(stages, existingGroups: existing)
+        return Dictionary(grouping: hydrated.compactMap { stage -> (UUID, String, Int)? in
+            guard let circuitGroupID = stage.circuitGroupID else { return nil }
+            return (circuitGroupID, stage.repeatSetLabel.isEmpty ? "Coupled Circuit" : stage.repeatSetLabel, max(stage.repeats, 1))
+        }, by: { $0.0 }).values.compactMap { entries in
+            guard let first = entries.first else { return nil }
+            if let existingGroup = existing.first(where: { $0.id == first.0 }) {
+                return ProgramWorkoutCircuitGroup(id: existingGroup.id, title: existingGroup.title, repeats: first.2)
+            }
+            return ProgramWorkoutCircuitGroup(id: first.0, title: first.1, repeats: first.2)
+        }
+        .sorted { $0.title < $1.title }
+    }
+
+    private func hydratedCircuitStages(
+        _ stages: [ProgramCustomWorkoutMicroStage],
+        existingGroups: [ProgramWorkoutCircuitGroup] = []
+    ) -> [ProgramCustomWorkoutMicroStage] {
+        guard !stages.isEmpty else { return stages }
+
+        var updated = stages
+        let groupsByID = Dictionary(uniqueKeysWithValues: existingGroups.map { ($0.id, $0) })
+        let groupsByTitle = Dictionary(uniqueKeysWithValues: existingGroups.map {
+            ($0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), $0)
+        })
+
+        for index in updated.indices {
+            if let groupID = updated[index].circuitGroupID,
+               let existing = groupsByID[groupID] {
+                updated[index].repeatSetLabel = existing.title
+                updated[index].repeats = max(updated[index].repeats, existing.repeats)
+            }
+        }
+
+        let groupedByLabel = Dictionary(grouping: updated.indices.filter {
+            updated[$0].circuitGroupID == nil &&
+            !updated[$0].repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }, by: {
+            updated[$0].repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        })
+
+        for (normalizedLabel, indices) in groupedByLabel where indices.count >= 2 {
+            guard let firstIndex = indices.first else { continue }
+            let rawLabel = updated[firstIndex].repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            let group = groupsByTitle[normalizedLabel] ?? ProgramWorkoutCircuitGroup(
+                title: rawLabel.isEmpty ? "Coupled Circuit" : rawLabel,
+                repeats: indices.map { max(updated[$0].repeats, 1) }.max() ?? 1
+            )
+            for index in indices {
+                updated[index].circuitGroupID = group.id
+                updated[index].repeatSetLabel = group.title
+                updated[index].repeats = max(updated[index].repeats, group.repeats)
+            }
+        }
+
+        return updated
     }
 
     private func mappedGoal(for metric: ProgramTargetMetric) -> ProgramMicroStageGoal {
@@ -1387,17 +1668,43 @@ struct ProgramBuilderView: View {
         }
     }
 
-    @ViewBuilder
-    private func singleActivityCustomWorkoutSection(for activity: ProgramWorkoutType) -> some View {
+    private var planningOverviewTab: some View {
         VStack(alignment: .leading, spacing: 16) {
+            Picker("Planning Mode", selection: $selectedMode) {
+                ForEach(ProgramBuilderMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Picker("Plan Depth", selection: $selectedPlanDepth) {
+                ForEach(ProgramPlanDepth.allCases) { depth in
+                    Text(depth.title).tag(depth)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            switch selectedMode {
+            case .guided:
+                guidedPlanningView
+            case .target:
+                targetPlanningView
+            case .route:
+                routePlanningView
+            }
+        }
+    }
+
+    private var workoutStagesTab: some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Single-Workout Structure")
+                    Text("Workout Stages")
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.white)
                     Text(selectedPlanDepth == .simple
-                         ? "Simple keeps this as one clean goal for the whole \(activity.title.lowercased()) session."
-                         : "Comprehensive lets you build warmup, repeat blocks, recovery steps, and cooldown inside one \(activity.title.lowercased()) workout.")
+                         ? "Simple keeps every selected workout as one clear stage and one goal."
+                         : "Comprehensive lets each selected workout carry its own warmup, repeat sets, recovery steps, and cooldown.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.72))
                 }
@@ -1407,158 +1714,934 @@ struct ProgramBuilderView: View {
                     .foregroundStyle(.black)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(activity.tint, in: Capsule())
+                    .background(Color.orange, in: Capsule())
             }
 
-            if selectedPlanDepth == .simple {
-                let stage = ProgramCustomWorkoutMicroStage.simpleDefault(for: activity, totalMinutes: Int(availableMinutes.rounded()))
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("Session Goal", systemImage: activity.symbol)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text(stage.simpleSummary)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.78))
-                    Text("Switch to Comprehensive if you want repeatable micro-stages like warmup, power blocks, HR resets, and cooldown inside this one workout type.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.62))
-                }
-                .padding(14)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            if selectedActivities.isEmpty {
+                ProgramEmptyState(
+                    title: "Choose a workout first",
+                    subtitle: "Selected workouts show up here so you can shape each one from simple or comprehensive stages."
+                )
             } else {
-                comprehensiveMicroStageEditor(for: activity)
+                stageActivityFilterBar
+
+                if let activity = selectedStageActivity {
+                    if selectedPlanDepth == .simple {
+                        simpleWorkoutStageView(for: activity)
+                    } else {
+                        comprehensiveWorkoutStageEditor(for: activity)
+                    }
+                }
+            }
+        }
+    }
+
+    private var stageActivityFilterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(selectedActivities) { activity in
+                    Button {
+                        selectedStageActivityID = activity.id
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: activity.symbol)
+                            Text(activity.title)
+                                .font(.subheadline.weight(.semibold))
+                            Text(allocationText(for: activity.id))
+                                .font(.caption.weight(.bold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.2), in: Capsule())
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            (selectedStageActivityID == activity.id ? activity.tint.opacity(0.9) : Color.white.opacity(0.08)),
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func simpleWorkoutStageView(for activity: ProgramWorkoutType) -> some View {
+        let stage = simpleStage(for: activity, totalMinutes: allocationMinutes(for: activity.id))
+        return VStack(alignment: .leading, spacing: 12) {
+            Label(activity.title, systemImage: activity.symbol)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Text(stage.simpleSummary)
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.78))
+
+            Text("Switch to Comprehensive if you want repeatable micro-stages like warmup, pace work, HR resets, power work, and cooldown inside this one workout type.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.62))
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func comprehensiveWorkoutStageEditor(for activity: ProgramWorkoutType) -> some View {
+        let stages = resolvedMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id))
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(activity.title)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Button {
+                    addMicroStage(for: activity)
+                } label: {
+                    Label("Add Stage", systemImage: "plus")
+                        .font(.subheadline.weight(.bold))
+                }
+                .buttonStyle(.glass)
+                .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 14) {
+                if !stages.isEmpty {
+                    stageEditorGrid(
+                        activity: activity,
+                        stages: stages,
+                        totalStages: stages.count
+                    )
+                }
             }
         }
     }
 
     @ViewBuilder
-    private func comprehensiveMicroStageEditor(for activity: ProgramWorkoutType) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Micro Stages")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button {
-                    customMicroStages.append(
-                        ProgramCustomWorkoutMicroStage.simpleDefault(
-                            for: activity,
-                            totalMinutes: max(Int(availableMinutes.rounded() / Double(max(customMicroStages.count + 1, 1))), 5)
-                        )
+    private func stageEditorGrid(
+        activity: ProgramWorkoutType,
+        stages: [ProgramCustomWorkoutMicroStage],
+        totalStages: Int
+    ) -> some View {
+        if isPadDevice {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14, alignment: .top)], spacing: 14) {
+                ForEach(stages) { stage in
+                    microStageEditorCard(
+                        for: activity,
+                        stage: stage,
+                        index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                        stageCount: totalStages
                     )
-                } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.subheadline.weight(.bold))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
             }
-
-            ForEach($customMicroStages) { $stage in
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        TextField("Stage name", text: $stage.title)
-                            .textInputAutocapitalization(.words)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                        if customMicroStages.count > 1 {
-                            Button(role: .destructive) {
-                                customMicroStages.removeAll { $0.id == stage.id }
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 14, weight: .bold))
-                            }
-                            .buttonStyle(.bordered)
-                        }
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(stages) { stage in
+                        microStageEditorCard(
+                            for: activity,
+                            stage: stage,
+                            index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                            stageCount: totalStages
+                        )
+                        .frame(width: 300)
                     }
-
-                    Picker("Role", selection: $stage.role) {
-                        ForEach(ProgramMicroStageRole.allCases) { role in
-                            Text(role.title).tag(role)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Picker("Goal", selection: $stage.goal) {
-                        ForEach(activity.supportedMicroStageGoals) { goal in
-                            Text(goal.title).tag(goal)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    HStack(spacing: 10) {
-                        Stepper("Minutes \(stage.plannedMinutes)", value: $stage.plannedMinutes, in: 1...180)
-                            .foregroundStyle(.white)
-                        Stepper("Repeats \(stage.repeats)", value: $stage.repeats, in: 1...12)
-                            .foregroundStyle(.white)
-                    }
-
-                    TextField("Repeat set label, e.g. Trail Rhythm Set", text: $stage.repeatSetLabel)
-                        .textInputAutocapitalization(.words)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    if stage.goal.requiresDescriptorInput {
-                        TextField(stage.goal.placeholder, text: $stage.targetValueText)
-                            .textInputAutocapitalization(.never)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-
-                    TextField("Notes or cues", text: $stage.notes, axis: .vertical)
-                        .lineLimit(2...4)
-                        .textInputAutocapitalization(.sentences)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    Text(stage.displaySummary)
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.68))
                 }
-                .padding(14)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .padding(.vertical, 2)
             }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Regenerate With Coach")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.white)
-                Text("Say what to change and Nutrivance will normalize it into cleaner planning guidance before rebuilding the micro-stage suggestion.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.68))
-
-                TextField("Example: make the middle set more power-focused and extend cooldown", text: $coachRegenerationNote, axis: .vertical)
-                    .lineLimit(2...4)
-                    .textInputAutocapitalization(.sentences)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                if !normalizedCoachRegenerationNote.isEmpty {
-                    Text("Normalized: \(normalizedCoachRegenerationNote)")
-                        .font(.footnote)
-                        .foregroundStyle(.orange.opacity(0.88))
-                }
-
-                Button {
-                    customMicroStages = regenerateMicroStages(for: activity, note: normalizedCoachRegenerationNote)
-                } label: {
-                    Label("Regenerate Structure", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.headline.weight(.bold))
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
+            .onPreferenceChange(ProgramStageCardHeightPreferenceKey.self) { newHeight in
+                guard newHeight > 0 else { return }
+                stageCardHeightByActivityID[activity.id] = newHeight
             }
         }
     }
 
+    @ViewBuilder
+    private func circuitGroupEditorCard(
+        for activity: ProgramWorkoutType,
+        group: ProgramWorkoutCircuitGroup
+    ) -> some View {
+        let stages = stages(for: activity.id, in: group)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(group.title)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("Alternates \(group.repeats)x")
+                        .font(.footnote)
+                        .foregroundStyle(.orange.opacity(0.88))
+                }
+                Spacer()
+                wheelMetricPicker(title: "Repeats", selection: circuitRepeatsWheelBinding(activityID: activity.id, groupID: group.id), options: repeatWheelOptions)
+                    .frame(width: 120)
+                Button(role: .destructive) {
+                    removeCircuitGroup(for: activity, groupID: group.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if !stages.isEmpty {
+                stageEditorGrid(activity: activity, stages: stages, totalStages: resolvedMicroStages(for: activity).count)
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func microStageEditorCard(
+        for activity: ProgramWorkoutType,
+        stage: ProgramCustomWorkoutMicroStage,
+        index: Int,
+        stageCount: Int
+    ) -> some View {
+        let stageBinding = comprehensiveStageBinding(activityID: activity.id, stageID: stage.id)
+        let availableGoals = allowedGoals(for: stageBinding.role.wrappedValue, activity: activity)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                TextField("Stage name", text: stageBinding.title)
+                    .textInputAutocapitalization(.words)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                Button(role: .destructive) {
+                    removeMicroStage(for: activity, at: index)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .bold))
+                }
+                .buttonStyle(.bordered)
+                .disabled(stageCount <= 1)
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    moveMicroStage(for: activity, from: index, to: index - 1)
+                } label: {
+                    Image(systemName: "arrow.left")
+                }
+                .buttonStyle(.bordered)
+                .disabled(index == 0)
+
+                Button {
+                    moveMicroStage(for: activity, from: index, to: index + 1)
+                } label: {
+                    Image(systemName: "arrow.right")
+                }
+                .buttonStyle(.bordered)
+                .disabled(index == stageCount - 1)
+
+                Spacer()
+
+                Text("Stage \(index + 1)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.66))
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                compactMenuField(title: "Role") {
+                    Picker("Role", selection: stageBinding.role) {
+                        ForEach(ProgramMicroStageRole.allCases) { role in
+                            Text(role.title).tag(role)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                compactMenuField(title: "Goal") {
+                    Picker("Goal", selection: stageBinding.goal) {
+                        ForEach(availableGoals) { goal in
+                            Text(goal.title).tag(goal)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                wheelMetricPicker(
+                    title: "Minutes",
+                    selection: plannedMinutesWheelBinding(activityID: activity.id, stageID: stage.id),
+                    options: minuteWheelOptions
+                )
+
+                wheelMetricPicker(
+                    title: "Repeats",
+                    selection: stageRepeatsWheelBinding(activityID: activity.id, stageID: stage.id),
+                    options: repeatWheelOptions
+                )
+            }
+
+            if stageBinding.goal.wrappedValue.requiresDescriptorInput {
+                stageTargetEditor(for: activity, stageID: stage.id)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Describe This Stage")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.72))
+
+                TextField(
+                    "Example: hold 90-100 rpm for 5 minutes",
+                    text: stagePromptBinding(stageID: stage.id),
+                    axis: .vertical
+                )
+                .lineLimit(2...4)
+                .textInputAutocapitalization(.sentences)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                Button {
+                    applyNaturalLanguageStagePrompt(for: activity, stageID: stage.id)
+                } label: {
+                    Label("Apply Description", systemImage: "sparkles")
+                        .font(.subheadline.weight(.bold))
+                }
+                .buttonStyle(.bordered)
+                .foregroundStyle(.white)
+            }
+
+            TextField("Notes", text: stageBinding.notes, axis: .vertical)
+                .lineLimit(2...4)
+                .textInputAutocapitalization(.sentences)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            HStack(alignment: .top, spacing: 10) {
+                Text(stageBinding.wrappedValue.displaySummary)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.68))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(stageBinding.wrappedValue.targetBehavior.editorDescription)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.58))
+                    .frame(maxWidth: 120, alignment: .trailing)
+            }
+        }
+        .frame(height: stageCardHeightByActivityID[activity.id], alignment: .top)
+        .padding(12)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(
+            GeometryReader { geometry in
+                Color.clear
+                    .preference(key: ProgramStageCardHeightPreferenceKey.self, value: geometry.size.height)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func stageTargetEditor(for activity: ProgramWorkoutType, stageID: UUID) -> some View {
+        let binding = comprehensiveStageBinding(activityID: activity.id, stageID: stageID)
+        let goal = binding.goal.wrappedValue
+        let behavior = binding.wrappedValue.targetBehavior
+
+        switch goal {
+        case .heartRateZone:
+            Picker("HR Zone", selection: heartRateZoneWheelBinding(activityID: activity.id, stageID: stageID)) {
+                ForEach(zoneWheelOptions, id: \.self) { zone in
+                    Text(zone).tag(zone)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: compactWheelHeight)
+            .clipped()
+
+        case .cadence, .power, .speed, .distance, .energy:
+            if behavior == .range {
+                HStack(spacing: 10) {
+                    wheelMetricPicker(title: "Min", selection: rangeComponentWheelBinding(activityID: activity.id, stageID: stageID, component: .lower), options: wheelOptions(for: goal))
+                    wheelMetricPicker(title: "Max", selection: rangeComponentWheelBinding(activityID: activity.id, stageID: stageID, component: .upper), options: wheelOptions(for: goal))
+                }
+            } else {
+                wheelMetricPicker(title: numericTargetLabel(for: behavior), selection: singleMetricWheelBinding(activityID: activity.id, stageID: stageID), options: wheelOptions(for: goal))
+            }
+
+        case .pace:
+            if behavior == .range {
+                HStack(spacing: 10) {
+                    wheelMetricPicker(title: "Start Pace", selection: rangeComponentWheelBinding(activityID: activity.id, stageID: stageID, component: .lower), options: wheelOptions(for: goal))
+                    wheelMetricPicker(title: "End Pace", selection: rangeComponentWheelBinding(activityID: activity.id, stageID: stageID, component: .upper), options: wheelOptions(for: goal))
+                }
+            } else {
+                wheelMetricPicker(title: numericTargetLabel(for: behavior), selection: singleMetricWheelBinding(activityID: activity.id, stageID: stageID), options: wheelOptions(for: goal))
+            }
+
+        case .open, .time:
+            EmptyView()
+        }
+    }
+
+    private func wheelMetricPicker(title: String, selection: Binding<String>, options: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.orange.opacity(0.85))
+            Picker(title, selection: selection) {
+                ForEach(options, id: \.self) { option in
+                    Text(option).tag(option)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: compactWheelHeight)
+            .clipped()
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func compactMenuField<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.orange.opacity(0.85))
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private enum StageRangeComponent {
+        case lower
+        case upper
+    }
+
+    private var compactWheelHeight: CGFloat { 84 }
+
+    private var minuteWheelOptions: [String] {
+        let short = (1...15).map(String.init)
+        let longer = stride(from: 20, through: 240, by: 5).map(String.init)
+        return Array(NSOrderedSet(array: short + longer)) as? [String] ?? (short + longer)
+    }
+
+    private var zoneWheelOptions: [String] {
+        (1...5).map { "Zone \($0)" }
+    }
+
+    private var repeatWheelOptions: [String] {
+        (1...12).map(String.init)
+    }
+
+    private func wheelOptions(for goal: ProgramMicroStageGoal) -> [String] {
+        switch goal {
+        case .power:
+            return stride(from: 50, through: 600, by: 5).map(String.init)
+        case .cadence:
+            return stride(from: 50, through: 220, by: 5).map(String.init)
+        case .speed:
+            return stride(from: 1, through: 40, by: 1).map(String.init)
+        case .distance:
+            return stride(from: 1, through: 50, by: 1).map(String.init)
+        case .energy:
+            return stride(from: 25, through: 2000, by: 25).map(String.init)
+        case .pace:
+            return (180...900).filter { $0 % 5 == 0 }.map { seconds in
+                String(format: "%d:%02d", seconds / 60, seconds % 60)
+            }
+        case .heartRateZone:
+            return zoneWheelOptions
+        case .open, .time:
+            return []
+        }
+    }
+
+    private func nearestWheelOption(for current: String, options: [String], fallback: String) -> String {
+        guard !options.isEmpty else { return fallback }
+        if options.contains(current) {
+            return current
+        }
+        if let currentValue = wheelComparableValue(for: current) {
+            return options.min(by: {
+                abs((wheelComparableValue(for: $0) ?? currentValue) - currentValue) <
+                abs((wheelComparableValue(for: $1) ?? currentValue) - currentValue)
+            }) ?? fallback
+        }
+        return fallback
+    }
+
+    private func wheelComparableValue(for value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("zone ") {
+            return Double(trimmed.replacingOccurrences(of: "zone ", with: ""))
+        }
+        if trimmed.contains(":") {
+            let parts = trimmed.split(separator: ":")
+            guard parts.count == 2,
+                  let minutes = Double(parts[0]),
+                  let seconds = Double(parts[1]) else { return nil }
+            return (minutes * 60) + seconds
+        }
+        return Double(trimmed)
+    }
+
+    private func plannedMinutesWheelBinding(activityID: String, stageID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                let current = String(comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedMinutes.wrappedValue)
+                return nearestWheelOption(for: current, options: minuteWheelOptions, fallback: "5")
+            },
+            set: { newValue in
+                let value = min(max(Int(newValue) ?? 1, 1), 240)
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedMinutes.wrappedValue = value
+            }
+        )
+    }
+
+    private var routeRepeatsWheelBinding: Binding<String> {
+        Binding(
+            get: { String(routeRepeats) },
+            set: { newValue in
+                routeRepeats = min(max(Int(newValue) ?? 1, 1), 10)
+            }
+        )
+    }
+
+    private func stageRepeatsWheelBinding(activityID: String, stageID: UUID) -> Binding<String> {
+        Binding(
+            get: { String(comprehensiveStageBinding(activityID: activityID, stageID: stageID).repeats.wrappedValue) },
+            set: { newValue in
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).repeats.wrappedValue = min(max(Int(newValue) ?? 1, 1), 12)
+            }
+        )
+    }
+
+    private func circuitRepeatsWheelBinding(activityID: String, groupID: UUID) -> Binding<String> {
+        Binding(
+            get: { String(circuitGroupBinding(activityID: activityID, groupID: groupID).repeats.wrappedValue) },
+            set: { newValue in
+                circuitGroupBinding(activityID: activityID, groupID: groupID).repeats.wrappedValue = min(max(Int(newValue) ?? 1, 1), 12)
+            }
+        )
+    }
+
+    private func heartRateZoneWheelBinding(activityID: String, stageID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                let stage = comprehensiveStageBinding(activityID: activityID, stageID: stageID).wrappedValue
+                let zone = stage.targetValueText.captureGroups(for: #"zone\s*(\d+)"#).first?.first.flatMap(Int.init) ?? 2
+                return "Zone \(min(max(zone, 1), 5))"
+            },
+            set: { newValue in
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue = newValue
+            }
+        )
+    }
+
+    private func rangeComponentWheelBinding(
+        activityID: String,
+        stageID: UUID,
+        component: StageRangeComponent
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                let goal = comprehensiveStageBinding(activityID: activityID, stageID: stageID).goal.wrappedValue
+                let options = wheelOptions(for: goal)
+                let raw = comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue
+                let parts = raw.components(separatedBy: "-").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                switch component {
+                case .lower:
+                    return nearestWheelOption(for: parts.first ?? "", options: options, fallback: options.first ?? "")
+                case .upper:
+                    return nearestWheelOption(for: parts.count > 1 ? parts[1] : "", options: options, fallback: options.dropFirst().first ?? options.first ?? "")
+                }
+            },
+            set: { newValue in
+                let current = comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue
+                var parts = current.components(separatedBy: "-").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if parts.isEmpty { parts = ["", ""] }
+                if parts.count == 1 { parts.append("") }
+                switch component {
+                case .lower:
+                    parts[0] = newValue
+                case .upper:
+                    parts[1] = newValue
+                }
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue = parts.filter { !$0.isEmpty }.joined(separator: "-")
+            }
+        )
+    }
+
+    private func singleMetricWheelBinding(activityID: String, stageID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                let goal = comprehensiveStageBinding(activityID: activityID, stageID: stageID).goal.wrappedValue
+                let options = wheelOptions(for: goal)
+                let current = comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue
+                return nearestWheelOption(for: current, options: options, fallback: options.first ?? "")
+            },
+            set: { newValue in
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue = newValue
+            }
+        )
+    }
+
+    private func numericTargetLabel(for behavior: ProgramStageTargetBehavior) -> String {
+        switch behavior {
+        case .range:
+            return "Range"
+        case .aboveThreshold:
+            return "Minimum"
+        case .belowThreshold:
+            return "Maximum"
+        case .completionGoal:
+            return "Target"
+        }
+    }
+
+    private func stagePromptBinding(stageID: UUID) -> Binding<String> {
+        Binding(
+            get: { stagePromptTextByStageID[stageID, default: ""] },
+            set: { stagePromptTextByStageID[stageID] = $0 }
+        )
+    }
+
+    private func applyNaturalLanguageStagePrompt(for activity: ProgramWorkoutType, stageID: UUID) {
+        let prompt = normalizeCoachRegenerationText(stagePromptTextByStageID[stageID, default: ""])
+        guard !prompt.isEmpty else { return }
+        var stages = customMicroStagesByActivityID[activity.id] ?? defaultMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id))
+        guard let index = stages.firstIndex(where: { $0.id == stageID }) else { return }
+        stages[index] = parsedStage(from: prompt, activity: activity, base: stages[index])
+        customMicroStagesByActivityID[activity.id] = stages
+    }
+
+    private func parsedStage(
+        from prompt: String,
+        activity: ProgramWorkoutType,
+        base: ProgramCustomWorkoutMicroStage
+    ) -> ProgramCustomWorkoutMicroStage {
+        let normalized = prompt.lowercased()
+        var updated = base
+        let inferredRole = stageRole(from: normalized, fallback: base.role)
+        let allowed = allowedGoals(for: inferredRole, activity: activity)
+        let inferredGoal = stageGoal(
+            from: normalized,
+            role: inferredRole,
+            activity: activity,
+            fallback: allowed.contains(base.goal) ? base.goal : (allowed.first ?? .time)
+        )
+
+        updated.role = inferredRole
+        updated.goal = inferredGoal
+        updated.targetBehavior = inferredRole.defaultTargetBehavior
+        updated.circuitGroupID = nil
+        updated.repeatSetLabel = ""
+        updated.notes = ""
+
+        if let minutes = stageDurationMinutes(from: normalized) {
+            updated.plannedMinutes = min(max(minutes, 1), 180)
+        }
+
+        if let repeats = stageRepeats(from: normalized) {
+            updated.repeats = min(max(repeats, 1), 12)
+        }
+
+        if inferredGoal.requiresDescriptorInput {
+            updated.targetValueText = stageDescriptor(
+                from: normalized,
+                goal: inferredGoal,
+                fallback: updated.targetValueText.isEmpty ? defaultDescriptor(for: inferredGoal) : updated.targetValueText
+            )
+        } else {
+            updated.targetValueText = ""
+        }
+
+        updated.title = defaultStageTitle(for: inferredRole, goal: inferredGoal)
+        return normalizeStage(updated, for: activity)
+    }
+
+    private func stageRole(from text: String, fallback: ProgramMicroStageRole) -> ProgramMicroStageRole {
+        if text.contains("warmup") || text.contains("warm up") {
+            return .warmup
+        }
+        if text.contains("cooldown") || text.contains("cool down") {
+            return .cooldown
+        }
+        if text.contains("recover") || text.contains("recovery") || text.contains("relax") || text.contains("easy") || text.contains("back off") || text.contains("tone down") {
+            return .recovery
+        }
+        if text.contains("hold") || text.contains("maintain") || text.contains("steady") || text.contains("within") || text.contains("between") || text.contains("stay at") {
+            return .steady
+        }
+        if text.contains("above") || text.contains("over") || text.contains("more than") || text.contains("push") || text.contains("hard") || text.contains("surge") {
+            return .work
+        }
+        if text.contains("calorie") || text.contains("kcal") || text.contains("distance") || text.contains("mile") || text.contains("km") || text.contains("meter") || text.contains("minute") || text.contains("hour") {
+            return .goal
+        }
+        return fallback
+    }
+
+    private func stageGoal(
+        from text: String,
+        role: ProgramMicroStageRole,
+        activity: ProgramWorkoutType,
+        fallback: ProgramMicroStageGoal
+    ) -> ProgramMicroStageGoal {
+        let allowed = allowedGoals(for: role, activity: activity)
+        let candidates: [ProgramMicroStageGoal] = [
+            text.contains("calorie") || text.contains("kcal") ? .energy : .open,
+            text.contains("zone") || text.contains("heart rate") || text.contains(" hr") ? .heartRateZone : .open,
+            text.contains("cadence") || text.contains("rpm") || text.contains("spm") ? .cadence : .open,
+            text.contains("power") || text.contains(" watt") || text.contains("watts") ? .power : .open,
+            text.contains("speed") || text.contains("mph") || text.contains("kph") || text.contains("km/h") || text.contains("m/s") ? .speed : .open,
+            text.contains("/mi") || text.contains("/km") || text.contains("pace") || text.contains("split") ? .pace : .open,
+            text.contains("distance") || text.contains("mile") || text.contains("km") || text.contains("lap") || text.contains("meter") ? .distance : .open,
+            text.contains("minute") || text.contains("hour") || text.contains(" min") || text.contains("time") ? .time : .open
+        ]
+
+        if let goal = candidates.first(where: { $0 != .open && allowed.contains($0) }) {
+            return goal
+        }
+        if allowed.contains(fallback) {
+            return fallback
+        }
+        return allowed.first ?? .time
+    }
+
+    private func stageDurationMinutes(from text: String) -> Int? {
+        if let hours = text.captureGroups(for: #"(\d+)\s*(hour|hours|hr|hrs)"#).first?.first,
+           let value = Int(hours) {
+            return value * 60
+        }
+        if let minutes = text.captureGroups(for: #"(\d+)\s*(minute|minutes|min|mins)"#).first?.first,
+           let value = Int(minutes) {
+            return value
+        }
+        return nil
+    }
+
+    private func stageRepeats(from text: String) -> Int? {
+        if let match = text.captureGroups(for: #"(\d+)\s*(?:x|times|rounds|repeats)"#).first?.first,
+           let value = Int(match) {
+            return value
+        }
+        if let match = text.captureGroups(for: #"repeat\s*(\d+)"#).first?.first,
+           let value = Int(match) {
+            return value
+        }
+        return nil
+    }
+
+    private func stageDescriptor(from text: String, goal: ProgramMicroStageGoal, fallback: String) -> String {
+        switch goal {
+        case .heartRateZone:
+            if let zone = text.captureGroups(for: #"zone\s*(\d+)"#).first?.first {
+                return "Zone \(zone)"
+            }
+        case .power:
+            if let range = text.captureGroups(for: #"(\d+\s*-\s*\d+)\s*(?:w|watts?)"#).first?.first {
+                return "\(range) W"
+            }
+            if let value = text.captureGroups(for: #"(\d+)\s*(?:w|watts?)"#).first?.first {
+                return "\(value) W"
+            }
+        case .cadence:
+            if let range = text.captureGroups(for: #"(\d+\s*-\s*\d+)\s*(?:rpm|spm)"#).first?.first {
+                return "\(range) rpm"
+            }
+            if let value = text.captureGroups(for: #"(\d+)\s*(?:rpm|spm)"#).first?.first {
+                return "\(value) rpm"
+            }
+        case .pace:
+            if let pace = text.captureGroups(for: #"(\d+:\d+(?:\s*-\s*\d+:\d+)?\s*/\s*(?:mi|km))"#).first?.first {
+                return pace
+            }
+        case .speed:
+            if let match = text.captureGroups(for: #"(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?)\s*(mph|kph|km/h|m/s)"#).first {
+                return "\(match[0]) \(match[1])"
+            }
+        case .distance:
+            if let match = text.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(km|kilometers?|mi|miles?|m|meters?|laps?)"#).first {
+                return "\(match[0]) \(match[1])"
+            }
+        case .energy:
+            if let match = text.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(kcal|calories?|cals?)"#).first {
+                return "\(match[0]) \(match[1])"
+            }
+        case .open, .time:
+            return ""
+        }
+        return fallback
+    }
+
+    private func defaultStageTitle(for role: ProgramMicroStageRole, goal: ProgramMicroStageGoal) -> String {
+        switch role {
+        case .warmup:
+            return "Warmup"
+        case .goal:
+            switch goal {
+            case .distance:
+                return "Distance Goal"
+            case .energy:
+                return "Energy Goal"
+            default:
+                return "Main Goal"
+            }
+        case .steady:
+            return "Steady \(goal.title)"
+        case .work:
+            return "Work \(goal.title)"
+        case .recovery:
+            return "Recovery"
+        case .cooldown:
+            return "Cooldown"
+        }
+    }
+
+    private func comprehensiveStageBinding(activityID: String, stageID: UUID) -> Binding<ProgramCustomWorkoutMicroStage> {
+        Binding(
+            get: {
+                let stages = customMicroStagesByActivityID[activityID] ?? []
+                guard let stage = stages.first(where: { $0.id == stageID }) else {
+                    return ProgramCustomWorkoutMicroStage(
+                        title: "Stage",
+                        notes: "",
+                        role: .goal,
+                        goal: .time,
+                        plannedMinutes: 5,
+                        repeats: 1,
+                        targetValueText: "",
+                        targetBehavior: .completionGoal
+                    )
+                }
+                return stage
+            },
+            set: { newValue in
+                var stages = customMicroStagesByActivityID[activityID] ?? []
+                guard let index = stages.firstIndex(where: { $0.id == stageID }) else { return }
+                var normalized = normalizeStage(newValue, for: ProgramWorkoutType.resolve(id: activityID))
+                if normalized.circuitGroupID != nil,
+                   let groupID = normalized.circuitGroupID,
+                   let group = customCircuitGroupsByActivityID[activityID]?.first(where: { $0.id == groupID }) {
+                    normalized.repeats = group.repeats
+                    normalized.repeatSetLabel = group.title
+                }
+                stages[index] = normalized
+                customMicroStagesByActivityID[activityID] = stages
+            }
+        )
+    }
+
+    private func addMicroStage(for activity: ProgramWorkoutType) {
+        var stages = customMicroStagesByActivityID[activity.id] ?? defaultMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id))
+        stages.append(
+            normalizeStage(
+                ProgramCustomWorkoutMicroStage.simpleDefault(
+                    for: activity,
+                    totalMinutes: max(Int(Double(allocationMinutes(for: activity.id)) / Double(max(stages.count + 1, 1))), 5)
+                ),
+                for: activity
+            )
+        )
+        customMicroStagesByActivityID[activity.id] = stages
+    }
+
+    private func removeMicroStage(for activity: ProgramWorkoutType, at index: Int) {
+        var stages = customMicroStagesByActivityID[activity.id] ?? []
+        guard stages.indices.contains(index), stages.count > 1 else { return }
+        stagePromptTextByStageID.removeValue(forKey: stages[index].id)
+        stages.remove(at: index)
+        customMicroStagesByActivityID[activity.id] = stages
+    }
+
+    private func moveMicroStage(for activity: ProgramWorkoutType, from source: Int, to destination: Int) {
+        var stages = customMicroStagesByActivityID[activity.id] ?? []
+        guard stages.indices.contains(source), stages.indices.contains(destination) else { return }
+        let moved = stages.remove(at: source)
+        stages.insert(moved, at: destination)
+        customMicroStagesByActivityID[activity.id] = stages
+    }
+
+    private func stageIndex(for activityID: String, stageID: UUID) -> Int? {
+        (customMicroStagesByActivityID[activityID] ?? []).firstIndex(where: { $0.id == stageID })
+    }
+
+    private func stages(for activityID: String, in group: ProgramWorkoutCircuitGroup) -> [ProgramCustomWorkoutMicroStage] {
+        (customMicroStagesByActivityID[activityID] ?? []).filter { $0.circuitGroupID == group.id }
+    }
+
+    private func circuitGroupBinding(activityID: String, groupID: UUID) -> Binding<ProgramWorkoutCircuitGroup> {
+        Binding(
+            get: {
+                (customCircuitGroupsByActivityID[activityID] ?? []).first(where: { $0.id == groupID })
+                ?? ProgramWorkoutCircuitGroup(title: "Circuit", repeats: 2)
+            },
+            set: { newValue in
+                var groups = customCircuitGroupsByActivityID[activityID] ?? []
+                guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+                groups[index] = newValue
+                customCircuitGroupsByActivityID[activityID] = groups
+                var stages = customMicroStagesByActivityID[activityID] ?? []
+                for stageIndex in stages.indices where stages[stageIndex].circuitGroupID == groupID {
+                    stages[stageIndex].repeats = newValue.repeats
+                    stages[stageIndex].repeatSetLabel = newValue.title
+                }
+                customMicroStagesByActivityID[activityID] = stages
+            }
+        )
+    }
+
+    private func addCircuitGroup(for activity: ProgramWorkoutType) {
+        let group = ProgramWorkoutCircuitGroup(title: "Coupled Circuit", repeats: 4)
+        var groups = customCircuitGroupsByActivityID[activity.id] ?? []
+        groups.append(group)
+        customCircuitGroupsByActivityID[activity.id] = groups
+
+        var stages = customMicroStagesByActivityID[activity.id] ?? defaultMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id))
+        let primaryGoal = preferredSteadyOrWorkGoal(for: activity)
+        stages.append(
+            normalizeStage(
+                ProgramCustomWorkoutMicroStage(
+                    title: "Circuit Stage 1",
+                    notes: "Maintain the assigned target for this repeat.",
+                    role: .steady,
+                    goal: primaryGoal,
+                    plannedMinutes: 5,
+                    repeats: group.repeats,
+                    targetValueText: defaultDescriptor(for: primaryGoal),
+                    repeatSetLabel: group.title,
+                    targetBehavior: .range,
+                    circuitGroupID: group.id
+                ),
+                for: activity
+            )
+        )
+        stages.append(
+            normalizeStage(
+                ProgramCustomWorkoutMicroStage(
+                    title: "Circuit Recovery",
+                    notes: "Back off and reset before the next repeat.",
+                    role: .recovery,
+                    goal: allowedGoals(for: .recovery, activity: activity).contains(.time) ? .time : allowedGoals(for: .recovery, activity: activity).first ?? .time,
+                    plannedMinutes: 1,
+                    repeats: group.repeats,
+                    targetValueText: "",
+                    repeatSetLabel: group.title,
+                    targetBehavior: .belowThreshold,
+                    circuitGroupID: group.id
+                ),
+                for: activity
+            )
+        )
+        customMicroStagesByActivityID[activity.id] = stages
+    }
+
+    private func removeCircuitGroup(for activity: ProgramWorkoutType, groupID: UUID) {
+        customCircuitGroupsByActivityID[activity.id]?.removeAll { $0.id == groupID }
+        customMicroStagesByActivityID[activity.id]?.removeAll { $0.circuitGroupID == groupID }
+    }
+
     private func regenerateMicroStages(for activity: ProgramWorkoutType, note: String) -> [ProgramCustomWorkoutMicroStage] {
-        var stages = defaultMicroStages(for: activity)
+        var stages = defaultMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id))
         guard !note.isEmpty else { return stages }
 
         if note.localizedCaseInsensitiveContains("longer cooldown"),
@@ -1628,9 +2711,11 @@ struct ProgramBuilderView: View {
         case .guided:
             return "\(Int(availableMinutes.rounded())) min • \(activity.title)"
         case .target:
-            let detail = selectedTargetMetric == .heartRateZone
-                ? "Zone \(selectedZone)"
-                : targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = activity.supportedTargets.contains(selectedTargetMetric)
+                ? (selectedTargetMetric == .heartRateZone
+                    ? "Zone \(selectedZone)"
+                    : targetValueText.trimmingCharacters(in: .whitespacesAndNewlines))
+                : ""
             return detail.isEmpty
                 ? "\(Int(availableMinutes.rounded())) min • \(activity.title)"
                 : "\(Int(availableMinutes.rounded())) min • \(selectedTargetMetric.title): \(detail)"
@@ -1644,7 +2729,7 @@ struct ProgramBuilderView: View {
     }
 
     private func routeLaunchMetadata() async -> RouteLaunchMetadata? {
-        guard selectedMode == .route else { return nil }
+        guard selectedMode == .route, !routeCompatibleActivities.isEmpty else { return nil }
 
         let name = routeObjectiveName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let workout = selectedRouteTemplate?.workout else {
@@ -1655,6 +2740,61 @@ struct ProgramBuilderView: View {
         let trailhead = coordinates.first
         let resolvedName = name.isEmpty ? workout.workoutActivityType.name.capitalized : name
         return RouteLaunchMetadata(name: resolvedName, trailhead: trailhead, coordinates: coordinates)
+    }
+
+    private var availableTargetMetrics: [ProgramTargetMetric] {
+        guard !selectedActivities.isEmpty else { return ProgramTargetMetric.allCases }
+        return ProgramTargetMetric.allCases.filter { metric in
+            selectedActivities.contains { $0.supportedTargets.contains(metric) }
+        }
+    }
+
+    private var targetCompatibleActivities: [ProgramWorkoutType] {
+        selectedActivities.filter { $0.supportedTargets.contains(selectedTargetMetric) }
+    }
+
+    private var targetIncompatibleActivities: [ProgramWorkoutType] {
+        selectedActivities.filter { !$0.supportedTargets.contains(selectedTargetMetric) }
+    }
+
+    private var targetApplicabilitySummary: String {
+        if targetCompatibleActivities.count == selectedActivities.count {
+            return "Target applies across every selected workout"
+        }
+        if targetCompatibleActivities.isEmpty {
+            return "No selected workout uses this target directly"
+        }
+        return "Target applies to \(targetCompatibleActivities.map(\.title).joined(separator: ", "))"
+    }
+
+    private var routeCompatibleActivities: [ProgramWorkoutType] {
+        selectedActivities.filter(\.routeFriendly)
+    }
+
+    private var routeIncompatibleActivities: [ProgramWorkoutType] {
+        selectedActivities.filter { !$0.routeFriendly }
+    }
+
+    private var routePlanningDescription: String {
+        if routeCompatibleActivities.isEmpty {
+            return "Use a course, trail, or familiar loop as the anchor. Right now none of the selected workouts support route planning."
+        }
+        if routeIncompatibleActivities.isEmpty {
+            return "Use a course, trail, or familiar loop as the anchor. The watch can show the route while the phone handles the planning step."
+        }
+        return "Use a course, trail, or familiar loop as the anchor for the outdoor phases, while the non-route phases keep their own structure."
+    }
+
+    private var selectedStageActivity: ProgramWorkoutType? {
+        guard let selectedStageActivityID else { return selectedActivities.first }
+        return selectedActivities.first(where: { $0.id == selectedStageActivityID }) ?? selectedActivities.first
+    }
+
+    private func allocationMinutes(for activityID: String) -> Int {
+        let totalWeight = selectedActivityIDs.reduce(0.0) { $0 + allocationWeights[$1, default: 1] }
+        guard totalWeight > 0 else { return max(5, Int(availableMinutes.rounded())) }
+        let weight = allocationWeights[activityID, default: 1]
+        return max(5, Int((availableMinutes * (weight / totalWeight)).rounded()))
     }
 
     private func loadRouteTemplateAvailability() async {
@@ -1773,15 +2913,15 @@ private struct ProgramBuilderCoachSection: View {
                 } label: {
                     if planner.isGeneratingCoach {
                         ProgressView()
-                            .tint(.black)
+                            .tint(.white)
                             .frame(width: 30, height: 30)
                     } else {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 15, weight: .bold))
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .buttonStyle(.glass)
+                .foregroundStyle(.white)
             }
 
             HStack(spacing: 10) {
@@ -1941,10 +3081,11 @@ private struct ProgramSelectedActivityChip: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: activity.symbol)
-                .foregroundStyle(activity.tint)
+                .foregroundStyle(.white.opacity(0.9))
             VStack(alignment: .leading, spacing: 2) {
                 Text(activity.title)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
                 Text(allocationText)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(activity.tint)
@@ -1956,7 +3097,7 @@ private struct ProgramSelectedActivityChip: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.white.opacity(0.08), in: Capsule())
+        .background(Color.white.opacity(0.12), in: Capsule())
     }
 }
 
@@ -2048,13 +3189,19 @@ private struct ProgramLaunchButton: View {
     let subtitle: String
     let symbol: String
     let tint: Color
+    let fixedHeight: CGFloat?
     let action: () -> Void
+
+    private var resolvedHeight: CGFloat? {
+        guard let fixedHeight else { return nil }
+        return min(fixedHeight, 84)
+    }
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 10) {
                 Image(systemName: symbol)
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(tint)
                 Text(title)
                     .font(.headline.weight(.bold))
@@ -2063,12 +3210,18 @@ private struct ProgramLaunchButton: View {
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.68))
             }
-            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
-            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .frame(height: resolvedHeight, alignment: .topLeading)
+            .padding(14)
             .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(tint.opacity(0.45), lineWidth: 1)
+            )
+            .background(
+                GeometryReader { geometry in
+                    Color.clear.preference(key: ProgramLaunchButtonHeightPreferenceKey.self, value: geometry.size.height)
+                }
             )
         }
         .buttonStyle(.plain)
@@ -2196,6 +3349,7 @@ private enum ProgramTargetMetric: String, CaseIterable, Identifiable {
 
 enum ProgramMicroStageRole: String, CaseIterable, Codable, Hashable, Identifiable {
     case warmup
+    case goal
     case steady
     case work
     case recovery
@@ -2206,11 +3360,35 @@ enum ProgramMicroStageRole: String, CaseIterable, Codable, Hashable, Identifiabl
     var title: String {
         switch self {
         case .warmup: return "Warmup"
+        case .goal: return "Goal"
         case .steady: return "Steady"
         case .work: return "Work"
         case .recovery: return "Recovery"
         case .cooldown: return "Cooldown"
         }
+    }
+
+    init?(storageValue: String) {
+        switch storageValue {
+        case "simpleGoal":
+            self = .goal
+        default:
+            self.init(rawValue: storageValue)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        guard let value = ProgramMicroStageRole(storageValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ProgramMicroStageRole: \(rawValue)")
+        }
+        self = value
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -2222,6 +3400,7 @@ enum ProgramMicroStageGoal: String, CaseIterable, Codable, Hashable, Identifiabl
     case heartRateZone
     case power
     case pace
+    case speed
     case cadence
 
     var id: String { rawValue }
@@ -2235,6 +3414,7 @@ enum ProgramMicroStageGoal: String, CaseIterable, Codable, Hashable, Identifiabl
         case .heartRateZone: return "HR Zone"
         case .power: return "Power"
         case .pace: return "Pace"
+        case .speed: return "Speed"
         case .cadence: return "Cadence"
         }
     }
@@ -2245,7 +3425,8 @@ enum ProgramMicroStageGoal: String, CaseIterable, Codable, Hashable, Identifiabl
         case .energy: return "Energy target, e.g. 300 kcal"
         case .heartRateZone: return "Zone 2"
         case .power: return "Power range, e.g. 220-260 W"
-        case .pace: return "Pace or speed band"
+        case .pace: return "Pace range, e.g. 7:10-7:30 /mi"
+        case .speed: return "Speed range, e.g. 18-20 mph"
         case .cadence: return "Cadence target"
         case .open, .time: return ""
         }
@@ -2261,16 +3442,52 @@ enum ProgramMicroStageGoal: String, CaseIterable, Codable, Hashable, Identifiabl
     }
 }
 
+enum ProgramStageTargetBehavior: String, CaseIterable, Codable, Hashable, Identifiable {
+    case range
+    case aboveThreshold
+    case belowThreshold
+    case completionGoal
+
+    var id: String { rawValue }
+
+    var editorDescription: String {
+        switch self {
+        case .range:
+            return "Maintain within a target range."
+        case .aboveThreshold:
+            return "Match or stay above the target."
+        case .belowThreshold:
+            return "Stay below the target or keep it easy."
+        case .completionGoal:
+            return "Reach the goal without threshold/range enforcement."
+        }
+    }
+}
+
+struct ProgramWorkoutCircuitGroup: Identifiable, Codable, Hashable {
+    let id: UUID
+    var title: String
+    var repeats: Int
+
+    init(id: UUID = UUID(), title: String, repeats: Int) {
+        self.id = id
+        self.title = title
+        self.repeats = repeats
+    }
+}
+
 struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
     let id: UUID
     var title: String
     var notes: String
     var roleRawValue: String
     var goalRawValue: String
+    var targetBehaviorRawValue: String
     var plannedMinutes: Int
     var repeats: Int
     var targetValueText: String
     var repeatSetLabel: String
+    var circuitGroupID: UUID?
 
     init(
         id: UUID = UUID(),
@@ -2281,27 +3498,36 @@ struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
         plannedMinutes: Int,
         repeats: Int,
         targetValueText: String,
-        repeatSetLabel: String = ""
+        repeatSetLabel: String = "",
+        targetBehavior: ProgramStageTargetBehavior? = nil,
+        circuitGroupID: UUID? = nil
     ) {
         self.id = id
         self.title = title
         self.notes = notes
         self.roleRawValue = role.rawValue
         self.goalRawValue = goal.rawValue
+        self.targetBehaviorRawValue = (targetBehavior ?? role.defaultTargetBehavior).rawValue
         self.plannedMinutes = plannedMinutes
         self.repeats = repeats
         self.targetValueText = targetValueText
         self.repeatSetLabel = repeatSetLabel
+        self.circuitGroupID = circuitGroupID
     }
 
     var role: ProgramMicroStageRole {
-        get { ProgramMicroStageRole(rawValue: roleRawValue) ?? .work }
+        get { ProgramMicroStageRole(storageValue: roleRawValue) ?? .work }
         set { roleRawValue = newValue.rawValue }
     }
 
     var goal: ProgramMicroStageGoal {
         get { ProgramMicroStageGoal(rawValue: goalRawValue) ?? .time }
         set { goalRawValue = newValue.rawValue }
+    }
+
+    var targetBehavior: ProgramStageTargetBehavior {
+        get { ProgramStageTargetBehavior(rawValue: targetBehaviorRawValue) ?? role.defaultTargetBehavior }
+        set { targetBehaviorRawValue = newValue.rawValue }
     }
 
     var simpleSummary: String {
@@ -2321,14 +3547,30 @@ struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
     fileprivate static func simpleDefault(for activity: ProgramWorkoutType, totalMinutes: Int) -> ProgramCustomWorkoutMicroStage {
         ProgramCustomWorkoutMicroStage(
             title: activity.title,
-            notes: "One continuous workout with a single main objective.",
-            role: .work,
+            notes: "",
+            role: .goal,
             goal: .time,
             plannedMinutes: max(totalMinutes, 5),
             repeats: 1,
             targetValueText: "",
-            repeatSetLabel: ""
+            repeatSetLabel: "",
+            targetBehavior: .completionGoal
         )
+    }
+}
+
+private extension ProgramMicroStageRole {
+    var defaultTargetBehavior: ProgramStageTargetBehavior {
+        switch self {
+        case .warmup, .goal:
+            return .completionGoal
+        case .steady:
+            return .range
+        case .work:
+            return .aboveThreshold
+        case .recovery, .cooldown:
+            return .belowThreshold
+        }
     }
 }
 
@@ -2508,24 +3750,47 @@ private struct ProgramWorkoutType: Identifiable, Hashable {
     }
 
     var supportedMicroStageGoals: [ProgramMicroStageGoal] {
-        var goals: [ProgramMicroStageGoal] = [.time, .open]
-        for target in supportedTargets {
-            let mapped: ProgramMicroStageGoal
-            switch target {
-            case .pace: mapped = .pace
-            case .power: mapped = .power
-            case .heartRateZone: mapped = .heartRateZone
-            case .cadence: mapped = .cadence
-            case .distance: mapped = .distance
-            }
-            if !goals.contains(mapped) {
-                goals.append(mapped)
-            }
+        supportedMicroStageGoals(for: .goal)
+    }
+
+    func supportedMicroStageGoals(for role: ProgramMicroStageRole) -> [ProgramMicroStageGoal] {
+        let activitySpecific: [ProgramMicroStageGoal]
+        switch id {
+        case "running", "trail-running":
+            activitySpecific = [.time, .distance, .energy, .heartRateZone, .power, .pace, .cadence]
+        case "walking", "hiking":
+            activitySpecific = [.time, .distance, .heartRateZone, .pace]
+        case "cycling", "mountain-biking":
+            activitySpecific = [.time, .distance, .energy, .heartRateZone, .power, .speed, .cadence]
+        case "swimming":
+            activitySpecific = [.time, .distance, .energy, .heartRateZone, .pace]
+        case "rowing":
+            activitySpecific = [.time, .distance, .energy, .heartRateZone, .power, .pace, .cadence]
+        case "elliptical", "stair-stepper":
+            activitySpecific = [.time, .distance, .energy, .heartRateZone, .cadence, .speed]
+        case "yoga", "pilates", "mobility", "stretching":
+            activitySpecific = [.time, .energy]
+        default:
+            activitySpecific = [.time, .distance, .energy, .heartRateZone, .power, .cadence, .speed]
         }
-        if !goals.contains(.energy), category == .strength || category == .ride || category == .endurance {
-            goals.append(.energy)
+
+        let roleMatrix: [ProgramMicroStageGoal]
+        switch role {
+        case .warmup:
+            roleMatrix = [.time, .distance]
+        case .goal:
+            roleMatrix = [.time, .distance, .energy]
+        case .steady:
+            roleMatrix = [.power, .heartRateZone, .cadence, .speed, .pace]
+        case .work:
+            roleMatrix = [.power, .heartRateZone, .cadence, .speed, .pace]
+        case .recovery:
+            roleMatrix = [.time, .power, .cadence, .speed, .pace, .distance]
+        case .cooldown:
+            roleMatrix = [.time, .power, .cadence, .speed, .pace, .distance]
         }
-        return goals
+
+        return roleMatrix.filter { activitySpecific.contains($0) }
     }
 }
 
@@ -2548,7 +3813,7 @@ private struct ProgramPlannerRequest {
     let allocations: [String: String]
     let target: TargetPreference?
     let route: RoutePreference?
-    let microStages: [ProgramCustomWorkoutMicroStage]
+    let microStagesByActivity: [String: [ProgramCustomWorkoutMicroStage]]
     let normalizedRegenerationNote: String
     let recentWorkouts: [ProgramRecentWorkout]
     let recoveryScore: Double
@@ -2589,6 +3854,11 @@ struct ProgramBuilderDraftState: Codable, Hashable {
         case routeObjectiveName
         case routeRepeats
         case selectedRouteTemplateID
+        case selectedBuilderTabRawValue
+        case selectedStageActivityID
+        case customMicroStagesByActivityID
+        case customCircuitGroupsByActivityID
+        case coachRegenerationNotesByActivityID
         case customMicroStages
         case coachRegenerationNote
         case coachAdvice
@@ -2607,8 +3877,11 @@ struct ProgramBuilderDraftState: Codable, Hashable {
     let routeObjectiveName: String
     let routeRepeats: Int
     let selectedRouteTemplateID: UUID?
-    let customMicroStages: [ProgramCustomWorkoutMicroStage]
-    let coachRegenerationNote: String
+    let selectedBuilderTabRawValue: String?
+    let selectedStageActivityID: String?
+    let customMicroStagesByActivityID: [String: [ProgramCustomWorkoutMicroStage]]
+    let customCircuitGroupsByActivityID: [String: [ProgramWorkoutCircuitGroup]]
+    let coachRegenerationNotesByActivityID: [String: String]
     let coachAdvice: String?
     let generatedBlueprint: ProgramGeneratedBlueprint?
     let updatedAt: Date
@@ -2625,8 +3898,11 @@ struct ProgramBuilderDraftState: Codable, Hashable {
         routeObjectiveName: String,
         routeRepeats: Int,
         selectedRouteTemplateID: UUID?,
-        customMicroStages: [ProgramCustomWorkoutMicroStage],
-        coachRegenerationNote: String,
+        selectedBuilderTabRawValue: String?,
+        selectedStageActivityID: String?,
+        customMicroStagesByActivityID: [String: [ProgramCustomWorkoutMicroStage]],
+        customCircuitGroupsByActivityID: [String: [ProgramWorkoutCircuitGroup]],
+        coachRegenerationNotesByActivityID: [String: String],
         coachAdvice: String?,
         generatedBlueprint: ProgramGeneratedBlueprint?,
         updatedAt: Date
@@ -2642,8 +3918,11 @@ struct ProgramBuilderDraftState: Codable, Hashable {
         self.routeObjectiveName = routeObjectiveName
         self.routeRepeats = routeRepeats
         self.selectedRouteTemplateID = selectedRouteTemplateID
-        self.customMicroStages = customMicroStages
-        self.coachRegenerationNote = coachRegenerationNote
+        self.selectedBuilderTabRawValue = selectedBuilderTabRawValue
+        self.selectedStageActivityID = selectedStageActivityID
+        self.customMicroStagesByActivityID = customMicroStagesByActivityID
+        self.customCircuitGroupsByActivityID = customCircuitGroupsByActivityID
+        self.coachRegenerationNotesByActivityID = coachRegenerationNotesByActivityID
         self.coachAdvice = coachAdvice
         self.generatedBlueprint = generatedBlueprint
         self.updatedAt = updatedAt
@@ -2662,11 +3941,55 @@ struct ProgramBuilderDraftState: Codable, Hashable {
         routeObjectiveName = try container.decode(String.self, forKey: .routeObjectiveName)
         routeRepeats = try container.decode(Int.self, forKey: .routeRepeats)
         selectedRouteTemplateID = try container.decodeIfPresent(UUID.self, forKey: .selectedRouteTemplateID)
-        customMicroStages = try container.decodeIfPresent([ProgramCustomWorkoutMicroStage].self, forKey: .customMicroStages) ?? []
-        coachRegenerationNote = try container.decodeIfPresent(String.self, forKey: .coachRegenerationNote) ?? ""
+        selectedBuilderTabRawValue = try container.decodeIfPresent(String.self, forKey: .selectedBuilderTabRawValue)
+        selectedStageActivityID = try container.decodeIfPresent(String.self, forKey: .selectedStageActivityID)
+        if let decodedStages = try container.decodeIfPresent([String: [ProgramCustomWorkoutMicroStage]].self, forKey: .customMicroStagesByActivityID) {
+            customMicroStagesByActivityID = decodedStages
+        } else {
+            let fallbackStages = try container.decodeIfPresent([ProgramCustomWorkoutMicroStage].self, forKey: .customMicroStages) ?? []
+            if let firstActivityID = selectedActivityIDs.first, !fallbackStages.isEmpty {
+                customMicroStagesByActivityID = [firstActivityID: fallbackStages]
+            } else {
+                customMicroStagesByActivityID = [:]
+            }
+        }
+        customCircuitGroupsByActivityID = try container.decodeIfPresent([String: [ProgramWorkoutCircuitGroup]].self, forKey: .customCircuitGroupsByActivityID) ?? [:]
+        if let decodedNotes = try container.decodeIfPresent([String: String].self, forKey: .coachRegenerationNotesByActivityID) {
+            coachRegenerationNotesByActivityID = decodedNotes
+        } else {
+            let fallbackNote = try container.decodeIfPresent(String.self, forKey: .coachRegenerationNote) ?? ""
+            if let firstActivityID = selectedActivityIDs.first, !fallbackNote.isEmpty {
+                coachRegenerationNotesByActivityID = [firstActivityID: fallbackNote]
+            } else {
+                coachRegenerationNotesByActivityID = [:]
+            }
+        }
         coachAdvice = try container.decodeIfPresent(String.self, forKey: .coachAdvice)
         generatedBlueprint = try container.decodeIfPresent(ProgramGeneratedBlueprint.self, forKey: .generatedBlueprint)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(selectedModeRawValue, forKey: .selectedModeRawValue)
+        try container.encode(selectedPlanDepthRawValue, forKey: .selectedPlanDepthRawValue)
+        try container.encode(selectedActivityIDs, forKey: .selectedActivityIDs)
+        try container.encode(availableMinutes, forKey: .availableMinutes)
+        try container.encode(allocationWeights, forKey: .allocationWeights)
+        try container.encode(selectedTargetMetricRawValue, forKey: .selectedTargetMetricRawValue)
+        try container.encode(selectedZone, forKey: .selectedZone)
+        try container.encode(targetValueText, forKey: .targetValueText)
+        try container.encode(routeObjectiveName, forKey: .routeObjectiveName)
+        try container.encode(routeRepeats, forKey: .routeRepeats)
+        try container.encodeIfPresent(selectedRouteTemplateID, forKey: .selectedRouteTemplateID)
+        try container.encodeIfPresent(selectedBuilderTabRawValue, forKey: .selectedBuilderTabRawValue)
+        try container.encodeIfPresent(selectedStageActivityID, forKey: .selectedStageActivityID)
+        try container.encode(customMicroStagesByActivityID, forKey: .customMicroStagesByActivityID)
+        try container.encode(customCircuitGroupsByActivityID, forKey: .customCircuitGroupsByActivityID)
+        try container.encode(coachRegenerationNotesByActivityID, forKey: .coachRegenerationNotesByActivityID)
+        try container.encodeIfPresent(coachAdvice, forKey: .coachAdvice)
+        try container.encodeIfPresent(generatedBlueprint, forKey: .generatedBlueprint)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 }
 
@@ -2679,6 +4002,7 @@ struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
     let locationRawValue: Int
     let plannedMinutes: Int
     let microStages: [ProgramCustomWorkoutMicroStage]?
+    let circuitGroups: [ProgramWorkoutCircuitGroup]?
 
     init(
         id: UUID = UUID(),
@@ -2688,7 +4012,8 @@ struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
         activityRawValue: UInt,
         locationRawValue: Int,
         plannedMinutes: Int,
-        microStages: [ProgramCustomWorkoutMicroStage]? = nil
+        microStages: [ProgramCustomWorkoutMicroStage]? = nil,
+        circuitGroups: [ProgramWorkoutCircuitGroup]? = nil
     ) {
         self.id = id
         self.title = title
@@ -2698,6 +4023,7 @@ struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
         self.locationRawValue = locationRawValue
         self.plannedMinutes = plannedMinutes
         self.microStages = microStages
+        self.circuitGroups = circuitGroups
     }
 }
 
@@ -3094,14 +4420,23 @@ private struct ProgramRecentWorkout: Identifiable {
     let highlight: String?
 }
 
+private struct ProgramStageRegenerationResult {
+    let stages: [ProgramCustomWorkoutMicroStage]
+    let circuitGroups: [ProgramWorkoutCircuitGroup]
+    let statusText: String?
+}
+
 @MainActor
 private final class ProgramBuilderAIPlanner: ObservableObject {
     @Published var coachAdvice = "Preparing your next-session coach..."
     @Published var generatedBlueprint: ProgramGeneratedBlueprint?
     @Published var isGeneratingCoach = false
     @Published var isGeneratingPlan = false
+    @Published var isRegeneratingMicroStages = false
     @Published var coachErrorText: String?
     @Published var planErrorText: String?
+    @Published var microStageRegenerationErrorText: String?
+    @Published var microStageRegenerationActivityID: String?
 
     func refreshCoachAdvice(for request: ProgramPlannerRequest, engine: HealthStateEngine) async {
         isGeneratingCoach = true
@@ -3158,6 +4493,81 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
 
         generatedBlueprint = fallbackBlueprint(for: request, engine: engine)
         isGeneratingPlan = false
+    }
+
+    func regenerateMicroStages(
+        for activity: ProgramWorkoutType,
+        request: ProgramPlannerRequest,
+        existingStages: [ProgramCustomWorkoutMicroStage],
+        existingCircuitGroups: [ProgramWorkoutCircuitGroup],
+        note: String
+    ) async -> ProgramStageRegenerationResult {
+        let totalMinutes = totalStageMinutes(existingStages)
+        let fallbackStages = fallbackRegeneratedMicroStages(
+            for: activity,
+            request: request,
+            existingStages: existingStages,
+            note: note,
+            totalMinutes: totalMinutes
+        )
+        let fallbackGroups = inferredCircuitGroups(from: fallbackStages, existing: existingCircuitGroups)
+
+        guard !note.isEmpty else {
+            microStageRegenerationErrorText = nil
+            return ProgramStageRegenerationResult(stages: fallbackStages, circuitGroups: fallbackGroups, statusText: nil)
+        }
+
+        isRegeneratingMicroStages = true
+        microStageRegenerationActivityID = activity.id
+        microStageRegenerationErrorText = nil
+        defer {
+            isRegeneratingMicroStages = false
+            microStageRegenerationActivityID = nil
+        }
+
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            let model = SystemLanguageModel(useCase: .general)
+            if model.isAvailable {
+                do {
+                    let session = LanguageModelSession(model: model, instructions: programBuilderMicroStageInstructions)
+                    let response = try await session.respond(
+                        to: microStagePrompt(
+                            for: activity,
+                            request: request,
+                            existingStages: existingStages,
+                            note: note,
+                            totalMinutes: totalMinutes
+                        ),
+                        generating: ProgramGeneratedMicroStagePlan.self
+                    )
+                    let cleaned = sanitizedGeneratedMicroStages(
+                        response.content.stages,
+                        for: activity,
+                        request: request,
+                        fallbackStages: fallbackStages,
+                        totalMinutes: totalMinutes
+                    )
+                    if !cleaned.isEmpty {
+                        let groups = inferredCircuitGroups(from: cleaned, existing: existingCircuitGroups)
+                        return ProgramStageRegenerationResult(
+                            stages: cleaned,
+                            circuitGroups: groups,
+                            statusText: groups.isEmpty ? "Coach rebuilt the stage structure from your note." : "Coach rebuilt the stage structure and grouped the coupled repeats."
+                        )
+                    }
+                } catch {
+                    microStageRegenerationErrorText = "Coach fell back to the local stage rebuilder for now."
+                }
+            }
+        }
+        #endif
+
+        return ProgramStageRegenerationResult(
+            stages: fallbackStages,
+            circuitGroups: fallbackGroups,
+            statusText: fallbackGroups.isEmpty ? "Coach rebuilt the stage structure from your note." : "Coach rebuilt the stage structure and grouped the coupled repeats."
+        )
     }
 
     private func fallbackCoachAdvice(for request: ProgramPlannerRequest, engine: HealthStateEngine) -> String {
@@ -3253,7 +4663,12 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
     private func coachPrompt(for request: ProgramPlannerRequest) -> String {
         let selectedActivities = request.selectedActivities.map(\.title).joined(separator: ", ")
         let recent = request.recentWorkouts.prefix(5).map(describeProgramWorkout).joined(separator: " ")
-        let microStageSummary = request.microStages.map(\.displaySummary).joined(separator: " | ")
+        let microStageSummary = request.microStagesByActivity
+            .sorted { $0.key < $1.key }
+            .map { key, stages in
+                "\(key): " + stages.map(\.displaySummary).joined(separator: " | ")
+            }
+            .joined(separator: " || ")
         return """
         Today context:
         - Selected activities: \(selectedActivities.isEmpty ? "none selected yet" : selectedActivities)
@@ -3281,7 +4696,12 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         let allocations = request.allocations.map { "\($0.key): \($0.value)" }.sorted().joined(separator: "; ")
         let targetLine = request.target.map { "\($0.metric.title): \($0.descriptor.isEmpty ? "general focus" : $0.descriptor)" } ?? "none"
         let routeLine = request.route.map { "\($0.name.isEmpty ? "unnamed route" : $0.name), repeats \($0.repeats), template \($0.templateName ?? "none")" } ?? "none"
-        let microStageSummary = request.microStages.map(\.displaySummary).joined(separator: " | ")
+        let microStageSummary = request.microStagesByActivity
+            .sorted { $0.key < $1.key }
+            .map { key, stages in
+                "\(key): " + stages.map(\.displaySummary).joined(separator: " | ")
+            }
+            .joined(separator: " || ")
 
         return """
         Build a structured workout blueprint from these exact user constraints:
@@ -3299,12 +4719,654 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         - Do not invent cooldown, warmup, mobility, stretching, or extra sports unless the user explicitly selected them.
         - Do not act clever or add a block "because it would be smart."
         - Keep the blueprint faithful to the selected activities and the time budget.
-        - If this is one activity and plan depth is comprehensive, it is allowed to describe internal structure inside that single workout type.
+        - If plan depth is comprehensive, it is allowed to describe internal structure inside each selected workout type.
         - Use recovery, readiness, strain, and recent workouts to shape the structure, but do not turn the entire plan into generic conservative recovery language.
         - Make the block titles concise and useful.
         - Keep the focus and cue practical.
         - The summary should reflect today, not a generic training plan.
         """
+    }
+
+    private func microStagePrompt(
+        for activity: ProgramWorkoutType,
+        request: ProgramPlannerRequest,
+        existingStages: [ProgramCustomWorkoutMicroStage],
+        note: String,
+        totalMinutes: Int
+    ) -> String {
+        let currentStages = existingStages.map(\.displaySummary).joined(separator: " | ")
+        let recent = request.recentWorkouts.prefix(4).map(describeProgramWorkout).joined(separator: " ")
+        let supportedGoals = Array(Set(ProgramMicroStageRole.allCases.flatMap { activity.supportedMicroStageGoals(for: $0) }))
+            .map(\.rawValue)
+            .sorted()
+            .joined(separator: ", ")
+
+        return """
+        Rebuild the workout stages for this activity using the user's note.
+
+        Activity: \(activity.title)
+        Supported goals: \(supportedGoals)
+        Planning mode: \(request.mode.title)
+        Available minutes for this activity: \(totalMinutes)
+        Recovery score: \(Int(request.recoveryScore.rounded())) / 100
+        Readiness score: \(Int(request.readinessScore.rounded())) / 100
+        Strain score: \(Int(request.strainScore.rounded())) / 21
+        User note: \(note)
+        Current stages: \(currentStages)
+        Target preference: \(request.target?.metric.title ?? "none") \(request.target?.descriptor ?? "")
+        Route preference: \(request.route?.name ?? "none"), repeats \(request.route?.repeats ?? 0)
+        Recent workouts: \(recent.isEmpty ? "none loaded" : recent)
+
+        Return a materially updated stage structure that responds directly to the user's note.
+
+        Hard constraints:
+        - Keep the total session close to \(totalMinutes) minutes.
+        - Keep the workout inside the selected activity. Do not invent a second sport.
+        - Use only these roles: warmup, goal, steady, work, recovery, cooldown.
+        - Use only supported goals.
+        - Do not add warmup or cooldown unless the note explicitly asks for them.
+        - warmup can only use time or distance.
+        - goal can only use time, distance, or energy.
+        - steady means maintain a range.
+        - work means hold at or above a target.
+        - recovery means stay below a target or keep it easy.
+        - If two or more stages alternate as a repeat set, give them the same non-empty repeatSetLabel and the same repeat count.
+        - A stage should have a clear title, role, goal, planned minutes, repeats, and short coaching notes.
+        - If the note asks for more recovery, add space or easier control instead of only renaming stages.
+        - If the note asks for more intensity, shift the work stages, targets, or repeat design accordingly.
+        - If the note asks for longer warmup or cooldown, actually change the time distribution.
+        - Prefer 3 to 7 stages unless the note clearly calls for simpler structure.
+        """
+    }
+
+    private func fallbackRegeneratedMicroStages(
+        for activity: ProgramWorkoutType,
+        request: ProgramPlannerRequest,
+        existingStages: [ProgramCustomWorkoutMicroStage],
+        note: String,
+        totalMinutes: Int
+    ) -> [ProgramCustomWorkoutMicroStage] {
+        var stages: [ProgramCustomWorkoutMicroStage] = existingStages.isEmpty
+            ? []
+            : existingStages.map { stage in
+                var updated = stage
+                updated.title = stage.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                updated.notes = stage.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                updated.plannedMinutes = max(stage.plannedMinutes, 1)
+                updated.repeats = min(max(stage.repeats, 1), 12)
+                return updated
+            }
+
+        if stages.isEmpty {
+            stages = [
+                ProgramCustomWorkoutMicroStage(
+                    title: activity.title,
+                    notes: "",
+                    role: .goal,
+                    goal: fallbackGoal(for: request, activity: activity),
+                    plannedMinutes: max(totalMinutes, 5),
+                    repeats: 1,
+                    targetValueText: normalizedTargetDescriptor(from: request, fallback: ""),
+                    repeatSetLabel: "",
+                    targetBehavior: .completionGoal
+                )
+            ]
+        }
+
+        let normalized = note.lowercased()
+        guard !normalized.isEmpty else {
+            return scaledStages(stages.map { normalizeStage($0, for: activity) }, targetTotalMinutes: totalMinutes)
+        }
+
+        if !normalized.contains("warm") {
+            stages.removeAll { $0.role == .warmup }
+        }
+        if !normalized.contains("cool") {
+            stages.removeAll { $0.role == .cooldown }
+        }
+        if stages.isEmpty {
+            stages = [
+                ProgramCustomWorkoutMicroStage(
+                    title: "Main Goal",
+                    notes: "",
+                    role: .goal,
+                    goal: fallbackGoal(for: request, activity: activity),
+                    plannedMinutes: max(totalMinutes, 5),
+                    repeats: 1,
+                    targetValueText: normalizedTargetDescriptor(from: request, fallback: ""),
+                    repeatSetLabel: "",
+                    targetBehavior: .completionGoal
+                )
+            ]
+        }
+
+        if let coupledStages = coupledCircuitStages(from: normalized, activity: activity, request: request) {
+            return scaledStages(coupledStages.map { normalizeStage($0, for: activity) }, targetTotalMinutes: totalMinutes)
+        }
+
+        if normalized.contains("simpl") || normalized.contains("cleaner") || normalized.contains("less clutter") {
+            stages = collapseStages(stages)
+        }
+
+        if normalized.contains("more recovery") || normalized.contains("easier") || normalized.contains("smoother") {
+            stages = addRecoverySupport(to: stages)
+        }
+
+        if normalized.contains("longer warmup") || normalized.contains("more warmup") {
+            stages = shiftMinutes(in: stages, matching: .warmup, delta: 4)
+        }
+
+        if normalized.contains("shorter warmup") {
+            stages = shiftMinutes(in: stages, matching: .warmup, delta: -3)
+        }
+
+        if normalized.contains("longer cooldown") || normalized.contains("extend cooldown") {
+            stages = shiftMinutes(in: stages, matching: .cooldown, delta: 5)
+        }
+
+        if normalized.contains("shorter cooldown") {
+            stages = shiftMinutes(in: stages, matching: .cooldown, delta: -4)
+        }
+
+        if normalized.contains("power") {
+            stages = applyGoal(.power, label: normalizedTargetDescriptor(from: request, fallback: "220-260 W"), to: stages)
+        } else if normalized.contains("pace") {
+            stages = applyGoal(.pace, label: normalizedTargetDescriptor(from: request, fallback: "steady pace band"), to: stages)
+        } else if normalized.contains("speed") || normalized.contains("mph") || normalized.contains("km/h") || normalized.contains("kph") {
+            stages = applyGoal(.speed, label: normalizedTargetDescriptor(from: request, fallback: "18-20 mph"), to: stages)
+        } else if normalized.contains("cadence") {
+            stages = applyGoal(.cadence, label: normalizedTargetDescriptor(from: request, fallback: "high cadence"), to: stages)
+        } else if normalized.contains("zone") || normalized.contains("heart rate") {
+            stages = applyGoal(.heartRateZone, label: normalizedTargetDescriptor(from: request, fallback: "Zone 2"), to: stages)
+        }
+
+        if normalized.contains("more intensity") || normalized.contains("harder") || normalized.contains("sharper") {
+            stages = sharpenWorkStages(stages)
+        }
+
+        if normalized.contains("less intensity") || normalized.contains("softer") || normalized.contains("controlled") {
+            stages = softenWorkStages(stages)
+        }
+
+        if normalized.contains("fewer repeats") {
+            stages = adjustRepeats(stages, delta: -1)
+        } else if normalized.contains("more repeats") {
+            stages = adjustRepeats(stages, delta: 1)
+        } else if let requestedRepeats = note.firstPositiveInteger {
+            stages = setRepeats(stages, repeats: requestedRepeats)
+        }
+
+        return scaledStages(stages.map { normalizeStage($0, for: activity) }, targetTotalMinutes: totalMinutes)
+    }
+
+    private func sanitizedGeneratedMicroStages(
+        _ generatedStages: [ProgramGeneratedMicroStage],
+        for activity: ProgramWorkoutType,
+        request: ProgramPlannerRequest,
+        fallbackStages: [ProgramCustomWorkoutMicroStage],
+        totalMinutes: Int
+    ) -> [ProgramCustomWorkoutMicroStage] {
+        let supportedGoals = Set(ProgramMicroStageRole.allCases.flatMap { role in
+            activity.supportedMicroStageGoals(for: role).map(\.rawValue)
+        })
+        let cleaned = generatedStages.compactMap { stage -> ProgramCustomWorkoutMicroStage? in
+            let role = ProgramMicroStageRole(storageValue: stage.roleRawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) ?? .work
+            let goalRawValue = stage.goalRawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parsedGoal = ProgramMicroStageGoal(rawValue: goalRawValue)
+            let goal: ProgramMicroStageGoal
+            if let parsedGoal, supportedGoals.contains(parsedGoal.rawValue) || parsedGoal == .open || parsedGoal == .time {
+                goal = parsedGoal
+            } else {
+                goal = fallbackGoal(for: request, activity: activity)
+            }
+
+            let title = stage.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return nil }
+
+            var targetValueText = stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if goal.requiresDescriptorInput && targetValueText.isEmpty {
+                targetValueText = defaultTargetText(for: goal, request: request)
+            }
+
+            return ProgramCustomWorkoutMicroStage(
+                title: title,
+                notes: stage.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Coach-adjusted stage." : stage.notes.trimmingCharacters(in: .whitespacesAndNewlines),
+                role: role,
+                goal: goal,
+                plannedMinutes: min(max(stage.plannedMinutes, 1), 180),
+                repeats: min(max(stage.repeats, 1), 12),
+                targetValueText: targetValueText,
+                repeatSetLabel: stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+                targetBehavior: role.defaultTargetBehavior
+            )
+        }
+
+        guard !cleaned.isEmpty else { return fallbackStages }
+        let hydrated = hydratedCircuitStages(cleaned)
+        return scaledStages(hydrated.map { normalizeStage($0, for: activity) }, targetTotalMinutes: totalMinutes)
+    }
+
+    private func totalStageMinutes(_ stages: [ProgramCustomWorkoutMicroStage]) -> Int {
+        max(stages.reduce(0) { $0 + max($1.plannedMinutes, 1) * max($1.repeats, 1) }, 1)
+    }
+
+    private func scaledStages(_ stages: [ProgramCustomWorkoutMicroStage], targetTotalMinutes: Int) -> [ProgramCustomWorkoutMicroStage] {
+        guard !stages.isEmpty else { return stages }
+        let safeTarget = max(targetTotalMinutes, 5)
+        let currentTotal = totalStageMinutes(stages)
+        guard currentTotal != safeTarget else { return stages }
+
+        let scale = Double(safeTarget) / Double(max(currentTotal, 1))
+        var updated = stages.map { stage -> ProgramCustomWorkoutMicroStage in
+            var stage = stage
+            stage.plannedMinutes = min(max(Int((Double(max(stage.plannedMinutes, 1)) * scale).rounded()), 1), 180)
+            return stage
+        }
+
+        var difference = safeTarget - totalStageMinutes(updated)
+        var index = 0
+        while difference != 0 && !updated.isEmpty {
+            let adjustedIndex = index % updated.count
+            if difference > 0 {
+                updated[adjustedIndex].plannedMinutes += 1
+                difference -= max(updated[adjustedIndex].repeats, 1)
+            } else if updated[adjustedIndex].plannedMinutes > 1 {
+                updated[adjustedIndex].plannedMinutes -= 1
+                difference += max(updated[adjustedIndex].repeats, 1)
+            }
+            index += 1
+            if index > 500 { break }
+        }
+
+        return updated
+    }
+
+    private func inferredCircuitGroups(
+        from stages: [ProgramCustomWorkoutMicroStage],
+        existing: [ProgramWorkoutCircuitGroup]
+    ) -> [ProgramWorkoutCircuitGroup] {
+        let inferred = Dictionary(grouping: hydratedCircuitStages(stages, existingGroups: existing).compactMap { stage -> (UUID, String, Int)? in
+            guard let groupID = stage.circuitGroupID else { return nil }
+            return (groupID, stage.repeatSetLabel.isEmpty ? "Coupled Circuit" : stage.repeatSetLabel, max(stage.repeats, 1))
+        }, by: { $0.0 }).values.compactMap { entries -> ProgramWorkoutCircuitGroup? in
+            guard let first = entries.first else { return nil }
+            if let existingGroup = existing.first(where: { $0.id == first.0 }) {
+                return ProgramWorkoutCircuitGroup(id: existingGroup.id, title: existingGroup.title, repeats: first.2)
+            }
+            return ProgramWorkoutCircuitGroup(id: first.0, title: first.1, repeats: first.2)
+        }
+        return inferred.sorted { $0.title < $1.title }
+    }
+
+    private func hydratedCircuitStages(
+        _ stages: [ProgramCustomWorkoutMicroStage],
+        existingGroups: [ProgramWorkoutCircuitGroup] = []
+    ) -> [ProgramCustomWorkoutMicroStage] {
+        guard !stages.isEmpty else { return stages }
+
+        var updated = stages
+        let groupsByID = Dictionary(uniqueKeysWithValues: existingGroups.map { ($0.id, $0) })
+        let groupsByTitle = Dictionary(uniqueKeysWithValues: existingGroups.map {
+            ($0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), $0)
+        })
+
+        for index in updated.indices {
+            if let groupID = updated[index].circuitGroupID,
+               let existing = groupsByID[groupID] {
+                updated[index].repeatSetLabel = existing.title
+                updated[index].repeats = max(updated[index].repeats, existing.repeats)
+            }
+        }
+
+        let groupedByLabel = Dictionary(grouping: updated.indices.filter {
+            updated[$0].circuitGroupID == nil &&
+            !updated[$0].repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }, by: {
+            updated[$0].repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        })
+
+        for (normalizedLabel, indices) in groupedByLabel where indices.count >= 2 {
+            guard let firstIndex = indices.first else { continue }
+            let rawLabel = updated[firstIndex].repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            let group = groupsByTitle[normalizedLabel] ?? ProgramWorkoutCircuitGroup(
+                title: rawLabel.isEmpty ? "Coupled Circuit" : rawLabel,
+                repeats: indices.map { max(updated[$0].repeats, 1) }.max() ?? 1
+            )
+            for index in indices {
+                updated[index].circuitGroupID = group.id
+                updated[index].repeatSetLabel = group.title
+                updated[index].repeats = max(updated[index].repeats, group.repeats)
+            }
+        }
+
+        return updated
+    }
+
+    private func coupledCircuitStages(
+        from normalizedNote: String,
+        activity: ProgramWorkoutType,
+        request: ProgramPlannerRequest
+    ) -> [ProgramCustomWorkoutMicroStage]? {
+        guard normalizedNote.contains("coupled") || normalizedNote.contains("paired with") || normalizedNote.contains("alternating with") else {
+            return nil
+        }
+
+        let repeats = min(max(normalizedNote.firstPositiveInteger ?? 4, 1), 12)
+        let group = ProgramWorkoutCircuitGroup(title: "Coupled Circuit", repeats: repeats)
+        let steadyGoal: ProgramMicroStageGoal
+        if normalizedNote.contains("cadence") {
+            steadyGoal = .cadence
+        } else if normalizedNote.contains("power") {
+            steadyGoal = .power
+        } else if normalizedNote.contains("pace") {
+            steadyGoal = .pace
+        } else if normalizedNote.contains("speed") || normalizedNote.contains("mph") || normalizedNote.contains("kph") || normalizedNote.contains("km/h") {
+            steadyGoal = .speed
+        } else {
+            steadyGoal = preferredSteadyOrWorkGoal(for: activity)
+        }
+
+        let workMinutes = durationMinutes(in: normalizedNote, fallback: 5)
+        let recoveryMinutes = secondDurationMinutes(in: normalizedNote, fallback: 1)
+        let descriptor = descriptorText(in: normalizedNote, for: steadyGoal, fallback: defaultDescriptor(for: steadyGoal))
+
+        return [
+            ProgramCustomWorkoutMicroStage(
+                title: "Circuit Stage",
+                notes: "Maintain the assigned target for each repeat.",
+                role: normalizedNote.contains("above") || normalizedNote.contains("over") ? .work : .steady,
+                goal: steadyGoal,
+                plannedMinutes: workMinutes,
+                repeats: repeats,
+                targetValueText: descriptor,
+                repeatSetLabel: group.title,
+                targetBehavior: (normalizedNote.contains("above") || normalizedNote.contains("over")) ? .aboveThreshold : .range,
+                circuitGroupID: group.id
+            ),
+            ProgramCustomWorkoutMicroStage(
+                title: "Circuit Recovery",
+                notes: "Tone it down and reset before the next repeat.",
+                role: .recovery,
+                goal: allowedRecoveryGoal(in: normalizedNote, activity: activity),
+                plannedMinutes: recoveryMinutes,
+                repeats: repeats,
+                targetValueText: normalizedNote.contains("zone") ? "Zone 2" : "",
+                repeatSetLabel: group.title,
+                targetBehavior: .belowThreshold,
+                circuitGroupID: group.id
+            )
+        ]
+    }
+
+    private func durationMinutes(in text: String, fallback: Int) -> Int {
+        let matches = text.captureGroups(for: #"(\d+)\s*(minute|min)"#)
+        if let first = matches.first, let value = Int(first[0]) {
+            return value
+        }
+        return fallback
+    }
+
+    private func secondDurationMinutes(in text: String, fallback: Int) -> Int {
+        let matches = text.captureGroups(for: #"(\d+)\s*(minute|min)"#)
+        if matches.count > 1, let value = Int(matches[1][0]) {
+            return value
+        }
+        return fallback
+    }
+
+    private func descriptorText(in text: String, for goal: ProgramMicroStageGoal, fallback: String) -> String {
+        switch goal {
+        case .heartRateZone:
+            if let zone = text.captureGroups(for: #"zone\s*(\d+)"#).first?.first {
+                return "Zone \(zone)"
+            }
+        case .power:
+            if let range = text.captureGroups(for: #"(\d+\s*-\s*\d+)\s*w"#).first?.first {
+                return "\(range) W"
+            }
+            if let threshold = text.captureGroups(for: #"(?:above|over|under)\s*(\d+)\s*w"#).first?.first {
+                return "\(threshold) W"
+            }
+        case .cadence:
+            if let range = text.captureGroups(for: #"(\d+\s*-\s*\d+)\s*rpm"#).first?.first {
+                return "\(range) rpm"
+            }
+        case .pace:
+            if let pace = text.captureGroups(for: #"(\d+:\d+\s*/\s*(?:mi|km))"#).first?.first {
+                return pace
+            }
+        case .speed:
+            if let range = text.captureGroups(for: #"(\d+\s*-\s*\d+)\s*(mph|kph|km/h)"#).first {
+                return "\(range[0]) \(range[1])"
+            }
+        default:
+            break
+        }
+        return fallback
+    }
+
+    private func allowedRecoveryGoal(in text: String, activity: ProgramWorkoutType) -> ProgramMicroStageGoal {
+        if text.contains("power"), activity.supportedMicroStageGoals(for: .recovery).contains(.power) {
+            return .power
+        }
+        if text.contains("cadence"), activity.supportedMicroStageGoals(for: .recovery).contains(.cadence) {
+            return .cadence
+        }
+        if (text.contains("speed") || text.contains("mph") || text.contains("kph") || text.contains("km/h")),
+           activity.supportedMicroStageGoals(for: .recovery).contains(.speed) {
+            return .speed
+        }
+        if text.contains("pace"), activity.supportedMicroStageGoals(for: .recovery).contains(.pace) {
+            return .pace
+        }
+        if text.contains("distance"), activity.supportedMicroStageGoals(for: .recovery).contains(.distance) {
+            return .distance
+        }
+        return .time
+    }
+
+    private func collapseStages(_ stages: [ProgramCustomWorkoutMicroStage]) -> [ProgramCustomWorkoutMicroStage] {
+        guard stages.count > 3 else { return stages }
+        let workStages = stages.filter { $0.role == .work || $0.role == .steady }
+        var rebuilt: [ProgramCustomWorkoutMicroStage] = []
+        if let warmup = stages.first(where: { $0.role == .warmup }) {
+            rebuilt.append(warmup)
+        }
+        if let primaryWork = workStages.first {
+            var stage = primaryWork
+            stage.title = "Main Set"
+            rebuilt.append(stage)
+        }
+        if let cooldown = stages.last(where: { $0.role == .cooldown }) {
+            rebuilt.append(cooldown)
+        }
+        return rebuilt.isEmpty ? stages : rebuilt
+    }
+
+    private func addRecoverySupport(to stages: [ProgramCustomWorkoutMicroStage]) -> [ProgramCustomWorkoutMicroStage] {
+        var updated = stages
+        if let recoveryIndex = updated.firstIndex(where: { $0.role == .recovery }) {
+            updated[recoveryIndex].plannedMinutes += 2
+            updated[recoveryIndex].notes = "Bring breathing down before the next push."
+        } else if let workIndex = updated.firstIndex(where: { $0.role == .work }) {
+            let recovery = ProgramCustomWorkoutMicroStage(
+                title: "Reset",
+                notes: "Bring breathing down before the next push.",
+                role: .recovery,
+                goal: .heartRateZone,
+                plannedMinutes: 3,
+                repeats: updated[workIndex].repeats,
+                targetValueText: "Zone 2",
+                repeatSetLabel: updated[workIndex].repeatSetLabel,
+                targetBehavior: .belowThreshold,
+                circuitGroupID: updated[workIndex].circuitGroupID
+            )
+            updated.insert(recovery, at: min(workIndex + 1, updated.count))
+        }
+        return updated
+    }
+
+    private func shiftMinutes(
+        in stages: [ProgramCustomWorkoutMicroStage],
+        matching role: ProgramMicroStageRole,
+        delta: Int
+    ) -> [ProgramCustomWorkoutMicroStage] {
+        var updated = stages
+        guard let index = updated.firstIndex(where: { $0.role == role }) else { return updated }
+        updated[index].plannedMinutes = max(updated[index].plannedMinutes + delta, 1)
+        return updated
+    }
+
+    private func applyGoal(
+        _ goal: ProgramMicroStageGoal,
+        label: String,
+        to stages: [ProgramCustomWorkoutMicroStage]
+    ) -> [ProgramCustomWorkoutMicroStage] {
+        stages.map { stage in
+            var updated = stage
+            if updated.role == .work || updated.role == .steady {
+                updated.goal = goal
+                updated.targetBehavior = updated.role == .steady ? .range : .aboveThreshold
+                if !label.isEmpty {
+                    updated.targetValueText = label
+                }
+            }
+            return updated
+        }
+    }
+
+    private func sharpenWorkStages(_ stages: [ProgramCustomWorkoutMicroStage]) -> [ProgramCustomWorkoutMicroStage] {
+        stages.map { stage in
+            var updated = stage
+            if updated.role == .work {
+                updated.plannedMinutes = max(updated.plannedMinutes + 1, 1)
+                updated.notes = "Coach pushed this stage to be more decisive and specific."
+            }
+            return updated
+        }
+    }
+
+    private func softenWorkStages(_ stages: [ProgramCustomWorkoutMicroStage]) -> [ProgramCustomWorkoutMicroStage] {
+        stages.map { stage in
+            var updated = stage
+            if updated.role == .work {
+                updated.plannedMinutes = max(updated.plannedMinutes - 1, 1)
+                updated.notes = "Coach softened this stage to keep the session more controlled."
+            }
+            return updated
+        }
+    }
+
+    private func adjustRepeats(_ stages: [ProgramCustomWorkoutMicroStage], delta: Int) -> [ProgramCustomWorkoutMicroStage] {
+        stages.map { stage in
+            var updated = stage
+            if updated.role == .work || updated.role == .recovery {
+                updated.repeats = min(max(updated.repeats + delta, 1), 12)
+            }
+            return updated
+        }
+    }
+
+    private func setRepeats(_ stages: [ProgramCustomWorkoutMicroStage], repeats: Int) -> [ProgramCustomWorkoutMicroStage] {
+        stages.map { stage in
+            var updated = stage
+            if updated.role == .work || updated.role == .recovery {
+                updated.repeats = min(max(repeats, 1), 12)
+            }
+            return updated
+        }
+    }
+
+    private func defaultTargetText(for goal: ProgramMicroStageGoal, request: ProgramPlannerRequest) -> String {
+        switch goal {
+        case .heartRateZone:
+            return request.target?.metric == .heartRateZone ? request.target?.descriptor ?? "Zone 2" : "Zone 2"
+        case .power, .pace, .speed, .cadence, .distance, .energy:
+            let descriptor = request.target?.descriptor.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return descriptor.isEmpty ? goal.placeholder : descriptor
+        case .open, .time:
+            return ""
+        }
+    }
+
+    private func normalizedTargetDescriptor(from request: ProgramPlannerRequest, fallback: String) -> String {
+        let descriptor = request.target?.descriptor.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return descriptor.isEmpty ? fallback : descriptor
+    }
+
+    private func allowedGoals(for role: ProgramMicroStageRole, activity: ProgramWorkoutType) -> [ProgramMicroStageGoal] {
+        activity.supportedMicroStageGoals(for: role)
+    }
+
+    private func preferredSteadyOrWorkGoal(for activity: ProgramWorkoutType) -> ProgramMicroStageGoal {
+        allowedGoals(for: .steady, activity: activity).first ?? .time
+    }
+
+    private func defaultDescriptor(for goal: ProgramMicroStageGoal) -> String {
+        switch goal {
+        case .heartRateZone:
+            return "Zone 2"
+        case .power:
+            return "220-260 W"
+        case .pace:
+            return "7:10-7:30 /mi"
+        case .speed:
+            return "18-20 mph"
+        case .cadence:
+            return "100-110 rpm"
+        case .distance:
+            return "5 km"
+        case .energy:
+            return "300 kcal"
+        case .open, .time:
+            return ""
+        }
+    }
+
+    private func normalizeStage(_ stage: ProgramCustomWorkoutMicroStage, for activity: ProgramWorkoutType?) -> ProgramCustomWorkoutMicroStage {
+        guard let activity else { return stage }
+        var updated = stage
+        let allowed = allowedGoals(for: updated.role, activity: activity)
+        if !allowed.contains(updated.goal) {
+            updated.goal = allowed.first ?? .time
+        }
+        updated.targetBehavior = updated.role.defaultTargetBehavior
+        if updated.goal.requiresDescriptorInput && updated.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.targetValueText = defaultDescriptor(for: updated.goal)
+        }
+        if !updated.goal.requiresDescriptorInput {
+            updated.targetValueText = ""
+        }
+        if updated.circuitGroupID == nil {
+            updated.repeatSetLabel = ""
+        }
+        return updated
+    }
+
+    private func fallbackGoal(for request: ProgramPlannerRequest, activity: ProgramWorkoutType) -> ProgramMicroStageGoal {
+        let supportedGoals = ProgramMicroStageGoal.allCases.filter { goal in
+            ProgramMicroStageRole.allCases.contains { activity.supportedMicroStageGoals(for: $0).contains(goal) }
+        }
+
+        if let target = request.target {
+            switch target.metric {
+            case .pace:
+                if supportedGoals.contains(.pace) { return .pace }
+                if supportedGoals.contains(.speed) { return .speed }
+            case .power:
+                if supportedGoals.contains(.power) { return .power }
+            case .heartRateZone:
+                if supportedGoals.contains(.heartRateZone) { return .heartRateZone }
+            case .cadence:
+                if supportedGoals.contains(.cadence) { return .cadence }
+            case .distance:
+                if supportedGoals.contains(.distance) { return .distance }
+            }
+        }
+        if supportedGoals.contains(.time) {
+            return .time
+        }
+        return supportedGoals.first ?? .time
     }
 }
 
@@ -3326,6 +5388,59 @@ Never add cooldown, warmup, stretching, yoga, mobility, or extra sports unless t
 Do not try to optimize the workout by sneaking in things the user did not ask for.
 Each block should have a clear purpose and fit the available minutes.
 """
+
+private let programBuilderMicroStageInstructions = """
+You rebuild workout micro-stages from the user's note and current training context.
+Make real structural changes, not cosmetic rewrites.
+Keep the session faithful to the selected activity, total time, and requested focus.
+When the user asks for more recovery, intensity, warmup, cooldown, or different emphasis, change the stage durations, repeat structure, goals, and labels accordingly.
+Use short practical notes.
+"""
+
+private func dismissProgramBuilderKeyboard() {
+    #if canImport(UIKit)
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    #endif
+}
+
+#if canImport(FoundationModels)
+@available(iOS 26.0, *)
+@Generable(description: "A regenerated set of workout micro-stages.")
+struct ProgramGeneratedMicroStagePlan {
+    @Generable(description: "One regenerated workout micro-stage.")
+    struct Stage {
+        var title: String
+        var notes: String
+        var roleRawValue: String
+        var goalRawValue: String
+        var plannedMinutes: Int
+        var repeats: Int
+        var targetValueText: String
+        var repeatSetLabel: String
+    }
+
+    var stages: [Stage]
+}
+
+typealias ProgramGeneratedMicroStage = ProgramGeneratedMicroStagePlan.Stage
+#else
+struct ProgramGeneratedMicroStagePlan {
+    struct Stage {
+        var title: String
+        var notes: String
+        var roleRawValue: String
+        var goalRawValue: String
+        var plannedMinutes: Int
+        var repeats: Int
+        var targetValueText: String
+        var repeatSetLabel: String
+    }
+
+    var stages: [Stage]
+}
+
+typealias ProgramGeneratedMicroStage = ProgramGeneratedMicroStagePlan.Stage
+#endif
 
 #if canImport(FoundationModels)
 @available(iOS 26.0, *)
@@ -3422,6 +5537,20 @@ private extension String {
             .first { !$0.isEmpty }
         guard let digits, let value = Int(digits), value > 0 else { return nil }
         return value
+    }
+
+    func captureGroups(for pattern: String) -> [[String]] {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let nsRange = NSRange(startIndex..<endIndex, in: self)
+        return regex.matches(in: self, options: [], range: nsRange).map { match in
+            guard match.numberOfRanges > 1 else { return [] }
+            return (1..<match.numberOfRanges).compactMap { index in
+                guard let range = Range(match.range(at: index), in: self) else { return nil }
+                return String(self[range])
+            }
+        }
     }
 }
 

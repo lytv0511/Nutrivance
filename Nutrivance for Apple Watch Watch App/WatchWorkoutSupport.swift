@@ -91,14 +91,11 @@ struct WatchCustomWorkoutDraft: Hashable {
         }
     }
 
-    var workoutPlan: WorkoutPlan {
-        let stage = stages.first ?? WatchCustomWorkoutStage()
-        let customWorkout = CustomWorkout(
-            activity: stage.activity,
-            location: stage.location.hkValue,
-            displayName: displayName
-        )
-        return WorkoutPlan(.custom(customWorkout))
+    var workoutPlan: WorkoutPlan? {
+        guard let workout = watchCustomWorkout(displayName: displayName, stages: stages) else {
+            return nil
+        }
+        return WorkoutPlan(.custom(workout))
     }
 }
 
@@ -176,6 +173,57 @@ extension WatchCustomWorkoutDraft {
             )
         }
     }
+}
+
+private func watchCustomWorkout(displayName: String, stages: [WatchCustomWorkoutStage]) -> CustomWorkout? {
+    let stageList = stages.isEmpty ? [WatchCustomWorkoutStage()] : stages
+    guard let firstStage = stageList.first else { return nil }
+    let anchorActivity = firstStage.activity
+    let anchorLocation = firstStage.location.hkValue
+
+    guard stageList.allSatisfy({ $0.activity == anchorActivity && $0.location.hkValue == anchorLocation }) else {
+        return nil
+    }
+
+    let blocks = stageList.map { stage in
+        IntervalBlock(
+            steps: [
+                IntervalStep(
+                    .work,
+                    step: WorkoutStep(
+                        goal: watchWorkoutGoal(for: stage),
+                        alert: watchWorkoutAlert(for: stage),
+                        displayName: stage.title
+                    )
+                )
+            ],
+            iterations: 1
+        )
+    }
+
+    return CustomWorkout(
+        activity: anchorActivity,
+        location: anchorLocation,
+        displayName: displayName,
+        warmup: nil,
+        blocks: blocks,
+        cooldown: nil
+    )
+}
+
+private func watchWorkoutGoal(for stage: WatchCustomWorkoutStage) -> WorkoutGoal {
+    switch stage.goalMode {
+    case .open, .time:
+        return .time(Double(max(stage.plannedMinutes, 1)), .minutes)
+    case .distance:
+        return .distance(max(stage.goalValue, 0.1), .kilometers)
+    case .energy:
+        return .energy(max(stage.goalValue, 1), .kilocalories)
+    }
+}
+
+private func watchWorkoutAlert(for stage: WatchCustomWorkoutStage) -> (any WorkoutAlert)? {
+    nil
 }
 
 struct WatchLiveMetric: Identifiable, Hashable {
@@ -760,8 +808,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         guard #available(watchOS 10.0, *) else { return }
 
         Task {
-            guard customDraft.stages.count <= 1 else {
-                statusMessage = "Scheduling supports one custom stage. Start multi-stage plans live on watch."
+            guard let workoutPlan = customDraft.workoutPlan else {
+                statusMessage = "WorkoutKit custom workouts need one shared activity and location across stages."
                 return
             }
             if schedulerAuthorizationState != .authorized {
@@ -774,7 +822,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
             let date = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
             let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-            await WorkoutScheduler.shared.schedule(customDraft.workoutPlan, at: components)
+            await WorkoutScheduler.shared.schedule(workoutPlan, at: components)
             scheduledPlans = await WorkoutScheduler.shared.scheduledWorkouts
             statusMessage = "Custom workout scheduled for tomorrow."
         }
@@ -2098,12 +2146,24 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     plannedMinutes: plannedMinutes,
                     repeats: repeats,
                     repeatSetLabel: stagePayload["repeatSetLabel"] as? String,
+                    targetBehaviorRawValue: stagePayload["targetBehavior"] as? String,
+                    circuitGroupID: UUID(uuidString: stagePayload["circuitGroupID"] as? String ?? ""),
                     objective: workoutObjective(
                         goalRawValue: goal,
                         plannedMinutes: plannedMinutes,
                         targetValueText: targetValueText
                     )
                 )
+            }
+
+            let circuitGroups = (phasePayload["circuitGroups"] as? [[String: Any]] ?? []).compactMap { payload -> WatchProgramCircuitGroupPayload? in
+                guard let idString = payload["id"] as? String,
+                      let id = UUID(uuidString: idString),
+                      let title = payload["title"] as? String,
+                      let repeats = payload["repeats"] as? Int else {
+                    return nil
+                }
+                return WatchProgramCircuitGroupPayload(id: id, title: title, repeats: repeats)
             }
 
             return WatchProgramPhasePayload(
@@ -2115,7 +2175,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 locationRawValue: locationRawValue,
                 plannedMinutes: plannedMinutes,
                 objective: WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(plannedMinutes, 1)), label: "Time"),
-                microStages: stagePayloads.isEmpty ? nil : stagePayloads
+                microStages: stagePayloads.isEmpty ? nil : stagePayloads,
+                circuitGroups: circuitGroups.isEmpty ? nil : circuitGroups
             )
         }
     }
@@ -2132,7 +2193,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return WatchPhaseObjectivePayload(kind: .energy, targetValue: max(targetValueText.firstNumberValue ?? Double(max(plannedMinutes * 8, 40)), 1), label: targetValueText)
         case "heartRateZone":
             return WatchPhaseObjectivePayload(kind: .heartRateZone, targetValue: Double(max(plannedMinutes, 1)), secondaryValue: targetValueText.firstNumberValue ?? 3, label: targetValueText)
-        case "power", "pace", "cadence":
+        case "power", "pace", "speed", "cadence":
             return WatchPhaseObjectivePayload(kind: .pacer, targetValue: Double(max(plannedMinutes, 1)), label: targetValueText.isEmpty ? goalRawValue : targetValueText)
         default:
             return WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(plannedMinutes, 1)), label: "Time")
@@ -2164,9 +2225,17 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         location: HKWorkoutSessionLocationType,
         phases: [WatchProgramPhasePayload]
     ) -> WorkoutPlan? {
-        let primaryPhase = phases.first ?? currentPhase
-        guard let primaryPhase else { return nil }
-        let microStages = primaryPhase.microStages ?? []
+        let resolvedPhases = phases.isEmpty ? currentPhase.map { [$0] } ?? [] : phases
+        guard let primaryPhase = resolvedPhases.first else { return nil }
+
+        guard resolvedPhases.allSatisfy({
+            HKWorkoutActivityType(rawValue: $0.activityRawValue) == activity &&
+            HKWorkoutSessionLocationType(rawValue: $0.locationRawValue) == location
+        }) else {
+            return nil
+        }
+
+        let microStages = resolvedPhases.flatMap { workoutKitMicroStages(from: $0) }
         if microStages.isEmpty {
             let workout = SingleGoalWorkout(
                 activity: activity,
@@ -2205,11 +2274,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         while index < mainStages.count {
             let stage = mainStages[index]
             let repeatLabel = stage.repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let circuitKey = stage.circuitGroupID?.uuidString ?? repeatLabel
             var groupedStages = [stage]
-            if !repeatLabel.isEmpty {
+            if !circuitKey.isEmpty {
                 var nextIndex = index + 1
                 while nextIndex < mainStages.count,
-                      (mainStages[nextIndex].repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == repeatLabel,
+                      (mainStages[nextIndex].circuitGroupID?.uuidString ?? mainStages[nextIndex].repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == circuitKey,
                       mainStages[nextIndex].repeats == stage.repeats {
                     groupedStages.append(mainStages[nextIndex])
                     nextIndex += 1
@@ -2234,6 +2304,31 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             blocks: blocks,
             cooldown: cooldown.map(workoutStep(for:))
         )
+    }
+
+    private func workoutKitMicroStages(from phase: WatchProgramPhasePayload) -> [WatchProgramMicroStagePayload] {
+        if let microStages = phase.microStages, !microStages.isEmpty {
+            return microStages
+        }
+
+        let objective = phase.objective ?? WatchPhaseObjectivePayload(
+            kind: .time,
+            targetValue: Double(max(phase.plannedMinutes, 1)),
+            label: "Time"
+        )
+        return [
+            WatchProgramMicroStagePayload(
+                id: phase.id,
+                title: phase.title,
+                notes: phase.subtitle,
+                plannedMinutes: max(phase.plannedMinutes, 1),
+                repeats: 1,
+                repeatSetLabel: nil,
+                targetBehaviorRawValue: nil,
+                circuitGroupID: nil,
+                objective: objective
+            )
+        ]
     }
 
     private func workoutStep(for stage: WatchProgramMicroStagePayload) -> WorkoutStep {

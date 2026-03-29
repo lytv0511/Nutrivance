@@ -148,7 +148,15 @@ private struct WatchProgramMicroStagePayload: Codable {
     let plannedMinutes: Int
     let repeats: Int
     let repeatSetLabel: String?
+    let targetBehaviorRawValue: String?
+    let circuitGroupID: UUID?
     let objective: WatchPhaseObjectivePayload
+}
+
+private struct WatchProgramCircuitGroupPayload: Codable {
+    let id: UUID
+    let title: String
+    let repeats: Int
 }
 
 private struct WatchProgramPhasePayload: Codable {
@@ -161,6 +169,7 @@ private struct WatchProgramPhasePayload: Codable {
     let plannedMinutes: Int
     let objective: WatchPhaseObjectivePayload?
     let microStages: [WatchProgramMicroStagePayload]?
+    let circuitGroups: [WatchProgramCircuitGroupPayload]?
 
     init(
         id: UUID,
@@ -171,7 +180,8 @@ private struct WatchProgramPhasePayload: Codable {
         locationRawValue: Int,
         plannedMinutes: Int,
         objective: WatchPhaseObjectivePayload?,
-        microStages: [WatchProgramMicroStagePayload]? = nil
+        microStages: [WatchProgramMicroStagePayload]? = nil,
+        circuitGroups: [WatchProgramCircuitGroupPayload]? = nil
     ) {
         self.id = id
         self.title = title
@@ -182,6 +192,7 @@ private struct WatchProgramPhasePayload: Codable {
         self.plannedMinutes = plannedMinutes
         self.objective = objective
         self.microStages = microStages
+        self.circuitGroups = circuitGroups
     }
 }
 
@@ -415,8 +426,13 @@ private func watchProgramPlanPayload(from plan: ProgramWorkoutPlanRecord) -> Wat
                         plannedMinutes: max(stage.plannedMinutes, 1),
                         repeats: max(stage.repeats, 1),
                         repeatSetLabel: stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stage.repeatSetLabel,
+                        targetBehaviorRawValue: stage.targetBehavior.rawValue,
+                        circuitGroupID: stage.circuitGroupID,
                         objective: watchObjectivePayload(from: stage)
                     )
+                },
+                circuitGroups: $0.circuitGroups?.map {
+                    WatchProgramCircuitGroupPayload(id: $0.id, title: $0.title, repeats: $0.repeats)
                 }
             )
         },
@@ -449,7 +465,7 @@ private func watchObjectivePayload(from stage: ProgramCustomWorkoutMicroStage) -
             secondaryValue: stage.targetValueText.firstNumberValue ?? 3,
             label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-    case .power, .pace, .cadence:
+    case .power, .pace, .speed, .cadence:
         return WatchPhaseObjectivePayload(
             kind: .pacer,
             targetValue: Double(max(stage.plannedMinutes, 1)),

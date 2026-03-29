@@ -852,10 +852,19 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                             "notes": stage.notes,
                             "role": stage.role.rawValue,
                             "goal": stage.goal.rawValue,
+                            "targetBehavior": stage.targetBehavior.rawValue,
                             "plannedMinutes": stage.plannedMinutes,
                             "repeats": stage.repeats,
                             "targetValueText": stage.targetValueText,
-                            "repeatSetLabel": stage.repeatSetLabel
+                            "repeatSetLabel": stage.repeatSetLabel,
+                            "circuitGroupID": stage.circuitGroupID?.uuidString as Any
+                        ]
+                    },
+                    "circuitGroups": (phase.circuitGroups ?? []).map { group in
+                        [
+                            "id": group.id.uuidString,
+                            "title": group.title,
+                            "repeats": group.repeats
                         ]
                     }
                 ]
@@ -977,10 +986,19 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                         "notes": stage.notes,
                         "role": stage.role.rawValue,
                         "goal": stage.goal.rawValue,
+                        "targetBehavior": stage.targetBehavior.rawValue,
                         "plannedMinutes": stage.plannedMinutes,
                         "repeats": stage.repeats,
                         "targetValueText": stage.targetValueText,
-                        "repeatSetLabel": stage.repeatSetLabel
+                        "repeatSetLabel": stage.repeatSetLabel,
+                        "circuitGroupID": stage.circuitGroupID?.uuidString as Any
+                    ]
+                },
+                "circuitGroups": (phase.circuitGroups ?? []).map { group in
+                    [
+                        "id": group.id.uuidString,
+                        "title": group.title,
+                        "repeats": group.repeats
                     ]
                 }
             ]

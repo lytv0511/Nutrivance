@@ -126,7 +126,15 @@ struct WatchProgramMicroStagePayload: Codable, Identifiable, Hashable {
     let plannedMinutes: Int
     let repeats: Int
     let repeatSetLabel: String?
+    let targetBehaviorRawValue: String?
+    let circuitGroupID: UUID?
     let objective: WatchPhaseObjectivePayload
+}
+
+struct WatchProgramCircuitGroupPayload: Codable, Identifiable, Hashable {
+    let id: UUID
+    let title: String
+    let repeats: Int
 }
 
 struct WatchProgramPhasePayload: Codable, Identifiable, Hashable {
@@ -139,6 +147,7 @@ struct WatchProgramPhasePayload: Codable, Identifiable, Hashable {
     let plannedMinutes: Int
     let objective: WatchPhaseObjectivePayload?
     let microStages: [WatchProgramMicroStagePayload]?
+    let circuitGroups: [WatchProgramCircuitGroupPayload]?
 
     init(
         id: UUID,
@@ -149,7 +158,8 @@ struct WatchProgramPhasePayload: Codable, Identifiable, Hashable {
         locationRawValue: Int,
         plannedMinutes: Int,
         objective: WatchPhaseObjectivePayload?,
-        microStages: [WatchProgramMicroStagePayload]? = nil
+        microStages: [WatchProgramMicroStagePayload]? = nil,
+        circuitGroups: [WatchProgramCircuitGroupPayload]? = nil
     ) {
         self.id = id
         self.title = title
@@ -160,6 +170,7 @@ struct WatchProgramPhasePayload: Codable, Identifiable, Hashable {
         self.plannedMinutes = plannedMinutes
         self.objective = objective
         self.microStages = microStages
+        self.circuitGroups = circuitGroups
     }
 }
 
