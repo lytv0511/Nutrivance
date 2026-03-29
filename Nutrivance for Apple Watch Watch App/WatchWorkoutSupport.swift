@@ -207,6 +207,21 @@ private struct CompanionWorkoutPacerPayload: Codable {
     let unitLabel: String
 }
 
+private struct CompanionWorkoutPhasePayload: Codable {
+    let id: UUID
+    let title: String
+    let subtitle: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let plannedMinutes: Int
+}
+
+private struct CompanionWorkoutEffortPromptPayload: Codable {
+    let phaseID: UUID
+    let title: String
+    let subtitle: String
+}
+
 private struct CompanionWorkoutSnapshotPayload: Codable {
     let title: String
     let stateText: String
@@ -233,6 +248,9 @@ private struct CompanionWorkoutSnapshotPayload: Codable {
     let currentElevationFeet: Double
     let elevationGainFeet: Double
     let pacerTarget: CompanionWorkoutPacerPayload?
+    let phaseQueue: [CompanionWorkoutPhasePayload]
+    let currentPhaseIndex: Int
+    let effortPrompt: CompanionWorkoutEffortPromptPayload?
 }
 
 @MainActor
@@ -297,6 +315,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         case split
         case stop
         case newWorkout
+        case nextPhase
     }
 
     private enum CompanionLaunchKeys {
@@ -331,6 +350,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         case none
         case promptEffort
         case startAnotherWorkout
+        case advancePhase
+    }
+
+    struct CompletedPhaseEffort: Identifiable, Hashable {
+        let id: UUID
+        let phase: WatchProgramPhasePayload
+        let completedAt: Date
+        var score: Int?
     }
 
     @Published private(set) var displayState: SessionDisplayState = .idle
@@ -374,10 +401,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published private(set) var routeName: String?
     @Published private(set) var routeTrailhead: CLLocationCoordinate2D?
     @Published private(set) var routeCoordinates: [CLLocationCoordinate2D] = []
+    @Published private(set) var phaseQueue: [WatchProgramPhasePayload] = []
+    @Published private(set) var currentPhaseIndex = 0
+    @Published private(set) var pendingEffortQueue: [CompletedPhaseEffort] = []
 
     private enum CompanionLifecycleKeys {
         static let workoutLifecycle = "workoutLifecycle"
         static let reason = "reason"
+        static let effortScore = "effortScore"
     }
     @Published private(set) var postWorkoutDestination: PostWorkoutDestination = .none
     @Published private(set) var lastCompletedWorkoutTitle: String?
@@ -392,6 +423,29 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     var isOutdoorWorkout: Bool {
         activeLocation == .outdoor
+    }
+
+    var currentPhase: WatchProgramPhasePayload? {
+        phaseQueue.indices.contains(currentPhaseIndex) ? phaseQueue[currentPhaseIndex] : nil
+    }
+
+    var nextPhase: WatchProgramPhasePayload? {
+        let nextIndex = currentPhaseIndex + 1
+        return phaseQueue.indices.contains(nextIndex) ? phaseQueue[nextIndex] : nil
+    }
+
+    var currentPhaseRemainingTime: TimeInterval? {
+        guard let currentPhase else { return nil }
+        return max(TimeInterval(currentPhase.plannedMinutes * 60) - elapsedTime, 0)
+    }
+
+    var isNextPhaseReady: Bool {
+        guard let currentPhase, nextPhase != nil else { return false }
+        return elapsedTime >= TimeInterval(currentPhase.plannedMinutes * 60)
+    }
+
+    var currentEffortPromptPhase: CompletedPhaseEffort? {
+        pendingEffortQueue.first
     }
 
     private let healthStore = HKHealthStore()
@@ -475,20 +529,81 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     func start(template: WatchWorkoutTemplate) {
-        startWorkout(
+        let phase = WatchProgramPhasePayload(
+            id: UUID(),
             title: template.title,
             subtitle: template.subtitle,
+            activityID: template.id,
+            activityRawValue: template.activity.rawValue,
+            locationRawValue: template.location.rawValue,
+            plannedMinutes: 30
+        )
+        phaseQueue = [phase]
+        currentPhaseIndex = 0
+        pendingEffortQueue = []
+        startWorkout(
+            title: phase.title,
+            subtitle: phase.subtitle,
             activity: template.activity,
             location: template.location
         )
     }
 
     func startCustomWorkout() {
-        startWorkout(
+        let plannedMinutes = Int(customDraft.warmupMinutes + customDraft.cooldownMinutes + (customDraft.workMinutes + customDraft.recoveryMinutes) * Double(max(customDraft.repeats, 1)))
+        let phase = WatchProgramPhasePayload(
+            id: UUID(),
             title: customDraft.displayName,
             subtitle: "Custom • \(watchWorkoutDisplayName(customDraft.activity))",
+            activityID: "custom-\(customDraft.activity.rawValue)",
+            activityRawValue: customDraft.activity.rawValue,
+            locationRawValue: customDraft.location.hkValue.rawValue,
+            plannedMinutes: max(plannedMinutes, 1)
+        )
+        phaseQueue = [phase]
+        currentPhaseIndex = 0
+        pendingEffortQueue = []
+        startWorkout(
+            title: phase.title,
+            subtitle: phase.subtitle,
             activity: customDraft.activity,
             location: customDraft.location.hkValue
+        )
+    }
+
+    func startSyncedPlan(_ plan: WatchProgramPlanPayload) {
+        let phases = plan.phases.isEmpty
+            ? [
+                WatchProgramPhasePayload(
+                    id: plan.id,
+                    title: plan.title,
+                    subtitle: plan.summary,
+                    activityID: "primary-\(plan.activityRawValue)",
+                    activityRawValue: plan.activityRawValue,
+                    locationRawValue: plan.locationRawValue,
+                    plannedMinutes: 30
+                )
+            ]
+            : plan.phases
+        let firstPhase = phases[0]
+        let activity = HKWorkoutActivityType(rawValue: firstPhase.activityRawValue) ?? .running
+        let location = HKWorkoutSessionLocationType(rawValue: firstPhase.locationRawValue) ?? .unknown
+        phaseQueue = phases
+        currentPhaseIndex = 0
+        pendingEffortQueue = []
+        routeName = plan.routeName
+        routeTrailhead = plan.trailhead.map {
+            CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+        }
+        routeCoordinates = plan.routeCoordinates.map {
+            CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+        }
+        startWorkout(
+            title: firstPhase.title,
+            subtitle: firstPhase.subtitle,
+            activity: activity,
+            location: location,
+            resetRouteGuidance: false
         )
     }
 
@@ -553,6 +668,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     func end() {
         guard let workoutSession else { return }
+        enqueueCurrentPhaseForEffort()
         elapsedTime = currentElapsedTime(at: Date())
         statusMessage = "Ending workout..."
         displayState = .ended
@@ -562,6 +678,23 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         lastCompletedWorkoutSubtitle = activeSubtitle
         postWorkoutDestination = .effortPrompt
         workoutSession.end()
+    }
+
+    func advanceToNextPhase() {
+        guard let nextPhase else {
+            end()
+            return
+        }
+        guard workoutSession != nil else { return }
+        enqueueCurrentPhaseForEffort()
+        elapsedTime = currentElapsedTime(at: Date())
+        statusMessage = "Switching to \(nextPhase.title)..."
+        displayState = .ended
+        stopElapsedTimer()
+        pendingEndAction = .advancePhase
+        lastCompletedWorkoutTitle = activeTitle
+        lastCompletedWorkoutSubtitle = activeSubtitle
+        workoutSession?.end()
     }
 
     func markSplit() {
@@ -626,10 +759,21 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     func submitEffortScore(_ score: Int) {
         lastEffortScore = score
-        postWorkoutDestination = .none
-        displayState = .idle
-        lastCompletedWorkoutTitle = nil
-        lastCompletedWorkoutSubtitle = nil
+        if !pendingEffortQueue.isEmpty {
+            pendingEffortQueue[0].score = score
+            pendingEffortQueue.removeFirst()
+        }
+        if let nextPrompt = pendingEffortQueue.first {
+            postWorkoutDestination = .effortPrompt
+            displayState = .ended
+            lastCompletedWorkoutTitle = nextPrompt.phase.title
+            lastCompletedWorkoutSubtitle = nextPrompt.phase.subtitle
+        } else {
+            postWorkoutDestination = .none
+            displayState = .idle
+            lastCompletedWorkoutTitle = nil
+            lastCompletedWorkoutSubtitle = nil
+        }
         statusMessage = "Effort logged as \(score)/10"
     }
 
@@ -709,6 +853,19 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 statusMessage = "Could not start workout."
             }
         }
+    }
+
+    private func enqueueCurrentPhaseForEffort() {
+        guard let currentPhase else { return }
+        guard pendingEffortQueue.contains(where: { $0.phase.id == currentPhase.id }) == false else { return }
+        pendingEffortQueue.append(
+            CompletedPhaseEffort(
+                id: UUID(),
+                phase: currentPhase,
+                completedAt: Date(),
+                score: nil
+            )
+        )
     }
 
     private func beginWorkoutSession(
@@ -791,6 +948,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             end()
         case .newWorkout:
             newWorkout()
+        case .nextPhase:
+            advanceToNextPhase()
         }
     }
 
@@ -958,6 +1117,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 guard let self else { return }
                 if self.displayState == .running {
                     self.elapsedTime = self.currentElapsedTime(at: Date())
+                    self.refreshPhaseSuggestionStatus()
                 } else if self.displayState == .paused {
                     self.elapsedTime = self.accumulatedElapsedTime
                 }
@@ -977,6 +1137,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
         guard let workoutStartDate else { return accumulatedElapsedTime }
         return accumulatedElapsedTime + max(0, date.timeIntervalSince(workoutStartDate))
+    }
+
+    private func refreshPhaseSuggestionStatus() {
+        guard displayState == .running else { return }
+        guard let nextPhase, let currentPhase else { return }
+        let plannedDuration = TimeInterval(currentPhase.plannedMinutes * 60)
+        guard plannedDuration > 0, elapsedTime >= plannedDuration else { return }
+        statusMessage = "Next phase ready: \(nextPhase.title) • \(nextPhase.plannedMinutes)m"
     }
 
     private func rebuildMetrics() {
@@ -1135,7 +1303,25 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             currentCadence: currentCadence,
             currentElevationFeet: currentElevationFeet,
             elevationGainFeet: elevationGainFeet,
-            pacerTarget: pacerTarget.map { .init(lowerBound: $0.lowerBound, upperBound: $0.upperBound, unitLabel: $0.unitLabel) }
+            pacerTarget: pacerTarget.map { .init(lowerBound: $0.lowerBound, upperBound: $0.upperBound, unitLabel: $0.unitLabel) },
+            phaseQueue: phaseQueue.map {
+                CompanionWorkoutPhasePayload(
+                    id: $0.id,
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    activityRawValue: $0.activityRawValue,
+                    locationRawValue: $0.locationRawValue,
+                    plannedMinutes: $0.plannedMinutes
+                )
+            },
+            currentPhaseIndex: currentPhaseIndex,
+            effortPrompt: currentEffortPromptPhase.map {
+                CompanionWorkoutEffortPromptPayload(
+                    phaseID: $0.phase.id,
+                    title: $0.phase.title,
+                    subtitle: $0.phase.subtitle
+                )
+            }
         )
 
         Task {
@@ -1373,9 +1559,34 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 self.lastCompletedWorkoutSubtitle = completedSubtitle
                 switch self.pendingEndAction {
                 case .promptEffort:
-                    self.postWorkoutDestination = .effortPrompt
+                    if let nextPrompt = self.pendingEffortQueue.first {
+                        self.lastCompletedWorkoutTitle = nextPrompt.phase.title
+                        self.lastCompletedWorkoutSubtitle = nextPrompt.phase.subtitle
+                        self.postWorkoutDestination = .effortPrompt
+                    } else {
+                        self.postWorkoutDestination = .none
+                        self.displayState = .idle
+                    }
                 case .startAnotherWorkout:
                     self.postWorkoutDestination = .nextWorkoutPicker
+                case .advancePhase:
+                    self.currentPhaseIndex = min(self.currentPhaseIndex + 1, max(self.phaseQueue.count - 1, 0))
+                    if let nextPhase = self.currentPhase {
+                        self.startWorkout(
+                            title: nextPhase.title,
+                            subtitle: nextPhase.subtitle,
+                            activity: HKWorkoutActivityType(rawValue: nextPhase.activityRawValue) ?? .running,
+                            location: HKWorkoutSessionLocationType(rawValue: nextPhase.locationRawValue) ?? .unknown,
+                            resetRouteGuidance: false
+                        )
+                    } else if let nextPrompt = self.pendingEffortQueue.first {
+                        self.lastCompletedWorkoutTitle = nextPrompt.phase.title
+                        self.lastCompletedWorkoutSubtitle = nextPrompt.phase.subtitle
+                        self.postWorkoutDestination = .effortPrompt
+                    } else {
+                        self.postWorkoutDestination = .none
+                        self.displayState = .idle
+                    }
                 case .none:
                     self.postWorkoutDestination = .none
                     self.displayState = .idle
@@ -1435,6 +1646,9 @@ extension WatchWorkoutManager: WCSessionDelegate {
             if let command = message["workoutControl"] as? String {
                 self.handleCompanionControlCommand(command)
                 replyHandler([CompanionLaunchKeys.accepted: true])
+            } else if let effortScore = message[CompanionLifecycleKeys.effortScore] as? Int {
+                self.submitEffortScore(effortScore)
+                replyHandler([CompanionLaunchKeys.accepted: true])
             } else if self.handleCompanionLaunchRequest(message) {
                 replyHandler([CompanionLaunchKeys.accepted: true])
             } else {
@@ -1447,6 +1661,8 @@ extension WatchWorkoutManager: WCSessionDelegate {
         Task { @MainActor in
             if let command = userInfo["workoutControl"] as? String {
                 self.handleCompanionControlCommand(command)
+            } else if let effortScore = userInfo[CompanionLifecycleKeys.effortScore] as? Int {
+                self.submitEffortScore(effortScore)
             } else {
                 _ = self.handleCompanionLaunchRequest(userInfo)
             }

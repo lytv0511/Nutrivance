@@ -343,16 +343,26 @@ private struct WorkoutMetricsCard: View {
                 .padding(.bottom, 1)
 
                 ForEach(metricLines(for: manager, variant: variant)) { line in
-                    HStack(alignment: .lastTextBaseline, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: line.symbol)
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(line.tint)
+                                .frame(width: 14, height: 14)
+                            if !line.label.isEmpty {
+                                Text(line.label)
+                                    .font(.system(size: 8, weight: .black, design: .rounded))
+                                    .fontWidth(.compressed)
+                                    .foregroundStyle(.white.opacity(0.8))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.75)
+                            }
+                        }
                         Text(line.value)
                             .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
                             .fontWidth(.condensed)
-                        if !line.label.isEmpty {
-                            Text(line.label)
-                                .font(.system(size: 8, weight: .black, design: .rounded))
-                                .fontWidth(.compressed)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
                     }
                 }
                 Spacer(minLength: 0)
@@ -496,6 +506,7 @@ private struct WorkoutSplitsCard: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let columnWidth = max((geometry.size.width - 24) / 2, 58)
             VStack(alignment: .leading, spacing: 6) {
                 Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
                     .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
@@ -511,27 +522,29 @@ private struct WorkoutSplitsCard: View {
                 HStack(alignment: .lastTextBaseline, spacing: 6) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(splitSpeedValue(for: manager, splitDistanceMeters: currentSplitDistanceMeters, splitDuration: currentSplitDuration))
-                            .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 18, weight: .black, design: .rounded).monospacedDigit())
                             .lineLimit(1)
-                            .minimumScaleFactor(0.72)
+                            .minimumScaleFactor(0.58)
                         Text(splitSpeedLabel(for: manager))
                             .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.62))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Spacer(minLength: 8)
+                    .frame(width: columnWidth, alignment: .leading)
 
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(splitDistanceValue(for: manager, splitDistanceMeters: currentSplitDistanceMeters))
-                            .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 18, weight: .black, design: .rounded).monospacedDigit())
                             .lineLimit(1)
-                            .minimumScaleFactor(0.62)
+                            .minimumScaleFactor(0.58)
                         Text("SPLIT DIST")
                             .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.62))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .frame(width: columnWidth, alignment: .trailing)
                 }
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
@@ -706,6 +719,7 @@ private struct WorkoutMetricGraphScaffold: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let columnWidth = max((geometry.size.width - 24) / 2, 58)
             VStack(alignment: .leading, spacing: 6) {
                 Text(workoutElapsedDisplayString(elapsedTime, reducedLuminance: isLuminanceReduced))
                     .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
@@ -716,36 +730,42 @@ private struct WorkoutMetricGraphScaffold: View {
 
                 HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: symbol)
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(accent)
+                            Text(topLabel)
+                                .font(.system(size: 8, weight: .black, design: .rounded))
+                                .foregroundStyle(accent.opacity(0.78))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
                         Text(topValue)
-                            .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 19, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(accent)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                        Text(topLabel)
-                            .font(.system(size: 8, weight: .black, design: .rounded))
-                            .foregroundStyle(accent.opacity(0.78))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                            .minimumScaleFactor(0.58)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Spacer(minLength: 0)
+                    .frame(width: columnWidth, alignment: .leading)
 
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(topValue)
-                            .hidden()
+                        HStack(spacing: 4) {
+                            Image(systemName: workoutMetricSymbol(for: bottomLabel))
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.78))
+                            Text(bottomLabel)
+                                .font(.system(size: 8, weight: .black, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.72))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
                         Text(bottomValue)
-                            .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: 19, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(.white)
                             .lineLimit(1)
                             .minimumScaleFactor(0.58)
-                        Text(bottomLabel)
-                            .font(.system(size: 8, weight: .black, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.72))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
                     }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .frame(width: columnWidth, alignment: .trailing)
                 }
 
                 Spacer(minLength: 0)
@@ -1084,6 +1104,7 @@ private struct WorkoutMediaCard: View {
 private struct WorkoutControlsCard: View {
     @ObservedObject var manager: WatchWorkoutManager
     let onWaterLock: () -> Void
+    @State private var showsQueue = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -1125,8 +1146,53 @@ private struct WorkoutControlsCard: View {
                     WorkoutControlPill(symbol: "stop.fill", title: "Stop", tint: Color(red: 0.56, green: 0.24, blue: 0.24)) {
                         manager.end()
                     }
+
+                    if let nextPhase = manager.nextPhase {
+                        WorkoutControlPill(
+                            symbol: "forward.end.fill",
+                            title: "Next \(nextPhase.title.prefix(10))",
+                            tint: Color(red: 0.22, green: 0.55, blue: 0.36)
+                        ) {
+                            manager.advanceToNextPhase()
+                        }
+                    }
+
+                    if manager.phaseQueue.count > 1 {
+                        WorkoutControlPill(symbol: "list.bullet", title: showsQueue ? "Hide List" : "List", tint: Color(red: 0.28, green: 0.48, blue: 0.55)) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showsQueue.toggle()
+                            }
+                        }
+                    }
                 }
                 .frame(width: gridWidth)
+
+                if showsQueue, !manager.phaseQueue.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
+                            HStack(spacing: 6) {
+                                Image(systemName: index == manager.currentPhaseIndex ? "play.circle.fill" : "circle")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(index == manager.currentPhaseIndex ? Color.green : Color.white.opacity(0.4))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(phase.title)
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .lineLimit(1)
+                                    Text(index == manager.currentPhaseIndex && manager.currentPhaseRemainingTime != nil
+                                         ? "\(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
+                                         : "\(phase.plannedMinutes) min")
+                                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white.opacity(0.65))
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
+                    .padding(8)
+                    .frame(width: gridWidth)
+                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
 
                 Text(manager.statusMessage)
                     .font(.system(size: 8, weight: .black, design: .rounded))
@@ -1876,6 +1942,8 @@ final class WatchDashboardStore: ObservableObject {
     @Published var rhrWeek: [MetricPoint]
     @Published var stressWeek: [StressPoint]
     @Published var workouts: [WorkoutSession]
+    @Published var incomingPlan: WatchProgramPlanPayload?
+    @Published var savedPlans: [WatchProgramPlanPayload]
     @Published var vitals: [VitalGauge]
     @Published var coachSummaries: [CoachWindow: String]
     @Published var recommendedSleepHours: Double = 8.3
@@ -1931,6 +1999,8 @@ final class WatchDashboardStore: ObservableObject {
             regulation: [61, 69, 58, 74, 77, 71, 79],
             anchoredTo: today
         )
+        incomingPlan = nil
+        savedPlans = []
 
         let morningRunStart = calendar.date(bySettingHour: 7, minute: 10, second: 0, of: Date()) ?? Date()
         let lunchStrengthStart = calendar.date(bySettingHour: 12, minute: 30, second: 0, of: Date()) ?? Date()
@@ -2505,9 +2575,6 @@ private struct TripleMetricRing: View {
             let outerDiameter = size
             let middleDiameter = size * 0.72
             let innerDiameter = size * 0.45
-            let outerY = -(outerDiameter / 2) + (lineWidth / 2)
-            let middleY = -(middleDiameter / 2) + (lineWidth / 2)
-            let innerY = -(innerDiameter / 2) + (lineWidth / 2)
 
             ZStack {
                 ring(progress: readiness, lineWidth: lineWidth, diameter: outerDiameter, color: Color(red: 0.20, green: 0.78, blue: 0.35))
@@ -2515,13 +2582,13 @@ private struct TripleMetricRing: View {
                 ring(progress: strain, lineWidth: lineWidth, diameter: innerDiameter, color: .orange)
 
                 symbolBadge(symbol: "checkmark", color: .black, size: size * 0.66)
-                    .offset(y: outerY)
+                    .offset(y: badgeOffsetY(for: outerDiameter))
 
                 symbolBadge(symbol: "heart.fill", color: .black, size: size * 0.56)
-                    .offset(y: middleY)
+                    .offset(y: badgeOffsetY(for: middleDiameter))
 
                 symbolBadge(symbol: "flame.fill", color: .black, size: size * 0.42)
-                    .offset(y: innerY)
+                    .offset(y: badgeOffsetY(for: innerDiameter))
             }
             .frame(width: size, height: size)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2538,6 +2605,10 @@ private struct TripleMetricRing: View {
                     .rotationEffect(.degrees(-90))
             }
             .frame(width: diameter, height: diameter)
+    }
+
+    private func badgeOffsetY(for diameter: CGFloat) -> CGFloat {
+        -(diameter / 2)
     }
 
     private func symbolBadge(symbol: String, color: Color, size: CGFloat) -> some View {
@@ -3318,20 +3389,14 @@ private struct SleepManagerView: View {
 
 private struct WorkoutLauncherView: View {
     @ObservedObject var store: WatchDashboardStore
-    @State private var customizationActivity: HKWorkoutActivityType = .running
+    @State private var quickStartActivity: HKWorkoutActivityType = .running
 
-    private func draftBinding<Value>(_ keyPath: WritableKeyPath<WatchCustomWorkoutDraft, Value>) -> Binding<Value> {
-        Binding {
-            store.workoutManager.customDraft[keyPath: keyPath]
-        } set: { newValue in
-            var updatedDraft = store.workoutManager.customDraft
-            updatedDraft[keyPath: keyPath] = newValue
-            store.workoutManager.customDraft = updatedDraft
-        }
+    private var selectedQuickStartTemplate: WatchWorkoutTemplate {
+        store.workoutTemplates.first(where: { $0.activity == quickStartActivity }) ?? store.workoutTemplates.first ?? .defaults[0]
     }
 
     var body: some View {
-        ScrollView {
+        GeometryReader { proxy in
             VStack(spacing: 10) {
                 if store.workoutManager.postWorkoutDestination == .nextWorkoutPicker {
                     SectionCard(title: "Next Workout") {
@@ -3366,7 +3431,7 @@ private struct WorkoutLauncherView: View {
                                     .foregroundStyle(store.workoutManager.displayState == .paused ? Color.yellow : Color.green)
                             }
 
-                            ForEach(store.workoutManager.metrics) { metric in
+                            ForEach(store.workoutManager.metrics.prefix(3)) { metric in
                                 HStack {
                                     Label(metric.title, systemImage: metric.symbol)
                                         .font(.caption2)
@@ -3403,82 +3468,297 @@ private struct WorkoutLauncherView: View {
                 }
 
                 SectionCard(title: "Quick Start") {
-                    VStack(spacing: 8) {
-                        ForEach(store.workoutTemplates) { workout in
-                            Button {
-                                store.queuedWorkout = workout.title
-                                store.workoutManager.start(template: workout)
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Label(workout.title, systemImage: workout.symbol)
-                                            .font(.caption.weight(.semibold))
-                                        Text(workout.subtitle)
-                                            .font(.caption2)
-                                            .foregroundStyle(.white.opacity(0.68))
-                                    }
-                                    Spacer()
-                                    Image(systemName: "play.fill")
-                                        .font(.caption.weight(.bold))
-                                }
-                                .padding(10)
-                                .background(Color.white.opacity(0.08))
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                SectionCard(title: "Tab Layout") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Picker("Workout", selection: $customizationActivity) {
+                        Picker("Workout", selection: $quickStartActivity) {
                             ForEach(store.workoutTemplates) { workout in
                                 Text(workout.title).tag(workout.activity)
                             }
                         }
                         .labelsHidden()
 
-                        ForEach(WatchWorkoutPageKind.allCases) { page in
-                            HStack(spacing: 6) {
-                                Toggle(
-                                    page.title,
-                                    isOn: Binding(
-                                        get: {
-                                            store.workoutManager.isPageEnabled(page, for: customizationActivity)
-                                        },
-                                        set: { isEnabled in
-                                            store.workoutManager.setPageEnabled(isEnabled, page: page, for: customizationActivity)
-                                        }
-                                    )
-                                )
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(selectedQuickStartTemplate.title, systemImage: selectedQuickStartTemplate.symbol)
+                                .font(.caption.weight(.semibold))
+                            Text(selectedQuickStartTemplate.subtitle)
                                 .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.68))
+                                .lineLimit(2)
+                        }
 
-                                Button {
-                                    store.workoutManager.movePage(page, direction: -1, for: customizationActivity)
-                                } label: {
-                                    Image(systemName: "arrow.up")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    store.workoutManager.movePage(page, direction: 1, for: customizationActivity)
-                                } label: {
-                                    Image(systemName: "arrow.down")
-                                }
-                                .buttonStyle(.bordered)
+                        Button {
+                            store.queuedWorkout = selectedQuickStartTemplate.title
+                            store.workoutManager.start(template: selectedQuickStartTemplate)
+                        } label: {
+                            HStack {
+                                Text("Start Now")
+                                    .font(.caption.weight(.semibold))
+                                Spacer()
+                                Image(systemName: "play.fill")
+                                    .font(.caption.weight(.bold))
                             }
                         }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
                     }
                 }
 
-                SectionCard(title: "Custom Workout") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Name", text: draftBinding(\.displayName))
-                            .padding(8)
-                            .background(Color.white.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                ScrollView {
+                    VStack(spacing: 10) {
+                        if let incomingPlan = store.incomingPlan {
+                            SectionCard(title: incomingPlan.sourceDeviceLabel == "iPad" ? "From iPad" : "Incoming Plan") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(incomingPlan.title)
+                                        .font(.caption.weight(.semibold))
+                                    Text(incomingPlan.summary)
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.72))
+                                    if let expiresAt = incomingPlan.expiresAt {
+                                        Text("Expires \(expiresAt.formatted(date: .omitted, time: .shortened))")
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange.opacity(0.9))
+                                    }
 
+                                    Button("Start Incoming Plan") {
+                                        store.queuedWorkout = incomingPlan.title
+                                        store.workoutManager.startSyncedPlan(incomingPlan)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.orange)
+                                }
+                            }
+                        }
+
+                        if !store.savedPlans.isEmpty {
+                            SectionCard(title: "Workout Repository") {
+                                VStack(spacing: 8) {
+                                    ForEach(store.savedPlans) { plan in
+                                        Button {
+                                            store.queuedWorkout = plan.title
+                                            store.workoutManager.startSyncedPlan(plan)
+                                        } label: {
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(plan.title)
+                                                        .font(.caption.weight(.semibold))
+                                                    Text(plan.summary)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.white.opacity(0.68))
+                                                        .lineLimit(2)
+                                                }
+                                                Spacer()
+                                                Image(systemName: "play.fill")
+                                                    .font(.caption.weight(.bold))
+                                            }
+                                            .padding(10)
+                                            .background(Color.white.opacity(0.08))
+                                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+
+                        if store.incomingPlan == nil && store.savedPlans.isEmpty {
+                            SectionCard(title: "Repository") {
+                                Text("Incoming plans from iPad and saved repository workouts will appear here.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.72))
+                            }
+                        }
+
+                        if !store.workoutManager.statusMessage.isEmpty {
+                            SectionCard(title: "Status") {
+                                Text(store.workoutManager.statusMessage)
+                                    .font(.caption2)
+                            }
+                        }
+
+                        if #available(watchOS 10.0, *), !store.workoutManager.scheduledPlans.isEmpty {
+                            SectionCard(title: "Scheduled") {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    if store.workoutManager.scheduledPlans.indices.contains(0) {
+                                        Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[0].date))
+                                            .font(.caption2)
+                                    }
+                                    if store.workoutManager.scheduledPlans.indices.contains(1) {
+                                        Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[1].date))
+                                            .font(.caption2)
+                                    }
+                                    if store.workoutManager.scheduledPlans.indices.contains(2) {
+                                        Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[2].date))
+                                            .font(.caption2)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.bottom, 58)
+                }
+                .frame(maxHeight: max(proxy.size.height * 0.42, 88))
+            }
+            .padding(10)
+            .overlay(alignment: .bottom) {
+                HStack {
+                    NavigationLink {
+                        WatchCustomWorkoutBuilderView(store: store)
+                    } label: {
+                        LauncherCornerActionButton(
+                            title: "Custom",
+                            subtitle: "Build",
+                            symbol: "slider.horizontal.3"
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer(minLength: 12)
+
+                    NavigationLink {
+                        WatchWorkoutViewsEditorView(store: store)
+                    } label: {
+                        LauncherCornerActionButton(
+                            title: "Views",
+                            subtitle: "Layout",
+                            symbol: "rectangle.3.group"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+            }
+        }
+        .navigationTitle("Workout")
+        .task {
+            store.workoutManager.activate()
+        }
+        .onAppear {
+            quickStartActivity = selectedQuickStartTemplate.activity
+        }
+    }
+}
+
+private struct WatchWorkoutViewsEditorView: View {
+    @ObservedObject var store: WatchDashboardStore
+    @State private var customizationActivity: HKWorkoutActivityType = .running
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 10) {
+                SectionCard(title: "Workout Type") {
+                    Picker("Workout", selection: $customizationActivity) {
+                        ForEach(store.workoutTemplates) { workout in
+                            Text(workout.title).tag(workout.activity)
+                        }
+                    }
+                    .labelsHidden()
+                }
+
+                SectionCard(title: "Workout Views") {
+                    VStack(spacing: 8) {
+                        ForEach(WatchWorkoutPageKind.allCases) { page in
+                            WorkoutViewEditorRow(
+                                page: page,
+                                isEnabled: Binding(
+                                    get: {
+                                        store.workoutManager.isPageEnabled(page, for: customizationActivity)
+                                    },
+                                    set: { isEnabled in
+                                        store.workoutManager.setPageEnabled(isEnabled, page: page, for: customizationActivity)
+                                    }
+                                ),
+                                moveUp: {
+                                    store.workoutManager.movePage(page, direction: -1, for: customizationActivity)
+                                },
+                                moveDown: {
+                                    store.workoutManager.movePage(page, direction: 1, for: customizationActivity)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(10)
+        }
+        .navigationTitle("Workout Views")
+    }
+}
+
+private struct WatchCustomWorkoutBuilderView: View {
+    @ObservedObject var store: WatchDashboardStore
+
+    private var draft: WatchCustomWorkoutDraft {
+        store.workoutManager.customDraft
+    }
+
+    private var draftTemplate: WatchWorkoutTemplate? {
+        store.workoutTemplates.first(where: { $0.activity == draft.activity })
+    }
+
+    private func draftBinding<Value>(_ keyPath: WritableKeyPath<WatchCustomWorkoutDraft, Value>) -> Binding<Value> {
+        Binding {
+            store.workoutManager.customDraft[keyPath: keyPath]
+        } set: { newValue in
+            var updatedDraft = store.workoutManager.customDraft
+            updatedDraft[keyPath: keyPath] = newValue
+            store.workoutManager.customDraft = updatedDraft
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 10) {
+                ZStack(alignment: .bottomLeading) {
+                    LinearGradient(
+                        colors: [Color.orange.opacity(0.9), Color.red.opacity(0.5), Color.black.opacity(0.9)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top) {
+                            ActionBubble(
+                                symbol: draftTemplate?.symbol ?? watchWorkoutSymbol(draft.activity),
+                                tint: .orange
+                            )
+                            Spacer()
+                            Text(customGoalLabel(for: draft))
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.28), in: Capsule())
+                        }
+
+                        TextField("Name", text: draftBinding(\.displayName))
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        HStack(spacing: 6) {
+                            BuilderStatPill(
+                                title: watchWorkoutTitle(for: draft.activity),
+                                symbol: draftTemplate?.symbol ?? watchWorkoutSymbol(draft.activity),
+                                tint: .white
+                            )
+                            BuilderStatPill(
+                                title: draft.location.rawValue.capitalized,
+                                symbol: draft.location == .outdoor ? "location.fill" : "house.fill",
+                                tint: .cyan
+                            )
+                            BuilderStatPill(
+                                title: "\(customWorkoutTotalMinutes(draft)) min",
+                                symbol: "timer",
+                                tint: .yellow
+                            )
+                        }
+                    }
+                    .padding(12)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                SectionCard(title: "Session") {
+                    VStack(alignment: .leading, spacing: 8) {
                         Picker("Activity", selection: draftBinding(\.activity)) {
                             ForEach(store.workoutTemplates) { workout in
                                 Text(workout.title).tag(workout.activity)
@@ -3492,7 +3772,11 @@ private struct WorkoutLauncherView: View {
                             }
                         }
                         .labelsHidden()
+                    }
+                }
 
+                SectionCard(title: "Goal") {
+                    VStack(alignment: .leading, spacing: 8) {
                         Picker("Goal", selection: draftBinding(\.goalMode)) {
                             ForEach(WatchWorkoutGoalMode.allCases) { mode in
                                 Text(mode.rawValue.capitalized).tag(mode)
@@ -3500,86 +3784,234 @@ private struct WorkoutLauncherView: View {
                         }
                         .labelsHidden()
 
-                        if store.workoutManager.customDraft.goalMode != .open {
-                            Stepper(value: draftBinding(\.goalValue), in: 1...240, step: store.workoutManager.customDraft.goalMode == .distance ? 0.5 : 5) {
-                                Text(customGoalLabel(for: store.workoutManager.customDraft))
-                                    .font(.caption2)
+                        if draft.goalMode != .open {
+                            Stepper(
+                                value: draftBinding(\.goalValue),
+                                in: 1...240,
+                                step: draft.goalMode == .distance ? 0.5 : 5
+                            ) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Label(customGoalLabel(for: draft), systemImage: workoutGoalSymbol(draft.goalMode))
+                                        .font(.caption.weight(.semibold))
+                                    Text("Tune the target before you start or schedule this workout.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.62))
+                                }
+                            }
+                        } else {
+                            Label("Open workout with no fixed goal", systemImage: "flag.slash.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.72))
+                        }
+                    }
+                }
+
+                SectionCard(title: "Intervals") {
+                    VStack(spacing: 8) {
+                        IntervalBuilderRow(
+                            title: "Warm Up",
+                            valueText: "\(Int(draft.warmupMinutes)) min",
+                            tint: .mint
+                        ) {
+                            Stepper(value: draftBinding(\.warmupMinutes), in: 0...20, step: 1) {
+                                EmptyView()
+                            }
+                            .labelsHidden()
+                        }
+
+                        IntervalBuilderRow(
+                            title: "Work",
+                            valueText: "\(Int(draft.workMinutes)) min",
+                            tint: .orange
+                        ) {
+                            Stepper(value: draftBinding(\.workMinutes), in: 1...20, step: 1) {
+                                EmptyView()
+                            }
+                            .labelsHidden()
+                        }
+
+                        IntervalBuilderRow(
+                            title: "Recovery",
+                            valueText: "\(Int(draft.recoveryMinutes)) min",
+                            tint: .cyan
+                        ) {
+                            Stepper(value: draftBinding(\.recoveryMinutes), in: 1...10, step: 1) {
+                                EmptyView()
+                            }
+                            .labelsHidden()
+                        }
+
+                        IntervalBuilderRow(
+                            title: "Repeats",
+                            valueText: "\(draft.repeats)x",
+                            tint: .pink
+                        ) {
+                            Stepper(value: draftBinding(\.repeats), in: 1...12, step: 1) {
+                                EmptyView()
+                            }
+                            .labelsHidden()
+                        }
+
+                        IntervalBuilderRow(
+                            title: "Cooldown",
+                            valueText: "\(Int(draft.cooldownMinutes)) min",
+                            tint: .purple
+                        ) {
+                            Stepper(value: draftBinding(\.cooldownMinutes), in: 0...20, step: 1) {
+                                EmptyView()
+                            }
+                            .labelsHidden()
+                        }
+                    }
+                }
+
+                SectionCard(title: "Actions") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            store.queuedWorkout = draft.displayName
+                            store.workoutManager.startCustomWorkout()
+                        } label: {
+                            HStack {
+                                Text("Start Custom Workout")
+                                Spacer()
+                                Image(systemName: "play.fill")
                             }
                         }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
 
-                        Stepper(value: draftBinding(\.warmupMinutes), in: 0...20, step: 1) {
-                            Text("Warm-up \(Int(store.workoutManager.customDraft.warmupMinutes)) min")
-                                .font(.caption2)
-                        }
-                        Stepper(value: draftBinding(\.workMinutes), in: 1...20, step: 1) {
-                            Text("Work \(Int(store.workoutManager.customDraft.workMinutes)) min")
-                                .font(.caption2)
-                        }
-                        Stepper(value: draftBinding(\.recoveryMinutes), in: 1...10, step: 1) {
-                            Text("Recovery \(Int(store.workoutManager.customDraft.recoveryMinutes)) min")
-                                .font(.caption2)
-                        }
-                        Stepper(value: draftBinding(\.repeats), in: 1...12, step: 1) {
-                            Text("Repeats \(store.workoutManager.customDraft.repeats)")
-                                .font(.caption2)
-                        }
-                        Stepper(value: draftBinding(\.cooldownMinutes), in: 0...20, step: 1) {
-                            Text("Cooldown \(Int(store.workoutManager.customDraft.cooldownMinutes)) min")
-                                .font(.caption2)
-                        }
-
-                        HStack(spacing: 8) {
-                            Button("Start") {
-                                store.queuedWorkout = store.workoutManager.customDraft.displayName
-                                store.workoutManager.startCustomWorkout()
+                        Button {
+                            store.workoutManager.scheduleCustomWorkoutForTomorrow()
+                        } label: {
+                            HStack {
+                                Text("Schedule for Tomorrow")
+                                Spacer()
+                                Image(systemName: "calendar.badge.plus")
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.orange)
-
-                            Button("Schedule") {
-                                store.workoutManager.scheduleCustomWorkoutForTomorrow()
-                            }
-                            .buttonStyle(.bordered)
                         }
+                        .buttonStyle(.bordered)
 
-                        Text("Start launches a live custom session here. Schedule sends the structured interval workout to WorkoutKit for Apple Watch.")
+                        Text("Start runs the workout now on watch. Schedule sends the interval plan to WorkoutKit for tomorrow.")
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.68))
-                    }
-                }
-
-                if !store.workoutManager.statusMessage.isEmpty {
-                    SectionCard(title: "Status") {
-                        Text(store.workoutManager.statusMessage)
-                            .font(.caption2)
-                    }
-                }
-
-                if #available(watchOS 10.0, *), !store.workoutManager.scheduledPlans.isEmpty {
-                    SectionCard(title: "Scheduled") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if store.workoutManager.scheduledPlans.indices.contains(0) {
-                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[0].date))
-                                    .font(.caption2)
-                            }
-                            if store.workoutManager.scheduledPlans.indices.contains(1) {
-                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[1].date))
-                                    .font(.caption2)
-                            }
-                            if store.workoutManager.scheduledPlans.indices.contains(2) {
-                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[2].date))
-                                    .font(.caption2)
-                            }
-                        }
                     }
                 }
             }
             .padding(10)
         }
-        .navigationTitle("Workout")
-        .task {
-            store.workoutManager.activate()
+        .navigationTitle("Custom Workout")
+    }
+}
+
+private struct LauncherCornerActionButton: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .bold))
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+            Text(subtitle)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.62))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.36))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct WorkoutViewEditorRow: View {
+    let page: WatchWorkoutPageKind
+    @Binding var isEnabled: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(page.title, systemImage: workoutPageSymbol(page))
+                .font(.caption.weight(.semibold))
+
+            HStack(spacing: 8) {
+                Toggle("Visible", isOn: $isEnabled)
+                    .font(.caption2)
+
+                Spacer(minLength: 0)
+
+                Button(action: moveUp) {
+                    Image(systemName: "arrow.up")
+                }
+                .buttonStyle(.bordered)
+
+                Button(action: moveDown) {
+                    Image(systemName: "arrow.down")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct BuilderStatPill: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .foregroundStyle(tint)
+            Text(title)
+                .lineLimit(1)
+        }
+        .font(.system(size: 9, weight: .semibold, design: .rounded))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.24), in: Capsule())
+    }
+}
+
+private struct IntervalBuilderRow<Control: View>: View {
+    let title: String
+    let valueText: String
+    let tint: Color
+    let control: Control
+
+    init(title: String, valueText: String, tint: Color, @ViewBuilder control: () -> Control) {
+        self.title = title
+        self.valueText = valueText
+        self.tint = tint
+        self.control = control()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text(valueText)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(tint)
+            }
+
+            control
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -3617,15 +4049,19 @@ private struct WorkoutEffortPromptView: View {
             let progressWidth = max(proxy.size.width - 36, 80)
             let compact = proxy.size.height < 205
 
-            VStack(alignment: .leading, spacing: compact ? 8 : 10) {
+            VStack(alignment: .leading, spacing: compact ? 6 : 8) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(manager.lastCompletedWorkoutTitle ?? "Workout Complete")
-                            .font(compact ? .subheadline.weight(.semibold) : .headline)
+                            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                         if let subtitle = manager.lastCompletedWorkoutSubtitle {
                             Text(subtitle)
-                                .font(.caption2)
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.white.opacity(0.68))
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.8)
                         }
                     }
 
@@ -3650,7 +4086,7 @@ private struct WorkoutEffortPromptView: View {
 
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text("\(roundedEffort)")
-                            .font(.system(size: compact ? 27 : 32, weight: .black, design: .rounded).monospacedDigit())
+                            .font(.system(size: compact ? 24 : 28, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(.white)
                         Text("/10")
                             .font(.caption.weight(.bold))
@@ -3699,16 +4135,9 @@ private struct WorkoutEffortPromptView: View {
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.72))
                 } else {
-                    SectionCard(title: "Commit") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Rotate the Digital Crown to set effort.")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.78))
-                            Text("Double tap anywhere or press the check button to save.")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.62))
-                        }
-                    }
+                    Text("Rotate the Digital Crown, then tap check to save.")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.72))
                 }
 
                 Spacer(minLength: 0)
@@ -4491,6 +4920,72 @@ private func scheduledWorkoutText(_ components: DateComponents) -> String {
     return formatter.string(from: date)
 }
 
+private func watchWorkoutTitle(for activityType: HKWorkoutActivityType) -> String {
+    switch activityType {
+    case .running:
+        return "Outdoor Run"
+    case .walking:
+        return "Outdoor Walk"
+    case .cycling:
+        return "Cycling"
+    case .swimming:
+        return "Pool Swim"
+    case .hiking:
+        return "Hike"
+    case .traditionalStrengthTraining, .functionalStrengthTraining:
+        return "Strength"
+    case .highIntensityIntervalTraining:
+        return "HIIT"
+    case .yoga:
+        return "Yoga"
+    default:
+        return "Workout"
+    }
+}
+
+private func customWorkoutTotalMinutes(_ draft: WatchCustomWorkoutDraft) -> Int {
+    let intervalBlock = (draft.workMinutes + draft.recoveryMinutes) * Double(max(draft.repeats, 1))
+    return Int((draft.warmupMinutes + intervalBlock + draft.cooldownMinutes).rounded())
+}
+
+private func workoutGoalSymbol(_ goalMode: WatchWorkoutGoalMode) -> String {
+    switch goalMode {
+    case .open:
+        return "flag.slash.fill"
+    case .time:
+        return "timer"
+    case .distance:
+        return "point.topleft.down.curvedto.point.bottomright.up.fill"
+    case .energy:
+        return "flame.fill"
+    }
+}
+
+private func workoutPageSymbol(_ page: WatchWorkoutPageKind) -> String {
+    switch page {
+    case .metricsPrimary:
+        return "gauge.with.dots.needle.50percent"
+    case .metricsSecondary:
+        return "list.bullet.rectangle"
+    case .heartRateZones:
+        return "heart.text.square.fill"
+    case .segments:
+        return "chart.bar.xaxis"
+    case .splits:
+        return "flag.checkered.2.crossed"
+    case .elevationGraph:
+        return "mountain.2.fill"
+    case .powerGraph:
+        return "bolt.fill"
+    case .powerZones:
+        return "bolt.heart.fill"
+    case .pacer:
+        return "speedometer"
+    case .map:
+        return "map.fill"
+    }
+}
+
 private func shortMetricLabel(_ value: Double) -> String {
     if value >= 100 {
         return String(format: "%.0f", value)
@@ -4561,6 +5056,8 @@ private struct WorkoutPrimaryLine: Identifiable {
     let id: String
     let value: String
     let label: String
+    let symbol: String
+    let tint: Color
 }
 
 private func metricLines(for manager: WatchWorkoutManager, variant: WorkoutMetricsVariant) -> [WorkoutPrimaryLine] {
@@ -4586,33 +5083,33 @@ private func primaryWorkoutLines(for manager: WatchWorkoutManager) -> [WorkoutPr
     switch manager.activeActivity {
     case .some(.running), .some(.walking):
         return [
-            WorkoutPrimaryLine(id: "rolling-mile", value: paceString(secondsPerMile: rollingPaceSecondsPerMile), label: "ROLLING MILE"),
-            WorkoutPrimaryLine(id: "avg-pace", value: paceString(secondsPerMile: averagePaceSecondsPerMile), label: "AVERAGE PACE"),
-            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "")
+            WorkoutPrimaryLine(id: "rolling-mile", value: paceString(secondsPerMile: rollingPaceSecondsPerMile), label: "ROLLING MILE", symbol: "figure.run", tint: .cyan),
+            WorkoutPrimaryLine(id: "avg-pace", value: paceString(secondsPerMile: averagePaceSecondsPerMile), label: "AVERAGE PACE", symbol: "gauge.with.dots.needle.50percent", tint: .mint),
+            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .orange)
         ]
     case .some(.cycling):
         return [
-            WorkoutPrimaryLine(id: "avg-speed", value: speedString(mph: averageSpeedMPH), label: "AVERAGE SPEED"),
-            WorkoutPrimaryLine(id: "power", value: manager.currentPowerWatts.map { "\(Int($0.rounded()))W" } ?? "--", label: "POWER"),
-            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "")
+            WorkoutPrimaryLine(id: "avg-speed", value: speedString(mph: averageSpeedMPH), label: "AVERAGE SPEED", symbol: "speedometer", tint: .cyan),
+            WorkoutPrimaryLine(id: "power", value: manager.currentPowerWatts.map { "\(Int($0.rounded()))W" } ?? "--", label: "POWER", symbol: "bolt.fill", tint: .green),
+            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .orange)
         ]
     case .some(.swimming):
         return [
-            WorkoutPrimaryLine(id: "distance", value: distanceString(kilometers: distanceKilometers), label: "DISTANCE"),
-            WorkoutPrimaryLine(id: "strokes", value: manager.strokeCount.map { "\(Int($0.rounded()))" } ?? "--", label: "STROKES"),
-            WorkoutPrimaryLine(id: "avg-hr", value: manager.averageHeartRate.map { "\(Int($0.rounded()))" } ?? "--", label: "AVERAGE HR")
+            WorkoutPrimaryLine(id: "distance", value: distanceString(kilometers: distanceKilometers), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .blue),
+            WorkoutPrimaryLine(id: "strokes", value: manager.strokeCount.map { "\(Int($0.rounded()))" } ?? "--", label: "STROKES", symbol: "water.waves", tint: .teal),
+            WorkoutPrimaryLine(id: "avg-hr", value: manager.averageHeartRate.map { "\(Int($0.rounded()))" } ?? "--", label: "AVERAGE HR", symbol: "heart.fill", tint: .red)
         ]
     case .some(.hiking):
         return [
-            WorkoutPrimaryLine(id: "avg-speed", value: speedString(kph: averageSpeedKPH), label: "AVERAGE SPEED"),
-            WorkoutPrimaryLine(id: "climb", value: manager.flightsClimbed.map { "\(Int($0.rounded())) FL" } ?? "--", label: "ELEVATION"),
-            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "")
+            WorkoutPrimaryLine(id: "avg-speed", value: speedString(kph: averageSpeedKPH), label: "AVERAGE SPEED", symbol: "speedometer", tint: .cyan),
+            WorkoutPrimaryLine(id: "climb", value: manager.flightsClimbed.map { "\(Int($0.rounded())) FL" } ?? "--", label: "ELEVATION", symbol: "mountain.2.fill", tint: .green),
+            WorkoutPrimaryLine(id: "distance", value: distanceString(miles: distanceMiles), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .orange)
         ]
     default:
         return [
-            WorkoutPrimaryLine(id: "energy", value: manager.metrics.first(where: { $0.id == "energy" })?.valueText ?? "--", label: "ENERGY"),
-            WorkoutPrimaryLine(id: "avg-hr", value: manager.averageHeartRate.map { "\(Int($0.rounded())) BPM" } ?? "--", label: "AVERAGE HR"),
-            WorkoutPrimaryLine(id: "time", value: preciseWorkoutElapsedString(manager.elapsedTime), label: "ELAPSED")
+            WorkoutPrimaryLine(id: "energy", value: manager.metrics.first(where: { $0.id == "energy" })?.valueText ?? "--", label: "ENERGY", symbol: "flame.fill", tint: .orange),
+            WorkoutPrimaryLine(id: "avg-hr", value: manager.averageHeartRate.map { "\(Int($0.rounded())) BPM" } ?? "--", label: "AVERAGE HR", symbol: "heart.fill", tint: .red),
+            WorkoutPrimaryLine(id: "time", value: preciseWorkoutElapsedString(manager.elapsedTime), label: "ELAPSED", symbol: "timer", tint: .yellow)
         ]
     }
 }
@@ -4621,21 +5118,37 @@ private func secondaryWorkoutLines(for manager: WatchWorkoutManager) -> [Workout
     switch manager.activeActivity {
     case .some(.running), .some(.walking), .some(.hiking):
         return [
-            WorkoutPrimaryLine(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))" } ?? "--", label: "CADENCE"),
-            WorkoutPrimaryLine(id: "stride", value: manager.strideMeters.map { String(format: "%.2fm", $0) } ?? "--", label: "STRIDE"),
-            WorkoutPrimaryLine(id: "gct", value: manager.groundContactTimeMilliseconds.map { "\(Int($0.rounded()))ms" } ?? "--", label: "GROUND CONTACT")
+            WorkoutPrimaryLine(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))" } ?? "--", label: "CADENCE", symbol: "metronome.fill", tint: .mint),
+            WorkoutPrimaryLine(id: "stride", value: manager.strideMeters.map { String(format: "%.2fm", $0) } ?? "--", label: "STRIDE", symbol: "figure.walk", tint: .cyan),
+            WorkoutPrimaryLine(id: "gct", value: manager.groundContactTimeMilliseconds.map { "\(Int($0.rounded()))ms" } ?? "--", label: "GROUND CONTACT", symbol: "waveform.path.ecg", tint: .purple)
         ]
     case .some(.cycling):
         return [
-            WorkoutPrimaryLine(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))RPM" } ?? "--", label: "CADENCE"),
-            WorkoutPrimaryLine(id: "power-avg", value: manager.averagePowerWatts.map { "\(Int($0.rounded()))W" } ?? "--", label: "AVG POWER"),
-            WorkoutPrimaryLine(id: "elev", value: "\(Int(manager.elevationGainFeet.rounded()))FT", label: "ELEVATION")
+            WorkoutPrimaryLine(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))RPM" } ?? "--", label: "CADENCE", symbol: "metronome.fill", tint: .mint),
+            WorkoutPrimaryLine(id: "power-avg", value: manager.averagePowerWatts.map { "\(Int($0.rounded()))W" } ?? "--", label: "AVG POWER", symbol: "bolt.fill", tint: .green),
+            WorkoutPrimaryLine(id: "elev", value: "\(Int(manager.elevationGainFeet.rounded()))FT", label: "ELEVATION", symbol: "mountain.2.fill", tint: .green)
         ]
     default:
         return Array(specificMetricCards(from: manager.metrics, activity: manager.activeActivity).prefix(3)).map {
-            WorkoutPrimaryLine(id: $0.id, value: $0.valueText.replacingOccurrences(of: " ", with: ""), label: $0.title.uppercased())
+            WorkoutPrimaryLine(
+                id: $0.id,
+                value: $0.valueText.replacingOccurrences(of: " ", with: ""),
+                label: $0.title.uppercased(),
+                symbol: $0.symbol,
+                tint: $0.tint
+            )
         }
     }
+}
+
+private func workoutMetricSymbol(for label: String) -> String {
+    if label.contains("CADENCE") { return "metronome.fill" }
+    if label.contains("PACE") { return "figure.run" }
+    if label.contains("POWER") { return "bolt.fill" }
+    if label.contains("ELEV") { return "mountain.2.fill" }
+    if label.contains("SPEED") { return "speedometer" }
+    if label.contains("SEGMENT") { return "flag.pattern.checkered" }
+    return "chart.xyaxis.line"
 }
 
 private func summaryMetricCards(from metrics: [WatchLiveMetric]) -> [WatchLiveMetric] {

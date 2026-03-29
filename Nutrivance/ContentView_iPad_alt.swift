@@ -62,93 +62,6 @@ struct ContentView_iPad_alt: View {
             .customizationID( "iPad.tab.mindfulnessRealm")
             .defaultVisibility(.visible, for: .tabBar)
             .customizationBehavior(.disabled, for: .sidebar)
-            TabSection("Nutrition") {
-                Tab("Insights", systemImage: "chart.line.uptrend.xyaxis", value: RootTabSelection.insights) {
-                    HealthInsightsView()
-                }
-                .customizationID("iPad.tab.insights")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Labels", systemImage: "doc.text.viewfinder", value: RootTabSelection.labels) {
-                    NutritionScannerView()
-                }
-                .customizationID("iPad.tab.labels")
-                .defaultVisibility(.hidden, for: .tabBar)
-                
-                Tab("Log", systemImage: "square.and.pencil", value: RootTabSelection.log) {
-                    LogView()
-                }
-                .customizationID("iPad.tab.log")
-                .defaultVisibility(.hidden, for: .tabBar)
-                Tab("Calories", systemImage: "flame.fill", value: RootTabSelection.calories) {
-                    NutrientDetailView(nutrientName: "Calories")
-                }
-                .customizationID("iPad.tab.calories")
-                .defaultVisibility(.hidden, for: .tabBar)
-            }
-            .defaultVisibility(.hidden, for: .tabBar)
-            TabSection("Nutrients") {
-                Tab("Carbs", systemImage: "carrot.fill", value: RootTabSelection.carbs) {
-                    NutrientDetailView(nutrientName: "Carbs")
-                }
-                .customizationID("iPad.tab.carbs")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Protein", systemImage: "fork.knife", value: RootTabSelection.protein) {
-                    NutrientDetailView(nutrientName: "Protein")
-                }
-                .customizationID("iPad.tab.protein")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Fats", systemImage: "drop.fill", value: RootTabSelection.fats) {
-                    NutrientDetailView(nutrientName: "Fats")
-                }
-                .customizationID("iPad.tab.fats")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Water", systemImage: "drop.circle.fill", value: RootTabSelection.water) {
-                    NutrientDetailView(nutrientName: "Water")
-                }
-                .customizationID("iPad.tab.water")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Fiber", systemImage: "leaf.fill", value: RootTabSelection.fiber) {
-                    NutrientDetailView(nutrientName: "Fiber")
-                }
-                .customizationID("iPad.tab.fiber")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Vitamins", systemImage: "pills.fill", value: RootTabSelection.vitamins) {
-                    NutrientDetailView(nutrientName: "Vitamins")
-                }
-                .customizationID("iPad.tab.vitamins")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Minerals", systemImage: "bolt.fill", value: RootTabSelection.minerals) {
-                    NutrientDetailView(nutrientName: "Minerals")
-                }
-                .customizationID("iPad.tab.minerals")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Phytochemicals", systemImage: "leaf.arrow.triangle.circlepath", value: RootTabSelection.phytochemicals) {
-                    NutrientDetailView(nutrientName: "Phytochemicals")
-                }
-                .customizationID("iPad.tab.phytochemicals")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Antioxidants", systemImage: "shield.fill", value: RootTabSelection.antioxidants) {
-                    NutrientDetailView(nutrientName: "Antioxidants")
-                }
-                .customizationID("iPad.tab.antioxidants")
-                .defaultVisibility(.hidden, for: .tabBar)
-
-                Tab("Electrolytes", systemImage: "battery.100percent", value: RootTabSelection.electrolytes) {
-                    NutrientDetailView(nutrientName: "Electrolytes")
-                }
-                .customizationID("iPad.tab.electrolytes")
-                .defaultVisibility(.hidden, for: .tabBar)
-            }
-            .defaultVisibility(.hidden, for: .tabBar)
             TabSection ("Fitness") {
                 Tab("Today's Plan", systemImage: "calendar.badge.clock", value: RootTabSelection.todaysPlan) {
                     TodaysPlanView(planType: .all)
@@ -236,6 +149,93 @@ struct ContentView_iPad_alt: View {
                     Image(systemName: "apple.meditate.square.stack.fill")
                 }
             }
+            TabSection("Nutrition") {
+                Tab("Insights", systemImage: "chart.line.uptrend.xyaxis", value: RootTabSelection.insights) {
+                    HealthInsightsView()
+                }
+                .customizationID("iPad.tab.insights")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Labels", systemImage: "doc.text.viewfinder", value: RootTabSelection.labels) {
+                    NutritionScannerView()
+                }
+                .customizationID("iPad.tab.labels")
+                .defaultVisibility(.hidden, for: .tabBar)
+                
+                Tab("Log", systemImage: "square.and.pencil", value: RootTabSelection.log) {
+                    LogView()
+                }
+                .customizationID("iPad.tab.log")
+                .defaultVisibility(.hidden, for: .tabBar)
+                Tab("Calories", systemImage: "flame.fill", value: RootTabSelection.calories) {
+                    NutrientDetailView(nutrientName: "Calories")
+                }
+                .customizationID("iPad.tab.calories")
+                .defaultVisibility(.hidden, for: .tabBar)
+            }
+            .defaultVisibility(.hidden, for: .tabBar)
+            TabSection("Nutrients") {
+                Tab("Carbs", systemImage: "carrot.fill", value: RootTabSelection.carbs) {
+                    NutrientDetailView(nutrientName: "Carbs")
+                }
+                .customizationID("iPad.tab.carbs")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Protein", systemImage: "fork.knife", value: RootTabSelection.protein) {
+                    NutrientDetailView(nutrientName: "Protein")
+                }
+                .customizationID("iPad.tab.protein")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Fats", systemImage: "drop.fill", value: RootTabSelection.fats) {
+                    NutrientDetailView(nutrientName: "Fats")
+                }
+                .customizationID("iPad.tab.fats")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Water", systemImage: "drop.circle.fill", value: RootTabSelection.water) {
+                    NutrientDetailView(nutrientName: "Water")
+                }
+                .customizationID("iPad.tab.water")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Fiber", systemImage: "leaf.fill", value: RootTabSelection.fiber) {
+                    NutrientDetailView(nutrientName: "Fiber")
+                }
+                .customizationID("iPad.tab.fiber")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Vitamins", systemImage: "pills.fill", value: RootTabSelection.vitamins) {
+                    NutrientDetailView(nutrientName: "Vitamins")
+                }
+                .customizationID("iPad.tab.vitamins")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Minerals", systemImage: "bolt.fill", value: RootTabSelection.minerals) {
+                    NutrientDetailView(nutrientName: "Minerals")
+                }
+                .customizationID("iPad.tab.minerals")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Phytochemicals", systemImage: "leaf.arrow.triangle.circlepath", value: RootTabSelection.phytochemicals) {
+                    NutrientDetailView(nutrientName: "Phytochemicals")
+                }
+                .customizationID("iPad.tab.phytochemicals")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Antioxidants", systemImage: "shield.fill", value: RootTabSelection.antioxidants) {
+                    NutrientDetailView(nutrientName: "Antioxidants")
+                }
+                .customizationID("iPad.tab.antioxidants")
+                .defaultVisibility(.hidden, for: .tabBar)
+
+                Tab("Electrolytes", systemImage: "battery.100percent", value: RootTabSelection.electrolytes) {
+                    NutrientDetailView(nutrientName: "Electrolytes")
+                }
+                .customizationID("iPad.tab.electrolytes")
+                .defaultVisibility(.hidden, for: .tabBar)
+            }
+            .defaultVisibility(.hidden, for: .tabBar)
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)

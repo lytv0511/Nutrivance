@@ -22,6 +22,8 @@ struct WatchDashboardPayload: Codable {
     let sleepHours: Double
     let sleepConsistencyScore: Double
     let sleepStages: [WatchSleepStagePayload]
+    let incomingPlan: WatchProgramPlanPayload?
+    let savedPlans: [WatchProgramPlanPayload]
 }
 
 struct WatchMetricPointPayload: Codable {
@@ -66,6 +68,37 @@ struct WatchSleepStagePayload: Codable {
     let name: String
     let hours: Double
     let colorName: String
+}
+
+struct WatchPlanCoordinatePayload: Codable, Hashable {
+    let latitude: Double
+    let longitude: Double
+}
+
+struct WatchProgramPlanPayload: Codable, Identifiable, Hashable {
+    let id: UUID
+    let title: String
+    let summary: String
+    let todayFocus: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let routeName: String?
+    let trailhead: WatchPlanCoordinatePayload?
+    let routeCoordinates: [WatchPlanCoordinatePayload]
+    let phases: [WatchProgramPhasePayload]
+    let sourceDeviceLabel: String
+    let createdAt: Date
+    let expiresAt: Date?
+}
+
+struct WatchProgramPhasePayload: Codable, Identifiable, Hashable {
+    let id: UUID
+    let title: String
+    let subtitle: String
+    let activityID: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let plannedMinutes: Int
 }
 
 private struct WatchLocalSleepSnapshot {
@@ -159,6 +192,8 @@ extension WatchDashboardStore {
         sleepStages = payload.sleepStages.map {
             ($0.name, $0.hours, sleepStageColor(named: $0.colorName))
         }
+        incomingPlan = payload.incomingPlan
+        savedPlans = payload.savedPlans
         markSynced(at: payload.generatedAt)
     }
 

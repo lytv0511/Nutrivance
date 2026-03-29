@@ -9,6 +9,7 @@ struct ProgramBuilderView: View {
     @StateObject private var engine = HealthStateEngine.shared
     @StateObject private var planner = ProgramBuilderAIPlanner()
     @StateObject private var liveWorkoutManager = CompanionWorkoutLiveManager.shared
+    @StateObject private var planStore = ProgramWorkoutPlanStore.shared
 
     @State private var searchText = ""
     @State private var selectedMode: ProgramBuilderMode = .guided
@@ -27,6 +28,8 @@ struct ProgramBuilderView: View {
     @State private var routeTemplateIDsWithSavedRoutes: Set<UUID> = []
     @State private var hasLoadedRouteTemplateAvailability = false
     @State private var isSearchSectionExpanded = false
+    @State private var hasRestoredCachedDraft = false
+    @State private var planSyncStatusMessage: String?
 
     private var catalog: [ProgramWorkoutType] {
         ProgramWorkoutType.catalog + customActivities
@@ -48,6 +51,10 @@ struct ProgramBuilderView: View {
 
     private var isPhoneLayout: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
+    }
+
+    private var isPadDevice: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
     }
 
     private var frequentHistorySuggestions: [ProgramWorkoutType] {
@@ -96,24 +103,44 @@ struct ProgramBuilderView: View {
         ].joined(separator: "|")
     }
 
+    private var routePlanningContextID: String {
+        [
+            selectedMode.rawValue,
+            selectedRouteTemplateID?.uuidString ?? "",
+            routeObjectiveName,
+            String(routeRepeats)
+        ].joined(separator: "|")
+    }
+
+    private var routeTemplateRefreshID: [UUID] {
+        routeTemplateCandidates.map(\.workout.uuid)
+    }
+
+    private var draftCacheID: String {
+        let allocationKey = allocationWeights
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: ",")
+        return [
+            selectedMode.rawValue,
+            selectedActivityIDs.joined(separator: ","),
+            String(availableMinutes),
+            allocationKey,
+            selectedTargetMetric.rawValue,
+            String(selectedZone),
+            targetValueText,
+            routeObjectiveName,
+            String(routeRepeats),
+            selectedRouteTemplateID?.uuidString ?? "",
+            planner.coachAdvice,
+            planner.generatedBlueprint?.title ?? ""
+        ].joined(separator: "|")
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ScrollView {
-                if wideLayout || proxy.size.width > 920 {
-                    HStack(alignment: .top, spacing: 24) {
-                        leftColumn
-                            .frame(width: min(430, proxy.size.width * 0.36))
-                        rightColumn
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                    }
-                    .padding(24)
-                } else {
-                    VStack(spacing: 20) {
-                        leftColumn
-                        rightColumn
-                    }
-                    .padding(16)
-                }
+                contentLayout(for: proxy.size.width)
             }
             .scrollBounceBehavior(.basedOnSize)
             .background(programBuilderBackground.ignoresSafeArea())
@@ -126,28 +153,103 @@ struct ProgramBuilderView: View {
                 engine: engine
             )
         }
-        .task(id: routeTemplateCandidates.map(\.workout.uuid)) {
+        .task(id: routeTemplateRefreshID) {
             await loadRouteTemplateAvailability()
         }
         .onChange(of: selectedActivityIDs) { _, newValue in
             rebalanceWeights(for: newValue)
             syncTargetMetric()
         }
-        .onChange(of: selectedMode) { _, _ in
+        .onChange(of: routePlanningContextID) { _, _ in
             plannedRouteLaunchMetadata = nil
         }
-        .onChange(of: selectedRouteTemplateID) { _, _ in
-            plannedRouteLaunchMetadata = nil
-        }
-        .onChange(of: routeObjectiveName) { _, _ in
-            plannedRouteLaunchMetadata = nil
-        }
-        .onChange(of: routeRepeats) { _, _ in
-            plannedRouteLaunchMetadata = nil
+        .onChange(of: draftCacheID) { _, _ in
+            persistBuilderDraft()
         }
         .onAppear {
-            rebalanceWeights(for: selectedActivityIDs)
-            syncTargetMetric()
+            handleViewAppear()
+        }
+    }
+
+    @ViewBuilder
+    private func contentLayout(for width: CGFloat) -> some View {
+        if wideLayout || width > 920 {
+            HStack(alignment: .top, spacing: 24) {
+                leftColumn
+                    .frame(width: min(430, width * 0.36))
+                rightColumn
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .padding(24)
+        } else {
+            VStack(spacing: 20) {
+                if isPhoneLayout,
+                   let inboxPlan = planStore.activeInboxPlan,
+                   inboxPlan.sourceDeviceLabel == "iPad" {
+                    phoneInboxSection(inboxPlan)
+                }
+                leftColumn
+                rightColumn
+            }
+            .padding(16)
+        }
+    }
+
+    private func handleViewAppear() {
+        restoreCachedDraftIfNeeded()
+        rebalanceWeights(for: selectedActivityIDs)
+        syncTargetMetric()
+    }
+
+    private func buildPlanPhases() -> [ProgramWorkoutPlanPhase] {
+        let activities = selectedActivities
+        guard !activities.isEmpty else { return [] }
+
+        if activities.count == 1, let activity = activities.first {
+            return [
+                ProgramWorkoutPlanPhase(
+                    title: activity.title,
+                    subtitle: "Planned phase",
+                    activityID: activity.id,
+                    activityRawValue: activity.hkWorkoutActivityType.rawValue,
+                    locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
+                    plannedMinutes: max(Int(availableMinutes.rounded()), 1)
+                )
+            ]
+        }
+
+        let normalizedWeights = activities.reduce(into: [String: Double]()) { result, activity in
+            result[activity.id] = max(0.15, allocationWeights[activity.id, default: 1])
+        }
+        let totalWeight = normalizedWeights.values.reduce(0, +)
+        let totalMinutes = max(Int(availableMinutes.rounded()), activities.count)
+        guard totalWeight > 0 else { return [] }
+
+        var plannedMinutesByActivity: [String: Int] = [:]
+        var consumedMinutes = 0
+
+        for (index, activity) in activities.enumerated() {
+            let weight = normalizedWeights[activity.id, default: 1]
+            let assignedMinutes = index == activities.count - 1
+                ? max(totalMinutes - consumedMinutes, 1)
+                : max(Int(((weight / totalWeight) * Double(totalMinutes)).rounded()), 1)
+            plannedMinutesByActivity[activity.id] = assignedMinutes
+            consumedMinutes += assignedMinutes
+        }
+
+        if consumedMinutes != totalMinutes, let lastID = activities.last?.id {
+            plannedMinutesByActivity[lastID] = max((plannedMinutesByActivity[lastID] ?? 1) + (totalMinutes - consumedMinutes), 1)
+        }
+
+        return activities.map { activity in
+            ProgramWorkoutPlanPhase(
+                title: activity.title,
+                subtitle: "\(plannedMinutesByActivity[activity.id] ?? 1) min planned",
+                activityID: activity.id,
+                activityRawValue: activity.hkWorkoutActivityType.rawValue,
+                locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
+                plannedMinutes: max(plannedMinutesByActivity[activity.id] ?? 1, 1)
+            )
         }
     }
 
@@ -364,6 +466,22 @@ struct ProgramBuilderView: View {
                     }
 
                     if let blueprint = planner.generatedBlueprint {
+                        HStack(spacing: 12) {
+                            Button {
+                                Task {
+                                    await saveCurrentPlanToRepository()
+                                }
+                            } label: {
+                                Label("Save to Repository", systemImage: "square.and.arrow.down")
+                                    .font(.subheadline.weight(.bold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.white.opacity(0.18))
+                            .disabled(selectedActivities.isEmpty)
+
+                            Spacer()
+                        }
+
                         ProgramGeneratedBlueprintView(blueprint: blueprint)
                     } else {
                         ProgramEmptyState(
@@ -371,7 +489,17 @@ struct ProgramBuilderView: View {
                             subtitle: "Pick your sports, choose a planning route, then generate a clean outline from those constraints."
                         )
                     }
+
+                    if let planSyncStatusMessage, !planSyncStatusMessage.isEmpty {
+                        Text(planSyncStatusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
                 }
+            }
+
+            ProgramSectionCard {
+                workoutRepositorySection
             }
         }
     }
@@ -380,15 +508,17 @@ struct ProgramBuilderView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Start This Workout")
+                    Text(isPadDevice ? "Send This Workout" : "Start This Workout")
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.white)
-                    Text("Run it here on iPhone or hand it straight to Apple Watch. Outdoor starts use device GPS, and connected HealthKit-compatible sensors can flow into the live view.")
+                    Text(isPadDevice
+                         ? "On iPad, save the generated plan and send it to iPhone. It will also float to the top of Apple Watch for quick access for the next 24 hours."
+                         : "Run it here on iPhone or hand it straight to Apple Watch. Outdoor starts use device GPS, and connected HealthKit-compatible sensors can flow into the live view.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.72))
                 }
                 Spacer()
-                if liveWorkoutManager.isWorkoutActive {
+                if !isPadDevice, liveWorkoutManager.isWorkoutActive {
                     Text("Live")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.black)
@@ -402,58 +532,80 @@ struct ProgramBuilderView: View {
                 let launchTitle = planner.generatedBlueprint?.title ?? activity.title
                 let launchSubtitle = launchSubtitle(for: activity)
 
-                HStack(spacing: 12) {
+                if isPadDevice {
                     ProgramLaunchButton(
-                        title: "Start on iPhone",
-                        subtitle: activity.routeFriendly ? "GPS + phone-connected feeds" : "Local live workout",
-                        symbol: "iphone",
-                        tint: .cyan
-                    ) {
-                        liveWorkoutManager.startWorkoutOnThisDevice(
-                            title: launchTitle,
-                            subtitle: launchSubtitle,
-                            activity: activity.hkWorkoutActivityType,
-                            location: activity.preferredLocationType(for: selectedMode)
-                        )
-                    }
-
-                    ProgramLaunchButton(
-                        title: "Start on Watch",
-                        subtitle: "Mirror back to phone",
-                        symbol: "applewatch",
+                        title: "Save Plan & Send to iPhone",
+                        subtitle: "Shows on iPhone and Apple Watch for 24 hours",
+                        symbol: "iphone.badge.arrow.forward",
                         tint: .orange
                     ) {
                         Task {
-                            let routeLaunch: RouteLaunchMetadata
-                            if let plannedRouteLaunchMetadata {
-                                routeLaunch = plannedRouteLaunchMetadata
-                            } else if let fetchedRouteLaunch = await routeLaunchMetadata() {
-                                routeLaunch = fetchedRouteLaunch
-                            } else {
-                                routeLaunch = RouteLaunchMetadata(name: "", trailhead: nil, coordinates: [])
-                            }
-                            liveWorkoutManager.startWorkoutOnWatch(
+                            await sendCurrentPlanToIPhone()
+                        }
+                    }
+                    .disabled(planner.generatedBlueprint == nil)
+                } else {
+                    HStack(spacing: 12) {
+                        ProgramLaunchButton(
+                            title: "Start on iPhone",
+                            subtitle: activity.routeFriendly ? "GPS + phone-connected feeds" : "Local live workout",
+                            symbol: "iphone",
+                            tint: .cyan
+                        ) {
+                            liveWorkoutManager.startWorkoutOnThisDevice(
                                 title: launchTitle,
                                 subtitle: launchSubtitle,
                                 activity: activity.hkWorkoutActivityType,
-                                location: activity.preferredLocationType(for: selectedMode),
-                                routeName: routeLaunch.name.isEmpty ? nil : routeLaunch.name,
-                                trailheadCoordinate: routeLaunch.trailhead,
-                                routeCoordinates: routeLaunch.coordinates
+                                location: activity.preferredLocationType(for: selectedMode)
                             )
                         }
+
+                        ProgramLaunchButton(
+                            title: "Start on Watch",
+                            subtitle: "Mirror back to phone",
+                            symbol: "applewatch",
+                            tint: .orange
+                        ) {
+                            Task {
+                                let routeLaunch: RouteLaunchMetadata
+                                if let plannedRouteLaunchMetadata {
+                                    routeLaunch = plannedRouteLaunchMetadata
+                                } else if let fetchedRouteLaunch = await routeLaunchMetadata() {
+                                    routeLaunch = fetchedRouteLaunch
+                                } else {
+                                    routeLaunch = RouteLaunchMetadata(name: "", trailhead: nil, coordinates: [])
+                                }
+                                liveWorkoutManager.startWorkoutOnWatch(
+                                    title: launchTitle,
+                                    subtitle: launchSubtitle,
+                                    activity: activity.hkWorkoutActivityType,
+                                    location: activity.preferredLocationType(for: selectedMode),
+                                    routeName: routeLaunch.name.isEmpty ? nil : routeLaunch.name,
+                                    trailheadCoordinate: routeLaunch.trailhead,
+                                    routeCoordinates: routeLaunch.coordinates
+                                )
+                            }
+                        }
+                    }
+
+                    if let launchStatusMessage = liveWorkoutManager.launchStatusMessage, !launchStatusMessage.isEmpty {
+                        Text(launchStatusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.8))
                     }
                 }
 
-                if let launchStatusMessage = liveWorkoutManager.launchStatusMessage, !launchStatusMessage.isEmpty {
-                    Text(launchStatusMessage)
+                if isPadDevice, let planSyncStatusMessage, !planSyncStatusMessage.isEmpty {
+                    Text(planSyncStatusMessage)
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(0.8))
                 }
             } else {
                 ProgramEmptyState(
                     title: "Pick the primary activity first",
-                    subtitle: "The first selected activity becomes the live workout type for iPhone or Apple Watch."
+                    subtitle: isPadDevice
+                        ? "The first selected activity becomes the primary plan type that gets sent to iPhone and Apple Watch."
+                        : "The first selected activity becomes the live workout type for iPhone or Apple Watch."
                 )
             }
         }
@@ -616,6 +768,267 @@ struct ProgramBuilderView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func phoneInboxSection(_ plan: ProgramWorkoutPlanRecord) -> some View {
+        ProgramSectionCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("From iPad")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.white)
+                        Text("Expires \(plan.expirationDescription)")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+                    Spacer()
+                    Text("24h")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.orange, in: Capsule())
+                }
+
+                Text(plan.title)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Text(plan.summary)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.76))
+
+                HStack(spacing: 10) {
+                    Button("Use Plan") {
+                        applyPlan(plan)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+
+                    Button("Save") {
+                        var saved = plan
+                        saved.expiresAt = nil
+                        saved.updatedAt = Date()
+                        planStore.saveRepositoryPlan(saved)
+                        planSyncStatusMessage = "Saved iPad plan to Workout Repository."
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Clear") {
+                        planStore.clearInboxPlan()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+    }
+
+    private var workoutRepositorySection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Workout Repository")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("Permanent workout plans sync across iPhone, iPad, and Apple Watch.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                Spacer()
+                if !planStore.repositoryPlans.isEmpty {
+                    Text("\(planStore.repositoryPlans.count)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.88), in: Capsule())
+                }
+            }
+
+            if planStore.repositoryPlans.isEmpty {
+                ProgramEmptyState(
+                    title: "No saved plans yet",
+                    subtitle: "Generate a workout, then save it here to keep it synced and ready on every device."
+                )
+            } else {
+                LazyVStack(spacing: 12) {
+                    ForEach(planStore.repositoryPlans) { plan in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(plan.title)
+                                        .font(.headline.weight(.bold))
+                                        .foregroundStyle(.white)
+                                    Text(plan.summary)
+                                        .font(.footnote)
+                                        .foregroundStyle(.white.opacity(0.72))
+                                        .lineLimit(2)
+                                    Text("Saved \(plan.sourceDeviceLabel) • \(plan.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.55))
+                                }
+                                Spacer()
+                            }
+
+                            HStack(spacing: 10) {
+                                Button("Load") {
+                                    applyPlan(plan)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+
+                                Button("Delete", role: .destructive) {
+                                    planStore.deleteRepositoryPlan(id: plan.id)
+                                    planSyncStatusMessage = "Deleted workout plan."
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                        .padding(14)
+                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    }
+                }
+            }
+        }
+    }
+
+    private func saveCurrentPlanToRepository() async {
+        guard let plan = await buildPlanRecord(expiresAt: nil) else {
+            planSyncStatusMessage = "Generate a workout before saving it to the repository."
+            return
+        }
+        planStore.saveRepositoryPlan(plan)
+        planSyncStatusMessage = "Saved to Workout Repository."
+    }
+
+    private func sendCurrentPlanToIPhone() async {
+        guard let temporaryPlan = await buildPlanRecord(expiresAt: Date().addingTimeInterval(24 * 60 * 60)) else {
+            planSyncStatusMessage = "Generate a workout before sending it to iPhone."
+            return
+        }
+        var permanentPlan = temporaryPlan
+        permanentPlan.expiresAt = nil
+        permanentPlan.updatedAt = Date()
+        planStore.saveRepositoryPlan(permanentPlan)
+        planStore.sendTemporaryPlan(temporaryPlan)
+        planSyncStatusMessage = "Saved and sent from iPad. It will stay at the top of iPhone and Apple Watch for 24 hours."
+    }
+
+    private func buildPlanRecord(expiresAt: Date?) async -> ProgramWorkoutPlanRecord? {
+        guard let activity = selectedActivities.first,
+              let blueprint = planner.generatedBlueprint else {
+            return nil
+        }
+
+        let routeLaunch: RouteLaunchMetadata?
+        if selectedMode == .route {
+            if let plannedRouteLaunchMetadata {
+                routeLaunch = plannedRouteLaunchMetadata
+            } else {
+                routeLaunch = await routeLaunchMetadata()
+            }
+        } else {
+            routeLaunch = nil
+        }
+
+        let phases = buildPlanPhases()
+
+        return ProgramWorkoutPlanRecord(
+            id: UUID(),
+            title: blueprint.title,
+            summary: blueprint.summary,
+            todayFocus: blueprint.todayFocus,
+            blocks: blueprint.blocks,
+            cautionNote: blueprint.cautionNote,
+            selectedActivityIDs: selectedActivityIDs,
+            availableMinutes: Int(availableMinutes.rounded()),
+            modeRawValue: selectedMode.rawValue,
+            allocationWeights: allocationWeights,
+            targetMetricRawValue: selectedTargetMetric.rawValue,
+            selectedZone: selectedZone,
+            targetValueText: targetValueText,
+            routeObjectiveName: routeObjectiveName,
+            routeRepeats: routeRepeats,
+            selectedRouteTemplateID: selectedRouteTemplateID,
+            primaryActivityID: activity.id,
+            activityRawValue: activity.hkWorkoutActivityType.rawValue,
+            locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
+            routeName: routeLaunch?.name,
+            trailhead: routeLaunch?.trailhead.map(ProgramStoredCoordinate.init),
+            routeCoordinates: routeLaunch?.coordinates.map(ProgramStoredCoordinate.init) ?? [],
+            phases: phases.count > 1 ? phases : nil,
+            createdAt: Date(),
+            updatedAt: Date(),
+            expiresAt: expiresAt,
+            sourceDeviceLabel: isPadDevice ? "iPad" : "iPhone"
+        )
+    }
+
+    private func applyPlan(_ plan: ProgramWorkoutPlanRecord) {
+        selectedActivityIDs = plan.selectedActivityIDs
+        availableMinutes = Double(plan.availableMinutes)
+        selectedMode = ProgramBuilderMode(rawValue: plan.modeRawValue) ?? .guided
+        allocationWeights = plan.allocationWeights
+        selectedTargetMetric = ProgramTargetMetric(rawValue: plan.targetMetricRawValue ?? ProgramTargetMetric.pace.rawValue) ?? .pace
+        selectedZone = plan.selectedZone
+        targetValueText = plan.targetValueText
+        routeObjectiveName = plan.routeObjectiveName
+        routeRepeats = plan.routeRepeats
+        selectedRouteTemplateID = plan.selectedRouteTemplateID
+        planner.generatedBlueprint = plan.blueprint
+        plannedRouteLaunchMetadata = RouteLaunchMetadata(
+            name: plan.routeName ?? "",
+            trailhead: plan.trailheadCoordinate,
+            coordinates: plan.routeCoordinateValues
+        )
+        planSyncStatusMessage = plan.expiresAt == nil
+            ? "Loaded repository plan into Program Builder."
+            : "Loaded temporary plan from \(plan.sourceDeviceLabel)."
+        rebalanceWeights(for: selectedActivityIDs)
+        syncTargetMetric()
+        persistBuilderDraft()
+    }
+
+    private func persistBuilderDraft() {
+        let draft = ProgramBuilderDraftState(
+            selectedModeRawValue: selectedMode.rawValue,
+            selectedActivityIDs: selectedActivityIDs,
+            availableMinutes: availableMinutes,
+            allocationWeights: allocationWeights,
+            selectedTargetMetricRawValue: selectedTargetMetric.rawValue,
+            selectedZone: selectedZone,
+            targetValueText: targetValueText,
+            routeObjectiveName: routeObjectiveName,
+            routeRepeats: routeRepeats,
+            selectedRouteTemplateID: selectedRouteTemplateID,
+            coachAdvice: planner.coachAdvice,
+            generatedBlueprint: planner.generatedBlueprint,
+            updatedAt: Date()
+        )
+        planStore.saveDraft(draft)
+    }
+
+    private func restoreCachedDraftIfNeeded() {
+        guard !hasRestoredCachedDraft else { return }
+        hasRestoredCachedDraft = true
+        guard let draft = planStore.cachedDraft else { return }
+
+        selectedMode = ProgramBuilderMode(rawValue: draft.selectedModeRawValue) ?? .guided
+        selectedActivityIDs = draft.selectedActivityIDs
+        availableMinutes = draft.availableMinutes
+        allocationWeights = draft.allocationWeights
+        selectedTargetMetric = ProgramTargetMetric(rawValue: draft.selectedTargetMetricRawValue) ?? .pace
+        selectedZone = draft.selectedZone
+        targetValueText = draft.targetValueText
+        routeObjectiveName = draft.routeObjectiveName
+        routeRepeats = draft.routeRepeats
+        selectedRouteTemplateID = draft.selectedRouteTemplateID
+        if let coachAdvice = draft.coachAdvice, !coachAdvice.isEmpty {
+            planner.coachAdvice = coachAdvice
+        }
+        planner.generatedBlueprint = draft.generatedBlueprint
     }
 
     private func toggleActivity(_ id: String) {
@@ -1344,6 +1757,10 @@ private struct ProgramWorkoutType: Identifiable, Hashable {
             .map(\.0)
     }
 
+    static func resolve(id: String) -> ProgramWorkoutType? {
+        catalog.first { $0.id == id }
+    }
+
     static func rankFromHistory(_ workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) -> [ProgramWorkoutType] {
         var scores: [String: Int] = [:]
         for pair in workouts {
@@ -1477,6 +1894,322 @@ private struct RouteLaunchMetadata {
     let name: String
     let trailhead: CLLocationCoordinate2D?
     let coordinates: [CLLocationCoordinate2D]
+}
+
+struct ProgramStoredCoordinate: Codable, Hashable {
+    let latitude: Double
+    let longitude: Double
+
+    init(_ coordinate: CLLocationCoordinate2D) {
+        self.latitude = coordinate.latitude
+        self.longitude = coordinate.longitude
+    }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+struct ProgramBuilderDraftState: Codable, Hashable {
+    let selectedModeRawValue: String
+    let selectedActivityIDs: [String]
+    let availableMinutes: Double
+    let allocationWeights: [String: Double]
+    let selectedTargetMetricRawValue: String
+    let selectedZone: Int
+    let targetValueText: String
+    let routeObjectiveName: String
+    let routeRepeats: Int
+    let selectedRouteTemplateID: UUID?
+    let coachAdvice: String?
+    let generatedBlueprint: ProgramGeneratedBlueprint?
+    let updatedAt: Date
+}
+
+struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
+    let id: UUID
+    let title: String
+    let subtitle: String
+    let activityID: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let plannedMinutes: Int
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        subtitle: String,
+        activityID: String,
+        activityRawValue: UInt,
+        locationRawValue: Int,
+        plannedMinutes: Int
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.activityID = activityID
+        self.activityRawValue = activityRawValue
+        self.locationRawValue = locationRawValue
+        self.plannedMinutes = plannedMinutes
+    }
+}
+
+struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
+    let id: UUID
+    let title: String
+    let summary: String
+    let todayFocus: String
+    let blocks: [ProgramGeneratedBlueprint.Block]
+    let cautionNote: String?
+    let selectedActivityIDs: [String]
+    let availableMinutes: Int
+    let modeRawValue: String
+    let allocationWeights: [String: Double]
+    let targetMetricRawValue: String?
+    let selectedZone: Int
+    let targetValueText: String
+    let routeObjectiveName: String
+    let routeRepeats: Int
+    let selectedRouteTemplateID: UUID?
+    let primaryActivityID: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let routeName: String?
+    let trailhead: ProgramStoredCoordinate?
+    let routeCoordinates: [ProgramStoredCoordinate]
+    let phases: [ProgramWorkoutPlanPhase]?
+    let createdAt: Date
+    var updatedAt: Date
+    var expiresAt: Date?
+    let sourceDeviceLabel: String
+
+    var blueprint: ProgramGeneratedBlueprint {
+        ProgramGeneratedBlueprint(
+            title: title,
+            summary: summary,
+            todayFocus: todayFocus,
+            blocks: blocks,
+            cautionNote: cautionNote
+        )
+    }
+
+    var isExpired: Bool {
+        if let expiresAt {
+            return expiresAt <= Date()
+        }
+        return false
+    }
+
+    var trailheadCoordinate: CLLocationCoordinate2D? {
+        trailhead?.coordinate
+    }
+
+    var routeCoordinateValues: [CLLocationCoordinate2D] {
+        routeCoordinates.map(\.coordinate)
+    }
+
+    var resolvedPhases: [ProgramWorkoutPlanPhase] {
+        if let phases, !phases.isEmpty {
+            return phases
+        }
+
+        return [
+            ProgramWorkoutPlanPhase(
+                title: ProgramWorkoutType.resolve(id: primaryActivityID)?.title ?? title,
+                subtitle: "\(availableMinutes) min planned",
+                activityID: primaryActivityID,
+                activityRawValue: activityRawValue,
+                locationRawValue: locationRawValue,
+                plannedMinutes: max(availableMinutes, 1)
+            )
+        ]
+    }
+
+    var expirationDescription: String {
+        guard let expiresAt else { return "No expiration" }
+        return expiresAt.formatted(date: .omitted, time: .shortened)
+    }
+}
+
+@MainActor
+final class ProgramWorkoutPlanStore: ObservableObject {
+    static let shared = ProgramWorkoutPlanStore()
+
+    private enum Persistence {
+        static let repositoryKey = "program_builder_repository_v1"
+        static let inboxKey = "program_builder_inbox_v1"
+        static let draftKey = "program_builder_draft_v1"
+    }
+
+    @Published private(set) var repositoryPlans: [ProgramWorkoutPlanRecord] = []
+    @Published private(set) var inboxPlan: ProgramWorkoutPlanRecord?
+    @Published private(set) var cachedDraft: ProgramBuilderDraftState?
+
+    private var cloudObserver: NSObjectProtocol?
+
+    var activeInboxPlan: ProgramWorkoutPlanRecord? {
+        if let inboxPlan, !inboxPlan.isExpired {
+            return inboxPlan
+        }
+        return nil
+    }
+
+    private init() {
+        reloadFromPersistence()
+        cloudObserver = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: NSUbiquitousKeyValueStore.default,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadFromPersistence()
+        }
+    }
+
+    deinit {
+        if let cloudObserver {
+            NotificationCenter.default.removeObserver(cloudObserver)
+        }
+    }
+
+    func saveRepositoryPlan(_ plan: ProgramWorkoutPlanRecord) {
+        var updated = repositoryPlans
+        if let existingIndex = updated.firstIndex(where: { $0.id == plan.id }) {
+            updated[existingIndex] = plan
+        } else {
+            updated.insert(plan, at: 0)
+        }
+        repositoryPlans = updated.sorted { $0.updatedAt > $1.updatedAt }
+        persistAll()
+    }
+
+    func deleteRepositoryPlan(id: UUID) {
+        repositoryPlans.removeAll { $0.id == id }
+        persistAll()
+    }
+
+    func sendTemporaryPlan(_ plan: ProgramWorkoutPlanRecord) {
+        inboxPlan = plan
+        persistAll()
+    }
+
+    func clearInboxPlan() {
+        inboxPlan = nil
+        persistAll()
+    }
+
+    fileprivate func saveDraft(_ draft: ProgramBuilderDraftState) {
+        cachedDraft = draft
+        persistAll()
+    }
+
+    private func reloadFromPersistence() {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+
+        let localRepository = decodeRepository(from: UserDefaults.standard.data(forKey: Persistence.repositoryKey))
+        let cloudRepository = decodeRepository(from: cloudStore.data(forKey: Persistence.repositoryKey))
+        repositoryPlans = mergePlans(localRepository, cloudRepository)
+
+        let localInbox = decodeInbox(from: UserDefaults.standard.data(forKey: Persistence.inboxKey))
+        let cloudInbox = decodeInbox(from: cloudStore.data(forKey: Persistence.inboxKey))
+        inboxPlan = preferredInbox(localInbox, cloudInbox)
+        if inboxPlan?.isExpired == true {
+            inboxPlan = nil
+        }
+
+        let localDraft = decodeDraft(from: UserDefaults.standard.data(forKey: Persistence.draftKey))
+        let cloudDraft = decodeDraft(from: cloudStore.data(forKey: Persistence.draftKey))
+        cachedDraft = preferredDraft(localDraft, cloudDraft)
+
+        persistAll()
+    }
+
+    private func persistAll() {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+
+        let validRepository = repositoryPlans.filter { !$0.isExpired }
+        repositoryPlans = validRepository.sorted { $0.updatedAt > $1.updatedAt }
+
+        if let encodedRepository = try? JSONEncoder().encode(repositoryPlans) {
+            UserDefaults.standard.set(encodedRepository, forKey: Persistence.repositoryKey)
+            cloudStore.set(encodedRepository, forKey: Persistence.repositoryKey)
+        }
+
+        if let inboxPlan, !inboxPlan.isExpired, let encodedInbox = try? JSONEncoder().encode(inboxPlan) {
+            UserDefaults.standard.set(encodedInbox, forKey: Persistence.inboxKey)
+            cloudStore.set(encodedInbox, forKey: Persistence.inboxKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Persistence.inboxKey)
+            cloudStore.removeObject(forKey: Persistence.inboxKey)
+        }
+
+        if let cachedDraft, let encodedDraft = try? JSONEncoder().encode(cachedDraft) {
+            UserDefaults.standard.set(encodedDraft, forKey: Persistence.draftKey)
+            cloudStore.set(encodedDraft, forKey: Persistence.draftKey)
+        }
+    }
+
+    private func decodeRepository(from data: Data?) -> [ProgramWorkoutPlanRecord] {
+        guard let data,
+              let decoded = try? JSONDecoder().decode([ProgramWorkoutPlanRecord].self, from: data) else {
+            return []
+        }
+        return decoded.filter { !$0.isExpired }
+    }
+
+    private func decodeInbox(from data: Data?) -> ProgramWorkoutPlanRecord? {
+        guard let data,
+              let decoded = try? JSONDecoder().decode(ProgramWorkoutPlanRecord.self, from: data),
+              !decoded.isExpired else {
+            return nil
+        }
+        return decoded
+    }
+
+    private func decodeDraft(from data: Data?) -> ProgramBuilderDraftState? {
+        guard let data,
+              let decoded = try? JSONDecoder().decode(ProgramBuilderDraftState.self, from: data) else {
+            return nil
+        }
+        return decoded
+    }
+
+    private func mergePlans(_ lhs: [ProgramWorkoutPlanRecord], _ rhs: [ProgramWorkoutPlanRecord]) -> [ProgramWorkoutPlanRecord] {
+        var merged: [UUID: ProgramWorkoutPlanRecord] = Dictionary(uniqueKeysWithValues: lhs.map { ($0.id, $0) })
+        for plan in rhs {
+            if let existing = merged[plan.id] {
+                merged[plan.id] = existing.updatedAt >= plan.updatedAt ? existing : plan
+            } else {
+                merged[plan.id] = plan
+            }
+        }
+        return merged.values.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private func preferredInbox(_ lhs: ProgramWorkoutPlanRecord?, _ rhs: ProgramWorkoutPlanRecord?) -> ProgramWorkoutPlanRecord? {
+        switch (lhs, rhs) {
+        case let (left?, right?):
+            return left.updatedAt >= right.updatedAt ? left : right
+        case let (left?, nil):
+            return left
+        case let (nil, right?):
+            return right
+        default:
+            return nil
+        }
+    }
+
+    private func preferredDraft(_ lhs: ProgramBuilderDraftState?, _ rhs: ProgramBuilderDraftState?) -> ProgramBuilderDraftState? {
+        switch (lhs, rhs) {
+        case let (left?, right?):
+            return left.updatedAt >= right.updatedAt ? left : right
+        case let (left?, nil):
+            return left
+        case let (nil, right?):
+            return right
+        default:
+            return nil
+        }
+    }
 }
 
 private struct ProgramRecentWorkout: Identifiable {
@@ -1711,9 +2444,9 @@ Each block should have a clear purpose and fit the available minutes.
 #if canImport(FoundationModels)
 @available(iOS 26.0, *)
 @Generable(description: "A structured workout blueprint for today.")
-private struct ProgramGeneratedBlueprint: Identifiable {
+struct ProgramGeneratedBlueprint: Identifiable, Codable, Hashable {
     @Generable(description: "A single block inside the generated workout blueprint.")
-    struct Block: Identifiable {
+    struct Block: Identifiable, Codable, Hashable {
         var id: String { "\(title)-\(minutes)" }
         var title: String
         var minutes: Int
@@ -1729,8 +2462,8 @@ private struct ProgramGeneratedBlueprint: Identifiable {
     var cautionNote: String?
 }
 #else
-private struct ProgramGeneratedBlueprint: Identifiable {
-    struct Block: Identifiable {
+struct ProgramGeneratedBlueprint: Identifiable, Codable, Hashable {
+    struct Block: Identifiable, Codable, Hashable {
         var id: String { "\(title)-\(minutes)" }
         var title: String
         var minutes: Int

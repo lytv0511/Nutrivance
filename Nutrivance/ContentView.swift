@@ -240,6 +240,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         case split
         case stop
         case newWorkout
+        case nextPhase
     }
 
     private enum SessionStateText {
@@ -284,6 +285,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let currentElevationFeet: Double
         let elevationGainFeet: Double
         let pacerTarget: MirroredPacerPayload?
+        let phaseQueue: [MirroredPhasePayload]
+        let currentPhaseIndex: Int
+        let effortPrompt: MirroredEffortPromptPayload?
     }
 
     private struct MirroredSeriesPointPayload: Codable {
@@ -306,6 +310,38 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let lowerBound: Double
         let upperBound: Double
         let unitLabel: String
+    }
+
+    private struct MirroredPhasePayload: Codable {
+        let id: UUID
+        let title: String
+        let subtitle: String
+        let activityRawValue: UInt
+        let locationRawValue: Int
+        let plannedMinutes: Int
+    }
+
+    private struct MirroredEffortPromptPayload: Codable {
+        let phaseID: UUID
+        let title: String
+        let subtitle: String
+    }
+
+    struct WorkoutPhase: Identifiable, Hashable {
+        let id: UUID
+        let title: String
+        let subtitle: String
+        let activityRawValue: UInt
+        let locationRawValue: Int
+        let plannedMinutes: Int
+    }
+
+    struct EffortPromptPhase: Identifiable, Hashable {
+        let phaseID: UUID
+        let title: String
+        let subtitle: String
+
+        var id: UUID { phaseID }
     }
 
     struct LiveMetric: Identifiable, Hashable {
@@ -343,6 +379,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     @Published private(set) var elevationGainFeet: Double = 0
     @Published private(set) var pacerTarget: CompanionWorkoutPacerTarget?
     @Published private(set) var isWorkoutActive = false
+    @Published private(set) var phaseQueue: [WorkoutPhase] = []
+    @Published private(set) var currentPhaseIndex = 0
+    @Published private(set) var pendingEffortPrompt: EffortPromptPhase?
     private var source: CompanionWorkoutSource = .appleWatch
     @Published private(set) var launchStatusMessage: String?
     private var shouldAutoPresentLiveView = true
@@ -366,6 +405,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         static let workoutLifecycle = "workoutLifecycle"
         static let state = "state"
         static let reason = "reason"
+        static let effortScore = "effortScore"
     }
 
     var canReopenLiveView: Bool {
@@ -566,6 +606,20 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         pacerTarget = payload.pacerTarget.map {
             CompanionWorkoutPacerTarget(lowerBound: $0.lowerBound, upperBound: $0.upperBound, unitLabel: $0.unitLabel)
         }
+        phaseQueue = payload.phaseQueue.map {
+            WorkoutPhase(
+                id: $0.id,
+                title: $0.title,
+                subtitle: $0.subtitle,
+                activityRawValue: $0.activityRawValue,
+                locationRawValue: $0.locationRawValue,
+                plannedMinutes: $0.plannedMinutes
+            )
+        }
+        currentPhaseIndex = payload.currentPhaseIndex
+        pendingEffortPrompt = payload.effortPrompt.map {
+            EffortPromptPhase(phaseID: $0.phaseID, title: $0.title, subtitle: $0.subtitle)
+        }
         isWorkoutActive = true
         if shouldAutoPresentLiveView {
             isVisible = true
@@ -740,6 +794,24 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 #endif
     }
 
+    func submitEffortScoreOnPhone(_ score: Int) {
+#if canImport(WatchConnectivity)
+        activateIfNeeded()
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        let payload: [String: Any] = [CompanionLifecycleKeys.effortScore: score]
+        if session.activationState != .activated {
+            session.activate()
+        }
+        pendingEffortPrompt = nil
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        } else {
+            session.transferUserInfo(payload)
+        }
+#endif
+    }
+
     private func handleLocalControl(_ command: WorkoutControlCommand) {
         switch command {
         case .pause:
@@ -761,6 +833,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         case .newWorkout:
             pendingLocalEndAction = .newWorkout
             endLocalWorkout()
+        case .nextPhase:
+            launchStatusMessage = "Next phase switching is currently handled from the staged watch workflow."
         }
     }
 
@@ -778,6 +852,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             finishSession(immediate: true)
         case .newWorkout:
             launchStatusMessage = "Requested next workout on Apple Watch."
+        case .nextPhase:
+            launchStatusMessage = "Requested next phase on Apple Watch."
         }
     }
 
@@ -988,6 +1064,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         currentElevationFeet = 0
         elevationGainFeet = 0
         pacerTarget = nil
+        phaseQueue = []
+        currentPhaseIndex = 0
+        pendingEffortPrompt = nil
         builder = nil
         lastLocation = nil
         locationManager.stopUpdatingLocation()
@@ -1161,7 +1240,7 @@ private struct CompanionWorkoutLiveOverlay: View {
             Color.black.ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top) {
+                HStack(alignment: .top, spacing: 14) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(manager.title)
                             .font(.system(.title3, design: .rounded, weight: .bold))
@@ -1170,6 +1249,8 @@ private struct CompanionWorkoutLiveOverlay: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Text(companionElapsedString(manager.elapsedTime))
+                        .font(.system(size: 32, weight: .black, design: .rounded).monospacedDigit())
                     Button {
                         manager.dismissLiveView()
                     } label: {
@@ -1180,8 +1261,6 @@ private struct CompanionWorkoutLiveOverlay: View {
                             .background(Color.white.opacity(0.1), in: Circle())
                     }
                     .buttonStyle(.plain)
-                    Text(companionElapsedString(manager.elapsedTime))
-                        .font(.system(size: 32, weight: .black, design: .rounded).monospacedDigit())
                 }
 
                 TabView(selection: $selectedPage) {
@@ -1192,9 +1271,13 @@ private struct CompanionWorkoutLiveOverlay: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .automatic))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if let prompt = manager.pendingEffortPrompt {
+                    CompanionWorkoutEffortCard(manager: manager, prompt: prompt)
+                }
             }
             .padding(.horizontal, 22)
-            .padding(.top, 52)
+            .padding(.top, 26)
             .padding(.bottom, controlsExpanded ? 208 : 112)
 
             CompanionWorkoutControlsDrawer(
@@ -1217,6 +1300,7 @@ private struct CompanionWorkoutLiveOverlay: View {
 private struct CompanionWorkoutControlsDrawer: View {
     @ObservedObject var manager: CompanionWorkoutLiveManager
     @Binding var isExpanded: Bool
+    @State private var showsQueue = false
 
     private var primaryControlLabel: String {
         manager.isPaused ? "Resume" : "Pause"
@@ -1228,6 +1312,11 @@ private struct CompanionWorkoutControlsDrawer: View {
 
     private var primaryControlCommand: CompanionWorkoutLiveManager.WorkoutControlCommand {
         manager.isPaused ? .resume : .pause
+    }
+
+    private var nextPhase: CompanionWorkoutLiveManager.WorkoutPhase? {
+        let nextIndex = manager.currentPhaseIndex + 1
+        return manager.phaseQueue.indices.contains(nextIndex) ? manager.phaseQueue[nextIndex] : nil
     }
 
     var body: some View {
@@ -1267,8 +1356,51 @@ private struct CompanionWorkoutControlsDrawer: View {
                         CompanionWorkoutControlButton(symbol: "stop.fill", title: "Stop", tint: .red) {
                             manager.sendControl(.stop)
                         }
+                        if let nextPhase {
+                            CompanionWorkoutControlButton(
+                                symbol: "forward.end.fill",
+                                title: "Next: \(nextPhase.title) \(nextPhase.plannedMinutes)m",
+                                tint: .green
+                            ) {
+                                manager.sendControl(.nextPhase)
+                            }
+                        }
+                        if manager.phaseQueue.count > 1 {
+                            CompanionWorkoutControlButton(symbol: "list.bullet", title: showsQueue ? "Hide Queue" : "List", tint: .mint) {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                                    showsQueue.toggle()
+                                }
+                            }
+                        }
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+
+                    if showsQueue, !manager.phaseQueue.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: index == manager.currentPhaseIndex ? "play.circle.fill" : "circle")
+                                        .foregroundStyle(index == manager.currentPhaseIndex ? Color.green : Color.white.opacity(0.45))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(phase.title)
+                                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                                            .foregroundStyle(.white)
+                                        Text(index == manager.currentPhaseIndex
+                                             ? "Current • \(phase.plannedMinutes) min planned"
+                                             : "\(phase.plannedMinutes) min planned")
+                                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(.white.opacity(0.65))
+                                    }
+                                    Spacer()
+                                }
+                            }
+                        }
+                        .padding(16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .fill(Color.white.opacity(0.05))
+                        )
+                    }
                 }
             }
             .padding(.horizontal, 20)
@@ -1302,6 +1434,9 @@ private struct CompanionWorkoutControlButton: View {
                 Text(title)
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.65)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 92)
@@ -1343,6 +1478,58 @@ private struct CompanionWorkoutReentryButton: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct CompanionWorkoutEffortCard: View {
+    @ObservedObject var manager: CompanionWorkoutLiveManager
+    let prompt: CompanionWorkoutLiveManager.EffortPromptPhase
+    @State private var score = 5.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Log Effort")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.72))
+                    Text(prompt.title)
+                        .font(.system(size: 20, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(prompt.subtitle)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                Spacer()
+                Text("\(Int(score.rounded()))/10")
+                    .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.green)
+            }
+
+            Slider(value: $score, in: 1...10, step: 1)
+                .tint(.green)
+
+            Button {
+                manager.submitEffortScoreOnPhone(Int(score.rounded()))
+            } label: {
+                Text("Save on iPhone")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.green, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .foregroundStyle(.black)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
     }
 }
 
@@ -1412,13 +1599,25 @@ private struct CompanionWorkoutMetricsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(companionMetricLines(for: manager, variant: variant)) { line in
-                HStack(alignment: .lastTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Image(systemName: line.symbol)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(line.tint)
+                            .frame(width: 24, height: 24)
+                            .background(line.tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        if !line.label.isEmpty {
+                            Text(line.label)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                    }
                     Text(line.value)
-                        .font(.system(size: 50, weight: .black, design: .rounded).monospacedDigit())
+                        .font(.system(size: 44, weight: .black, design: .rounded).monospacedDigit())
                         .minimumScaleFactor(0.55)
-                    Text(line.label)
-                        .font(.system(size: 16, weight: .black, design: .rounded))
-                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             Spacer()
@@ -1486,9 +1685,16 @@ private struct CompanionWorkoutGraphPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title)
-                .font(.system(size: 20, weight: .black, design: .rounded))
-                .foregroundStyle(accent)
+            HStack(spacing: 8) {
+                Image(systemName: companionMetricSymbol(for: title))
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(accent)
+                    .frame(width: 24, height: 24)
+                    .background(accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Text(title)
+                    .font(.system(size: 20, weight: .black, design: .rounded))
+                    .foregroundStyle(accent)
+            }
 
             CompanionWorkoutSparkline(points: points, accent: accent)
                 .frame(height: 120)
@@ -1722,6 +1928,8 @@ private struct CompanionMetricLine: Identifiable {
     let id: String
     let value: String
     let label: String
+    let symbol: String
+    let tint: Color
 }
 
 @MainActor
@@ -1733,32 +1941,46 @@ private func companionMetricLines(for manager: CompanionWorkoutLiveManager, vari
         switch manager.activityType {
         case .cycling:
             return [
-                .init(id: "speed", value: companionSpeedValue(metersPerSecond: avgSpeed), label: "AVERAGE SPEED"),
-                .init(id: "elev", value: "\(Int(manager.elevationGainFeet.rounded()))FT", label: "ELEVATION GAINED"),
-                .init(id: "distance", value: companionDistanceValue(distanceMeters: manager.totalDistanceMeters, activityType: manager.activityType), label: "")
+                .init(id: "speed", value: companionSpeedValue(metersPerSecond: avgSpeed), label: "AVERAGE SPEED", symbol: "speedometer", tint: .cyan),
+                .init(id: "elev", value: "\(Int(manager.elevationGainFeet.rounded()))FT", label: "ELEVATION GAINED", symbol: "mountain.2.fill", tint: .green),
+                .init(id: "distance", value: companionDistanceValue(distanceMeters: manager.totalDistanceMeters, activityType: manager.activityType), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .orange)
             ]
         default:
             return [
-                .init(id: "time", value: companionElapsedString(manager.elapsedTime), label: ""),
-                .init(id: "pace", value: companionPaceValue(speed: manager.currentSpeedMetersPerSecond == nil ? nil : avgSpeed), label: "AVERAGE PACE"),
-                .init(id: "distance", value: companionDistanceValue(distanceMeters: manager.totalDistanceMeters, activityType: manager.activityType), label: "")
+                .init(id: "time", value: companionElapsedString(manager.elapsedTime), label: "TIME", symbol: "timer", tint: .yellow),
+                .init(id: "pace", value: companionPaceValue(speed: manager.currentSpeedMetersPerSecond == nil ? nil : avgSpeed), label: "AVERAGE PACE", symbol: "figure.run", tint: .mint),
+                .init(id: "distance", value: companionDistanceValue(distanceMeters: manager.totalDistanceMeters, activityType: manager.activityType), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .orange)
             ]
         }
     case .secondary:
         switch manager.activityType {
         case .cycling:
             return [
-                .init(id: "power", value: manager.currentPowerWatts.map { "\(Int($0.rounded()))W" } ?? "--", label: "POWER"),
-                .init(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))RPM" } ?? "--", label: "CADENCE"),
-                .init(id: "speed", value: companionSpeedValue(metersPerSecond: manager.currentSpeedMetersPerSecond), label: "CURRENT SPEED")
+                .init(id: "power", value: manager.currentPowerWatts.map { "\(Int($0.rounded()))W" } ?? "--", label: "POWER", symbol: "bolt.fill", tint: .green),
+                .init(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))RPM" } ?? "--", label: "CADENCE", symbol: "metronome.fill", tint: .mint),
+                .init(id: "speed", value: companionSpeedValue(metersPerSecond: manager.currentSpeedMetersPerSecond), label: "CURRENT SPEED", symbol: "speedometer", tint: .cyan)
             ]
         default:
             return [
-                .init(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))" } ?? "--", label: "CADENCE"),
-                .init(id: "pace", value: companionPaceValue(speed: manager.currentSpeedMetersPerSecond), label: "CURRENT PACE"),
-                .init(id: "hr", value: manager.currentHeartRate.map { "\(Int($0.rounded())) BPM" } ?? "--", label: "HEART RATE")
+                .init(id: "cadence", value: manager.currentCadence.map { "\(Int($0.rounded()))" } ?? "--", label: "CADENCE", symbol: "metronome.fill", tint: .mint),
+                .init(id: "pace", value: companionPaceValue(speed: manager.currentSpeedMetersPerSecond), label: "CURRENT PACE", symbol: "figure.run", tint: .cyan),
+                .init(id: "hr", value: manager.currentHeartRate.map { "\(Int($0.rounded())) BPM" } ?? "--", label: "HEART RATE", symbol: "heart.fill", tint: .red)
             ]
         }
+    }
+}
+
+@MainActor
+private func companionMetricSymbol(for title: String) -> String {
+    switch title {
+    case "POWER":
+        return "bolt.fill"
+    case "ELEVATION":
+        return "mountain.2.fill"
+    case "SEGMENTS":
+        return "figure.run"
+    default:
+        return "chart.xyaxis.line"
     }
 }
 

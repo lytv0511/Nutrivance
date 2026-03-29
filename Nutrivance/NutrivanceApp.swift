@@ -44,6 +44,8 @@ private struct WatchDashboardPayload: Codable {
     let sleepHours: Double
     let sleepConsistencyScore: Double
     let sleepStages: [WatchSleepStagePayload]
+    let incomingPlan: WatchProgramPlanPayload?
+    let savedPlans: [WatchProgramPlanPayload]
 }
 
 private struct WatchMetricPointPayload: Codable {
@@ -88,6 +90,37 @@ private struct WatchSleepStagePayload: Codable {
     let name: String
     let hours: Double
     let colorName: String
+}
+
+private struct WatchPlanCoordinatePayload: Codable {
+    let latitude: Double
+    let longitude: Double
+}
+
+private struct WatchProgramPlanPayload: Codable {
+    let id: UUID
+    let title: String
+    let summary: String
+    let todayFocus: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let routeName: String?
+    let trailhead: WatchPlanCoordinatePayload?
+    let routeCoordinates: [WatchPlanCoordinatePayload]
+    let phases: [WatchProgramPhasePayload]
+    let sourceDeviceLabel: String
+    let createdAt: Date
+    let expiresAt: Date?
+}
+
+private struct WatchProgramPhasePayload: Codable {
+    let id: UUID
+    let title: String
+    let subtitle: String
+    let activityID: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let plannedMinutes: Int
 }
 
 private struct WatchCoachCacheEntry: Codable {
@@ -159,6 +192,13 @@ final class WatchDashboardSyncBridge: NSObject {
             .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 self?.scheduleSnapshotRefresh(reason: "defaults")
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleSnapshotRefresh(reason: "icloud")
             }
             .store(in: &cancellables)
     }
@@ -273,9 +313,40 @@ final class WatchDashboardSyncBridge: NSObject {
             ),
             sleepHours: sleepHours,
             sleepConsistencyScore: sleepConsistencyScore,
-            sleepStages: sleepStagePayloads
+            sleepStages: sleepStagePayloads,
+            incomingPlan: ProgramWorkoutPlanStore.shared.activeInboxPlan.map(watchProgramPlanPayload(from:)),
+            savedPlans: ProgramWorkoutPlanStore.shared.repositoryPlans.prefix(8).map(watchProgramPlanPayload(from:))
         )
     }
+}
+
+@MainActor
+private func watchProgramPlanPayload(from plan: ProgramWorkoutPlanRecord) -> WatchProgramPlanPayload {
+    WatchProgramPlanPayload(
+        id: plan.id,
+        title: plan.title,
+        summary: plan.summary,
+        todayFocus: plan.todayFocus,
+        activityRawValue: plan.activityRawValue,
+        locationRawValue: plan.locationRawValue,
+        routeName: plan.routeName,
+        trailhead: plan.trailhead.map { WatchPlanCoordinatePayload(latitude: $0.latitude, longitude: $0.longitude) },
+        routeCoordinates: plan.routeCoordinates.prefix(60).map { WatchPlanCoordinatePayload(latitude: $0.latitude, longitude: $0.longitude) },
+        phases: plan.resolvedPhases.map {
+            WatchProgramPhasePayload(
+                id: $0.id,
+                title: $0.title,
+                subtitle: $0.subtitle,
+                activityID: $0.activityID,
+                activityRawValue: $0.activityRawValue,
+                locationRawValue: $0.locationRawValue,
+                plannedMinutes: $0.plannedMinutes
+            )
+        },
+        sourceDeviceLabel: plan.sourceDeviceLabel,
+        createdAt: plan.createdAt,
+        expiresAt: plan.expiresAt
+    )
 }
 
 extension WatchDashboardSyncBridge: WCSessionDelegate {
