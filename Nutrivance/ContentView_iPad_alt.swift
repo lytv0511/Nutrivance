@@ -43,7 +43,9 @@ struct ContentView_iPad_alt: View {
             }
             .customizationID("iPad.tab.search")
             Tab("Program Builder", systemImage: "figure.run", value: RootTabSelection.programBuilder) {
-                ProgramBuilderView()
+                NavigationStack {
+                    ProgramBuilderView()
+                }
             }
             .customizationID("iPad.tab.programBuilder")
             .defaultVisibility(.visible, for: .tabBar)

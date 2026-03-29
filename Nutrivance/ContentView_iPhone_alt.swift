@@ -110,7 +110,9 @@ struct ContentView_iPhone_alt: View {
 //                .customizationBehavior(.disabled, for: .sidebar)
             
                 Tab("Workout", systemImage: "figure.run", value: RootTabSelection.programBuilder) {
-                    ProgramBuilderView()
+                    NavigationStack {
+                        ProgramBuilderView()
+                    }
                 }
                 .customizationID( "iPhone.tab.builder")
                 .defaultVisibility(.visible, for: .tabBar)

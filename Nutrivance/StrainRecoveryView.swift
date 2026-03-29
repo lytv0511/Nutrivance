@@ -1240,9 +1240,14 @@ Never refer to the athlete in the third person. Use You and Your.
 Focus on actionable coaching, not generic explanation.
 Never be scolding, judgmental, shaming, or critical of the athlete.
 You are an AI coach working from incomplete signals, and the athlete may be experiencing context the data does not capture.
+Metrics are useful points of reference, not gospel, and they never capture the full picture of the athlete's life, stress, motivation, or capability.
 If strain, recovery, readiness, sleep, HRV, HRR, resting heart rate, or other signals appear to conflict, treat that as uncertainty rather than proof that the athlete is wrong.
 In mismatch cases, use a gentle noticing style such as hey, notice this pattern or this may be worth watching, and offer suggestions rather than verdicts.
 Do not accuse the athlete of making mistakes, ignoring recovery, overdoing it, or underperforming unless the prompt explicitly asks for blunt critique.
+Do not use discouraging stock phrases such as this is concerning, you should take it easy, keep it short and to the point, back off, or anything that unnecessarily dampens motivation.
+If recovery or readiness is Full Send or Perform, lean clearly encouraging and confident. Reinforce that high recovery and readiness are positive signals in this app's logic and speak like a coach who believes the athlete can go do the work.
+If recovery or readiness is Adapt, acknowledge that the state may be a bit less ready than ideal, but keep the tone supportive and forward-moving. Emphasize smart execution, confidence, and flexibility without sounding parental or overprotective.
+Even when you see caution signals, frame them as subtle watch-points and choices, not as a reason to deflate momentum.
 When the evidence is mixed, acknowledge uncertainty, stay supportive, and suggest the next best adjustment, check-in, or experiment.
 Vary sentence openings. Do not start every sentence with You.
 When mentioning a trend, comparison, peak, drop, or streak, anchor it to explicit dates or date ranges whenever the prompt provides them.
@@ -1276,9 +1281,14 @@ Never refer to the athlete in the third person. Use You and Your.
 Focus on actionable coaching, not generic explanation.
 Never be scolding, judgmental, shaming, or critical of the athlete.
 You are an AI coach working from incomplete signals, and the athlete may be experiencing context the data does not capture.
+Metrics are useful points of reference, not gospel, and they never capture the full picture of the athlete's life, stress, motivation, or capability.
 If strain, recovery, readiness, sleep, HRV, HRR, resting heart rate, or other signals appear to conflict, treat that as uncertainty rather than proof that the athlete is wrong.
 In mismatch cases, use a gentle noticing style such as hey, notice this pattern or this may be worth watching, and offer suggestions rather than verdicts.
 Do not accuse the athlete of making mistakes, ignoring recovery, overdoing it, or underperforming unless the prompt explicitly asks for blunt critique.
+Do not use discouraging stock phrases such as this is concerning, you should take it easy, keep it short and to the point, back off, or anything that unnecessarily dampens motivation.
+If recovery or readiness is Full Send or Perform, lean clearly encouraging and confident. Reinforce that high recovery and readiness are positive signals in this app's logic and speak like a coach who believes the athlete can go do the work.
+If recovery or readiness is Adapt, acknowledge that the state may be a bit less ready than ideal, but keep the tone supportive and forward-moving. Emphasize smart execution, confidence, and flexibility without sounding parental or overprotective.
+Even when you see caution signals, frame them as subtle watch-points and choices, not as a reason to deflate momentum.
 When the evidence is mixed, acknowledge uncertainty, stay supportive, and suggest the next best adjustment, check-in, or experiment.
 Vary sentence openings. Do not start every sentence with You.
 When mentioning a trend, comparison, peak, drop, or streak, anchor it to explicit dates or date ranges whenever the prompt provides them.
@@ -1324,6 +1334,9 @@ Score construction reference for this app:
 - High strain plus high recovery can be a positive match when recovery is keeping pace with load.
 - High strain plus low recovery is the clearest mismatch or overreach pattern.
 - Treat match versus mismatch as central. Either score by itself is incomplete. The main question is whether recovery is supporting the current level of strain, lagging behind it, or comfortably exceeding it.
+- High recovery and high readiness are positive coaching signals in this app and should be treated as supportive, not suspicious, unless there is unusually strong contradictory evidence.
+- Full Send and Perform should usually sound encouraging and confident. Adapt should still sound supportive and capable, not deflating or parental.
+- Avoid discouraging phrasing like this is concerning, you should take it easy, or keep it short and to the point unless the user explicitly asked for blunt caution.
 """
 
 @MainActor
@@ -3851,11 +3864,15 @@ private struct StrainRecoverySummaryRequest {
         - A low strain score with a high recovery score is usually a fresh or well-recovered state, not a mismatch problem.
         - Do not judge strain or recovery in isolation. Treat the match or mismatch between them as a major part of the coaching call.
         - High strain with high recovery can be a productive match. High strain with low recovery is the clearest mismatch. Low strain with high recovery usually means freshness or under-loading depending on the training goal.
+        - Metrics are coaching references, not gospel. They do not capture the athlete's full picture, so do not let them override motivation or self-knowledge.
         - Do not demand a perfect score match. Recovery does not need to be near 100 to support a good training day.
         - Treat strain in the productive or high range together with Perform recovery as a solid, coachable state unless other dated evidence clearly points to breakdown.
         - Example calibration for this app: a strain near 15/21 with recovery near 77/100 Perform is generally a good match, not an automatic warning.
+        - If recovery or readiness is Full Send or Perform, use encouraging language and reinforce that the athlete is in a good state to go do meaningful work.
+        - If recovery or readiness is Adapt, stay supportive and subtle. Acknowledge the state may be a bit less ready than ideal, but use language about execution, control, and confidence rather than babysitting best practices.
         - Save stronger criticism for serious mismatch patterns: high strain with Adapt or Recover recovery, several dated check-ins showing recovery slipping while strain stays elevated, or multiple supporting negatives like sleep debt, rising RHR, suppressed HRV, poor HRR, or unstable vitals.
         - When strain and recovery are supporting each other well enough, acknowledge that explicitly and reinforce what is working.
+        - Avoid discouraging stock phrases like this is concerning, you should take it easy, or this workout should be short and to the point.
         - Prioritize coaching based on this intent: \(intent.promptInstruction)
         - Distinguish this report from other filters through both content selection and vocabulary.
         - Avoid repeating the same stock explanation patterns across different filters.
@@ -4930,13 +4947,13 @@ private struct RecoveryClassification {
 private func recoveryClassification(for score: Double) -> RecoveryClassification {
     switch score {
     case 90...100:
-        return RecoveryClassification(title: "Full Send", detail: "Green light for maximum intensity.", color: .green)
+        return RecoveryClassification(title: "Full Send", detail: "Strong state for ambitious work if it matches your goal.", color: .green)
     case 70..<90:
-        return RecoveryClassification(title: "Perform", detail: "Solid state for quality work.", color: .green)
+        return RecoveryClassification(title: "Perform", detail: "Solid state for quality work and good momentum.", color: .green)
     case 40..<70:
-        return RecoveryClassification(title: "Adapt", detail: "Body is processing stress; keep it moderate.", color: .orange)
+        return RecoveryClassification(title: "Adapt", detail: "A bit less ready than ideal, so aim for sharp execution and controlled intent.", color: .orange)
     default:
-        return RecoveryClassification(title: "Recover", detail: "Physiological red flag; prioritize sleep and mobility.", color: .red)
+        return RecoveryClassification(title: "Recover", detail: "Recovery reserve looks limited, so keep the focus on rebuilding support for the next push.", color: .red)
     }
 }
 
@@ -5564,10 +5581,10 @@ private func localFallbackSummary(
         }
 
         if loadStatus.title == "Spike" || loadStatus.title == "Aggressive" {
-            return "Your Equalizer is tilting toward strain. You need recovery to catch up before you keep pressing."
+            return "Your Equalizer is tilting toward strain, so the best move is to stay precise and make the next push count."
         }
 
-        return "Your Equalizer looks manageable right now, but the next step depends on whether recovery keeps pace with load."
+        return "Your Equalizer looks manageable right now, and the next step is to keep the work purposeful as recovery tracks the load."
     }()
     let overreachSignal: String = {
         guard let latestHRR = hrrData.last?.1,
@@ -5578,7 +5595,7 @@ private func localFallbackSummary(
         }
 
         if latestHRR < averageHRR * 0.92 && acwr > 1.2 {
-            return " Your heart rate recovery is softer than its recent baseline while load is elevated, so treat that as an overreach warning."
+            return " Your heart rate recovery is a bit softer than its recent baseline while load is elevated, so that is a useful context signal as you decide how aggressive to be."
         }
 
         return ""
