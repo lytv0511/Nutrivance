@@ -618,7 +618,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         } else {
             return nil
         }
-        guard objective.kind == .time else { return nil }
+        guard [.time, .power, .cadence, .speed, .pace].contains(objective.kind) else { return nil }
         return max(objective.targetValue * 60 - currentSegmentElapsedTime(at: Date()), 0)
     }
 
@@ -1296,8 +1296,11 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             let subtitle = payload[CompanionLaunchKeys.subtitle] as? String,
             let activityRawValue = payload[CompanionLaunchKeys.activityRawValue] as? Int
         else {
+            print("[Watch] handleCompanionLaunchRequest: workoutStart validation failed. Keys: \(Array(payload.keys))")
             return false
         }
+
+        print("[Watch] Processing companion launch request: title=\(title), phases=\(payload[CompanionLaunchKeys.phasePayloads] is [Any] ? "present" : "none")")
 
         let activity = HKWorkoutActivityType(rawValue: UInt(activityRawValue)) ?? .running
         let locationRawValue = payload[CompanionLaunchKeys.locationRawValue] as? Int ?? HKWorkoutSessionLocationType.unknown.rawValue
@@ -1306,6 +1309,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         if let latitude = payload[CompanionLaunchKeys.trailheadLatitude] as? Double,
            let longitude = payload[CompanionLaunchKeys.trailheadLongitude] as? Double {
             routeTrailhead = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            print("[Watch] Trailhead set: \(latitude), \(longitude)")
         } else {
             routeTrailhead = nil
         }
@@ -1313,9 +1317,13 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             guard pair.count == 2 else { return nil }
             return CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1])
         } ?? []
+        print("[Watch] Route coordinates: \(routeCoordinates.count) points")
 
         let phasePayloads = decodePhasePayloads(from: payload[CompanionLaunchKeys.phasePayloads] as? [[String: Any]])
+        print("[Watch] Decoded \(phasePayloads.count) phases from payload")
+        
         if (payload[CompanionLaunchKeys.openInWorkoutApp] as? Bool) == true {
+            print("[Watch] Opening in Workout app...")
             Task { @MainActor in
                 await self.openInWorkoutApp(
                     title: title,
@@ -1823,8 +1831,34 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         )
 
         Task {
-            guard let data = try? JSONEncoder().encode(payload) else { return }
-            try? await workoutSession.sendToRemoteWorkoutSession(data: data)
+            guard let data = try? JSONEncoder().encode(payload) else {
+                print("[Watch] Failed to encode snapshot payload")
+                return
+            }
+            do {
+                try await workoutSession.sendToRemoteWorkoutSession(data: data)
+                print("[Watch] Snapshot sent successfully (size: \(data.count) bytes)")
+            } catch {
+                print("[Watch] Failed to send snapshot to iPhone: \(error.localizedDescription)")
+                // Fall back to WCSession for critical updates if available
+                #if canImport(WatchConnectivity)
+                if WCSession.isSupported() {
+                    let session = WCSession.default
+                    if session.activationState == .activated && session.isReachable {
+                        let fallbackPayload: [String: Any] = [
+                            "snapshotUpdate": true,
+                            "elapsedTime": elapsedTime,
+                            "stateText": displayState.rawValue
+                        ]
+                        session.sendMessage(fallbackPayload, replyHandler: { response in
+                            print("[Watch] WCSession fallback sent: \(response)")
+                        }, errorHandler: { error in
+                            print("[Watch] WCSession fallback failed: \(error.localizedDescription)")
+                        })
+                    }
+                }
+                #endif
+            }
         }
     }
 
@@ -1866,10 +1900,10 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             let currentMinutes = zoneSeconds / 60
             let targetMinutes = max(objective.targetValue, 1)
             return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(zoneNumber)", currentMinutes >= targetMinutes)
-        case .pacer:
+        case .power, .cadence, .speed, .pace:
             let currentMinutes = elapsedTime / 60
             let targetMinutes = max(objective.targetValue, 1)
-            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in range", currentMinutes >= targetMinutes)
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min at \(objectiveDisplayLabel(for: objective))", currentMinutes >= targetMinutes)
         case .routeDistance:
             let currentKilometers = totalDistanceMeters / 1000
             let targetKilometers = max(objective.targetValue, 0.1)
@@ -1908,14 +1942,10 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             let currentMinutes = max(currentZoneSeconds - priorZoneSeconds, 0) / 60
             let targetMinutes = max(stage.objective.targetValue, 1)
             return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(zoneNumber)", currentMinutes >= targetMinutes)
-        case .pacer:
+        case .power, .cadence, .speed, .pace:
             let targetMinutes = max(stage.objective.targetValue, 1)
             let currentMinutes = elapsedTime / 60
-            let label = stage.objective.label?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let label, !label.isEmpty {
-                return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min at \(label)", currentMinutes >= targetMinutes)
-            }
-            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in range", currentMinutes >= targetMinutes)
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min at \(objectiveDisplayLabel(for: stage.objective))", currentMinutes >= targetMinutes)
         case .routeDistance:
             let targetKilometers = max(stage.objective.targetValue, 0.1)
             return (String(format: "%.1f / %.1f km route", distanceDeltaKilometers, targetKilometers), distanceDeltaKilometers >= targetKilometers)
@@ -1932,8 +1962,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return "Goal \(Int(objective.targetValue.rounded())) kcal"
         case .heartRateZone:
             return "Goal \(Int(objective.targetValue.rounded())) min in Z\(Int(objective.secondaryValue ?? 3))"
-        case .pacer:
-            return "Goal \(Int(objective.targetValue.rounded())) min in range"
+        case .power, .cadence, .speed, .pace:
+            return "Goal \(Int(objective.targetValue.rounded())) min at \(objectiveDisplayLabel(for: objective))"
         case .routeDistance:
             return String(format: "Goal %.1f km route", objective.targetValue)
         }
@@ -1949,10 +1979,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return "Goal \(Int(stage.objective.targetValue.rounded())) kcal"
         case .heartRateZone:
             return "Goal \(Int(stage.objective.targetValue.rounded())) min in Z\(Int(stage.objective.secondaryValue ?? 3))"
-        case .pacer:
-            return stage.objective.label?.isEmpty == false
-                ? "Goal \(Int(stage.objective.targetValue.rounded())) min at \(stage.objective.label!)"
-                : "Goal \(Int(stage.objective.targetValue.rounded())) min in range"
+        case .power, .cadence, .speed, .pace:
+            return "Goal \(Int(stage.objective.targetValue.rounded())) min at \(objectiveDisplayLabel(for: stage.objective))"
         case .routeDistance:
             return String(format: "Goal %.1f km route", stage.objective.targetValue)
         }
@@ -2018,9 +2046,17 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
 
         if session.isReachable {
-            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+            session.sendMessage(payload, replyHandler: { response in
+                print("[WatchSync] Companion lifecycle message sent and acknowledged: \(response)")
+            }, errorHandler: { error in
+                print("[WatchSync] Failed to send companion lifecycle message: \(error.localizedDescription)")
+                // Fall back to background transfer
+                session.transferUserInfo(payload)
+            })
+        } else {
+            print("[WatchSync] iPhone not reachable, using background transfer for lifecycle update")
+            session.transferUserInfo(payload)
         }
-        session.transferUserInfo(payload)
 #endif
     }
 
@@ -2139,13 +2175,18 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     return nil
                 }
                 let targetValueText = stagePayload["targetValueText"] as? String ?? ""
+                let roleRawValue = stagePayload["role"] as? String
+                let goalRawValue = stagePayload["goal"] as? String
                 return WatchProgramMicroStagePayload(
                     id: UUID(uuidString: stagePayload["id"] as? String ?? "") ?? UUID(),
                     title: title,
                     notes: notes,
+                    roleRawValue: roleRawValue,
+                    goalRawValue: goalRawValue,
                     plannedMinutes: plannedMinutes,
                     repeats: repeats,
                     repeatSetLabel: stagePayload["repeatSetLabel"] as? String,
+                    targetValueText: targetValueText,
                     targetBehaviorRawValue: stagePayload["targetBehavior"] as? String,
                     circuitGroupID: UUID(uuidString: stagePayload["circuitGroupID"] as? String ?? ""),
                     objective: workoutObjective(
@@ -2193,8 +2234,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return WatchPhaseObjectivePayload(kind: .energy, targetValue: max(targetValueText.firstNumberValue ?? Double(max(plannedMinutes * 8, 40)), 1), label: targetValueText)
         case "heartRateZone":
             return WatchPhaseObjectivePayload(kind: .heartRateZone, targetValue: Double(max(plannedMinutes, 1)), secondaryValue: targetValueText.firstNumberValue ?? 3, label: targetValueText)
-        case "power", "pace", "speed", "cadence":
-            return WatchPhaseObjectivePayload(kind: .pacer, targetValue: Double(max(plannedMinutes, 1)), label: targetValueText.isEmpty ? goalRawValue : targetValueText)
+        case "power":
+            return WatchPhaseObjectivePayload(kind: .power, targetValue: Double(max(plannedMinutes, 1)), label: targetValueText.isEmpty ? "Power" : targetValueText)
+        case "cadence":
+            return WatchPhaseObjectivePayload(kind: .cadence, targetValue: Double(max(plannedMinutes, 1)), label: targetValueText.isEmpty ? "Cadence" : targetValueText)
+        case "speed":
+            return WatchPhaseObjectivePayload(kind: .speed, targetValue: Double(max(plannedMinutes, 1)), label: targetValueText.isEmpty ? "Speed" : targetValueText)
+        case "pace":
+            return WatchPhaseObjectivePayload(kind: .pace, targetValue: Double(max(plannedMinutes, 1)), label: targetValueText.isEmpty ? "Pace" : targetValueText)
         default:
             return WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(plannedMinutes, 1)), label: "Time")
         }
@@ -2263,8 +2310,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         location: HKWorkoutSessionLocationType,
         microStages: [WatchProgramMicroStagePayload]
     ) -> CustomWorkout {
-        let warmup = microStages.first(where: { $0.title.localizedCaseInsensitiveContains("warm") })
-        let cooldown = microStages.last(where: { $0.title.localizedCaseInsensitiveContains("cool") })
+        let warmup = microStages.first(where: { isWarmupStage($0) })
+        let cooldown = microStages.last(where: { isCooldownStage($0) })
         let mainStages = microStages.filter { stage in
             stage.id != warmup?.id && stage.id != cooldown?.id
         }
@@ -2290,7 +2337,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             }
 
             let steps = groupedStages.map { groupedStage in
-                IntervalStep(groupedStage.title.localizedCaseInsensitiveContains("recovery") || groupedStage.title.localizedCaseInsensitiveContains("reset") || groupedStage.title.localizedCaseInsensitiveContains("settle") ? .recovery : .work,
+                IntervalStep(intervalStepPurpose(for: groupedStage),
                              step: workoutStep(for: groupedStage))
             }
             blocks.append(IntervalBlock(steps: steps, iterations: max(stage.repeats, 1)))
@@ -2321,9 +2368,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 id: phase.id,
                 title: phase.title,
                 notes: phase.subtitle,
+                roleRawValue: nil,
+                goalRawValue: fallbackGoalRawValue(for: objective.kind),
                 plannedMinutes: max(phase.plannedMinutes, 1),
                 repeats: 1,
                 repeatSetLabel: nil,
+                targetValueText: objective.label,
                 targetBehaviorRawValue: nil,
                 circuitGroupID: nil,
                 objective: objective
@@ -2341,7 +2391,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return .distance(max(stage.objective.targetValue, 0.1), .kilometers)
         case .energy:
             return .energy(max(stage.objective.targetValue, 1), .kilocalories)
-        case .time, .heartRateZone, .pacer:
+        case .time, .heartRateZone, .power, .cadence, .speed, .pace:
             return .time(Double(max(stage.plannedMinutes, 1)), .minutes)
         }
     }
@@ -2350,13 +2400,135 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         switch stage.objective.kind {
         case .heartRateZone:
             return .heartRate(zone: Int(stage.objective.secondaryValue ?? 3))
-        case .pacer:
-            if let range = (stage.objective.label ?? "").numberRange {
-                return .power(range.lowerBound...range.upperBound, unit: .watts)
-            }
+        case .power:
+            return powerAlert(for: stage)
+        case .cadence:
+            return cadenceAlert(for: stage)
+        case .speed:
+            return speedAlert(for: stage)
+        case .pace:
+            return paceAlert(for: stage)
+        case .time, .distance, .energy, .routeDistance:
             return nil
+        }
+    }
+
+    private func intervalStepPurpose(for stage: WatchProgramMicroStagePayload) -> IntervalStep.Purpose {
+        switch stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "recovery":
+            return .recovery
         default:
-            return nil
+            return .work
+        }
+    }
+
+    private func isWarmupStage(_ stage: WatchProgramMicroStagePayload) -> Bool {
+        if stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "warmup" {
+            return true
+        }
+        return stage.title.localizedCaseInsensitiveContains("warm")
+    }
+
+    private func isCooldownStage(_ stage: WatchProgramMicroStagePayload) -> Bool {
+        if stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "cooldown" {
+            return true
+        }
+        return stage.title.localizedCaseInsensitiveContains("cool")
+    }
+
+    private func fallbackGoalRawValue(for kind: WatchPhaseObjectivePayload.Kind) -> String? {
+        switch kind {
+        case .distance, .routeDistance:
+            return "distance"
+        case .energy:
+            return "energy"
+        case .heartRateZone:
+            return "heartRateZone"
+        case .power:
+            return "power"
+        case .cadence:
+            return "cadence"
+        case .speed:
+            return "speed"
+        case .pace:
+            return "pace"
+        case .time:
+            return "time"
+        }
+    }
+
+    private func powerAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+        if behavior == "belowthreshold", let target = label.firstNumberValue {
+            return .power(0...target, unit: .watts)
+        }
+        if let range = label.numberRange {
+            return .power(range.lowerBound...range.upperBound, unit: .watts)
+        }
+        if let target = label.firstNumberValue {
+            return .power(target, unit: .watts)
+        }
+        return nil
+    }
+
+    private func cadenceAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+        if behavior == "belowthreshold", let target = label.firstNumberValue {
+            return .cadence(0...target)
+        }
+        if let range = label.numberRange {
+            return .cadence(range.lowerBound...range.upperBound)
+        }
+        if let target = label.firstNumberValue {
+            return .cadence(target)
+        }
+        return nil
+    }
+
+    private func speedAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+        guard let target = label.speedTarget else { return nil }
+        if behavior == "belowthreshold" {
+            return .speed(target.recoveryRange.lowerBound...target.recoveryRange.upperBound, unit: target.unit)
+        }
+        if let range = target.range {
+            return .speed(range.lowerBound...range.upperBound, unit: target.unit)
+        }
+        return .speed(target.threshold, unit: target.unit)
+    }
+
+    private func paceAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+        guard let target = label.paceAsSpeedTarget else { return nil }
+        if behavior == "belowthreshold" {
+            return .speed(target.recoveryRange.lowerBound...target.recoveryRange.upperBound, unit: target.unit)
+        }
+        if let range = target.range {
+            return .speed(range.lowerBound...range.upperBound, unit: target.unit)
+        }
+        return .speed(target.threshold, unit: target.unit)
+    }
+
+    private func objectiveDisplayLabel(for objective: WatchPhaseObjectivePayload) -> String {
+        let label = objective.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !label.isEmpty {
+            return label
+        }
+        switch objective.kind {
+        case .power:
+            return "power target"
+        case .cadence:
+            return "cadence target"
+        case .speed:
+            return "speed target"
+        case .pace:
+            return "pace target"
+        default:
+            return "target"
         }
     }
 
@@ -2605,7 +2777,56 @@ extension WatchWorkoutManager: WCSessionDelegate {
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
-    ) { }
+    ) {
+        Task { @MainActor in
+            if let error = error {
+                print("[Watch] WCSession activation failed: \(error.localizedDescription)")
+                self.statusMessage = "iPhone connection failed: \(error.localizedDescription)"
+                return
+            }
+            
+            let stateString: String
+            switch activationState {
+            case .activated:
+                stateString = "ACTIVATED"
+            case .inactive:
+                stateString = "INACTIVE"
+            case .notActivated:
+                stateString = "NOT_ACTIVATED"
+            @unknown default:
+                stateString = "UNKNOWN(\(activationState.rawValue))"
+            }
+            
+            print("[Watch] WCSession activation completed: state=\(stateString), isReachable=\(session.isReachable)")
+            
+            switch activationState {
+            case .activated:
+                if session.isReachable {
+                    self.statusMessage = "Connected to iPhone"
+                    print("[Watch] iPhone is reachable, ready to receive commands")
+                } else {
+                    self.statusMessage = "iPhone not in range"
+                    print("[Watch] iPhone not immediately reachable, will receive via background transfer")
+                }
+            case .inactive:
+                self.statusMessage = "iPhone connection inactive"
+                print("[Watch] Connection is inactive, attempting to reactivate...")
+                // Attempt to reactivate
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    if WCSession.isSupported() {
+                        print("[Watch] Reactivating session...")
+                        WCSession.default.activate()
+                    }
+                }
+            case .notActivated:
+                self.statusMessage = "WatchConnectivity unavailable"
+                print("[Watch] WatchConnectivity not supported on this device")
+            @unknown default:
+                self.statusMessage = "Unknown iPhone connection state"
+                print("[Watch] Unknown activation state: \(activationState.rawValue)")
+            }
+        }
+    }
 
     nonisolated func session(
         _ session: WCSession,
@@ -2613,17 +2834,24 @@ extension WatchWorkoutManager: WCSessionDelegate {
         replyHandler: @escaping ([String : Any]) -> Void
     ) {
         Task { @MainActor in
+            print("[Watch] Received message from iPhone: keys=\(message.keys.joined(separator: ","))")
+            
             if let command = message["workoutControl"] as? String {
+                print("[Watch] Processing workoutControl: \(command)")
                 self.handleCompanionControlCommand(command)
                 replyHandler([CompanionLaunchKeys.accepted: true])
             } else if let effortScore = message[CompanionLifecycleKeys.effortScore] as? Int {
+                print("[Watch] Processing effortScore: \(effortScore)")
                 self.submitEffortScore(effortScore)
                 replyHandler([CompanionLaunchKeys.accepted: true])
             } else if self.handleInjectedPhaseRequest(message) {
+                print("[Watch] Handled as injected phase request")
                 replyHandler([CompanionLaunchKeys.accepted: true])
             } else if self.handleCompanionLaunchRequest(message) {
+                print("[Watch] Handled as companion launch request")
                 replyHandler([CompanionLaunchKeys.accepted: true])
             } else {
+                print("[Watch] Message not recognized, keys: \(Array(message.keys))")
                 replyHandler([:])
             }
         }
@@ -2631,14 +2859,24 @@ extension WatchWorkoutManager: WCSessionDelegate {
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
         Task { @MainActor in
+            print("[Watch] Received userInfo from iPhone: keys=\(userInfo.keys.joined(separator: ","))")
+            
             if let command = userInfo["workoutControl"] as? String {
+                print("[Watch] Processing userInfo workoutControl: \(command)")
                 self.handleCompanionControlCommand(command)
             } else if let effortScore = userInfo[CompanionLifecycleKeys.effortScore] as? Int {
+                print("[Watch] Processing userInfo effortScore: \(effortScore)")
                 self.submitEffortScore(effortScore)
             } else if self.handleInjectedPhaseRequest(userInfo) {
+                print("[Watch] Handled userInfo as injected phase request")
                 return
             } else {
-                _ = self.handleCompanionLaunchRequest(userInfo)
+                print("[Watch] Trying companion launch request from userInfo")
+                if self.handleCompanionLaunchRequest(userInfo) {
+                    print("[Watch] Successfully handled as companion launch request")
+                } else {
+                    print("[Watch] UserInfo not recognized, keys: \(Array(userInfo.keys))")
+                }
             }
         }
     }
@@ -2773,6 +3011,16 @@ private extension HKWorkoutActivityType {
     }
 }
 
+private struct WatchParsedSpeedTarget {
+    let unit: UnitSpeed
+    let threshold: Double
+    let range: ClosedRange<Double>?
+
+    var recoveryRange: ClosedRange<Double> {
+        0...max(range?.upperBound ?? threshold, threshold)
+    }
+}
+
 private extension String {
     var firstNumberValue: Double? {
         let scanner = Scanner(string: self)
@@ -2788,5 +3036,64 @@ private extension String {
         let lower = min(numbers[0], numbers[1])
         let upper = max(numbers[0], numbers[1])
         return lower...upper
+    }
+
+    var speedTarget: WatchParsedSpeedTarget? {
+        let normalized = lowercased()
+        let unit: UnitSpeed
+        if normalized.contains("mph") {
+            unit = .milesPerHour
+        } else if normalized.contains("km/h") || normalized.contains("kph") {
+            unit = .kilometersPerHour
+        } else if normalized.contains("m/s") {
+            unit = .metersPerSecond
+        } else {
+            return nil
+        }
+
+        if let range = numberRange {
+            return WatchParsedSpeedTarget(unit: unit, threshold: range.upperBound, range: range)
+        }
+        if let value = firstNumberValue {
+            return WatchParsedSpeedTarget(unit: unit, threshold: value, range: nil)
+        }
+        return nil
+    }
+
+    var paceAsSpeedTarget: WatchParsedSpeedTarget? {
+        let normalized = lowercased()
+        let metersPerSegment: Double
+        if normalized.contains("/mi") {
+            metersPerSegment = 1609.344
+        } else if normalized.contains("/km") {
+            metersPerSegment = 1000
+        } else {
+            return nil
+        }
+
+        let pattern = #"\b(\d+):(\d+)\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsRange = NSRange(startIndex..<endIndex, in: self)
+        let speeds = regex.matches(in: self, range: nsRange).compactMap { match -> Double? in
+            guard
+                let minutesRange = Range(match.range(at: 1), in: self),
+                let secondsRange = Range(match.range(at: 2), in: self),
+                let minutes = Double(self[minutesRange]),
+                let seconds = Double(self[secondsRange])
+            else {
+                return nil
+            }
+            let totalSeconds = (minutes * 60) + seconds
+            guard totalSeconds > 0 else { return nil }
+            return metersPerSegment / totalSeconds
+        }
+
+        guard let first = speeds.first else { return nil }
+        if speeds.count >= 2 {
+            let lower = speeds.min() ?? first
+            let upper = speeds.max() ?? first
+            return WatchParsedSpeedTarget(unit: .metersPerSecond, threshold: upper, range: lower...upper)
+        }
+        return WatchParsedSpeedTarget(unit: .metersPerSecond, threshold: first, range: nil)
     }
 }

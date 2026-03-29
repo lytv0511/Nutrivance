@@ -97,7 +97,10 @@ struct WatchPhaseObjectivePayload: Codable, Hashable {
         case distance
         case energy
         case heartRateZone
-        case pacer
+        case power
+        case cadence
+        case speed
+        case pace
         case routeDistance
     }
 
@@ -123,12 +126,43 @@ struct WatchProgramMicroStagePayload: Codable, Identifiable, Hashable {
     let id: UUID
     let title: String
     let notes: String
+    let roleRawValue: String?
+    let goalRawValue: String?
     let plannedMinutes: Int
     let repeats: Int
     let repeatSetLabel: String?
+    let targetValueText: String?
     let targetBehaviorRawValue: String?
     let circuitGroupID: UUID?
     let objective: WatchPhaseObjectivePayload
+
+    init(
+        id: UUID,
+        title: String,
+        notes: String,
+        roleRawValue: String? = nil,
+        goalRawValue: String? = nil,
+        plannedMinutes: Int,
+        repeats: Int,
+        repeatSetLabel: String? = nil,
+        targetValueText: String? = nil,
+        targetBehaviorRawValue: String? = nil,
+        circuitGroupID: UUID? = nil,
+        objective: WatchPhaseObjectivePayload
+    ) {
+        self.id = id
+        self.title = title
+        self.notes = notes
+        self.roleRawValue = roleRawValue
+        self.goalRawValue = goalRawValue
+        self.plannedMinutes = plannedMinutes
+        self.repeats = repeats
+        self.repeatSetLabel = repeatSetLabel
+        self.targetValueText = targetValueText
+        self.targetBehaviorRawValue = targetBehaviorRawValue
+        self.circuitGroupID = circuitGroupID
+        self.objective = objective
+    }
 }
 
 struct WatchProgramCircuitGroupPayload: Codable, Identifiable, Hashable {
@@ -190,15 +224,20 @@ extension WatchDashboardStore {
         hasStartedLiveServices = true
         connectivityBridge.attach(to: self)
         healthBridge.attach(to: self)
-        connectivityBridge.requestImmediateRefresh()
 
         Task { @MainActor in
             await Task.yield()
-            workoutManager.activate()
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            self.connectivityBridge.requestImmediateRefresh()
         }
 
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            self.workoutManager.activate()
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
             self.healthBridge.refresh()
         }
     }

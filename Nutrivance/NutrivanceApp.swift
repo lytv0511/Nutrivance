@@ -119,7 +119,10 @@ private struct WatchPhaseObjectivePayload: Codable {
         case distance
         case energy
         case heartRateZone
-        case pacer
+        case power
+        case cadence
+        case speed
+        case pace
         case routeDistance
     }
 
@@ -145,9 +148,12 @@ private struct WatchProgramMicroStagePayload: Codable {
     let id: UUID
     let title: String
     let notes: String
+    let roleRawValue: String?
+    let goalRawValue: String?
     let plannedMinutes: Int
     let repeats: Int
     let repeatSetLabel: String?
+    let targetValueText: String?
     let targetBehaviorRawValue: String?
     let circuitGroupID: UUID?
     let objective: WatchPhaseObjectivePayload
@@ -423,9 +429,12 @@ private func watchProgramPlanPayload(from plan: ProgramWorkoutPlanRecord) -> Wat
                         id: stage.id,
                         title: stage.title,
                         notes: stage.notes,
+                        roleRawValue: stage.role.rawValue,
+                        goalRawValue: stage.goal.rawValue,
                         plannedMinutes: max(stage.plannedMinutes, 1),
                         repeats: max(stage.repeats, 1),
                         repeatSetLabel: stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stage.repeatSetLabel,
+                        targetValueText: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stage.targetValueText,
                         targetBehaviorRawValue: stage.targetBehavior.rawValue,
                         circuitGroupID: stage.circuitGroupID,
                         objective: watchObjectivePayload(from: stage)
@@ -465,9 +474,27 @@ private func watchObjectivePayload(from stage: ProgramCustomWorkoutMicroStage) -
             secondaryValue: stage.targetValueText.firstNumberValue ?? 3,
             label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-    case .power, .pace, .speed, .cadence:
+    case .power:
         return WatchPhaseObjectivePayload(
-            kind: .pacer,
+            kind: .power,
+            targetValue: Double(max(stage.plannedMinutes, 1)),
+            label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stage.goal.title : stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    case .pace:
+        return WatchPhaseObjectivePayload(
+            kind: .pace,
+            targetValue: Double(max(stage.plannedMinutes, 1)),
+            label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stage.goal.title : stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    case .speed:
+        return WatchPhaseObjectivePayload(
+            kind: .speed,
+            targetValue: Double(max(stage.plannedMinutes, 1)),
+            label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stage.goal.title : stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    case .cadence:
+        return WatchPhaseObjectivePayload(
+            kind: .cadence,
             targetValue: Double(max(stage.plannedMinutes, 1)),
             label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stage.goal.title : stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
         )
@@ -490,17 +517,21 @@ extension WatchDashboardSyncBridge: WCSessionDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            let stateString: String
+            switch activationState {
+            case .activated:
+                stateString = "ACTIVATED"
+            case .inactive:
+                stateString = "INACTIVE"
+            case .notActivated:
+                stateString = "NOT_ACTIVATED"
+            @unknown default:
+                stateString = "UNKNOWN"
+            }
+            print("[iPhone Dashboard] WCSession activation: state=\(stateString), error=\(error?.localizedDescription ?? "none")")
             self.hasActivatedSession = error == nil && activationState == .activated
             self.pushLatestPayloadToWatch()
             self.scheduleSnapshotRefresh(reason: "session-activated")
-        }
-    }
-
-    nonisolated func sessionDidBecomeInactive(_ session: WCSession) { }
-
-    nonisolated func sessionDidDeactivate(_ session: WCSession) {
-        Task { @MainActor in
-            session.activate()
         }
     }
 
@@ -515,7 +546,6 @@ extension WatchDashboardSyncBridge: WCSessionDelegate {
                 if self.latestPayloadData == nil {
                     self.publishLatestSnapshot(reason: "watch-request")
                 }
-
                 replyHandler([
                     Keys.dashboardPayload: self.latestPayloadData ?? Data()
                 ])
@@ -529,12 +559,26 @@ extension WatchDashboardSyncBridge: WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
-        guard (userInfo[Keys.request] as? String) == Keys.showLiveWorkout else { return }
-
         Task { @MainActor in
-            CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
+            if userInfo[Keys.showLiveWorkout] as? Bool == true {
+                CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
+            }
+            if userInfo[Keys.request] as? String == Keys.dashboardSnapshot {
+                self.scheduleSnapshotRefresh(reason: "watch-userinfo-request")
+            }
         }
     }
+
+    #if os(iOS)
+    nonisolated func sessionDidBecomeInactive(_ session: WCSession) {
+        print("[iPhone Dashboard] WCSession became inactive.")
+    }
+
+    nonisolated func sessionDidDeactivate(_ session: WCSession) {
+        print("[iPhone Dashboard] WCSession deactivated. Reactivating...")
+        session.activate()
+    }
+    #endif
 }
 
 @MainActor
@@ -543,22 +587,18 @@ private func watchWorkoutPayloads(
     loadSnapshots: [WatchLoadSnapshot]
 ) -> [WatchWorkoutPayload] {
     let calendar = Calendar.current
-    let today = calendar.startOfDay(for: Date())
-    let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
     let loadLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0) })
 
     return engine.workoutAnalytics
-        .filter {
-            calendar.isDate($0.workout.startDate, inSameDayAs: today) ||
-            calendar.isDate($0.workout.startDate, inSameDayAs: yesterday)
-        }
         .sorted { $0.workout.startDate > $1.workout.startDate }
+        .prefix(20)
         .map { pair in
             let day = calendar.startOfDay(for: pair.workout.startDate)
-            let averageHeartRate = pair.analytics.heartRates.isEmpty
+            let heartRates = pair.analytics.heartRates.map(\.1)
+            let averageHeartRate = heartRates.isEmpty
                 ? 0
-                : Int((pair.analytics.heartRates.map(\.1).reduce(0, +) / Double(pair.analytics.heartRates.count)).rounded())
-            let maxHeartRate = Int((pair.analytics.peakHR ?? pair.analytics.heartRates.map(\.1).max() ?? 0).rounded())
+                : Int((heartRates.reduce(0, +) / Double(heartRates.count)).rounded())
+            let maxHeartRate = Int((pair.analytics.peakHR ?? heartRates.max() ?? 0).rounded())
             let zoneMinutes = watchZoneMinutes(from: pair.analytics)
             let workoutLoad = HealthStateEngine.proWorkoutLoad(
                 for: pair.workout,

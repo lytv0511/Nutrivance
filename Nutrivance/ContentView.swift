@@ -568,11 +568,13 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         isWorkoutActive = true
         shouldAutoPresentLiveView = true
         isVisible = true
+        print("[Companion] Attached mirrored session from watch, activity: \(activityType.name)")
 
         if #available(iOS 26.0, *) {
             let builder = session.associatedWorkoutBuilder()
             self.builder = builder
             builder.delegate = self
+            print("[Companion] Associated workout builder attached")
             rebuildMetrics()
         }
         persistCurrentSession()
@@ -828,15 +830,27 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
 
         let session = WCSession.default
-        var payload: [String: Any] = [
+        launchStatusMessage = "Starting on Apple Watch..."
+
+        if session.activationState != .activated {
+            session.activate()
+        }
+
+        // Build minimal payload first (for quick startup)
+        var minimalPayload: [String: Any] = [
             "workoutStart": true,
             "title": title,
             "subtitle": subtitle,
             "activityRawValue": Int(activity.rawValue),
             "locationRawValue": location.rawValue
         ]
+        
+        // Build full payload (for queued delivery)
+        var fullPayload: [String: Any] = minimalPayload
+        
+        // Add phase payloads if present
         if !phases.isEmpty {
-            payload["phasePayloads"] = phases.map { phase in
+            let phasePayloads = phases.map { phase in
                 [
                     "id": phase.id.uuidString,
                     "title": phase.title,
@@ -869,41 +883,60 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                     }
                 ]
             }
+            fullPayload["phasePayloads"] = phasePayloads
         }
+        
         if let routeName, !routeName.isEmpty {
-            payload["routeName"] = routeName
+            fullPayload["routeName"] = routeName
         }
         if let trailheadCoordinate {
-            payload["trailheadLatitude"] = trailheadCoordinate.latitude
-            payload["trailheadLongitude"] = trailheadCoordinate.longitude
+            fullPayload["trailheadLatitude"] = trailheadCoordinate.latitude
+            fullPayload["trailheadLongitude"] = trailheadCoordinate.longitude
         }
         if !routeCoordinates.isEmpty {
-            payload["routeCoordinates"] = routeCoordinates.map { [$0.latitude, $0.longitude] }
-        }
-
-        launchStatusMessage = "Starting on Apple Watch..."
-        primePresentationFromWatchRequest()
-
-        if session.activationState != .activated {
-            session.activate()
+            fullPayload["routeCoordinates"] = routeCoordinates.map { [$0.latitude, $0.longitude] }
         }
 
         if session.isReachable {
-            session.sendMessage(payload) { [weak self] reply in
+            // Try sending full payload via direct message
+            session.sendMessage(fullPayload, replyHandler: { [weak self] reply in
                 Task { @MainActor in
                     if (reply["accepted"] as? Bool) == true {
+                        self?.primePresentationFromWatchRequest()
                         self?.launchStatusMessage = "Apple Watch workout started."
                     } else {
                         self?.launchStatusMessage = "Apple Watch did not confirm the workout start."
                     }
                 }
-            } errorHandler: { [weak self] _ in
+            }, errorHandler: { [weak self] error in
                 Task { @MainActor in
-                    self?.launchStatusMessage = "Watch is not reachable. The start request was queued."
+                    // Fallback: send minimal payload via direct message for quick feedback
+                    WCSession.default.sendMessage(minimalPayload, replyHandler: { reply in
+                        Task { @MainActor in
+                            if (reply["accepted"] as? Bool) == true {
+                                self?.primePresentationFromWatchRequest()
+                                self?.launchStatusMessage = "Apple Watch workout started."
+                            } else {
+                                // Queue full payload for later delivery
+                                WCSession.default.transferUserInfo(fullPayload)
+                                self?.launchStatusMessage = "Queuing workout details to send when reachable..."
+                            }
+                        }
+                    }, errorHandler: { _ in
+                        // Send both minimal and full payloads for background delivery
+                        WCSession.default.transferUserInfo(minimalPayload)
+                        WCSession.default.transferUserInfo(fullPayload)
+                        self?.launchStatusMessage = "Queuing workout to send when reachable..."
+                    })
                 }
-            }
+            })
         } else {
-            session.transferUserInfo(payload)
+            // Watch not reachable: queue payloads
+            session.transferUserInfo(minimalPayload)
+            if !phases.isEmpty {
+                session.transferUserInfo(fullPayload)
+            }
+            launchStatusMessage = "Queuing workout to send when reachable..."
         }
 #else
         launchStatusMessage = "Watch connectivity is unavailable."
@@ -936,20 +969,26 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         applyOptimisticWatchControlState(command)
 
         if session.activationState != .activated {
+            print("[iPhone Companion] Control: Session not activated, activating...")
             session.activate()
         }
 
+        print("[iPhone Companion] Sending control '\(command.rawValue)' to watch. Reachable: \(session.isReachable)")
+
         if session.isReachable {
-            session.sendMessage(payload) { [weak self] _ in
+            session.sendMessage(payload) { [weak self] reply in
                 Task { @MainActor in
+                    print("[iPhone Companion] Control message delivered, reply: \(reply)")
                     self?.launchStatusMessage = nil
                 }
-            } errorHandler: { [weak self] _ in
+            } errorHandler: { [weak self] error in
                 Task { @MainActor in
+                    print("[iPhone Companion] Control message error: \(error.localizedDescription)")
                     self?.launchStatusMessage = "Watch control was queued and will sync when reachable."
                 }
             }
         } else {
+            print("[iPhone Companion] Watch not reachable for control, using background transfer")
             session.transferUserInfo(payload)
         }
 #endif
@@ -1555,8 +1594,12 @@ extension CompanionWorkoutLiveManager: HKWorkoutSessionDelegate {
         }
     }
 
-    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didFailWithError error: Error
+    ) {
         Task { @MainActor in
+            print("[Companion] Workout session failed: \(error.localizedDescription)")
             stateText = "Unavailable"
             finishSession()
         }
@@ -1564,11 +1607,23 @@ extension CompanionWorkoutLiveManager: HKWorkoutSessionDelegate {
 
     nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didReceiveDataFromRemoteWorkoutSession data: [Data]) {
         Task { @MainActor in
+            print("[Companion] Received \(data.count) packet(s) from remote workout session")
+            var successCount = 0
+            var failureCount = 0
+            
             for packet in data {
-                guard let payload = try? JSONDecoder().decode(MirroredWorkoutSnapshotPayload.self, from: packet) else {
-                    continue
+                do {
+                    let payload = try JSONDecoder().decode(MirroredWorkoutSnapshotPayload.self, from: packet)
+                    applyRemoteSnapshot(payload)
+                    successCount += 1
+                } catch {
+                    failureCount += 1
+                    print("[Companion] Failed to decode remote snapshot: \(error)")
                 }
-                applyRemoteSnapshot(payload)
+            }
+            
+            if failureCount > 0 {
+                print("[Companion] Processed \(successCount) successful, \(failureCount) failed packets")
             }
         }
     }
@@ -1627,22 +1682,23 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
-    ) { }
-
-    nonisolated func sessionDidBecomeInactive(_ session: WCSession) { }
-
-    nonisolated func sessionDidDeactivate(_ session: WCSession) {
-        session.activate()
+    ) {
+        print("[Companion] WCSession activation completed: state=\(activationState.rawValue), error=\(error?.localizedDescription ?? "none")")
     }
 
     nonisolated func session(
         _ session: WCSession,
-        didReceiveMessage message: [String : Any]
+        didReceiveMessage message: [String : Any],
+        replyHandler: @escaping ([String : Any]) -> Void
     ) {
         Task { @MainActor in
-            guard let state = message[CompanionLifecycleKeys.workoutLifecycle] as? String else { return }
+            guard let state = message[CompanionLifecycleKeys.workoutLifecycle] as? String else {
+                replyHandler([:])
+                return
+            }
             let reason = message[CompanionLifecycleKeys.reason] as? String
             self.handleWatchLifecycleState(state, reason: reason)
+            replyHandler(["accepted": true])
         }
     }
 
@@ -1653,6 +1709,17 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
             self.handleWatchLifecycleState(state, reason: reason)
         }
     }
+
+    #if os(iOS)
+    nonisolated func sessionDidBecomeInactive(_ session: WCSession) {
+        print("[Companion] WCSession became inactive.")
+    }
+
+    nonisolated func sessionDidDeactivate(_ session: WCSession) {
+        print("[Companion] WCSession deactivated. Reactivating...")
+        session.activate()
+    }
+    #endif
 }
 #endif
 

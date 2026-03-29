@@ -2025,7 +2025,7 @@ struct ProgramBuilderView: View {
                     .frame(maxWidth: 120, alignment: .trailing)
             }
         }
-        .frame(height: stageCardHeightByActivityID[activity.id], alignment: .top)
+        .frame(minHeight: stageCardHeightByActivityID[activity.id], alignment: .top)
         .padding(12)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .background(
@@ -2331,7 +2331,7 @@ struct ProgramBuilderView: View {
 
         updated.role = inferredRole
         updated.goal = inferredGoal
-        updated.targetBehavior = inferredRole.defaultTargetBehavior
+        updated.targetBehavior = inferredTargetBehavior(from: normalized, goal: inferredGoal)
         updated.circuitGroupID = nil
         updated.repeatSetLabel = ""
         updated.notes = ""
@@ -2431,40 +2431,158 @@ struct ProgramBuilderView: View {
         return nil
     }
 
+    private func inferredTargetBehavior(from text: String, goal: ProgramMicroStageGoal) -> ProgramStageTargetBehavior {
+        let normalized = text.lowercased()
+        // Check for threshold keywords
+        if normalized.contains("above") || normalized.contains("at least") || normalized.contains("minimum") || 
+           normalized.contains("more than") || normalized.contains("over ") || normalized.contains("exceeding") {
+            // For certain goals, "above" means we want a minimum threshold
+            switch goal {
+            case .cadence, .power, .speed, .heartRateZone:
+                return .aboveThreshold
+            default:
+                return .range
+            }
+        }
+        if normalized.contains("below") || normalized.contains("at most") || normalized.contains("maximum") || 
+           normalized.contains("less than") || normalized.contains("under ") || normalized.contains("not exceeding") {
+            // For certain goals, "below" means we want a maximum threshold
+            switch goal {
+            case .cadence, .power, .speed, .heartRateZone:
+                return .belowThreshold
+            default:
+                return .range
+            }
+        }
+        // Check for range indicators - must match pattern like "90-100", "90 to 100", "90 - 100"
+        let rangePatterns = [
+            #"(\d+)\s*-\s*(\d+)"#,  // 90-100 or 90 - 100
+            #"(\d+)\s+to\s+(\d+)"#, // 90 to 100
+            #"(\d+)\s+through\s+(\d+)"#, // 90 through 100
+            #"between\s+(\d+)\s+and\s+(\d+)"# // between 90 and 100
+        ]
+        for pattern in rangePatterns {
+            if normalized.captureGroups(for: pattern).count > 0 {
+                return .range
+            }
+        }
+        return .range
+    }
+
+    private func extractRangeValues(from text: String) -> (first: String, second: String)? {
+        let normalized = text.lowercased()
+        // Try to extract explicit min/max range like "90-100" or "90 to 100"
+        let patterns = [
+            #"(\d+)\s*-\s*(\d+)"#,
+            #"(\d+)\s+to\s+(\d+)"#,
+            #"(\d+)\s+through\s+(\d+)"#,
+            #"between\s+(\d+)\s+and\s+(\d+)"#
+        ]
+        for pattern in patterns {
+            if let match = normalized.captureGroups(for: pattern).first, match.count >= 2 {
+                return (first: match[0], second: match[1])
+            }
+        }
+        return nil
+    }
+
     private func stageDescriptor(from text: String, goal: ProgramMicroStageGoal, fallback: String) -> String {
+        let normalized = text.lowercased()
         switch goal {
         case .heartRateZone:
-            if let zone = text.captureGroups(for: #"zone\s*(\d+)"#).first?.first {
+            // Try extracting explicit zone range first (handles "zone 2-3", "zone 2 to 3")
+            if let range = extractRangeValues(from: normalized) {
+                if let val1 = Int(range.first), let val2 = Int(range.second), val1 > 0, val2 > 0 {
+                    let minZone = Swift.min(val1, val2)
+                    let maxZone = Swift.max(val1, val2)
+                    if minZone != maxZone {
+                        return "Zone \(minZone)-\(maxZone)"
+                    }
+                    return "Zone \(val1)"
+                }
+            }
+            if let zone = normalized.captureGroups(for: #"zone\s*(\d+)"#).first?.first {
                 return "Zone \(zone)"
             }
-        case .power:
-            if let range = text.captureGroups(for: #"(\d+\s*-\s*\d+)\s*(?:w|watts?)"#).first?.first {
-                return "\(range) W"
+            // Try extracting from threshold phrases
+            if let value = normalized.captureGroups(for: #"(?:above|at least|minimum|over|exceeding)\s+(?:zone\s+)?(\d+)"#).first?.first {
+                return "Zone \(value)"
             }
-            if let value = text.captureGroups(for: #"(\d+)\s*(?:w|watts?)"#).first?.first {
+            if let value = normalized.captureGroups(for: #"(?:below|at most|maximum|under|less than)\s+(?:zone\s+)?(\d+)"#).first?.first {
+                return "Zone \(value)"
+            }
+        case .power:
+            // Try extracting explicit range first
+            if let range = extractRangeValues(from: normalized) {
+                let val1 = Int(range.first) ?? 0
+                let val2 = Int(range.second) ?? 0
+                let minVal = Swift.min(val1, val2)
+                let maxVal = Swift.max(val1, val2)
+                if minVal > 0 && maxVal > 0 && minVal != maxVal {
+                    return "\(minVal)-\(maxVal) W"
+                }
+            }
+            if let value = normalized.captureGroups(for: #"(?:above|at least|minimum|over)\s+(\d+)\s*(?:w|watts?)"#).first?.first {
+                return "\(value) W"
+            }
+            if let value = normalized.captureGroups(for: #"(?:below|at most|maximum|under)\s+(\d+)\s*(?:w|watts?)"#).first?.first {
+                return "\(value) W"
+            }
+            if let value = normalized.captureGroups(for: #"(\d+)\s*(?:w|watts?)"#).first?.first {
                 return "\(value) W"
             }
         case .cadence:
-            if let range = text.captureGroups(for: #"(\d+\s*-\s*\d+)\s*(?:rpm|spm)"#).first?.first {
-                return "\(range) rpm"
+            // Try extracting explicit range first (handles "90-100 rpm", "90 - 100 rpm", "90 to 100 rpm")
+            if let range = extractRangeValues(from: normalized) {
+                let val1 = Int(range.first) ?? 0
+                let val2 = Int(range.second) ?? 0
+                let minVal = Swift.min(val1, val2)
+                let maxVal = Swift.max(val1, val2)
+                if minVal > 0 && maxVal > 0 && minVal != maxVal {
+                    return "\(minVal)-\(maxVal) rpm"
+                }
             }
-            if let value = text.captureGroups(for: #"(\d+)\s*(?:rpm|spm)"#).first?.first {
+            if let value = normalized.captureGroups(for: #"(?:above|at least|minimum|over|exceeding)\s+(\d+)\s*(?:rpm|spm)"#).first?.first {
+                return "\(value) rpm"
+            }
+            if let value = normalized.captureGroups(for: #"(?:below|at most|maximum|under|less than)\s+(\d+)\s*(?:rpm|spm)"#).first?.first {
+                return "\(value) rpm"
+            }
+            if let value = normalized.captureGroups(for: #"(\d+)\s*(?:rpm|spm)"#).first?.first {
                 return "\(value) rpm"
             }
         case .pace:
-            if let pace = text.captureGroups(for: #"(\d+:\d+(?:\s*-\s*\d+:\d+)?\s*/\s*(?:mi|km))"#).first?.first {
+            if let pace = normalized.captureGroups(for: #"(\d+:\d+(?:\s*-\s*\d+:\d+)?\s*/\s*(?:mi|km))"#).first?.first {
                 return pace
             }
         case .speed:
-            if let match = text.captureGroups(for: #"(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?)\s*(mph|kph|km/h|m/s)"#).first {
+            // Try extracting explicit range first (handles "12-15 mph", "12 - 15 kph")
+            if let range = extractRangeValues(from: normalized) {
+                if let unit = normalized.captureGroups(for: #"(mph|kph|km/h|m/s)"#).first?.first {
+                    let val1 = Double(range.first) ?? 0
+                    let val2 = Double(range.second) ?? 0
+                    let minSpeed = Swift.min(val1, val2)
+                    let maxSpeed = Swift.max(val1, val2)
+                    if minSpeed > 0 && maxSpeed > 0 && minSpeed != maxSpeed {
+                        return "\(Int(minSpeed))-\(Int(maxSpeed)) \(unit)"
+                    }
+                }
+            }
+            if let match = normalized.captureGroups(for: #"(?:above|at least|minimum|over)\s+(\d+(?:\.\d+)?)\s*(mph|kph|km/h|m/s)"#).first, match.count >= 2 {
+                return "\(match[0]) \(match[1])"
+            }
+            if let match = normalized.captureGroups(for: #"(?:below|at most|maximum|under)\s+(\d+(?:\.\d+)?)\s*(mph|kph|km/h|m/s)"#).first, match.count >= 2 {
+                return "\(match[0]) \(match[1])"
+            }
+            if let match = normalized.captureGroups(for: #"(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?)\s*(mph|kph|km/h|m/s)"#).first, match.count >= 2 {
                 return "\(match[0]) \(match[1])"
             }
         case .distance:
-            if let match = text.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(km|kilometers?|mi|miles?|m|meters?|laps?)"#).first {
+            if let match = normalized.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(km|kilometers?|mi|miles?|m|meters?|laps?)"#).first {
                 return "\(match[0]) \(match[1])"
             }
         case .energy:
-            if let match = text.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(kcal|calories?|cals?)"#).first {
+            if let match = normalized.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(kcal|calories?|cals?)"#).first {
                 return "\(match[0]) \(match[1])"
             }
         case .open, .time:
