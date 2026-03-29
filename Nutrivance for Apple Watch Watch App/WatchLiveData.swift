@@ -80,9 +80,21 @@ private struct WatchLocalSleepSnapshot {
 @MainActor
 extension WatchDashboardStore {
     func startLiveServices() {
+        guard !hasStartedLiveServices else { return }
+        hasStartedLiveServices = true
         connectivityBridge.attach(to: self)
         healthBridge.attach(to: self)
-        workoutManager.activate()
+        connectivityBridge.requestImmediateRefresh()
+
+        Task { @MainActor in
+            await Task.yield()
+            workoutManager.activate()
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            self.healthBridge.refresh()
+        }
     }
 
     func refreshLiveData() {
@@ -227,6 +239,7 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
 
     private weak var store: WatchDashboardStore?
     private let session: WCSession? = WCSession.isSupported() ? WCSession.default : nil
+    private var lastImmediateRefreshAt = Date.distantPast
 
     func attach(to store: WatchDashboardStore) {
         self.store = store
@@ -242,6 +255,10 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
 
     func requestImmediateRefresh() {
         guard let session else { return }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastImmediateRefreshAt) > 1.5 else { return }
+        lastImmediateRefreshAt = now
 
         if !session.receivedApplicationContext.isEmpty {
             applyApplicationContext(session.receivedApplicationContext)
@@ -294,13 +311,22 @@ final class WatchHealthBridge {
     private let healthStore = HKHealthStore()
     private weak var store: WatchDashboardStore?
     private var hasRequestedAuthorization = false
+    private var refreshTask: Task<Void, Never>?
+    private var lastRefreshAt = Date.distantPast
 
     func attach(to store: WatchDashboardStore) {
         self.store = store
     }
 
     func refresh() {
-        Task {
+        guard refreshTask == nil else { return }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastRefreshAt) > 15 else { return }
+        lastRefreshAt = now
+
+        refreshTask = Task {
+            defer { refreshTask = nil }
             let authorized = await requestAuthorizationIfNeeded()
             guard authorized else { return }
 

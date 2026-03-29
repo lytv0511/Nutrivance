@@ -60,8 +60,8 @@ struct ContentView: View {
             WatchDashboardBackground(style: selectedTab.backgroundStyle)
                 .ignoresSafeArea()
         )
-        .onAppear {
-            store.refreshLiveData()
+        .task {
+            store.startLiveServices()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -512,19 +512,26 @@ private struct WorkoutSplitsCard: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(splitSpeedValue(for: manager, splitDistanceMeters: currentSplitDistanceMeters, splitDuration: currentSplitDuration))
                             .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
                         Text(splitSpeedLabel(for: manager))
                             .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.62))
                     }
-                    Spacer(minLength: 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    Spacer(minLength: 8)
+
+                    VStack(alignment: .trailing, spacing: 2) {
                         Text(splitDistanceValue(for: manager, splitDistanceMeters: currentSplitDistanceMeters))
                             .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.62)
                         Text("SPLIT DIST")
                             .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.62))
                     }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
@@ -712,21 +719,33 @@ private struct WorkoutMetricGraphScaffold: View {
                         Text(topValue)
                             .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(accent)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
                         Text(topLabel)
                             .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(accent.opacity(0.78))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                     Spacer(minLength: 0)
-                    VStack(alignment: .leading, spacing: 2) {
+
+                    VStack(alignment: .trailing, spacing: 2) {
                         Text(topValue)
                             .hidden()
                         Text(bottomValue)
                             .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
                             .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.58)
                         Text(bottomLabel)
                             .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white.opacity(0.72))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
 
                 Spacer(minLength: 0)
@@ -1882,6 +1901,7 @@ final class WatchDashboardStore: ObservableObject {
 
     let connectivityBridge = WatchConnectivityBridge()
     let healthBridge = WatchHealthBridge()
+    var hasStartedLiveServices = false
 
     init() {
         let calendar = Calendar.current
@@ -1995,7 +2015,6 @@ final class WatchDashboardStore: ObservableObject {
             .month: "This month shows a solid aerobic base with steadier recovery patterns. Readiness is trending upward when sleep consistency stays above target, so the biggest upside is protecting bedtime regularity."
         ]
 
-        startLiveServices()
     }
 
     var currentStrain: Double { strainWeek.last?.value ?? 0 }

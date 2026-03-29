@@ -144,7 +144,7 @@ struct SearchView: View {
                                   "Fiber", "Vitamins", "Minerals", "Phytochemicals",
                                   "Antioxidants", "Electrolytes"]
     
-    private let fitnessItems = ["Dashboard","Readiness Check", "Strain vs Recovery"]
+    private let fitnessItems = ["Dashboard", "Program Builder", "Readiness Check", "Strain vs Recovery"]
     
     let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress"]
 
@@ -185,6 +185,7 @@ struct SearchView: View {
         "antioxidants": ["antioxidants", "antioxidant", "free radicals"],
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"],
         "dashboard": ["dashboard", "metrics", "fitness"],
+        "program builder": ["program builder", "workout builder", "builder", "plan workout", "workout planner"],
         "journal": ["journal", "write"],
         "mood": ["mood tracker", "emotion tracker", "mental health", "feeling"],
         "sleep": ["sleep", "rest", "resting", "recovery"],
@@ -199,7 +200,7 @@ struct SearchView: View {
     ]
     
     var filteredItems: [String] {
-        let allItems = ["Dashboard", "Today's Plan", "Training Calendar", "Coach", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Workout History", "Activity Rings", "Heart Zones", "Personal Records", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
+        let allItems = ["Dashboard", "Program Builder", "Today's Plan", "Training Calendar", "Coach", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Workout History", "Activity Rings", "Heart Zones", "Personal Records", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
 
         let query = searchState.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
@@ -310,6 +311,8 @@ struct SearchView: View {
             return (.nutrition, "Electrolytes", .electrolytes)
         case "Dashboard":
             return (.fitness, "Dashboard", .dashboard)
+        case "Program Builder":
+            return (.fitness, "Program Builder", .programBuilder)
         case "Today's Plan":
             return (.fitness, "Today's Plan", .todaysPlan)
         case "Training Calendar":

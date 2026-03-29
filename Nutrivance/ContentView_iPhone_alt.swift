@@ -102,10 +102,17 @@ struct ContentView_iPhone_alt: View {
                 .customizationID( "iPhone.tab.realm")
                 .defaultVisibility(.visible, for: .tabBar)
             
-                Tab("Macros", systemImage: "chart.line.uptrend.xyaxis", value: RootTabSelection.insights) {
-                    HealthInsightsView()
+//                Tab("Macros", systemImage: "chart.line.uptrend.xyaxis", value: RootTabSelection.insights) {
+//                    HealthInsightsView()
+//                }
+//                .customizationID( "iPad.tab.macros")
+//                .defaultVisibility(.visible, for: .tabBar)
+//                .customizationBehavior(.disabled, for: .sidebar)
+            
+                Tab("Workout", systemImage: "figure.run", value: RootTabSelection.programBuilder) {
+                    ProgramBuilderView()
                 }
-                .customizationID( "iPad.tab.macros")
+                .customizationID( "iPhone.tab.builder")
                 .defaultVisibility(.visible, for: .tabBar)
                 .customizationBehavior(.disabled, for: .sidebar)
                 
@@ -113,7 +120,7 @@ struct ContentView_iPhone_alt: View {
                     SearchView_iPhone()
                 }
                 .customizationID("iPhone.tab.searchiPhone")
-            .defaultVisibility(.hidden, for: .tabBar)
+                .defaultVisibility(.hidden, for: .tabBar)
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)

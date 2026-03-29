@@ -42,11 +42,12 @@ struct ContentView_iPad_alt: View {
                 SearchView_iPhone()
             }
             .customizationID("iPad.tab.search")
-            Tab("Insights", systemImage: "chart.line.uptrend.xyaxis", value: RootTabSelection.insights) {
-                HealthInsightsView()
+            Tab("Program Builder", systemImage: "figure.run", value: RootTabSelection.programBuilder) {
+                ProgramBuilderView()
             }
-            .customizationID("iPad.tab.insights")
+            .customizationID("iPad.tab.programBuilder")
             .defaultVisibility(.visible, for: .tabBar)
+            .customizationBehavior(.disabled, for: .sidebar)
             Tab("Dashboard", systemImage: "gauge.medium", value: RootTabSelection.dashboard) {
                 DashboardView()
             }
@@ -60,6 +61,12 @@ struct ContentView_iPad_alt: View {
             .defaultVisibility(.visible, for: .tabBar)
             .customizationBehavior(.disabled, for: .sidebar)
             TabSection("Nutrition") {
+                Tab("Insights", systemImage: "chart.line.uptrend.xyaxis", value: RootTabSelection.insights) {
+                    HealthInsightsView()
+                }
+                .customizationID("iPad.tab.insights")
+                .defaultVisibility(.hidden, for: .tabBar)
+
                 Tab("Labels", systemImage: "doc.text.viewfinder", value: RootTabSelection.labels) {
                     NutritionScannerView()
                 }

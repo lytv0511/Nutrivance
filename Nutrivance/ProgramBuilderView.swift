@@ -24,6 +24,9 @@ struct ProgramBuilderView: View {
     @State private var routeRepeats = 1
     @State private var selectedRouteTemplateID: UUID?
     @State private var plannedRouteLaunchMetadata: RouteLaunchMetadata?
+    @State private var routeTemplateIDsWithSavedRoutes: Set<UUID> = []
+    @State private var hasLoadedRouteTemplateAvailability = false
+    @State private var isSearchSectionExpanded = false
 
     private var catalog: [ProgramWorkoutType] {
         ProgramWorkoutType.catalog + customActivities
@@ -43,6 +46,10 @@ struct ProgramBuilderView: View {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
+    private var isPhoneLayout: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+    }
+
     private var frequentHistorySuggestions: [ProgramWorkoutType] {
         let ranked = ProgramWorkoutType.rankFromHistory(engine.workoutAnalytics)
         let selected = Set(selectedActivityIDs)
@@ -57,7 +64,7 @@ struct ProgramBuilderView: View {
         return Array(suggestions.prefix(8))
     }
 
-    private var routeTemplates: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+    private var routeTemplateCandidates: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         engine.workoutAnalytics
             .filter { pair in
                 let activity = pair.workout.workoutActivityType
@@ -66,6 +73,11 @@ struct ProgramBuilderView: View {
             .sorted { $0.workout.startDate > $1.workout.startDate }
             .prefix(8)
             .map { $0 }
+    }
+
+    private var routeTemplates: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        guard hasLoadedRouteTemplateAvailability else { return [] }
+        return routeTemplateCandidates.filter { routeTemplateIDsWithSavedRoutes.contains($0.workout.uuid) }
     }
 
     private var selectedRouteTemplate: (workout: HKWorkout, analytics: WorkoutAnalytics)? {
@@ -113,6 +125,9 @@ struct ProgramBuilderView: View {
                 for: buildPlannerRequest(),
                 engine: engine
             )
+        }
+        .task(id: routeTemplateCandidates.map(\.workout.uuid)) {
+            await loadRouteTemplateAvailability()
         }
         .onChange(of: selectedActivityIDs) { _, newValue in
             rebalanceWeights(for: newValue)
@@ -164,57 +179,82 @@ struct ProgramBuilderView: View {
                         .foregroundStyle(.white.opacity(0.72))
 
                     AdaptiveChipGrid(todaySuggestions) { suggestion in
-                            ProgramSuggestionChip(
-                                title: suggestion.title,
-                                symbol: suggestion.symbol,
-                                isSelected: selectedActivityIDs.contains(suggestion.id),
-                                tint: suggestion.tint
-                            ) {
-                                toggleActivity(suggestion.id)
-                            }
+                        ProgramSuggestionChip(
+                            title: suggestion.title,
+                            symbol: suggestion.symbol,
+                            isSelected: selectedActivityIDs.contains(suggestion.id),
+                            tint: suggestion.tint
+                        ) {
+                            toggleActivity(suggestion.id)
+                        }
                     }
+                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
                 }
             }
 
             ProgramSectionCard {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Search Every Activity")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
+                    HStack(spacing: 12) {
+                        Text("Search Every Activity")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.white)
 
-                    TextField("Search running, ski touring, yoga, triathlon...", text: $searchText)
-                        .textInputAutocapitalization(.words)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
+                        Spacer()
 
-                    HStack(spacing: 10) {
-                        TextField("Add your own activity", text: $customActivityName)
+                        if isPhoneLayout {
+                            Button {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                                    isSearchSectionExpanded.toggle()
+                                }
+                            } label: {
+                                Image(systemName: isSearchSectionExpanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.white.opacity(0.86))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if !isPhoneLayout || isSearchSectionExpanded {
+                        TextField("Search running, ski touring, yoga, triathlon...", text: $searchText)
                             .textInputAutocapitalization(.words)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
-                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                        Button("Add") {
-                            addCustomActivity()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
-                        .disabled(customActivityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-
-                    LazyVStack(spacing: 10) {
-                        ForEach(filteredCatalog) { activity in
-                            ProgramWorkoutTypeRow(
-                                activity: activity,
-                                isSelected: selectedActivityIDs.contains(activity.id),
-                                action: { toggleActivity(activity.id) }
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
                             )
+
+                        HStack(spacing: 10) {
+                            TextField("Add your own activity", text: $customActivityName)
+                                .textInputAutocapitalization(.words)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                            Button("Add") {
+                                addCustomActivity()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                            .disabled(customActivityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
+
+                        LazyVStack(spacing: 10) {
+                            ForEach(filteredCatalog) { activity in
+                                ProgramWorkoutTypeRow(
+                                    activity: activity,
+                                    isSelected: selectedActivityIDs.contains(activity.id),
+                                    action: { toggleActivity(activity.id) }
+                                )
+                            }
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    } else if isPhoneLayout {
+                        Text("Collapsed for easier picking from your suggested workouts.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.62))
                     }
                 }
             }
@@ -714,6 +754,53 @@ struct ProgramBuilderView: View {
         let trailhead = coordinates.first
         let resolvedName = name.isEmpty ? workout.workoutActivityType.name.capitalized : name
         return RouteLaunchMetadata(name: resolvedName, trailhead: trailhead, coordinates: coordinates)
+    }
+
+    private func loadRouteTemplateAvailability() async {
+        let candidates = routeTemplateCandidates
+        guard !candidates.isEmpty else {
+            await MainActor.run {
+                routeTemplateIDsWithSavedRoutes = []
+                hasLoadedRouteTemplateAvailability = true
+                if let selectedRouteTemplateID, !routeTemplateIDsWithSavedRoutes.contains(selectedRouteTemplateID) {
+                    self.selectedRouteTemplateID = nil
+                }
+            }
+            return
+        }
+
+        var idsWithRoutes: Set<UUID> = []
+        for candidate in candidates {
+            if await workoutHasSavedRoute(candidate.workout) {
+                idsWithRoutes.insert(candidate.workout.uuid)
+            }
+        }
+
+        await MainActor.run {
+            routeTemplateIDsWithSavedRoutes = idsWithRoutes
+            hasLoadedRouteTemplateAvailability = true
+            if let selectedRouteTemplateID, !idsWithRoutes.contains(selectedRouteTemplateID) {
+                self.selectedRouteTemplateID = nil
+            }
+        }
+    }
+
+    private func workoutHasSavedRoute(_ workout: HKWorkout) async -> Bool {
+        let healthStore = HKHealthStore()
+        let predicate = HKQuery.predicateForObjects(from: workout)
+        let routeType = HKSeriesType.workoutRoute()
+
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: routeType,
+                predicate: predicate,
+                limit: 1,
+                sortDescriptors: nil
+            ) { _, samples, _ in
+                continuation.resume(returning: !(samples?.isEmpty ?? true))
+            }
+            healthStore.execute(query)
+        }
     }
 
     private func fetchRouteCoordinates(for workout: HKWorkout, maximumPoints: Int) async -> [CLLocationCoordinate2D] {
@@ -1221,7 +1308,7 @@ private struct ProgramWorkoutType: Identifiable, Hashable {
         .init(id: "pilates", title: "Pilates", subtitle: "Core, control, posture", symbol: "figure.cooldown", category: .recovery, tint: .pink, keywords: ["pilates", "core"], supportedTargets: [.heartRateZone], routeFriendly: false, aliasMatches: ["pilates"]),
         .init(id: "mobility", title: "Mobility", subtitle: "Range, tissue prep, reset", symbol: "figure.flexibility", category: .recovery, tint: .mint, keywords: ["mobility", "stretch", "recovery"], supportedTargets: [.heartRateZone], routeFriendly: false, aliasMatches: ["mobility", "stretching"]),
         .init(id: "stretching", title: "Stretching", subtitle: "Simple and explicit range work", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right", category: .recovery, tint: .cyan, keywords: ["stretch", "cool down", "cooldown"], supportedTargets: [.heartRateZone], routeFriendly: false, aliasMatches: ["stretching"]),
-        .init(id: "cooldown", title: "Cooldown", subtitle: "Explicit low-intensity finish", symbol: "wind.down.circle", category: .recovery, tint: .blue, keywords: ["cooldown", "cool down"], supportedTargets: [.heartRateZone], routeFriendly: false, aliasMatches: ["cooldown"]),
+        .init(id: "cooldown", title: "Cooldown", subtitle: "Explicit low-intensity finish", symbol: "arrow.down.circle.fill", category: .recovery, tint: .blue, keywords: ["cooldown", "cool down"], supportedTargets: [.heartRateZone], routeFriendly: false, aliasMatches: ["cooldown"]),
         .init(id: "boxing", title: "Boxing", subtitle: "Bag work, skill, rounds", symbol: "figure.boxing", category: .strength, tint: .red, keywords: ["boxing", "combat", "bag"], supportedTargets: [.heartRateZone, .power], routeFriendly: false, aliasMatches: ["boxing"]),
         .init(id: "dance", title: "Dance", subtitle: "Cardio, rhythm, expression", symbol: "figure.dance", category: .hybrid, tint: .pink, keywords: ["dance", "cardio dance"], supportedTargets: [.heartRateZone], routeFriendly: false, aliasMatches: ["dance"]),
         .init(id: "elliptical", title: "Elliptical", subtitle: "Low-impact cardio builder", symbol: "figure.elliptical", category: .endurance, tint: .cyan, keywords: ["elliptical", "cross trainer"], supportedTargets: [.heartRateZone, .cadence, .distance], routeFriendly: false, aliasMatches: ["elliptical"]),

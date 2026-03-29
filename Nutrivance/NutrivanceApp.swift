@@ -915,6 +915,7 @@ enum AppFocus: String, CaseIterable {
 
 enum RootTabSelection: Hashable {
     case dashboard
+    case programBuilder
     case insights
     case labels
     case log
@@ -1104,7 +1105,7 @@ class NavigationState: ObservableObject {
             }
         case .fitness:
             switch tab {
-            case .dashboard, .todaysPlan, .trainingCalendar, .coach, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .activityRings, .heartZones, .personalRecords:
+            case .dashboard, .programBuilder, .todaysPlan, .trainingCalendar, .coach, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .activityRings, .heartZones, .personalRecords:
                 return true
             default:
                 return false
@@ -1121,6 +1122,7 @@ class NavigationState: ObservableObject {
 
     static func destination(for tab: RootTabSelection) -> AppDestination? {
         switch tab {
+        case .programBuilder: return nil
         case .insights: return .insights
         case .labels: return .labels
         case .log: return .log
@@ -1164,7 +1166,7 @@ class NavigationState: ObservableObject {
 
         if UIDevice.current.userInterfaceIdiom == .phone {
             switch tab {
-            case .dashboard, .search, .playground, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .stress:
+            case .dashboard, .programBuilder, .search, .playground, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .stress:
                 selectedRootTab = tab
                 presentedDestination = nil
             default:

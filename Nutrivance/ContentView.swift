@@ -345,6 +345,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     @Published private(set) var isWorkoutActive = false
     private var source: CompanionWorkoutSource = .appleWatch
     @Published private(set) var launchStatusMessage: String?
+    private var shouldAutoPresentLiveView = true
 
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
@@ -416,6 +417,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         startedAt = Date()
         startElapsedTimer()
         isWorkoutActive = true
+        shouldAutoPresentLiveView = true
         isVisible = true
 
         if #available(iOS 26.0, *) {
@@ -565,7 +567,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             CompanionWorkoutPacerTarget(lowerBound: $0.lowerBound, upperBound: $0.upperBound, unitLabel: $0.unitLabel)
         }
         isWorkoutActive = true
-        isVisible = true
+        if shouldAutoPresentLiveView {
+            isVisible = true
+        }
     }
 
     private func handleWatchLifecycleState(_ state: String, reason: String?) {
@@ -591,6 +595,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             title = "Watch Workout"
             stateText = mirroredSession == nil ? SessionStateText.watchConnecting : stateText
             source = .appleWatch
+            shouldAutoPresentLiveView = true
             isVisible = true
         }
     }
@@ -692,11 +697,13 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     func dismissLiveView() {
         guard isWorkoutActive else { return }
+        shouldAutoPresentLiveView = false
         isVisible = false
     }
 
     func reopenLiveView() {
         guard isWorkoutActive else { return }
+        shouldAutoPresentLiveView = true
         isVisible = true
     }
 
@@ -767,6 +774,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             launchStatusMessage = "Split sent to Apple Watch."
         case .stop:
             stateText = SessionStateText.ended
+            launchStatusMessage = nil
+            finishSession(immediate: true)
         case .newWorkout:
             launchStatusMessage = "Requested next workout on Apple Watch."
         }
@@ -851,6 +860,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         self.stateText = SessionStateText.phoneRunning
         self.pageKinds = localPageKinds(for: activity, location: location)
         self.isWorkoutActive = true
+        self.shouldAutoPresentLiveView = true
         self.isVisible = true
         self.pendingLocalEndAction = nil
 
@@ -984,13 +994,15 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         elapsedTime = 0
         startedAt = nil
         pendingLocalEndAction = nil
+        shouldAutoPresentLiveView = true
     }
 
-    fileprivate func finishSession() {
+    fileprivate func finishSession(immediate: Bool = false) {
         stopElapsedTimer()
         isWorkoutActive = false
         stateText = SessionStateText.ended
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+        let cleanupDelay = immediate ? 0.0 : 6.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + cleanupDelay) { [weak self] in
             guard let self else { return }
             self.isVisible = false
             self.resetForNewSession()
