@@ -243,6 +243,21 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         case nextPhase
     }
 
+    enum QueueInsertionPlacement: String {
+        case next
+        case afterPlan
+    }
+
+    struct InjectableWorkout: Identifiable, Hashable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let symbol: String
+        let activity: HKWorkoutActivityType
+        let location: HKWorkoutSessionLocationType
+        let plannedMinutes: Int
+    }
+
     private enum SessionStateText {
         static let watchConnecting = "Connecting to Apple Watch..."
         static let watchLive = "Live on Apple Watch"
@@ -406,7 +421,22 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         static let state = "state"
         static let reason = "reason"
         static let effortScore = "effortScore"
+        static let injectedPlacement = "injectedPlacement"
+        static let injectedTitle = "injectedTitle"
+        static let injectedSubtitle = "injectedSubtitle"
+        static let injectedActivityRawValue = "injectedActivityRawValue"
+        static let injectedLocationRawValue = "injectedLocationRawValue"
+        static let injectedPlannedMinutes = "injectedPlannedMinutes"
     }
+
+    static let injectableWorkouts: [InjectableWorkout] = [
+        .init(id: "run", title: "Outdoor Run", subtitle: "Injected • Run", symbol: "figure.run", activity: .running, location: .outdoor, plannedMinutes: 30),
+        .init(id: "walk", title: "Outdoor Walk", subtitle: "Injected • Walk", symbol: "figure.walk", activity: .walking, location: .outdoor, plannedMinutes: 30),
+        .init(id: "cycle", title: "Cycling", subtitle: "Injected • Cycling", symbol: "bicycle", activity: .cycling, location: .outdoor, plannedMinutes: 30),
+        .init(id: "yoga", title: "Yoga", subtitle: "Injected • Yoga", symbol: "figure.mind.and.body", activity: .yoga, location: .indoor, plannedMinutes: 20),
+        .init(id: "strength", title: "Strength", subtitle: "Injected • Strength", symbol: "dumbbell.fill", activity: .traditionalStrengthTraining, location: .indoor, plannedMinutes: 30),
+        .init(id: "hike", title: "Hike", subtitle: "Injected • Hike", symbol: "figure.hiking", activity: .hiking, location: .outdoor, plannedMinutes: 45)
+    ]
 
     var canReopenLiveView: Bool {
         isWorkoutActive && !isVisible
@@ -414,6 +444,11 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     var isPaused: Bool {
         stateText.localizedCaseInsensitiveContains("paused")
+    }
+
+    var currentPhaseRemainingTime: TimeInterval? {
+        guard phaseQueue.indices.contains(currentPhaseIndex) else { return nil }
+        return max(TimeInterval(phaseQueue[currentPhaseIndex].plannedMinutes * 60) - elapsedTime, 0)
     }
 
     override init() {
@@ -804,6 +839,33 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             session.activate()
         }
         pendingEffortPrompt = nil
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        } else {
+            session.transferUserInfo(payload)
+        }
+#endif
+    }
+
+    func injectWorkout(_ workout: InjectableWorkout, placement: QueueInsertionPlacement) {
+#if canImport(WatchConnectivity)
+        activateIfNeeded()
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        let payload: [String: Any] = [
+            CompanionLifecycleKeys.injectedPlacement: placement.rawValue,
+            CompanionLifecycleKeys.injectedTitle: workout.title,
+            CompanionLifecycleKeys.injectedSubtitle: workout.subtitle,
+            CompanionLifecycleKeys.injectedActivityRawValue: Int(workout.activity.rawValue),
+            CompanionLifecycleKeys.injectedLocationRawValue: workout.location.rawValue,
+            CompanionLifecycleKeys.injectedPlannedMinutes: workout.plannedMinutes
+        ]
+        if session.activationState != .activated {
+            session.activate()
+        }
+        launchStatusMessage = placement == .next
+            ? "Queued \(workout.title) after the current stage."
+            : "Queued \(workout.title) after the plan."
         if session.isReachable {
             session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
         } else {
@@ -1300,7 +1362,8 @@ private struct CompanionWorkoutLiveOverlay: View {
 private struct CompanionWorkoutControlsDrawer: View {
     @ObservedObject var manager: CompanionWorkoutLiveManager
     @Binding var isExpanded: Bool
-    @State private var showsQueue = false
+    @State private var showsInjector = false
+    @State private var insertionPlacement: CompanionWorkoutLiveManager.QueueInsertionPlacement = .next
 
     private var primaryControlLabel: String {
         manager.isPaused ? "Resume" : "Pause"
@@ -1350,8 +1413,10 @@ private struct CompanionWorkoutControlsDrawer: View {
                         CompanionWorkoutControlButton(symbol: "flag.checkered", title: "Split", tint: .blue) {
                             manager.sendControl(.split)
                         }
-                        CompanionWorkoutControlButton(symbol: "plus.circle.fill", title: "New", tint: .orange) {
-                            manager.sendControl(.newWorkout)
+                        CompanionWorkoutControlButton(symbol: "plus.circle.fill", title: showsInjector ? "Hide Add" : "Add", tint: .orange) {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                                showsInjector.toggle()
+                            }
                         }
                         CompanionWorkoutControlButton(symbol: "stop.fill", title: "Stop", tint: .red) {
                             manager.sendControl(.stop)
@@ -1365,29 +1430,53 @@ private struct CompanionWorkoutControlsDrawer: View {
                                 manager.sendControl(.nextPhase)
                             }
                         }
-                        if manager.phaseQueue.count > 1 {
-                            CompanionWorkoutControlButton(symbol: "list.bullet", title: showsQueue ? "Hide Queue" : "List", tint: .mint) {
-                                withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                                    showsQueue.toggle()
-                                }
-                            }
-                        }
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
 
-                    if showsQueue, !manager.phaseQueue.isEmpty {
+                    if showsInjector {
                         VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 10) {
+                                injectorChip(title: "Inject Next", isSelected: insertionPlacement == .next) {
+                                    insertionPlacement = .next
+                                }
+                                injectorChip(title: "After Plan", isSelected: insertionPlacement == .afterPlan) {
+                                    insertionPlacement = .afterPlan
+                                }
+                            }
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                ForEach(CompanionWorkoutLiveManager.injectableWorkouts) { workout in
+                                    CompanionWorkoutControlButton(symbol: workout.symbol, title: workout.title, tint: .orange) {
+                                        manager.injectWorkout(workout, placement: insertionPlacement)
+                                        showsInjector = false
+                                    }
+                                }
+                            }
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
+                    if manager.phaseQueue.count > 1 {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Label("Workout Queue", systemImage: "list.bullet.rectangle")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                Text("\(manager.currentPhaseIndex + 1)/\(manager.phaseQueue.count)")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.65))
+                            }
+
                             ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
                                 HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: index == manager.currentPhaseIndex ? "play.circle.fill" : "circle")
-                                        .foregroundStyle(index == manager.currentPhaseIndex ? Color.green : Color.white.opacity(0.45))
+                                    Image(systemName: queueSymbol(for: index))
+                                        .foregroundStyle(queueTint(for: index))
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(phase.title)
                                             .font(.system(size: 14, weight: .bold, design: .rounded))
                                             .foregroundStyle(.white)
-                                        Text(index == manager.currentPhaseIndex
-                                             ? "Current • \(phase.plannedMinutes) min planned"
-                                             : "\(phase.plannedMinutes) min planned")
+                                        Text(queueDetail(for: phase, at: index))
                                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                                             .foregroundStyle(.white.opacity(0.65))
                                     }
@@ -1416,6 +1505,57 @@ private struct CompanionWorkoutControlsDrawer: View {
             )
         }
         .ignoresSafeArea(edges: .bottom)
+    }
+
+    private func injectorChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(isSelected ? .black : .white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background((isSelected ? Color.green : Color.white.opacity(0.08)), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func queueSymbol(for index: Int) -> String {
+        if index < manager.currentPhaseIndex {
+            return "checkmark.circle.fill"
+        }
+        if index == manager.currentPhaseIndex {
+            return "play.circle.fill"
+        }
+        if index == manager.currentPhaseIndex + 1 {
+            return "forward.circle.fill"
+        }
+        return "circle"
+    }
+
+    private func queueTint(for index: Int) -> Color {
+        if index < manager.currentPhaseIndex {
+            return .green
+        }
+        if index == manager.currentPhaseIndex {
+            return .orange
+        }
+        if index == manager.currentPhaseIndex + 1 {
+            return .mint
+        }
+        return Color.white.opacity(0.45)
+    }
+
+    private func queueDetail(for phase: CompanionWorkoutLiveManager.WorkoutPhase, at index: Int) -> String {
+        if index < manager.currentPhaseIndex {
+            return "Completed"
+        }
+        if index == manager.currentPhaseIndex {
+            return "Current • \(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
+        }
+        if index == manager.currentPhaseIndex + 1 {
+            return "Next • \(phase.plannedMinutes) min"
+        }
+        return "\(phase.plannedMinutes) min planned"
     }
 }
 

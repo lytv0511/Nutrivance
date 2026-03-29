@@ -57,15 +57,9 @@ enum WatchWorkoutLocationChoice: String, CaseIterable, Identifiable {
 
 struct WatchCustomWorkoutDraft: Hashable {
     var displayName = "Custom Workout"
-    var activity: HKWorkoutActivityType = .running
-    var location: WatchWorkoutLocationChoice = .outdoor
     var goalMode: WatchWorkoutGoalMode = .open
     var goalValue: Double = 30
-    var warmupMinutes: Double = 5
-    var workMinutes: Double = 4
-    var recoveryMinutes: Double = 2
-    var repeats: Int = 4
-    var cooldownMinutes: Double = 5
+    var stages: [WatchCustomWorkoutStage] = [WatchCustomWorkoutStage()]
 
     var workoutGoal: WorkoutGoal {
         switch goalMode {
@@ -81,25 +75,59 @@ struct WatchCustomWorkoutDraft: Hashable {
     }
 
     var workoutPlan: WorkoutPlan {
-        let warmup = warmupMinutes > 0
-            ? WorkoutStep(goal: .time(warmupMinutes, .minutes), displayName: "Warm Up")
-            : nil
-        let cooldown = cooldownMinutes > 0
-            ? WorkoutStep(goal: .time(cooldownMinutes, .minutes), displayName: "Cool Down")
-            : nil
-        let steps: [IntervalStep] = [
-            IntervalStep(.work, step: WorkoutStep(goal: .time(max(workMinutes, 0.5), .minutes), displayName: "Work")),
-            IntervalStep(.recovery, step: WorkoutStep(goal: .time(max(recoveryMinutes, 0.5), .minutes), displayName: "Recover"))
-        ]
+        let stage = stages.first ?? WatchCustomWorkoutStage()
         let customWorkout = CustomWorkout(
-            activity: activity,
-            location: location.hkValue,
-            displayName: displayName,
-            warmup: warmup,
-            blocks: [IntervalBlock(steps: steps, iterations: max(repeats, 1))],
-            cooldown: cooldown
+            activity: stage.activity,
+            location: stage.location.hkValue,
+            displayName: displayName
         )
         return WorkoutPlan(.custom(customWorkout))
+    }
+}
+
+struct WatchCustomWorkoutStage: Identifiable, Hashable {
+    let id: UUID
+    var activity: HKWorkoutActivityType
+    var location: WatchWorkoutLocationChoice
+    var plannedMinutes: Int
+
+    init(
+        id: UUID = UUID(),
+        activity: HKWorkoutActivityType = .running,
+        location: WatchWorkoutLocationChoice = .outdoor,
+        plannedMinutes: Int = 30
+    ) {
+        self.id = id
+        self.activity = activity
+        self.location = location
+        self.plannedMinutes = plannedMinutes
+    }
+
+    var title: String {
+        watchWorkoutDisplayName(activity)
+    }
+}
+
+extension WatchCustomWorkoutDraft {
+    var totalPlannedMinutes: Int {
+        stages.reduce(0) { $0 + max($1.plannedMinutes, 1) }
+    }
+
+    var customPhases: [WatchProgramPhasePayload] {
+        let stageList = stages.isEmpty ? [WatchCustomWorkoutStage()] : stages
+        return stageList.enumerated().map { index, stage in
+            WatchProgramPhasePayload(
+                id: stage.id,
+                title: stage.title,
+                subtitle: stageList.count > 1
+                    ? "\(displayName) • Stage \(index + 1) of \(stageList.count)"
+                    : "Custom • \(displayName)",
+                activityID: "custom-\(index)-\(stage.activity.rawValue)",
+                activityRawValue: stage.activity.rawValue,
+                locationRawValue: stage.location.hkValue.rawValue,
+                plannedMinutes: max(stage.plannedMinutes, 1)
+            )
+        }
     }
 }
 
@@ -318,6 +346,11 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         case nextPhase
     }
 
+    enum QueueInsertionPlacement: String {
+        case next
+        case afterPlan
+    }
+
     private enum CompanionLaunchKeys {
         static let workoutStart = "workoutStart"
         static let title = "title"
@@ -329,6 +362,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         static let trailheadLongitude = "trailheadLongitude"
         static let routeCoordinates = "routeCoordinates"
         static let accepted = "accepted"
+        static let injectedPlacement = "injectedPlacement"
+        static let injectedTitle = "injectedTitle"
+        static let injectedSubtitle = "injectedSubtitle"
+        static let injectedActivityRawValue = "injectedActivityRawValue"
+        static let injectedLocationRawValue = "injectedLocationRawValue"
+        static let injectedPlannedMinutes = "injectedPlannedMinutes"
     }
 
     enum SessionDisplayState: String {
@@ -463,6 +502,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private var currentSplitStartDistanceMeters: Double = 0
     private var autoSplitLengthMeters: Double?
     private let workoutTabPreferences = WatchWorkoutTabPreferences()
+    private var hasAnnouncedCurrentPhaseReady = false
+    private var nextPhaseReminderIdentifier: String?
 
     private var sessionState: HKWorkoutSessionState? {
         workoutSession?.state
@@ -550,24 +591,19 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     func startCustomWorkout() {
-        let plannedMinutes = Int(customDraft.warmupMinutes + customDraft.cooldownMinutes + (customDraft.workMinutes + customDraft.recoveryMinutes) * Double(max(customDraft.repeats, 1)))
-        let phase = WatchProgramPhasePayload(
-            id: UUID(),
-            title: customDraft.displayName,
-            subtitle: "Custom • \(watchWorkoutDisplayName(customDraft.activity))",
-            activityID: "custom-\(customDraft.activity.rawValue)",
-            activityRawValue: customDraft.activity.rawValue,
-            locationRawValue: customDraft.location.hkValue.rawValue,
-            plannedMinutes: max(plannedMinutes, 1)
-        )
-        phaseQueue = [phase]
+        let phases = customDraft.customPhases
+        guard let firstPhase = phases.first else {
+            statusMessage = "Add at least one custom stage."
+            return
+        }
+        phaseQueue = phases
         currentPhaseIndex = 0
         pendingEffortQueue = []
         startWorkout(
-            title: phase.title,
-            subtitle: phase.subtitle,
-            activity: customDraft.activity,
-            location: customDraft.location.hkValue
+            title: firstPhase.title,
+            subtitle: firstPhase.subtitle,
+            activity: HKWorkoutActivityType(rawValue: firstPhase.activityRawValue) ?? .running,
+            location: HKWorkoutSessionLocationType(rawValue: firstPhase.locationRawValue) ?? .unknown
         )
     }
 
@@ -611,6 +647,10 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         guard #available(watchOS 10.0, *) else { return }
 
         Task {
+            guard customDraft.stages.count <= 1 else {
+                statusMessage = "Scheduling supports one custom stage. Start multi-stage plans live on watch."
+                return
+            }
             if schedulerAuthorizationState != .authorized {
                 schedulerAuthorizationState = await WorkoutScheduler.shared.requestAuthorization()
             }
@@ -668,6 +708,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     func end() {
         guard let workoutSession else { return }
+        clearPendingNextPhaseReminder()
         enqueueCurrentPhaseForEffort()
         elapsedTime = currentElapsedTime(at: Date())
         statusMessage = "Ending workout..."
@@ -686,6 +727,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return
         }
         guard workoutSession != nil else { return }
+        clearPendingNextPhaseReminder()
         enqueueCurrentPhaseForEffort()
         elapsedTime = currentElapsedTime(at: Date())
         statusMessage = "Switching to \(nextPhase.title)..."
@@ -757,6 +799,28 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         workoutSession?.end()
     }
 
+    func injectTemplate(_ template: WatchWorkoutTemplate, placement: QueueInsertionPlacement) {
+        let phase = WatchProgramPhasePayload(
+            id: UUID(),
+            title: template.title,
+            subtitle: "Injected • \(template.subtitle)",
+            activityID: "inject-\(template.id)-\(UUID().uuidString)",
+            activityRawValue: template.activity.rawValue,
+            locationRawValue: template.location.rawValue,
+            plannedMinutes: 30
+        )
+        injectPhases([phase], placement: placement)
+    }
+
+    func injectCustomStages(placement: QueueInsertionPlacement) {
+        let phases = customDraft.customPhases
+        guard !phases.isEmpty else {
+            statusMessage = "Add a custom stage before injecting."
+            return
+        }
+        injectPhases(phases, placement: placement)
+    }
+
     func submitEffortScore(_ score: Int) {
         lastEffortScore = score
         if !pendingEffortQueue.isEmpty {
@@ -812,6 +876,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         pendingEndAction = .none
         lastHistorySampleElapsedTime = 0
         lastPowerSampleDate = nil
+        hasAnnouncedCurrentPhaseReady = false
+        clearPendingNextPhaseReminder()
         speedHistory = []
         paceHistory = []
         powerHistory = []
@@ -866,6 +932,33 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 score: nil
             )
         )
+    }
+
+    private func injectPhases(_ phases: [WatchProgramPhasePayload], placement: QueueInsertionPlacement) {
+        guard !phases.isEmpty else { return }
+
+        if phaseQueue.isEmpty {
+            phaseQueue = phases
+            currentPhaseIndex = 0
+            statusMessage = "Queue created with \(phases.count) stage\(phases.count == 1 ? "" : "s")."
+            broadcastCompanionSnapshot()
+            return
+        }
+
+        let insertionIndex: Int
+        switch placement {
+        case .next:
+            insertionIndex = min(currentPhaseIndex + 1, phaseQueue.count)
+        case .afterPlan:
+            insertionIndex = phaseQueue.count
+        }
+
+        phaseQueue.insert(contentsOf: phases, at: insertionIndex)
+        let head = phases.first?.title ?? "stage"
+        statusMessage = placement == .next
+            ? "\(head) queued after the current stage."
+            : "\(head) queued after the current plan."
+        broadcastCompanionSnapshot()
     }
 
     private func beginWorkoutSession(
@@ -951,6 +1044,32 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         case .nextPhase:
             advanceToNextPhase()
         }
+    }
+
+    private func handleInjectedPhaseRequest(_ payload: [String: Any]) -> Bool {
+        guard
+            let title = payload[CompanionLaunchKeys.injectedTitle] as? String,
+            let subtitle = payload[CompanionLaunchKeys.injectedSubtitle] as? String,
+            let activityRawValue = payload[CompanionLaunchKeys.injectedActivityRawValue] as? Int,
+            let locationRawValue = payload[CompanionLaunchKeys.injectedLocationRawValue] as? Int,
+            let plannedMinutes = payload[CompanionLaunchKeys.injectedPlannedMinutes] as? Int,
+            let placementRaw = payload[CompanionLaunchKeys.injectedPlacement] as? String,
+            let placement = QueueInsertionPlacement(rawValue: placementRaw)
+        else {
+            return false
+        }
+
+        let phase = WatchProgramPhasePayload(
+            id: UUID(),
+            title: title,
+            subtitle: subtitle,
+            activityID: "inject-\(activityRawValue)-\(UUID().uuidString)",
+            activityRawValue: UInt(activityRawValue),
+            locationRawValue: locationRawValue,
+            plannedMinutes: max(plannedMinutes, 1)
+        )
+        injectPhases([phase], placement: placement)
+        return true
     }
 
     private func handleCompanionLaunchRequest(_ payload: [String: Any]) -> Bool {
@@ -1144,7 +1263,64 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         guard let nextPhase, let currentPhase else { return }
         let plannedDuration = TimeInterval(currentPhase.plannedMinutes * 60)
         guard plannedDuration > 0, elapsedTime >= plannedDuration else { return }
+        if !hasAnnouncedCurrentPhaseReady {
+            hasAnnouncedCurrentPhaseReady = true
+            WKInterfaceDevice.current().play(.notification)
+            scheduleNextPhaseReminder(for: nextPhase, currentPhase: currentPhase)
+        }
         statusMessage = "Next phase ready: \(nextPhase.title) • \(nextPhase.plannedMinutes)m"
+    }
+
+    private func clearPendingNextPhaseReminder() {
+        guard let nextPhaseReminderIdentifier else { return }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [nextPhaseReminderIdentifier])
+        self.nextPhaseReminderIdentifier = nil
+    }
+
+    private func scheduleNextPhaseReminder(
+        for nextPhase: WatchProgramPhasePayload,
+        currentPhase: WatchProgramPhasePayload
+    ) {
+        let center = UNUserNotificationCenter.current()
+        Task {
+            let settings = await center.notificationSettings()
+            let isAuthorized: Bool
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                isAuthorized = true
+            case .notDetermined:
+                let granted = try? await center.requestAuthorization(options: [.alert, .sound])
+                isAuthorized = granted == true
+            default:
+                isAuthorized = false
+            }
+
+            guard isAuthorized else { return }
+
+            let identifier = "workout-next-phase-\(currentPhase.id.uuidString)"
+            let content = UNMutableNotificationContent()
+            content.title = "Next stage ready"
+            content.body = "\(nextPhase.title) is ready to start. Planned \(nextPhase.plannedMinutes) min."
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: identifier,
+                content: content,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+            )
+
+            do {
+                center.removePendingNotificationRequests(withIdentifiers: [identifier])
+                try await center.add(request)
+                await MainActor.run {
+                    self.nextPhaseReminderIdentifier = identifier
+                }
+            } catch {
+                await MainActor.run {
+                    self.nextPhaseReminderIdentifier = nil
+                }
+            }
+        }
     }
 
     private func rebuildMetrics() {
@@ -1649,6 +1825,8 @@ extension WatchWorkoutManager: WCSessionDelegate {
             } else if let effortScore = message[CompanionLifecycleKeys.effortScore] as? Int {
                 self.submitEffortScore(effortScore)
                 replyHandler([CompanionLaunchKeys.accepted: true])
+            } else if self.handleInjectedPhaseRequest(message) {
+                replyHandler([CompanionLaunchKeys.accepted: true])
             } else if self.handleCompanionLaunchRequest(message) {
                 replyHandler([CompanionLaunchKeys.accepted: true])
             } else {
@@ -1663,6 +1841,8 @@ extension WatchWorkoutManager: WCSessionDelegate {
                 self.handleCompanionControlCommand(command)
             } else if let effortScore = userInfo[CompanionLifecycleKeys.effortScore] as? Int {
                 self.submitEffortScore(effortScore)
+            } else if self.handleInjectedPhaseRequest(userInfo) {
+                return
             } else {
                 _ = self.handleCompanionLaunchRequest(userInfo)
             }

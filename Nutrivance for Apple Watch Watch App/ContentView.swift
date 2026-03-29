@@ -135,6 +135,7 @@ struct ContentView: View {
 }
 
 private enum ActiveWorkoutSidePane: Int {
+    case queue
     case controls
     case main
     case media
@@ -161,8 +162,20 @@ private struct ActiveWorkoutCardsView: View {
         manager.orderedWorkoutPages.contains(.map)
     }
 
+    private var readyNextPhase: WatchProgramPhasePayload? {
+        guard horizontalSelection == .main, manager.isNextPhaseReady else { return nil }
+        return manager.nextPhase
+    }
+
+    private var showsQueueSummary: Bool {
+        horizontalSelection == .main && manager.phaseQueue.count > 1
+    }
+
     var body: some View {
         TabView(selection: $horizontalSelection) {
+            WorkoutQueueCard(manager: manager)
+                .tag(ActiveWorkoutSidePane.queue)
+
             WorkoutControlsCard(
                 manager: manager,
                 onWaterLock: {
@@ -210,6 +223,26 @@ private struct ActiveWorkoutCardsView: View {
                     .padding(.top, 8)
                     .padding(.trailing, 10)
             }
+        }
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 6) {
+                if showsQueueSummary {
+                    CompactWorkoutQueueBanner(manager: manager)
+                        .padding(.horizontal, 8)
+                }
+
+                if let nextPhase = readyNextPhase {
+                    NextPhasePromptBanner(
+                        title: nextPhase.title,
+                        plannedMinutes: nextPhase.plannedMinutes,
+                        onAdvance: {
+                            manager.advanceToNextPhase()
+                        }
+                    )
+                    .padding(.horizontal, 8)
+                }
+            }
+            .padding(.bottom, 8)
         }
         .onAppear {
             verticalSelection = verticalPages.first ?? .metricsPrimary
@@ -267,6 +300,128 @@ private struct ActiveWorkoutCardsView: View {
     }
 }
 
+private struct WorkoutQueueCard: View {
+    @ObservedObject var manager: WatchWorkoutManager
+
+    private var nextPhase: WatchProgramPhasePayload? {
+        manager.nextPhase
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Workout Queue", systemImage: "list.bullet.rectangle")
+                        .font(.system(size: 13, weight: .black, design: .rounded))
+                    Spacer()
+                    Text("\(manager.currentPhaseIndex + 1)/\(max(manager.phaseQueue.count, 1))")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+
+                if let nextPhase {
+                    Button {
+                        manager.advanceToNextPhase()
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Next Phase")
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                Text("\(nextPhase.title) • \(nextPhase.plannedMinutes)m")
+                                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.75)
+                            }
+                            Spacer()
+                            Image(systemName: "forward.end.fill")
+                                .font(.system(size: 12, weight: .black))
+                        }
+                        .padding(10)
+                        .background(Color.green.opacity(0.22), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
+                        HStack(spacing: 8) {
+                            Image(systemName: symbol(for: index))
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(tint(for: index))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(phase.title)
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .lineLimit(1)
+                                Text(detail(for: phase, at: index))
+                                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.68))
+                                    .lineLimit(2)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(background(for: index), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+        }
+        .background(Color.black.ignoresSafeArea())
+    }
+
+    private func symbol(for index: Int) -> String {
+        if index < manager.currentPhaseIndex {
+            return "checkmark.circle.fill"
+        }
+        if index == manager.currentPhaseIndex {
+            return "play.circle.fill"
+        }
+        if index == manager.currentPhaseIndex + 1 {
+            return "forward.circle.fill"
+        }
+        return "circle"
+    }
+
+    private func tint(for index: Int) -> Color {
+        if index < manager.currentPhaseIndex {
+            return .green
+        }
+        if index == manager.currentPhaseIndex {
+            return .orange
+        }
+        if index == manager.currentPhaseIndex + 1 {
+            return .cyan
+        }
+        return .white.opacity(0.36)
+    }
+
+    private func background(for index: Int) -> Color {
+        if index == manager.currentPhaseIndex {
+            return Color.orange.opacity(0.14)
+        }
+        if index == manager.currentPhaseIndex + 1 {
+            return Color.green.opacity(0.08)
+        }
+        return Color.white.opacity(0.05)
+    }
+
+    private func detail(for phase: WatchProgramPhasePayload, at index: Int) -> String {
+        if index < manager.currentPhaseIndex {
+            return "Completed"
+        }
+        if index == manager.currentPhaseIndex {
+            return "\(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
+        }
+        if index == manager.currentPhaseIndex + 1 {
+            return "Next • \(phase.plannedMinutes) min"
+        }
+        return "\(phase.plannedMinutes) min planned"
+    }
+}
+
 private struct WorkoutAlwaysOnClock: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -279,6 +434,101 @@ private struct WorkoutAlwaysOnClock: View {
         }
         .allowsHitTesting(false)
         .accessibilityLabel("Current time")
+    }
+}
+
+private struct NextPhasePromptBanner: View {
+    let title: String
+    let plannedMinutes: Int
+    let onAdvance: () -> Void
+
+    var body: some View {
+        Button(action: onAdvance) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Next Phase")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(.green)
+                    Text("\(title) • \(plannedMinutes)m")
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+
+                Spacer(minLength: 6)
+
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(.black)
+                    .frame(width: 28, height: 28)
+                    .background(Color.green, in: Circle())
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.88), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.green.opacity(0.45), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct CompactWorkoutQueueBanner: View {
+    @ObservedObject var manager: WatchWorkoutManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "list.bullet.rectangle")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.cyan)
+                Text("Workout Queue")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.82))
+                Spacer(minLength: 6)
+                Text("\(manager.currentPhaseIndex + 1)/\(manager.phaseQueue.count)")
+                    .font(.system(size: 10, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+
+            ForEach(Array(manager.phaseQueue.enumerated().prefix(3)), id: \.element.id) { index, phase in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(index == manager.currentPhaseIndex ? Color.green : Color.white.opacity(0.24))
+                        .frame(width: 6, height: 6)
+
+                    Text(phase.title)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+
+                    Spacer(minLength: 6)
+
+                    Text(queueTimingText(for: phase, at: index))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(index == manager.currentPhaseIndex ? .green : .white.opacity(0.72))
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    private func queueTimingText(for phase: WatchProgramPhasePayload, at index: Int) -> String {
+        if index == manager.currentPhaseIndex {
+            let remaining = max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)
+            return "\(remaining)m left"
+        }
+        return "\(phase.plannedMinutes)m"
     }
 }
 
@@ -1104,7 +1354,8 @@ private struct WorkoutMediaCard: View {
 private struct WorkoutControlsCard: View {
     @ObservedObject var manager: WatchWorkoutManager
     let onWaterLock: () -> Void
-    @State private var showsQueue = false
+    @State private var showsQueueOverlay = false
+    @State private var insertionPlacement: WatchWorkoutManager.QueueInsertionPlacement = .next
 
     var body: some View {
         GeometryReader { geometry in
@@ -1139,8 +1390,8 @@ private struct WorkoutControlsCard: View {
                         manager.showOnPhone()
                     }
 
-                    WorkoutControlPill(symbol: "plus.circle.fill", title: "New", tint: Color(red: 0.52, green: 0.38, blue: 0.23)) {
-                        manager.newWorkout()
+                    WorkoutControlPill(symbol: "plus.circle.fill", title: "Add", tint: Color(red: 0.52, green: 0.38, blue: 0.23)) {
+                        showsQueueOverlay = true
                     }
 
                     WorkoutControlPill(symbol: "stop.fill", title: "Stop", tint: Color(red: 0.56, green: 0.24, blue: 0.24)) {
@@ -1150,7 +1401,7 @@ private struct WorkoutControlsCard: View {
                     if let nextPhase = manager.nextPhase {
                         WorkoutControlPill(
                             symbol: "forward.end.fill",
-                            title: "Next \(nextPhase.title.prefix(10))",
+                            title: "Next \(nextPhase.title) \(nextPhase.plannedMinutes)m",
                             tint: Color(red: 0.22, green: 0.55, blue: 0.36)
                         ) {
                             manager.advanceToNextPhase()
@@ -1158,41 +1409,12 @@ private struct WorkoutControlsCard: View {
                     }
 
                     if manager.phaseQueue.count > 1 {
-                        WorkoutControlPill(symbol: "list.bullet", title: showsQueue ? "Hide List" : "List", tint: Color(red: 0.28, green: 0.48, blue: 0.55)) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showsQueue.toggle()
-                            }
+                        WorkoutControlPill(symbol: "list.bullet", title: "List", tint: Color(red: 0.28, green: 0.48, blue: 0.55)) {
+                            showsQueueOverlay = true
                         }
                     }
                 }
                 .frame(width: gridWidth)
-
-                if showsQueue, !manager.phaseQueue.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
-                            HStack(spacing: 6) {
-                                Image(systemName: index == manager.currentPhaseIndex ? "play.circle.fill" : "circle")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(index == manager.currentPhaseIndex ? Color.green : Color.white.opacity(0.4))
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(phase.title)
-                                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                                        .lineLimit(1)
-                                    Text(index == manager.currentPhaseIndex && manager.currentPhaseRemainingTime != nil
-                                         ? "\(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
-                                         : "\(phase.plannedMinutes) min")
-                                        .font(.system(size: 8, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.white.opacity(0.65))
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                            }
-                        }
-                    }
-                    .padding(8)
-                    .frame(width: gridWidth)
-                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
 
                 Text(manager.statusMessage)
                     .font(.system(size: 8, weight: .black, design: .rounded))
@@ -1208,7 +1430,187 @@ private struct WorkoutControlsCard: View {
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
             .padding(.top, 4)
             .padding(.bottom, 0)
+            .overlay {
+                if showsQueueOverlay {
+                    WatchWorkoutQueueOverlayView(
+                        manager: manager,
+                        insertionPlacement: $insertionPlacement,
+                        dismiss: {
+                            showsQueueOverlay = false
+                        }
+                    )
+                }
+            }
         }
+    }
+}
+
+private struct WatchWorkoutQueueOverlayView: View {
+    @ObservedObject var manager: WatchWorkoutManager
+    @Binding var insertionPlacement: WatchWorkoutManager.QueueInsertionPlacement
+    let dismiss: () -> Void
+
+    private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.opacity(0.94)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("Queue & Add", systemImage: "list.bullet.rectangle")
+                            .font(.system(size: 12, weight: .black, design: .rounded))
+                        Spacer()
+                        Text("\(manager.phaseQueue.count) items")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+
+                    if let nextPhase = manager.nextPhase {
+                        Button {
+                            manager.advanceToNextPhase()
+                            dismiss()
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Next Phase")
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    Text("\(nextPhase.title) • \(nextPhase.plannedMinutes)m")
+                                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                                        .lineLimit(2)
+                                        .minimumScaleFactor(0.75)
+                                }
+                                Spacer()
+                                Image(systemName: "forward.end.fill")
+                                    .font(.system(size: 12, weight: .black))
+                            }
+                            .padding(10)
+                            .background(Color.green.opacity(0.22), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if !manager.phaseQueue.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
+                                HStack(spacing: 7) {
+                                    Image(systemName: index == manager.currentPhaseIndex ? "play.circle.fill" : "circle")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(index == manager.currentPhaseIndex ? Color.green : Color.white.opacity(0.36))
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(phase.title)
+                                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                                            .lineLimit(1)
+                                        Text(queueTimingText(for: phase, at: index))
+                                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(.white.opacity(0.68))
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Add to Queue")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+
+                        HStack(spacing: 6) {
+                            queuePlacementChip(
+                                title: "Inject Next",
+                                isSelected: insertionPlacement == .next
+                            ) {
+                                insertionPlacement = .next
+                            }
+                            queuePlacementChip(
+                                title: "After Plan",
+                                isSelected: insertionPlacement == .afterPlan
+                            ) {
+                                insertionPlacement = .afterPlan
+                            }
+                        }
+
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(WatchWorkoutTemplate.defaults) { template in
+                                Button {
+                                    manager.injectTemplate(template, placement: insertionPlacement)
+                                    dismiss()
+                                } label: {
+                                    VStack(spacing: 4) {
+                                        Image(systemName: template.symbol)
+                                            .font(.system(size: 12, weight: .bold))
+                                        Text(template.title)
+                                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                                            .multilineTextAlignment(.center)
+                                            .lineLimit(2)
+                                            .minimumScaleFactor(0.72)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 48)
+                                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            Button {
+                                manager.injectCustomStages(placement: insertionPlacement)
+                                dismiss()
+                            } label: {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "slider.horizontal.3")
+                                        .font(.system(size: 12, weight: .bold))
+                                    Text("Custom")
+                                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 12)
+                .padding(.bottom, 16)
+            }
+
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.12), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .padding(.trailing, 8)
+        }
+        .transition(.opacity)
+    }
+
+    private func queueTimingText(for phase: WatchProgramPhasePayload, at index: Int) -> String {
+        if index == manager.currentPhaseIndex {
+            return "\(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
+        }
+        return "\(phase.plannedMinutes) min"
+    }
+
+    private func queuePlacementChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(isSelected ? .black : .white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background((isSelected ? Color.green : Color.white.opacity(0.08)), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -3389,6 +3791,7 @@ private struct SleepManagerView: View {
 
 private struct WorkoutLauncherView: View {
     @ObservedObject var store: WatchDashboardStore
+    @ObservedObject private var manager = WatchWorkoutManager.shared
     @State private var quickStartActivity: HKWorkoutActivityType = .running
 
     private var selectedQuickStartTemplate: WatchWorkoutTemplate {
@@ -3396,8 +3799,9 @@ private struct WorkoutLauncherView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            VStack(spacing: 10) {
+        VStack(spacing: 10) {
+            ScrollView {
+                VStack(spacing: 10) {
                 if store.workoutManager.postWorkoutDestination == .nextWorkoutPicker {
                     SectionCard(title: "Next Workout") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -3463,6 +3867,36 @@ private struct WorkoutLauncherView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(.red)
                             }
+
+                            if store.workoutManager.phaseQueue.count > 1 {
+                                Divider()
+                                    .background(Color.white.opacity(0.12))
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Label("Workout Queue", systemImage: "list.bullet.rectangle")
+                                        .font(.caption.weight(.semibold))
+
+                                    ForEach(Array(store.workoutManager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(index == store.workoutManager.currentPhaseIndex ? Color.green : Color.white.opacity(0.24))
+                                                .frame(width: 6, height: 6)
+
+                                            Text(phase.title)
+                                                .font(.caption2.weight(.semibold))
+                                                .lineLimit(1)
+
+                                            Spacer()
+
+                                            Text(index == store.workoutManager.currentPhaseIndex
+                                                 ? "\(max(Int((store.workoutManager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
+                                                 : "\(phase.plannedMinutes) min")
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(index == store.workoutManager.currentPhaseIndex ? Color.green : .white.opacity(0.68))
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3474,7 +3908,7 @@ private struct WorkoutLauncherView: View {
                                 Text(workout.title).tag(workout.activity)
                             }
                         }
-                        .labelsHidden()
+                        .watchPickerFieldStyle()
 
                         VStack(alignment: .leading, spacing: 4) {
                             Label(selectedQuickStartTemplate.title, systemImage: selectedQuickStartTemplate.symbol)
@@ -3502,133 +3936,128 @@ private struct WorkoutLauncherView: View {
                     }
                 }
 
-                ScrollView {
-                    VStack(spacing: 10) {
-                        if let incomingPlan = store.incomingPlan {
-                            SectionCard(title: incomingPlan.sourceDeviceLabel == "iPad" ? "From iPad" : "Incoming Plan") {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(incomingPlan.title)
-                                        .font(.caption.weight(.semibold))
-                                    Text(incomingPlan.summary)
-                                        .font(.caption2)
-                                        .foregroundStyle(.white.opacity(0.72))
-                                    if let expiresAt = incomingPlan.expiresAt {
-                                        Text("Expires \(expiresAt.formatted(date: .omitted, time: .shortened))")
-                                            .font(.caption2)
-                                            .foregroundStyle(.orange.opacity(0.9))
-                                    }
-
-                                    Button("Start Incoming Plan") {
-                                        store.queuedWorkout = incomingPlan.title
-                                        store.workoutManager.startSyncedPlan(incomingPlan)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(.orange)
-                                }
+                if let incomingPlan = store.incomingPlan {
+                    SectionCard(title: incomingPlan.sourceDeviceLabel == "iPad" ? "From iPad" : "Incoming Plan") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(incomingPlan.title)
+                                .font(.caption.weight(.semibold))
+                            Text(incomingPlan.summary)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.72))
+                            if let expiresAt = incomingPlan.expiresAt {
+                                Text("Expires \(expiresAt.formatted(date: .omitted, time: .shortened))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange.opacity(0.9))
                             }
-                        }
 
-                        if !store.savedPlans.isEmpty {
-                            SectionCard(title: "Workout Repository") {
-                                VStack(spacing: 8) {
-                                    ForEach(store.savedPlans) { plan in
-                                        Button {
-                                            store.queuedWorkout = plan.title
-                                            store.workoutManager.startSyncedPlan(plan)
-                                        } label: {
-                                            HStack {
-                                                VStack(alignment: .leading, spacing: 2) {
-                                                    Text(plan.title)
-                                                        .font(.caption.weight(.semibold))
-                                                    Text(plan.summary)
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.white.opacity(0.68))
-                                                        .lineLimit(2)
-                                                }
-                                                Spacer()
-                                                Image(systemName: "play.fill")
-                                                    .font(.caption.weight(.bold))
-                                            }
-                                            .padding(10)
-                                            .background(Color.white.opacity(0.08))
-                                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            Button("Start Incoming Plan") {
+                                store.queuedWorkout = incomingPlan.title
+                                store.workoutManager.startSyncedPlan(incomingPlan)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                        }
+                    }
+                }
+
+                if !store.savedPlans.isEmpty {
+                    SectionCard(title: "Workout Repository") {
+                        VStack(spacing: 8) {
+                            ForEach(store.savedPlans) { plan in
+                                Button {
+                                    store.queuedWorkout = plan.title
+                                    store.workoutManager.startSyncedPlan(plan)
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(plan.title)
+                                                .font(.caption.weight(.semibold))
+                                            Text(plan.summary)
+                                                .font(.caption2)
+                                                .foregroundStyle(.white.opacity(0.68))
+                                                .lineLimit(2)
                                         }
-                                        .buttonStyle(.plain)
+                                        Spacer()
+                                        Image(systemName: "play.fill")
+                                            .font(.caption.weight(.bold))
                                     }
+                                    .padding(10)
+                                    .background(Color.white.opacity(0.08))
+                                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                                 }
-                            }
-                        }
-
-                        if store.incomingPlan == nil && store.savedPlans.isEmpty {
-                            SectionCard(title: "Repository") {
-                                Text("Incoming plans from iPad and saved repository workouts will appear here.")
-                                    .font(.caption2)
-                                    .foregroundStyle(.white.opacity(0.72))
-                            }
-                        }
-
-                        if !store.workoutManager.statusMessage.isEmpty {
-                            SectionCard(title: "Status") {
-                                Text(store.workoutManager.statusMessage)
-                                    .font(.caption2)
-                            }
-                        }
-
-                        if #available(watchOS 10.0, *), !store.workoutManager.scheduledPlans.isEmpty {
-                            SectionCard(title: "Scheduled") {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    if store.workoutManager.scheduledPlans.indices.contains(0) {
-                                        Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[0].date))
-                                            .font(.caption2)
-                                    }
-                                    if store.workoutManager.scheduledPlans.indices.contains(1) {
-                                        Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[1].date))
-                                            .font(.caption2)
-                                    }
-                                    if store.workoutManager.scheduledPlans.indices.contains(2) {
-                                        Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[2].date))
-                                            .font(.caption2)
-                                    }
-                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
-                    .padding(.bottom, 58)
                 }
-                .frame(maxHeight: max(proxy.size.height * 0.42, 88))
+
+                if store.incomingPlan == nil && store.savedPlans.isEmpty {
+                    SectionCard(title: "Repository") {
+                        Text("Incoming plans from iPad and saved repository workouts will appear here.")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+                }
+
+                if !store.workoutManager.statusMessage.isEmpty {
+                    SectionCard(title: "Status") {
+                        Text(store.workoutManager.statusMessage)
+                            .font(.caption2)
+                    }
+                }
+
+                if #available(watchOS 10.0, *), !store.workoutManager.scheduledPlans.isEmpty {
+                    SectionCard(title: "Scheduled") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if store.workoutManager.scheduledPlans.indices.contains(0) {
+                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[0].date))
+                                    .font(.caption2)
+                            }
+                            if store.workoutManager.scheduledPlans.indices.contains(1) {
+                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[1].date))
+                                    .font(.caption2)
+                            }
+                            if store.workoutManager.scheduledPlans.indices.contains(2) {
+                                Text(scheduledWorkoutText(store.workoutManager.scheduledPlans[2].date))
+                                    .font(.caption2)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 58)
             }
             .padding(10)
-            .overlay(alignment: .bottom) {
-                HStack {
-                    NavigationLink {
-                        WatchCustomWorkoutBuilderView(store: store)
-                    } label: {
-                        LauncherCornerActionButton(
-                            title: "Custom",
-                            subtitle: "Build",
-                            symbol: "slider.horizontal.3"
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    Spacer(minLength: 12)
-
-                    NavigationLink {
-                        WatchWorkoutViewsEditorView(store: store)
-                    } label: {
-                        LauncherCornerActionButton(
-                            title: "Views",
-                            subtitle: "Layout",
-                            symbol: "rectangle.3.group"
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 6)
-            }
         }
-        .navigationTitle("Workout")
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.black.ignoresSafeArea())
+        .ignoresSafeArea()
+        .overlay(alignment: .bottom) {
+            HStack {
+                NavigationLink {
+                    WatchCustomWorkoutBuilderView(store: store, manager: manager)
+                } label: {
+                    LauncherCornerActionButton(
+                        symbol: "slider.horizontal.3"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 12)
+
+                NavigationLink {
+                    WatchWorkoutViewsEditorView(store: store, manager: manager)
+                } label: {
+                    LauncherCornerActionButton(
+                        symbol: "rectangle.3.group"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, -4)
+        }
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             store.workoutManager.activate()
         }
@@ -3640,6 +4069,7 @@ private struct WorkoutLauncherView: View {
 
 private struct WatchWorkoutViewsEditorView: View {
     @ObservedObject var store: WatchDashboardStore
+    @ObservedObject var manager: WatchWorkoutManager
     @State private var customizationActivity: HKWorkoutActivityType = .running
 
     var body: some View {
@@ -3651,7 +4081,7 @@ private struct WatchWorkoutViewsEditorView: View {
                             Text(workout.title).tag(workout.activity)
                         }
                     }
-                    .labelsHidden()
+                    .watchPickerFieldStyle()
                 }
 
                 SectionCard(title: "Workout Views") {
@@ -3661,17 +4091,17 @@ private struct WatchWorkoutViewsEditorView: View {
                                 page: page,
                                 isEnabled: Binding(
                                     get: {
-                                        store.workoutManager.isPageEnabled(page, for: customizationActivity)
+                                        manager.isPageEnabled(page, for: customizationActivity)
                                     },
                                     set: { isEnabled in
-                                        store.workoutManager.setPageEnabled(isEnabled, page: page, for: customizationActivity)
+                                        manager.setPageEnabled(isEnabled, page: page, for: customizationActivity)
                                     }
                                 ),
                                 moveUp: {
-                                    store.workoutManager.movePage(page, direction: -1, for: customizationActivity)
+                                    manager.movePage(page, direction: -1, for: customizationActivity)
                                 },
                                 moveDown: {
-                                    store.workoutManager.movePage(page, direction: 1, for: customizationActivity)
+                                    manager.movePage(page, direction: 1, for: customizationActivity)
                                 }
                             )
                         }
@@ -3686,22 +4116,40 @@ private struct WatchWorkoutViewsEditorView: View {
 
 private struct WatchCustomWorkoutBuilderView: View {
     @ObservedObject var store: WatchDashboardStore
+    @ObservedObject var manager: WatchWorkoutManager
 
     private var draft: WatchCustomWorkoutDraft {
-        store.workoutManager.customDraft
+        manager.customDraft
+    }
+
+    private var firstStage: WatchCustomWorkoutStage? {
+        draft.stages.first
     }
 
     private var draftTemplate: WatchWorkoutTemplate? {
-        store.workoutTemplates.first(where: { $0.activity == draft.activity })
+        guard let firstStage else { return nil }
+        return store.workoutTemplates.first(where: { $0.activity == firstStage.activity })
     }
 
     private func draftBinding<Value>(_ keyPath: WritableKeyPath<WatchCustomWorkoutDraft, Value>) -> Binding<Value> {
         Binding {
-            store.workoutManager.customDraft[keyPath: keyPath]
+            manager.customDraft[keyPath: keyPath]
         } set: { newValue in
-            var updatedDraft = store.workoutManager.customDraft
+            var updatedDraft = manager.customDraft
             updatedDraft[keyPath: keyPath] = newValue
-            store.workoutManager.customDraft = updatedDraft
+            manager.customDraft = updatedDraft
+        }
+    }
+
+    private func stageBinding<Value>(_ stageID: UUID, _ keyPath: WritableKeyPath<WatchCustomWorkoutStage, Value>) -> Binding<Value> {
+        Binding {
+            draft.stages.first(where: { $0.id == stageID })?[keyPath: keyPath]
+                ?? WatchCustomWorkoutStage()[keyPath: keyPath]
+        } set: { newValue in
+            var updatedDraft = manager.customDraft
+            guard let index = updatedDraft.stages.firstIndex(where: { $0.id == stageID }) else { return }
+            updatedDraft.stages[index][keyPath: keyPath] = newValue
+            manager.customDraft = updatedDraft
         }
     }
 
@@ -3718,7 +4166,7 @@ private struct WatchCustomWorkoutBuilderView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .top) {
                             ActionBubble(
-                                symbol: draftTemplate?.symbol ?? watchWorkoutSymbol(draft.activity),
+                                symbol: draftTemplate?.symbol ?? watchWorkoutSymbol(firstStage?.activity),
                                 tint: .orange
                             )
                             Spacer()
@@ -3737,13 +4185,13 @@ private struct WatchCustomWorkoutBuilderView: View {
 
                         HStack(spacing: 6) {
                             BuilderStatPill(
-                                title: watchWorkoutTitle(for: draft.activity),
-                                symbol: draftTemplate?.symbol ?? watchWorkoutSymbol(draft.activity),
+                                title: firstStage.map { watchWorkoutTitle(for: $0.activity) } ?? "Workout",
+                                symbol: draftTemplate?.symbol ?? watchWorkoutSymbol(firstStage?.activity),
                                 tint: .white
                             )
                             BuilderStatPill(
-                                title: draft.location.rawValue.capitalized,
-                                symbol: draft.location == .outdoor ? "location.fill" : "house.fill",
+                                title: "\(draft.stages.count) stage\(draft.stages.count == 1 ? "" : "s")",
+                                symbol: "list.number",
                                 tint: .cyan
                             )
                             BuilderStatPill(
@@ -3757,24 +4205,6 @@ private struct WatchCustomWorkoutBuilderView: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-                SectionCard(title: "Session") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Picker("Activity", selection: draftBinding(\.activity)) {
-                            ForEach(store.workoutTemplates) { workout in
-                                Text(workout.title).tag(workout.activity)
-                            }
-                        }
-                        .labelsHidden()
-
-                        Picker("Location", selection: draftBinding(\.location)) {
-                            ForEach(WatchWorkoutLocationChoice.allCases) { choice in
-                                Text(choice.rawValue.capitalized).tag(choice)
-                            }
-                        }
-                        .labelsHidden()
-                    }
-                }
-
                 SectionCard(title: "Goal") {
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Goal", selection: draftBinding(\.goalMode)) {
@@ -3782,7 +4212,7 @@ private struct WatchCustomWorkoutBuilderView: View {
                                 Text(mode.rawValue.capitalized).tag(mode)
                             }
                         }
-                        .labelsHidden()
+                        .watchPickerFieldStyle()
 
                         if draft.goalMode != .open {
                             Stepper(
@@ -3806,61 +4236,64 @@ private struct WatchCustomWorkoutBuilderView: View {
                     }
                 }
 
-                SectionCard(title: "Intervals") {
+                SectionCard(title: "Stages") {
                     VStack(spacing: 8) {
-                        IntervalBuilderRow(
-                            title: "Warm Up",
-                            valueText: "\(Int(draft.warmupMinutes)) min",
-                            tint: .mint
-                        ) {
-                            Stepper(value: draftBinding(\.warmupMinutes), in: 0...20, step: 1) {
-                                EmptyView()
+                        ForEach(draft.stages) { stage in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Label(stage.title, systemImage: watchWorkoutSymbol(stage.activity))
+                                        .font(.caption.weight(.semibold))
+                                    Spacer()
+                                    Text("\(stage.plannedMinutes) min")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.orange)
+                                }
+
+                                Picker("Activity", selection: stageBinding(stage.id, \.activity)) {
+                                    ForEach(store.workoutTemplates) { workout in
+                                        Text(workout.title).tag(workout.activity)
+                                    }
+                                }
+                                .watchPickerFieldStyle()
+
+                                Picker("Location", selection: stageBinding(stage.id, \.location)) {
+                                    ForEach(WatchWorkoutLocationChoice.allCases) { choice in
+                                        Text(choice.rawValue.capitalized).tag(choice)
+                                    }
+                                }
+                                .watchPickerFieldStyle()
+
+                                Stepper(value: stageBinding(stage.id, \.plannedMinutes), in: 5...240, step: 5) {
+                                    Text("Planned \(stage.plannedMinutes) min")
+                                        .font(.caption2)
+                                }
                             }
-                            .labelsHidden()
+                            .padding(10)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
 
-                        IntervalBuilderRow(
-                            title: "Work",
-                            valueText: "\(Int(draft.workMinutes)) min",
-                            tint: .orange
-                        ) {
-                            Stepper(value: draftBinding(\.workMinutes), in: 1...20, step: 1) {
-                                EmptyView()
+                        HStack(spacing: 8) {
+                            Button {
+                                var updatedDraft = manager.customDraft
+                                updatedDraft.stages.append(WatchCustomWorkoutStage())
+                                manager.customDraft = updatedDraft
+                            } label: {
+                                Label("Add Stage", systemImage: "plus")
+                                    .frame(maxWidth: .infinity)
                             }
-                            .labelsHidden()
-                        }
+                            .buttonStyle(.bordered)
 
-                        IntervalBuilderRow(
-                            title: "Recovery",
-                            valueText: "\(Int(draft.recoveryMinutes)) min",
-                            tint: .cyan
-                        ) {
-                            Stepper(value: draftBinding(\.recoveryMinutes), in: 1...10, step: 1) {
-                                EmptyView()
+                            Button {
+                                guard draft.stages.count > 1 else { return }
+                                var updatedDraft = manager.customDraft
+                                updatedDraft.stages.removeLast()
+                                manager.customDraft = updatedDraft
+                            } label: {
+                                Label("Remove", systemImage: "minus")
+                                    .frame(maxWidth: .infinity)
                             }
-                            .labelsHidden()
-                        }
-
-                        IntervalBuilderRow(
-                            title: "Repeats",
-                            valueText: "\(draft.repeats)x",
-                            tint: .pink
-                        ) {
-                            Stepper(value: draftBinding(\.repeats), in: 1...12, step: 1) {
-                                EmptyView()
-                            }
-                            .labelsHidden()
-                        }
-
-                        IntervalBuilderRow(
-                            title: "Cooldown",
-                            valueText: "\(Int(draft.cooldownMinutes)) min",
-                            tint: .purple
-                        ) {
-                            Stepper(value: draftBinding(\.cooldownMinutes), in: 0...20, step: 1) {
-                                EmptyView()
-                            }
-                            .labelsHidden()
+                            .buttonStyle(.bordered)
+                            .disabled(draft.stages.count <= 1)
                         }
                     }
                 }
@@ -3869,7 +4302,7 @@ private struct WatchCustomWorkoutBuilderView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Button {
                             store.queuedWorkout = draft.displayName
-                            store.workoutManager.startCustomWorkout()
+                            manager.startCustomWorkout()
                         } label: {
                             HStack {
                                 Text("Start Custom Workout")
@@ -3881,7 +4314,7 @@ private struct WatchCustomWorkoutBuilderView: View {
                         .tint(.orange)
 
                         Button {
-                            store.workoutManager.scheduleCustomWorkoutForTomorrow()
+                            manager.scheduleCustomWorkoutForTomorrow()
                         } label: {
                             HStack {
                                 Text("Schedule for Tomorrow")
@@ -3904,29 +4337,21 @@ private struct WatchCustomWorkoutBuilderView: View {
 }
 
 private struct LauncherCornerActionButton: View {
-    let title: String
-    let subtitle: String
     let symbol: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.5))
+
+            Circle()
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .bold))
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-            Text(subtitle)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.62))
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.black.opacity(0.36))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.14), lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .frame(width: 42, height: 42)
     }
 }
 
@@ -4046,8 +4471,8 @@ private struct WorkoutEffortPromptView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let progressWidth = max(proxy.size.width - 36, 80)
-            let compact = proxy.size.height < 205
+            let progressWidth = max(proxy.size.width - 28, 88)
+            let compact = proxy.size.height < 222
 
             VStack(alignment: .leading, spacing: compact ? 6 : 8) {
                 HStack(alignment: .top) {
@@ -4060,7 +4485,7 @@ private struct WorkoutEffortPromptView: View {
                             Text(subtitle)
                                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.white.opacity(0.68))
-                                .lineLimit(2)
+                                .lineLimit(3)
                                 .minimumScaleFactor(0.8)
                         }
                     }
@@ -4143,9 +4568,9 @@ private struct WorkoutEffortPromptView: View {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
         }
         .background(Color.black.ignoresSafeArea())
         .contentShape(Rectangle())
@@ -4245,7 +4670,7 @@ private struct HRZonesView: View {
                                     .tag(UUID?.some(workout.id))
                             }
                         }
-                        .labelsHidden()
+                        .watchPickerFieldStyle()
 
                         ForEach(zoneMinutes.indices, id: \.self) { index in
                             ZoneBarRow(
@@ -4346,7 +4771,7 @@ private struct CoachSummaryView: View {
                                 .tag(window)
                         }
                     }
-                    .labelsHidden()
+                    .watchPickerFieldStyle()
                 }
 
                 SectionCard(title: "Coach Summary") {
@@ -4892,7 +5317,9 @@ private func elapsedWorkoutString(_ elapsed: TimeInterval) -> String {
 private func customGoalLabel(for draft: WatchCustomWorkoutDraft) -> String {
     switch draft.goalMode {
     case .open:
-        return "Open goal"
+        return draft.stages.count > 1
+            ? "\(draft.stages.count) stages • \(draft.totalPlannedMinutes) min"
+            : "Open goal"
     case .time:
         return "Goal \(Int(draft.goalValue)) min"
     case .distance:
@@ -4944,8 +5371,7 @@ private func watchWorkoutTitle(for activityType: HKWorkoutActivityType) -> Strin
 }
 
 private func customWorkoutTotalMinutes(_ draft: WatchCustomWorkoutDraft) -> Int {
-    let intervalBlock = (draft.workMinutes + draft.recoveryMinutes) * Double(max(draft.repeats, 1))
-    return Int((draft.warmupMinutes + intervalBlock + draft.cooldownMinutes).rounded())
+    draft.totalPlannedMinutes
 }
 
 private func workoutGoalSymbol(_ goalMode: WatchWorkoutGoalMode) -> String {
@@ -5535,6 +5961,20 @@ private extension Array {
     subscript(safe index: Int) -> Element? {
         guard indices.contains(index) else { return nil }
         return self[index]
+    }
+}
+
+private extension View {
+    func watchPickerFieldStyle() -> some View {
+        self
+            .pickerStyle(.navigationLink)
+            .labelsHidden()
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
