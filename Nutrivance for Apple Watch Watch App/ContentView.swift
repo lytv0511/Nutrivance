@@ -135,7 +135,6 @@ struct ContentView: View {
 }
 
 private enum ActiveWorkoutSidePane: Int {
-    case queue
     case controls
     case main
     case media
@@ -162,20 +161,13 @@ private struct ActiveWorkoutCardsView: View {
         manager.orderedWorkoutPages.contains(.map)
     }
 
-    private var readyNextPhase: WatchProgramPhasePayload? {
+    private var readyNextTitle: String? {
         guard horizontalSelection == .main, manager.isNextPhaseReady else { return nil }
-        return manager.nextPhase
-    }
-
-    private var showsQueueSummary: Bool {
-        horizontalSelection == .main && manager.phaseQueue.count > 1
+        return manager.nextAdvanceTitle
     }
 
     var body: some View {
         TabView(selection: $horizontalSelection) {
-            WorkoutQueueCard(manager: manager)
-                .tag(ActiveWorkoutSidePane.queue)
-
             WorkoutControlsCard(
                 manager: manager,
                 onWaterLock: {
@@ -226,15 +218,26 @@ private struct ActiveWorkoutCardsView: View {
         }
         .overlay(alignment: .bottom) {
             VStack(spacing: 6) {
-                if showsQueueSummary {
-                    CompactWorkoutQueueBanner(manager: manager)
-                        .padding(.horizontal, 8)
+                if let completedPhase = manager.activeCompletionPrompt,
+                   let nextTitle = manager.nextAdvanceTitle {
+                    GoalCompleteBanner(
+                        completedTitle: manager.currentMicroStage?.title ?? completedPhase.title,
+                        nextTitle: nextTitle,
+                        onAdvance: {
+                            manager.advanceToNextPhase()
+                        },
+                        onDismiss: {
+                            manager.dismissCompletionPrompt()
+                        }
+                    )
+                    .padding(.horizontal, 8)
                 }
 
-                if let nextPhase = readyNextPhase {
+                if let nextTitle = readyNextTitle,
+                   let nextMinutes = manager.nextAdvancePlannedMinutes {
                     NextPhasePromptBanner(
-                        title: nextPhase.title,
-                        plannedMinutes: nextPhase.plannedMinutes,
+                        title: nextTitle,
+                        plannedMinutes: nextMinutes,
                         onAdvance: {
                             manager.advanceToNextPhase()
                         }
@@ -300,128 +303,6 @@ private struct ActiveWorkoutCardsView: View {
     }
 }
 
-private struct WorkoutQueueCard: View {
-    @ObservedObject var manager: WatchWorkoutManager
-
-    private var nextPhase: WatchProgramPhasePayload? {
-        manager.nextPhase
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Workout Queue", systemImage: "list.bullet.rectangle")
-                        .font(.system(size: 13, weight: .black, design: .rounded))
-                    Spacer()
-                    Text("\(manager.currentPhaseIndex + 1)/\(max(manager.phaseQueue.count, 1))")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.72))
-                }
-
-                if let nextPhase {
-                    Button {
-                        manager.advanceToNextPhase()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Next Phase")
-                                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                                Text("\(nextPhase.title) • \(nextPhase.plannedMinutes)m")
-                                    .font(.system(size: 11, weight: .heavy, design: .rounded))
-                                    .lineLimit(2)
-                                    .minimumScaleFactor(0.75)
-                            }
-                            Spacer()
-                            Image(systemName: "forward.end.fill")
-                                .font(.system(size: 12, weight: .black))
-                        }
-                        .padding(10)
-                        .background(Color.green.opacity(0.22), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { index, phase in
-                        HStack(spacing: 8) {
-                            Image(systemName: symbol(for: index))
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(tint(for: index))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(phase.title)
-                                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                                    .lineLimit(1)
-                                Text(detail(for: phase, at: index))
-                                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.68))
-                                    .lineLimit(2)
-                            }
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(background(for: index), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 10)
-            .padding(.bottom, 12)
-        }
-        .background(Color.black.ignoresSafeArea())
-    }
-
-    private func symbol(for index: Int) -> String {
-        if index < manager.currentPhaseIndex {
-            return "checkmark.circle.fill"
-        }
-        if index == manager.currentPhaseIndex {
-            return "play.circle.fill"
-        }
-        if index == manager.currentPhaseIndex + 1 {
-            return "forward.circle.fill"
-        }
-        return "circle"
-    }
-
-    private func tint(for index: Int) -> Color {
-        if index < manager.currentPhaseIndex {
-            return .green
-        }
-        if index == manager.currentPhaseIndex {
-            return .orange
-        }
-        if index == manager.currentPhaseIndex + 1 {
-            return .cyan
-        }
-        return .white.opacity(0.36)
-    }
-
-    private func background(for index: Int) -> Color {
-        if index == manager.currentPhaseIndex {
-            return Color.orange.opacity(0.14)
-        }
-        if index == manager.currentPhaseIndex + 1 {
-            return Color.green.opacity(0.08)
-        }
-        return Color.white.opacity(0.05)
-    }
-
-    private func detail(for phase: WatchProgramPhasePayload, at index: Int) -> String {
-        if index < manager.currentPhaseIndex {
-            return "Completed"
-        }
-        if index == manager.currentPhaseIndex {
-            return "\(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
-        }
-        if index == manager.currentPhaseIndex + 1 {
-            return "Next • \(phase.plannedMinutes) min"
-        }
-        return "\(phase.plannedMinutes) min planned"
-    }
-}
-
 private struct WorkoutAlwaysOnClock: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -476,62 +357,6 @@ private struct NextPhasePromptBanner: View {
     }
 }
 
-private struct CompactWorkoutQueueBanner: View {
-    @ObservedObject var manager: WatchWorkoutManager
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "list.bullet.rectangle")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.cyan)
-                Text("Workout Queue")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.82))
-                Spacer(minLength: 6)
-                Text("\(manager.currentPhaseIndex + 1)/\(manager.phaseQueue.count)")
-                    .font(.system(size: 10, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-            }
-
-            ForEach(Array(manager.phaseQueue.enumerated().prefix(3)), id: \.element.id) { index, phase in
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(index == manager.currentPhaseIndex ? Color.green : Color.white.opacity(0.24))
-                        .frame(width: 6, height: 6)
-
-                    Text(phase.title)
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-
-                    Spacer(minLength: 6)
-
-                    Text(queueTimingText(for: phase, at: index))
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(index == manager.currentPhaseIndex ? .green : .white.opacity(0.72))
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
-    }
-
-    private func queueTimingText(for phase: WatchProgramPhasePayload, at index: Int) -> String {
-        if index == manager.currentPhaseIndex {
-            let remaining = max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)
-            return "\(remaining)m left"
-        }
-        return "\(phase.plannedMinutes)m"
-    }
-}
-
 private struct WorkoutLivePageView: View {
     @ObservedObject var manager: WatchWorkoutManager
     @ObservedObject var mapTracker: WatchWorkoutMapTracker
@@ -565,6 +390,53 @@ private struct WorkoutLivePageView: View {
         .padding(.horizontal, 2)
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .topTrailing) {
+            if manager.isCurrentPhaseObjectiveComplete {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 16, weight: .black))
+                    .foregroundStyle(.green)
+                    .padding(.top, 4)
+                    .padding(.trailing, 6)
+            }
+        }
+    }
+}
+
+private struct GoalCompleteBanner: View {
+    let completedTitle: String
+    let nextTitle: String
+    let onAdvance: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Label("Goal Complete", systemImage: "checkmark.seal.fill")
+                    .font(.system(size: 10, weight: .black, design: .rounded))
+                    .foregroundStyle(.green)
+                Spacer()
+            }
+
+            Text("\(completedTitle) is done. Start \(nextTitle) now or keep going in the current stage.")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+
+            HStack(spacing: 6) {
+                Button("Dismiss", action: onDismiss)
+                    .buttonStyle(.bordered)
+                Button("Next Stage", action: onAdvance)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.9), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.green.opacity(0.35), lineWidth: 1)
+        )
     }
 }
 
@@ -1361,75 +1233,71 @@ private struct WorkoutControlsCard: View {
         GeometryReader { geometry in
             let gridWidth = max(geometry.size.width - 10, 160.0)
 
-            VStack(spacing: 6) {
-                let columns = [GridItem(.fixed((gridWidth - 4) / 2), spacing: 4), GridItem(.fixed((gridWidth - 4) / 2), spacing: 4)]
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 6) {
+                    let columns = [GridItem(.fixed((gridWidth - 4) / 2), spacing: 4), GridItem(.fixed((gridWidth - 4) / 2), spacing: 4)]
 
-                LazyVGrid(columns: columns, spacing: 4) {
-                    if manager.displayState == .running {
-                        WorkoutControlPill(symbol: "pause.fill", title: "Pause", tint: Color(red: 0.58, green: 0.52, blue: 0.22)) {
-                            manager.pause()
+                    LazyVGrid(columns: columns, spacing: 4) {
+                        if manager.displayState == .running {
+                            WorkoutControlPill(symbol: "pause.fill", title: "Pause", tint: Color(red: 0.58, green: 0.52, blue: 0.22)) {
+                                manager.pause()
+                            }
+                        } else if manager.displayState == .paused {
+                            WorkoutControlPill(symbol: "play.fill", title: "Resume", tint: Color(red: 0.22, green: 0.55, blue: 0.36)) {
+                                manager.resume()
+                            }
+                        } else {
+                            Color.clear
+                                .frame(height: 38)
                         }
-                    } else if manager.displayState == .paused {
-                        WorkoutControlPill(symbol: "play.fill", title: "Resume", tint: Color(red: 0.22, green: 0.55, blue: 0.36)) {
-                            manager.resume()
+
+                        WorkoutControlPill(symbol: "flag.checkered", title: "Split", tint: Color(red: 0.27, green: 0.42, blue: 0.58)) {
+                            manager.markSplit()
                         }
-                    } else {
-                        Color.clear
-                            .frame(height: 38)
-                    }
 
-                    WorkoutControlPill(symbol: "flag.checkered", title: "Split", tint: Color(red: 0.27, green: 0.42, blue: 0.58)) {
-                        manager.markSplit()
-                    }
-
-                    WorkoutControlPill(symbol: "drop.fill", title: "Lock", tint: Color(red: 0.24, green: 0.47, blue: 0.52)) {
-                        onWaterLock()
-                    }
-
-                    WorkoutControlPill(symbol: "iphone", title: "Phone", tint: Color(red: 0.31, green: 0.51, blue: 0.49)) {
-                        manager.showOnPhone()
-                    }
-
-                    WorkoutControlPill(symbol: "plus.circle.fill", title: "Add", tint: Color(red: 0.52, green: 0.38, blue: 0.23)) {
-                        showsQueueOverlay = true
-                    }
-
-                    WorkoutControlPill(symbol: "stop.fill", title: "Stop", tint: Color(red: 0.56, green: 0.24, blue: 0.24)) {
-                        manager.end()
-                    }
-
-                    if let nextPhase = manager.nextPhase {
-                        WorkoutControlPill(
-                            symbol: "forward.end.fill",
-                            title: "Next \(nextPhase.title) \(nextPhase.plannedMinutes)m",
-                            tint: Color(red: 0.22, green: 0.55, blue: 0.36)
-                        ) {
-                            manager.advanceToNextPhase()
+                        WorkoutControlPill(symbol: "drop.fill", title: "Lock", tint: Color(red: 0.24, green: 0.47, blue: 0.52)) {
+                            onWaterLock()
                         }
-                    }
 
-                    if manager.phaseQueue.count > 1 {
-                        WorkoutControlPill(symbol: "list.bullet", title: "List", tint: Color(red: 0.28, green: 0.48, blue: 0.55)) {
+                        WorkoutControlPill(symbol: "iphone", title: "Phone", tint: Color(red: 0.31, green: 0.51, blue: 0.49)) {
+                            manager.showOnPhone()
+                        }
+
+                        WorkoutControlPill(symbol: "plus.circle.fill", title: "Add", tint: Color(red: 0.52, green: 0.38, blue: 0.23)) {
                             showsQueueOverlay = true
                         }
+
+                        WorkoutControlPill(symbol: "stop.fill", title: "Stop", tint: Color(red: 0.56, green: 0.24, blue: 0.24)) {
+                            manager.end()
+                        }
+
+                        if let nextPhase = manager.nextPhase {
+                            WorkoutControlPill(
+                                symbol: "forward.end.fill",
+                                title: "Next \(nextPhase.title) \(nextPhase.plannedMinutes)m",
+                                tint: Color(red: 0.22, green: 0.55, blue: 0.36)
+                            ) {
+                                manager.advanceToNextPhase()
+                            }
+                        }
                     }
-                }
-                .frame(width: gridWidth)
-
-                Text(manager.statusMessage)
-                    .font(.system(size: 8, weight: .black, design: .rounded))
-                    .fontWidth(.compressed)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .multilineTextAlignment(.center)
                     .frame(width: gridWidth)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
 
-                Spacer(minLength: 0)
+                    Text(manager.statusMessage)
+                        .font(.system(size: 8, weight: .black, design: .rounded))
+                        .fontWidth(.compressed)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .multilineTextAlignment(.center)
+                        .frame(width: gridWidth)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+
+                    Spacer(minLength: 0)
+                }
+                .frame(width: geometry.size.width, alignment: .top)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
             }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
-            .padding(.top, 4)
-            .padding(.bottom, 0)
             .overlay {
                 if showsQueueOverlay {
                     WatchWorkoutQueueOverlayView(
@@ -1595,10 +1463,11 @@ private struct WatchWorkoutQueueOverlayView: View {
     }
 
     private func queueTimingText(for phase: WatchProgramPhasePayload, at index: Int) -> String {
-        if index == manager.currentPhaseIndex {
-            return "\(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
+        let status = manager.objectiveStatus(for: phase, at: index)
+        if index == manager.currentPhaseIndex + 1 {
+            return "Next • \(status.summaryText)"
         }
-        return "\(phase.plannedMinutes) min"
+        return status.summaryText
     }
 
     private func queuePlacementChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -3888,9 +3757,7 @@ private struct WorkoutLauncherView: View {
 
                                             Spacer()
 
-                                            Text(index == store.workoutManager.currentPhaseIndex
-                                                 ? "\(max(Int((store.workoutManager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
-                                                 : "\(phase.plannedMinutes) min")
+                                            Text(store.workoutManager.objectiveStatus(for: phase, at: index).summaryText)
                                                 .font(.caption2.weight(.bold))
                                                 .foregroundStyle(index == store.workoutManager.currentPhaseIndex ? Color.green : .white.opacity(0.68))
                                         }
@@ -4263,9 +4130,28 @@ private struct WatchCustomWorkoutBuilderView: View {
                                 }
                                 .watchPickerFieldStyle()
 
+                                Picker("Goal", selection: stageBinding(stage.id, \.goalMode)) {
+                                    ForEach(WatchWorkoutGoalMode.allCases) { mode in
+                                        Text(mode.rawValue.capitalized).tag(mode)
+                                    }
+                                }
+                                .watchPickerFieldStyle()
+
                                 Stepper(value: stageBinding(stage.id, \.plannedMinutes), in: 5...240, step: 5) {
                                     Text("Planned \(stage.plannedMinutes) min")
                                         .font(.caption2)
+                                }
+
+                                if stage.goalMode == .distance {
+                                    Stepper(value: stageBinding(stage.id, \.goalValue), in: 1...100, step: 0.5) {
+                                        Text(String(format: "Goal %.1f km", stage.goalValue))
+                                            .font(.caption2)
+                                    }
+                                } else if stage.goalMode == .energy {
+                                    Stepper(value: stageBinding(stage.id, \.goalValue), in: 25...2000, step: 25) {
+                                        Text("Goal \(Int(stage.goalValue.rounded())) kcal")
+                                            .font(.caption2)
+                                    }
                                 }
                             }
                             .padding(10)

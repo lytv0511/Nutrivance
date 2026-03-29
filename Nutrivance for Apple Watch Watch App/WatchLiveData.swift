@@ -91,6 +91,44 @@ struct WatchProgramPlanPayload: Codable, Identifiable, Hashable {
     let expiresAt: Date?
 }
 
+struct WatchPhaseObjectivePayload: Codable, Hashable {
+    enum Kind: String, Codable, Hashable {
+        case time
+        case distance
+        case energy
+        case heartRateZone
+        case pacer
+        case routeDistance
+    }
+
+    let kind: Kind
+    let targetValue: Double
+    let secondaryValue: Double?
+    let label: String?
+
+    init(
+        kind: Kind,
+        targetValue: Double,
+        secondaryValue: Double? = nil,
+        label: String? = nil
+    ) {
+        self.kind = kind
+        self.targetValue = targetValue
+        self.secondaryValue = secondaryValue
+        self.label = label
+    }
+}
+
+struct WatchProgramMicroStagePayload: Codable, Identifiable, Hashable {
+    let id: UUID
+    let title: String
+    let notes: String
+    let plannedMinutes: Int
+    let repeats: Int
+    let repeatSetLabel: String?
+    let objective: WatchPhaseObjectivePayload
+}
+
 struct WatchProgramPhasePayload: Codable, Identifiable, Hashable {
     let id: UUID
     let title: String
@@ -99,6 +137,30 @@ struct WatchProgramPhasePayload: Codable, Identifiable, Hashable {
     let activityRawValue: UInt
     let locationRawValue: Int
     let plannedMinutes: Int
+    let objective: WatchPhaseObjectivePayload?
+    let microStages: [WatchProgramMicroStagePayload]?
+
+    init(
+        id: UUID,
+        title: String,
+        subtitle: String,
+        activityID: String,
+        activityRawValue: UInt,
+        locationRawValue: Int,
+        plannedMinutes: Int,
+        objective: WatchPhaseObjectivePayload?,
+        microStages: [WatchProgramMicroStagePayload]? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.activityID = activityID
+        self.activityRawValue = activityRawValue
+        self.locationRawValue = locationRawValue
+        self.plannedMinutes = plannedMinutes
+        self.objective = objective
+        self.microStages = microStages
+    }
 }
 
 private struct WatchLocalSleepSnapshot {

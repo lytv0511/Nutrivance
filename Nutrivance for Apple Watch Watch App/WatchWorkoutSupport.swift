@@ -10,6 +10,23 @@ import WatchConnectivity
 #endif
 import WorkoutKit
 
+private struct WatchPersistedWorkoutSession: Codable {
+    let displayStateRawValue: String
+    let activeTitle: String?
+    let activeSubtitle: String?
+    let activeActivityRawValue: UInt?
+    let activeLocationRawValue: Int
+    let workoutStartDate: Date?
+    let accumulatedElapsedTime: TimeInterval
+    let pauseStartedAt: Date?
+    let phaseQueue: [WatchProgramPhasePayload]
+    let currentPhaseIndex: Int
+    let currentMicroStageIndex: Int
+    let routeName: String?
+    let routeTrailhead: WatchPlanCoordinatePayload?
+    let routeCoordinates: [WatchPlanCoordinatePayload]
+}
+
 struct WatchWorkoutTemplate: Identifiable, Hashable {
     let id: String
     let title: String
@@ -90,17 +107,23 @@ struct WatchCustomWorkoutStage: Identifiable, Hashable {
     var activity: HKWorkoutActivityType
     var location: WatchWorkoutLocationChoice
     var plannedMinutes: Int
+    var goalMode: WatchWorkoutGoalMode
+    var goalValue: Double
 
     init(
         id: UUID = UUID(),
         activity: HKWorkoutActivityType = .running,
         location: WatchWorkoutLocationChoice = .outdoor,
-        plannedMinutes: Int = 30
+        plannedMinutes: Int = 30,
+        goalMode: WatchWorkoutGoalMode = .time,
+        goalValue: Double = 30
     ) {
         self.id = id
         self.activity = activity
         self.location = location
         self.plannedMinutes = plannedMinutes
+        self.goalMode = goalMode
+        self.goalValue = goalValue
     }
 
     var title: String {
@@ -125,7 +148,31 @@ extension WatchCustomWorkoutDraft {
                 activityID: "custom-\(index)-\(stage.activity.rawValue)",
                 activityRawValue: stage.activity.rawValue,
                 locationRawValue: stage.location.hkValue.rawValue,
-                plannedMinutes: max(stage.plannedMinutes, 1)
+                plannedMinutes: max(stage.plannedMinutes, 1),
+                objective: objectivePayload(for: stage)
+            )
+        }
+    }
+
+    private func objectivePayload(for stage: WatchCustomWorkoutStage) -> WatchPhaseObjectivePayload {
+        switch stage.goalMode {
+        case .open, .time:
+            return WatchPhaseObjectivePayload(
+                kind: .time,
+                targetValue: Double(max(stage.plannedMinutes, 1)),
+                label: "Time"
+            )
+        case .distance:
+            return WatchPhaseObjectivePayload(
+                kind: .distance,
+                targetValue: max(stage.goalValue, 0.1),
+                label: "Distance"
+            )
+        case .energy:
+            return WatchPhaseObjectivePayload(
+                kind: .energy,
+                targetValue: max(stage.goalValue, 1),
+                label: "Energy"
             )
         }
     }
@@ -242,6 +289,18 @@ private struct CompanionWorkoutPhasePayload: Codable {
     let activityRawValue: UInt
     let locationRawValue: Int
     let plannedMinutes: Int
+    let objectiveStatusText: String
+    let isObjectiveComplete: Bool
+}
+
+private struct CompanionWorkoutMicroStagePayload: Codable {
+    let id: UUID
+    let title: String
+    let notes: String
+    let plannedMinutes: Int
+    let repeats: Int
+    let objectiveStatusText: String
+    let isObjectiveComplete: Bool
 }
 
 private struct CompanionWorkoutEffortPromptPayload: Codable {
@@ -278,6 +337,8 @@ private struct CompanionWorkoutSnapshotPayload: Codable {
     let pacerTarget: CompanionWorkoutPacerPayload?
     let phaseQueue: [CompanionWorkoutPhasePayload]
     let currentPhaseIndex: Int
+    let stepQueue: [CompanionWorkoutMicroStagePayload]
+    let currentMicroStageIndex: Int
     let effortPrompt: CompanionWorkoutEffortPromptPayload?
 }
 
@@ -353,6 +414,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private enum CompanionLaunchKeys {
         static let workoutStart = "workoutStart"
+        static let openInWorkoutApp = "openInWorkoutApp"
         static let title = "title"
         static let subtitle = "subtitle"
         static let activityRawValue = "activityRawValue"
@@ -361,6 +423,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         static let trailheadLatitude = "trailheadLatitude"
         static let trailheadLongitude = "trailheadLongitude"
         static let routeCoordinates = "routeCoordinates"
+        static let phasePayloads = "phasePayloads"
         static let accepted = "accepted"
         static let injectedPlacement = "injectedPlacement"
         static let injectedTitle = "injectedTitle"
@@ -417,6 +480,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published private(set) var splitCount = 0
     @Published private(set) var isMirroringToPhone = false
     @Published private(set) var totalDistanceMeters: Double = 0
+    @Published private(set) var currentEnergyKilocalories: Double = 0
     @Published private(set) var currentSpeedMetersPerSecond: Double?
     @Published private(set) var currentPowerWatts: Double?
     @Published private(set) var averagePowerWatts: Double?
@@ -442,7 +506,9 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published private(set) var routeCoordinates: [CLLocationCoordinate2D] = []
     @Published private(set) var phaseQueue: [WatchProgramPhasePayload] = []
     @Published private(set) var currentPhaseIndex = 0
+    @Published private(set) var currentMicroStageIndex = 0
     @Published private(set) var pendingEffortQueue: [CompletedPhaseEffort] = []
+    @Published private(set) var activeCompletionPrompt: WatchProgramPhasePayload?
 
     private enum CompanionLifecycleKeys {
         static let workoutLifecycle = "workoutLifecycle"
@@ -455,6 +521,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published private(set) var lastEffortScore: Int?
     @Published var customDraft = WatchCustomWorkoutDraft()
     @Published var statusMessage = "Choose a workout to begin."
+    private var dismissedCompletionPromptPhaseID: UUID?
 
     var isSessionActive: Bool {
         displayState == .running || displayState == .paused || displayState == .preparing
@@ -473,14 +540,47 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         return phaseQueue.indices.contains(nextIndex) ? phaseQueue[nextIndex] : nil
     }
 
+    var currentMicroStages: [WatchProgramMicroStagePayload] {
+        currentPhase?.microStages ?? []
+    }
+
+    var currentMicroStage: WatchProgramMicroStagePayload? {
+        currentMicroStages.indices.contains(currentMicroStageIndex) ? currentMicroStages[currentMicroStageIndex] : nil
+    }
+
+    var nextMicroStage: WatchProgramMicroStagePayload? {
+        let nextIndex = currentMicroStageIndex + 1
+        return currentMicroStages.indices.contains(nextIndex) ? currentMicroStages[nextIndex] : nil
+    }
+
+    var nextAdvanceTitle: String? {
+        nextMicroStage?.title ?? nextPhase?.title
+    }
+
+    var nextAdvancePlannedMinutes: Int? {
+        nextMicroStage?.plannedMinutes ?? nextPhase?.plannedMinutes
+    }
+
     var currentPhaseRemainingTime: TimeInterval? {
-        guard let currentPhase else { return nil }
-        return max(TimeInterval(currentPhase.plannedMinutes * 60) - elapsedTime, 0)
+        let objective: WatchPhaseObjectivePayload
+        if let currentMicroStage {
+            objective = currentMicroStage.objective
+        } else if let currentPhase {
+            objective = currentPhase.objective ?? WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(currentPhase.plannedMinutes, 1)))
+        } else {
+            return nil
+        }
+        guard objective.kind == .time else { return nil }
+        return max(objective.targetValue * 60 - currentSegmentElapsedTime(at: Date()), 0)
     }
 
     var isNextPhaseReady: Bool {
-        guard let currentPhase, nextPhase != nil else { return false }
-        return elapsedTime >= TimeInterval(currentPhase.plannedMinutes * 60)
+        guard nextMicroStage != nil || nextPhase != nil else { return false }
+        return currentSegmentObjectiveStatus().isComplete
+    }
+
+    var isCurrentPhaseObjectiveComplete: Bool {
+        currentSegmentObjectiveStatus().isComplete
     }
 
     var currentEffortPromptPhase: CompletedPhaseEffort? {
@@ -504,6 +604,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private let workoutTabPreferences = WatchWorkoutTabPreferences()
     private var hasAnnouncedCurrentPhaseReady = false
     private var nextPhaseReminderIdentifier: String?
+    private var microStageStartDate: Date?
+    private var accumulatedMicroStageElapsedTime: TimeInterval = 0
+    private var microStageStartDistanceMeters: Double = 0
+    private var microStageStartEnergyKilocalories: Double = 0
+    private var microStageStartZoneDurations: [TimeInterval] = []
+    private let persistenceKey = "watch.live.workout.session_v2"
 
     private var sessionState: HKWorkoutSessionState? {
         workoutSession?.state
@@ -555,6 +661,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         Task {
             authorizationGranted = await requestAuthorizationIfNeeded()
             estimatedMaxHeartRate = await estimatedMaximumHeartRate()
+            restorePersistedSessionIfNeeded()
+            await recoverActiveWorkoutSessionIfNeeded()
 #if canImport(WatchConnectivity)
             if WCSession.isSupported() {
                 let session = WCSession.default
@@ -577,10 +685,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             activityID: template.id,
             activityRawValue: template.activity.rawValue,
             locationRawValue: template.location.rawValue,
-            plannedMinutes: 30
+            plannedMinutes: 30,
+            objective: WatchPhaseObjectivePayload(kind: .time, targetValue: 30, label: "Time")
         )
         phaseQueue = [phase]
         currentPhaseIndex = 0
+        currentMicroStageIndex = 0
         pendingEffortQueue = []
         startWorkout(
             title: phase.title,
@@ -598,6 +708,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
         phaseQueue = phases
         currentPhaseIndex = 0
+        currentMicroStageIndex = 0
         pendingEffortQueue = []
         startWorkout(
             title: firstPhase.title,
@@ -617,7 +728,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     activityID: "primary-\(plan.activityRawValue)",
                     activityRawValue: plan.activityRawValue,
                     locationRawValue: plan.locationRawValue,
-                    plannedMinutes: 30
+                    plannedMinutes: 30,
+                    objective: WatchPhaseObjectivePayload(kind: .time, targetValue: 30, label: "Time")
                 )
             ]
             : plan.phases
@@ -626,6 +738,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         let location = HKWorkoutSessionLocationType(rawValue: firstPhase.locationRawValue) ?? .unknown
         phaseQueue = phases
         currentPhaseIndex = 0
+        currentMicroStageIndex = 0
         pendingEffortQueue = []
         routeName = plan.routeName
         routeTrailhead = plan.trailhead.map {
@@ -679,6 +792,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
         statusMessage = "Pausing workout..."
         accumulatedElapsedTime = currentElapsedTime(at: Date())
+        accumulatedMicroStageElapsedTime = currentSegmentElapsedTime(at: Date())
         pauseStartedAt = Date()
         elapsedTime = accumulatedElapsedTime
         displayState = .paused
@@ -699,6 +813,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         statusMessage = "Resuming workout..."
         if pauseStartedAt != nil {
             workoutStartDate = Date()
+            microStageStartDate = Date()
             pauseStartedAt = nil
         }
         displayState = .running
@@ -709,6 +824,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     func end() {
         guard let workoutSession else { return }
         clearPendingNextPhaseReminder()
+        activeCompletionPrompt = nil
+        dismissedCompletionPromptPhaseID = nil
         enqueueCurrentPhaseForEffort()
         elapsedTime = currentElapsedTime(at: Date())
         statusMessage = "Ending workout..."
@@ -722,12 +839,17 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     func advanceToNextPhase() {
+        if advanceWithinCurrentPhaseIfNeeded() {
+            return
+        }
         guard let nextPhase else {
             end()
             return
         }
         guard workoutSession != nil else { return }
         clearPendingNextPhaseReminder()
+        activeCompletionPrompt = nil
+        dismissedCompletionPromptPhaseID = nil
         enqueueCurrentPhaseForEffort()
         elapsedTime = currentElapsedTime(at: Date())
         statusMessage = "Switching to \(nextPhase.title)..."
@@ -737,6 +859,44 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         lastCompletedWorkoutTitle = activeTitle
         lastCompletedWorkoutSubtitle = activeSubtitle
         workoutSession?.end()
+    }
+
+    func jumpToQueuedPhase(_ phaseID: UUID) {
+        guard let currentPhase else { return }
+        guard let targetIndex = phaseQueue.firstIndex(where: { $0.id == phaseID }) else { return }
+        guard targetIndex > currentPhaseIndex else { return }
+
+        clearPendingNextPhaseReminder()
+        activeCompletionPrompt = nil
+        dismissedCompletionPromptPhaseID = nil
+
+        if targetIndex > currentPhaseIndex + 1 {
+            phaseQueue.removeSubrange((currentPhaseIndex + 1)..<targetIndex)
+        }
+
+        statusMessage = "Skipping from \(currentPhase.title) to \(phaseQueue[currentPhaseIndex + 1].title)..."
+        advanceToNextPhase()
+    }
+
+    func jumpToMicroStage(_ stageID: UUID) {
+        guard let currentPhase else { return }
+        guard !currentMicroStages.isEmpty else { return }
+        guard let targetIndex = currentMicroStages.firstIndex(where: { $0.id == stageID }) else { return }
+        guard targetIndex > currentMicroStageIndex else { return }
+
+        currentMicroStageIndex = targetIndex
+        resetMicroStageTracking(at: Date())
+        hasAnnouncedCurrentPhaseReady = false
+        activeCompletionPrompt = nil
+        dismissedCompletionPromptPhaseID = currentPhase.id
+        statusMessage = "Moved to \(currentMicroStages[targetIndex].title)."
+        broadcastCompanionSnapshot()
+    }
+
+    func dismissCompletionPrompt() {
+        dismissedCompletionPromptPhaseID = currentPhase?.id
+        activeCompletionPrompt = nil
+        broadcastCompanionSnapshot()
     }
 
     func markSplit() {
@@ -807,7 +967,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             activityID: "inject-\(template.id)-\(UUID().uuidString)",
             activityRawValue: template.activity.rawValue,
             locationRawValue: template.location.rawValue,
-            plannedMinutes: 30
+            plannedMinutes: 30,
+            objective: WatchPhaseObjectivePayload(kind: .time, targetValue: 30, label: "Time")
         )
         injectPhases([phase], placement: placement)
     }
@@ -878,6 +1039,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         lastPowerSampleDate = nil
         hasAnnouncedCurrentPhaseReady = false
         clearPendingNextPhaseReminder()
+        activeCompletionPrompt = nil
+        dismissedCompletionPromptPhaseID = nil
         speedHistory = []
         paceHistory = []
         powerHistory = []
@@ -886,6 +1049,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         heartRateHistory = []
         splits = []
         powerZoneDurations = Array(repeating: 0, count: 5)
+        currentEnergyKilocalories = 0
         currentElevationFeet = 0
         elevationGainFeet = 0
         currentSplitStartElapsedTime = 0
@@ -1003,6 +1167,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
         let startDate = Date()
         workoutStartDate = startDate
+        resetMicroStageTracking(at: startDate)
+        session.prepare()
         session.startActivity(with: startDate)
 
         displayState = .running
@@ -1019,11 +1185,13 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 self.displayState = .failed
                 self.statusMessage = "Could not start workout."
                 self.stopElapsedTimer()
+                self.clearPersistedSession()
                 return
             }
 
             self.isMirroringToPhone = await self.ensureCompanionMirroring()
             self.broadcastCompanionSnapshot()
+            self.persistCurrentSession()
         }
     }
 
@@ -1066,7 +1234,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             activityID: "inject-\(activityRawValue)-\(UUID().uuidString)",
             activityRawValue: UInt(activityRawValue),
             locationRawValue: locationRawValue,
-            plannedMinutes: max(plannedMinutes, 1)
+            plannedMinutes: max(plannedMinutes, 1),
+            objective: WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(plannedMinutes, 1)), label: "Time")
         )
         injectPhases([phase], placement: placement)
         return true
@@ -1097,11 +1266,47 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1])
         } ?? []
 
+        let phasePayloads = decodePhasePayloads(from: payload[CompanionLaunchKeys.phasePayloads] as? [[String: Any]])
+        if (payload[CompanionLaunchKeys.openInWorkoutApp] as? Bool) == true {
+            Task { @MainActor in
+                await self.openInWorkoutApp(
+                    title: title,
+                    activity: activity,
+                    location: location,
+                    phases: phasePayloads
+                )
+            }
+            return true
+        }
+
+        if !phasePayloads.isEmpty {
+            phaseQueue = phasePayloads
+            currentPhaseIndex = 0
+            currentMicroStageIndex = 0
+            pendingEffortQueue = []
+        } else {
+            phaseQueue = [
+                WatchProgramPhasePayload(
+                    id: UUID(),
+                    title: title,
+                    subtitle: subtitle,
+                    activityID: "primary-\(activity.rawValue)",
+                    activityRawValue: activity.rawValue,
+                    locationRawValue: location.rawValue,
+                    plannedMinutes: 30,
+                    objective: WatchPhaseObjectivePayload(kind: .time, targetValue: 30, label: "Time")
+                )
+            ]
+            currentPhaseIndex = 0
+            currentMicroStageIndex = 0
+            pendingEffortQueue = []
+        }
+
         startWorkout(
-            title: title,
-            subtitle: subtitle,
-            activity: activity,
-            location: location,
+            title: phaseQueue.first?.title ?? title,
+            subtitle: phaseQueue.first?.subtitle ?? subtitle,
+            activity: HKWorkoutActivityType(rawValue: phaseQueue.first?.activityRawValue ?? activity.rawValue) ?? activity,
+            location: HKWorkoutSessionLocationType(rawValue: phaseQueue.first?.locationRawValue ?? location.rawValue) ?? location,
             resetRouteGuidance: false
         )
         return true
@@ -1258,17 +1463,69 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         return accumulatedElapsedTime + max(0, date.timeIntervalSince(workoutStartDate))
     }
 
+    private func currentSegmentElapsedTime(at date: Date) -> TimeInterval {
+        if displayState == .paused || pauseStartedAt != nil {
+            return accumulatedMicroStageElapsedTime
+        }
+
+        guard let microStageStartDate else { return accumulatedMicroStageElapsedTime }
+        return accumulatedMicroStageElapsedTime + max(0, date.timeIntervalSince(microStageStartDate))
+    }
+
+    private func resetMicroStageTracking(at date: Date) {
+        accumulatedMicroStageElapsedTime = 0
+        microStageStartDate = date
+        microStageStartDistanceMeters = totalDistanceMeters
+        microStageStartEnergyKilocalories = currentEnergyKilocalories
+        microStageStartZoneDurations = liveZoneDurations
+    }
+
+    private func currentSegmentObjectiveStatus() -> (summaryText: String, isComplete: Bool) {
+        if let currentMicroStage {
+            return microStageStatus(for: currentMicroStage, at: currentMicroStageIndex)
+        }
+        guard let currentPhase else { return ("", false) }
+        return objectiveStatus(for: currentPhase, at: currentPhaseIndex)
+    }
+
+    private func advanceWithinCurrentPhaseIfNeeded() -> Bool {
+        guard let currentPhase else { return false }
+        guard nextMicroStage != nil else { return false }
+        currentMicroStageIndex += 1
+        resetMicroStageTracking(at: Date())
+        hasAnnouncedCurrentPhaseReady = false
+        activeCompletionPrompt = nil
+        dismissedCompletionPromptPhaseID = currentPhase.id
+        if let currentMicroStage {
+            statusMessage = "Moved to \(currentMicroStage.title)."
+        }
+        broadcastCompanionSnapshot()
+        return true
+    }
+
     private func refreshPhaseSuggestionStatus() {
         guard displayState == .running else { return }
-        guard let nextPhase, let currentPhase else { return }
-        let plannedDuration = TimeInterval(currentPhase.plannedMinutes * 60)
-        guard plannedDuration > 0, elapsedTime >= plannedDuration else { return }
+        guard let currentPhase else { return }
+        let currentStatus = currentSegmentObjectiveStatus()
+        guard currentStatus.isComplete else { return }
         if !hasAnnouncedCurrentPhaseReady {
             hasAnnouncedCurrentPhaseReady = true
             WKInterfaceDevice.current().play(.notification)
-            scheduleNextPhaseReminder(for: nextPhase, currentPhase: currentPhase)
+            if let nextPhase = nextPhase {
+                scheduleNextPhaseReminder(for: nextPhase, currentPhase: currentPhase)
+            }
         }
-        statusMessage = "Next phase ready: \(nextPhase.title) • \(nextPhase.plannedMinutes)m"
+        if dismissedCompletionPromptPhaseID != currentPhase.id {
+            activeCompletionPrompt = currentPhase
+        }
+        if let nextMicroStage {
+            statusMessage = "Goal complete. Next stage ready: \(nextMicroStage.title)"
+        } else if let nextPhase {
+            statusMessage = "Goal complete. Next phase ready: \(nextPhase.title)"
+        } else {
+            statusMessage = "Goal complete for \(currentMicroStage?.title ?? currentPhase.title)"
+        }
+        broadcastCompanionSnapshot()
     }
 
     private func clearPendingNextPhaseReminder() {
@@ -1347,6 +1604,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
         if let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned),
            let energy = workoutBuilder.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()) {
+            currentEnergyKilocalories = energy
             cards.append(.init(id: "energy", title: "Energy", valueText: "\(Int(energy.rounded())) kcal", symbol: "flame.fill", tint: .orange))
         }
 
@@ -1480,17 +1738,33 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             currentElevationFeet: currentElevationFeet,
             elevationGainFeet: elevationGainFeet,
             pacerTarget: pacerTarget.map { .init(lowerBound: $0.lowerBound, upperBound: $0.upperBound, unitLabel: $0.unitLabel) },
-            phaseQueue: phaseQueue.map {
-                CompanionWorkoutPhasePayload(
-                    id: $0.id,
-                    title: $0.title,
-                    subtitle: $0.subtitle,
-                    activityRawValue: $0.activityRawValue,
-                    locationRawValue: $0.locationRawValue,
-                    plannedMinutes: $0.plannedMinutes
+            phaseQueue: phaseQueue.enumerated().map { index, phase in
+                let status = objectiveStatus(for: phase, at: index)
+                return CompanionWorkoutPhasePayload(
+                    id: phase.id,
+                    title: phase.title,
+                    subtitle: phase.subtitle,
+                    activityRawValue: phase.activityRawValue,
+                    locationRawValue: phase.locationRawValue,
+                    plannedMinutes: phase.plannedMinutes,
+                    objectiveStatusText: status.summaryText,
+                    isObjectiveComplete: status.isComplete
                 )
             },
             currentPhaseIndex: currentPhaseIndex,
+            stepQueue: currentMicroStages.enumerated().map { index, stage in
+                let status = microStageStatus(for: stage, at: index)
+                return CompanionWorkoutMicroStagePayload(
+                    id: stage.id,
+                    title: stage.title,
+                    notes: stage.notes,
+                    plannedMinutes: stage.plannedMinutes,
+                    repeats: stage.repeats,
+                    objectiveStatusText: status.summaryText,
+                    isObjectiveComplete: status.isComplete
+                )
+            },
+            currentMicroStageIndex: currentMicroStageIndex,
             effortPrompt: currentEffortPromptPhase.map {
                 CompanionWorkoutEffortPromptPayload(
                     phaseID: $0.phase.id,
@@ -1503,6 +1777,136 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         Task {
             guard let data = try? JSONEncoder().encode(payload) else { return }
             try? await workoutSession.sendToRemoteWorkoutSession(data: data)
+        }
+    }
+
+    func objectiveStatus(for phase: WatchProgramPhasePayload, at index: Int) -> (summaryText: String, isComplete: Bool) {
+        if index == currentPhaseIndex, phase.microStages?.isEmpty == false {
+            let currentTitle = currentMicroStage?.title ?? phase.title
+            let status = currentSegmentObjectiveStatus()
+            return ("\(currentTitle) • \(status.summaryText)", status.isComplete)
+        }
+
+        let objective = phase.objective ?? WatchPhaseObjectivePayload(
+            kind: .time,
+            targetValue: Double(max(phase.plannedMinutes, 1))
+        )
+
+        if index < currentPhaseIndex {
+            return ("Completed", true)
+        }
+
+        if index > currentPhaseIndex {
+            return (upcomingObjectiveText(for: phase, objective: objective), false)
+        }
+
+        switch objective.kind {
+        case .time:
+            let targetSeconds = max(objective.targetValue, 1) * 60
+            let remaining = max(targetSeconds - elapsedTime, 0)
+            return ("\(shortWorkoutElapsedString(remaining)) left", remaining <= 0)
+        case .distance:
+            let currentKilometers = totalDistanceMeters / 1000
+            let targetKilometers = max(objective.targetValue, 0.1)
+            return (String(format: "%.1f / %.1f km", currentKilometers, targetKilometers), currentKilometers >= targetKilometers)
+        case .energy:
+            let targetKilocalories = max(objective.targetValue, 1)
+            return ("\(Int(currentEnergyKilocalories.rounded())) / \(Int(targetKilocalories.rounded())) kcal", currentEnergyKilocalories >= targetKilocalories)
+        case .heartRateZone:
+            let zoneNumber = Int(objective.secondaryValue ?? 3)
+            let zoneSeconds = liveZoneDurations[max(0, min(zoneNumber - 1, liveZoneDurations.count - 1))] ?? 0
+            let currentMinutes = zoneSeconds / 60
+            let targetMinutes = max(objective.targetValue, 1)
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(zoneNumber)", currentMinutes >= targetMinutes)
+        case .pacer:
+            let currentMinutes = elapsedTime / 60
+            let targetMinutes = max(objective.targetValue, 1)
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in range", currentMinutes >= targetMinutes)
+        case .routeDistance:
+            let currentKilometers = totalDistanceMeters / 1000
+            let targetKilometers = max(objective.targetValue, 0.1)
+            return (String(format: "%.1f / %.1f km route", currentKilometers, targetKilometers), currentKilometers >= targetKilometers)
+        }
+    }
+
+    func microStageStatus(for stage: WatchProgramMicroStagePayload, at index: Int) -> (summaryText: String, isComplete: Bool) {
+        if index < currentMicroStageIndex {
+            return ("Completed", true)
+        }
+
+        if index > currentMicroStageIndex {
+            return (upcomingMicroStageText(for: stage), false)
+        }
+
+        let elapsedTime = currentSegmentElapsedTime(at: Date())
+        let distanceDeltaKilometers = max(totalDistanceMeters - microStageStartDistanceMeters, 0) / 1000
+        let energyDelta = max(currentEnergyKilocalories - microStageStartEnergyKilocalories, 0)
+
+        switch stage.objective.kind {
+        case .time:
+            let targetSeconds = max(stage.objective.targetValue, 1) * 60
+            let remaining = max(targetSeconds - elapsedTime, 0)
+            return ("\(shortWorkoutElapsedString(remaining)) left", remaining <= 0)
+        case .distance:
+            let targetKilometers = max(stage.objective.targetValue, 0.1)
+            return (String(format: "%.1f / %.1f km", distanceDeltaKilometers, targetKilometers), distanceDeltaKilometers >= targetKilometers)
+        case .energy:
+            let targetKilocalories = max(stage.objective.targetValue, 1)
+            return ("\(Int(energyDelta.rounded())) / \(Int(targetKilocalories.rounded())) kcal", energyDelta >= targetKilocalories)
+        case .heartRateZone:
+            let zoneNumber = Int(stage.objective.secondaryValue ?? 3)
+            let priorZoneSeconds = microStageStartZoneDurations[max(0, zoneNumber - 1)] ?? 0
+            let currentZoneSeconds = liveZoneDurations[max(0, zoneNumber - 1)] ?? 0
+            let currentMinutes = max(currentZoneSeconds - priorZoneSeconds, 0) / 60
+            let targetMinutes = max(stage.objective.targetValue, 1)
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(zoneNumber)", currentMinutes >= targetMinutes)
+        case .pacer:
+            let targetMinutes = max(stage.objective.targetValue, 1)
+            let currentMinutes = elapsedTime / 60
+            let label = stage.objective.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let label, !label.isEmpty {
+                return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min at \(label)", currentMinutes >= targetMinutes)
+            }
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in range", currentMinutes >= targetMinutes)
+        case .routeDistance:
+            let targetKilometers = max(stage.objective.targetValue, 0.1)
+            return (String(format: "%.1f / %.1f km route", distanceDeltaKilometers, targetKilometers), distanceDeltaKilometers >= targetKilometers)
+        }
+    }
+
+    private func upcomingObjectiveText(for phase: WatchProgramPhasePayload, objective: WatchPhaseObjectivePayload) -> String {
+        switch objective.kind {
+        case .time:
+            return "\(phase.plannedMinutes) min planned"
+        case .distance:
+            return String(format: "Goal %.1f km", objective.targetValue)
+        case .energy:
+            return "Goal \(Int(objective.targetValue.rounded())) kcal"
+        case .heartRateZone:
+            return "Goal \(Int(objective.targetValue.rounded())) min in Z\(Int(objective.secondaryValue ?? 3))"
+        case .pacer:
+            return "Goal \(Int(objective.targetValue.rounded())) min in range"
+        case .routeDistance:
+            return String(format: "Goal %.1f km route", objective.targetValue)
+        }
+    }
+
+    private func upcomingMicroStageText(for stage: WatchProgramMicroStagePayload) -> String {
+        switch stage.objective.kind {
+        case .time:
+            return "\(stage.plannedMinutes) min planned"
+        case .distance:
+            return String(format: "Goal %.1f km", stage.objective.targetValue)
+        case .energy:
+            return "Goal \(Int(stage.objective.targetValue.rounded())) kcal"
+        case .heartRateZone:
+            return "Goal \(Int(stage.objective.targetValue.rounded())) min in Z\(Int(stage.objective.secondaryValue ?? 3))"
+        case .pacer:
+            return stage.objective.label?.isEmpty == false
+                ? "Goal \(Int(stage.objective.targetValue.rounded())) min at \(stage.objective.label!)"
+                : "Goal \(Int(stage.objective.targetValue.rounded())) min in range"
+        case .routeDistance:
+            return String(format: "Goal %.1f km route", stage.objective.targetValue)
         }
     }
 
@@ -1570,6 +1974,295 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
         session.transferUserInfo(payload)
 #endif
+    }
+
+    private func persistCurrentSession() {
+        guard isSessionActive || workoutSession != nil else { return }
+        let payload = WatchPersistedWorkoutSession(
+            displayStateRawValue: displayState.rawValue,
+            activeTitle: activeTitle,
+            activeSubtitle: activeSubtitle,
+            activeActivityRawValue: activeActivity?.rawValue,
+            activeLocationRawValue: activeLocation.rawValue,
+            workoutStartDate: workoutStartDate,
+            accumulatedElapsedTime: accumulatedElapsedTime,
+            pauseStartedAt: pauseStartedAt,
+            phaseQueue: phaseQueue,
+            currentPhaseIndex: currentPhaseIndex,
+            currentMicroStageIndex: currentMicroStageIndex,
+            routeName: routeName,
+            routeTrailhead: routeTrailhead.map { WatchPlanCoordinatePayload(latitude: $0.latitude, longitude: $0.longitude) },
+            routeCoordinates: routeCoordinates.map { WatchPlanCoordinatePayload(latitude: $0.latitude, longitude: $0.longitude) }
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        UserDefaults.standard.set(data, forKey: persistenceKey)
+    }
+
+    private func restorePersistedSessionIfNeeded() {
+        guard let data = UserDefaults.standard.data(forKey: persistenceKey),
+              let payload = try? JSONDecoder().decode(WatchPersistedWorkoutSession.self, from: data) else {
+            return
+        }
+
+        displayState = SessionDisplayState(rawValue: payload.displayStateRawValue) ?? .idle
+        activeTitle = payload.activeTitle
+        activeSubtitle = payload.activeSubtitle
+        if let activeActivityRawValue = payload.activeActivityRawValue {
+            activeActivity = HKWorkoutActivityType(rawValue: activeActivityRawValue)
+        } else {
+            activeActivity = nil
+        }
+        activeLocation = HKWorkoutSessionLocationType(rawValue: payload.activeLocationRawValue) ?? .unknown
+        workoutStartDate = payload.workoutStartDate
+        accumulatedElapsedTime = payload.accumulatedElapsedTime
+        pauseStartedAt = payload.pauseStartedAt
+        phaseQueue = payload.phaseQueue
+        currentPhaseIndex = payload.currentPhaseIndex
+        currentMicroStageIndex = payload.currentMicroStageIndex
+        routeName = payload.routeName
+        routeTrailhead = payload.routeTrailhead.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        routeCoordinates = payload.routeCoordinates.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+    }
+
+    private func clearPersistedSession() {
+        UserDefaults.standard.removeObject(forKey: persistenceKey)
+    }
+
+    private func recoverActiveWorkoutSessionIfNeeded() async {
+        guard workoutSession == nil else { return }
+        let recoveredSession = await withCheckedContinuation { continuation in
+            healthStore.recoverActiveWorkoutSession(completion: { session, _ in
+                continuation.resume(returning: session)
+            })
+        }
+        guard let recoveredSession else {
+            if !isSessionActive {
+                clearPersistedSession()
+            }
+            return
+        }
+        attachRecoveredWorkoutSession(recoveredSession)
+    }
+
+    private func attachRecoveredWorkoutSession(_ session: HKWorkoutSession) {
+        workoutSession = session
+        workoutBuilder = session.associatedWorkoutBuilder()
+        workoutBuilder?.delegate = self
+        session.delegate = self
+        activeActivity = session.workoutConfiguration.activityType
+        activeLocation = session.workoutConfiguration.locationType
+        if activeTitle == nil {
+            activeTitle = watchWorkoutDisplayName(activeActivity ?? .running)
+        }
+        if workoutStartDate == nil {
+            workoutStartDate = Date()
+        }
+        displayState = session.state == .paused ? .paused : .running
+        statusMessage = session.state == .paused ? "Recovered paused workout" : "Recovered active workout"
+        if session.state == .running {
+            startElapsedTimer()
+        }
+        rebuildMetrics()
+        Task { @MainActor in
+            self.isMirroringToPhone = await self.ensureCompanionMirroring()
+            self.broadcastCompanionSnapshot()
+            self.persistCurrentSession()
+        }
+    }
+
+    private func decodePhasePayloads(from payloads: [[String: Any]]?) -> [WatchProgramPhasePayload] {
+        guard let payloads else { return [] }
+        return payloads.compactMap { phasePayload in
+            guard let title = phasePayload["title"] as? String,
+                  let subtitle = phasePayload["subtitle"] as? String,
+                  let activityID = phasePayload["activityID"] as? String,
+                  let activityRawValue = phasePayload["activityRawValue"] as? Int,
+                  let locationRawValue = phasePayload["locationRawValue"] as? Int,
+                  let plannedMinutes = phasePayload["plannedMinutes"] as? Int else {
+                return nil
+            }
+
+            let stagePayloads = (phasePayload["microStages"] as? [[String: Any]] ?? []).compactMap { stagePayload -> WatchProgramMicroStagePayload? in
+                guard let title = stagePayload["title"] as? String,
+                      let notes = stagePayload["notes"] as? String,
+                      let goal = stagePayload["goal"] as? String,
+                      let plannedMinutes = stagePayload["plannedMinutes"] as? Int,
+                      let repeats = stagePayload["repeats"] as? Int else {
+                    return nil
+                }
+                let targetValueText = stagePayload["targetValueText"] as? String ?? ""
+                return WatchProgramMicroStagePayload(
+                    id: UUID(uuidString: stagePayload["id"] as? String ?? "") ?? UUID(),
+                    title: title,
+                    notes: notes,
+                    plannedMinutes: plannedMinutes,
+                    repeats: repeats,
+                    repeatSetLabel: stagePayload["repeatSetLabel"] as? String,
+                    objective: workoutObjective(
+                        goalRawValue: goal,
+                        plannedMinutes: plannedMinutes,
+                        targetValueText: targetValueText
+                    )
+                )
+            }
+
+            return WatchProgramPhasePayload(
+                id: UUID(uuidString: phasePayload["id"] as? String ?? "") ?? UUID(),
+                title: title,
+                subtitle: subtitle,
+                activityID: activityID,
+                activityRawValue: UInt(activityRawValue),
+                locationRawValue: locationRawValue,
+                plannedMinutes: plannedMinutes,
+                objective: WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(plannedMinutes, 1)), label: "Time"),
+                microStages: stagePayloads.isEmpty ? nil : stagePayloads
+            )
+        }
+    }
+
+    private func workoutObjective(
+        goalRawValue: String,
+        plannedMinutes: Int,
+        targetValueText: String
+    ) -> WatchPhaseObjectivePayload {
+        switch goalRawValue {
+        case "distance":
+            return WatchPhaseObjectivePayload(kind: .distance, targetValue: max(targetValueText.firstNumberValue ?? 1, 0.1), label: targetValueText)
+        case "energy":
+            return WatchPhaseObjectivePayload(kind: .energy, targetValue: max(targetValueText.firstNumberValue ?? Double(max(plannedMinutes * 8, 40)), 1), label: targetValueText)
+        case "heartRateZone":
+            return WatchPhaseObjectivePayload(kind: .heartRateZone, targetValue: Double(max(plannedMinutes, 1)), secondaryValue: targetValueText.firstNumberValue ?? 3, label: targetValueText)
+        case "power", "pace", "cadence":
+            return WatchPhaseObjectivePayload(kind: .pacer, targetValue: Double(max(plannedMinutes, 1)), label: targetValueText.isEmpty ? goalRawValue : targetValueText)
+        default:
+            return WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(plannedMinutes, 1)), label: "Time")
+        }
+    }
+
+    private func openInWorkoutApp(
+        title: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        phases: [WatchProgramPhasePayload]
+    ) async {
+        guard let workoutPlan = workoutPlanForWorkoutApp(title: title, activity: activity, location: location, phases: phases) else {
+            statusMessage = "Workout app handoff needs a single activity workout."
+            return
+        }
+
+        do {
+            try await workoutPlan.openInWorkoutApp()
+            statusMessage = "Opened in Apple Workout."
+        } catch {
+            statusMessage = "Could not open Apple Workout."
+        }
+    }
+
+    private func workoutPlanForWorkoutApp(
+        title: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        phases: [WatchProgramPhasePayload]
+    ) -> WorkoutPlan? {
+        let primaryPhase = phases.first ?? currentPhase
+        guard let primaryPhase else { return nil }
+        let microStages = primaryPhase.microStages ?? []
+        if microStages.isEmpty {
+            let workout = SingleGoalWorkout(
+                activity: activity,
+                location: location,
+                goal: .time(Double(max(primaryPhase.plannedMinutes, 1)), .minutes)
+            )
+            return WorkoutPlan(.goal(workout))
+        }
+
+        return WorkoutPlan(
+            .custom(
+                customWorkoutForWorkoutApp(
+                    title: title,
+                    activity: activity,
+                    location: location,
+                    microStages: microStages
+                )
+            )
+        )
+    }
+
+    private func customWorkoutForWorkoutApp(
+        title: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        microStages: [WatchProgramMicroStagePayload]
+    ) -> CustomWorkout {
+        let warmup = microStages.first(where: { $0.title.localizedCaseInsensitiveContains("warm") })
+        let cooldown = microStages.last(where: { $0.title.localizedCaseInsensitiveContains("cool") })
+        let mainStages = microStages.filter { stage in
+            stage.id != warmup?.id && stage.id != cooldown?.id
+        }
+
+        var blocks: [IntervalBlock] = []
+        var index = 0
+        while index < mainStages.count {
+            let stage = mainStages[index]
+            let repeatLabel = stage.repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var groupedStages = [stage]
+            if !repeatLabel.isEmpty {
+                var nextIndex = index + 1
+                while nextIndex < mainStages.count,
+                      (mainStages[nextIndex].repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == repeatLabel,
+                      mainStages[nextIndex].repeats == stage.repeats {
+                    groupedStages.append(mainStages[nextIndex])
+                    nextIndex += 1
+                }
+                index = nextIndex
+            } else {
+                index += 1
+            }
+
+            let steps = groupedStages.map { groupedStage in
+                IntervalStep(groupedStage.title.localizedCaseInsensitiveContains("recovery") || groupedStage.title.localizedCaseInsensitiveContains("reset") || groupedStage.title.localizedCaseInsensitiveContains("settle") ? .recovery : .work,
+                             step: workoutStep(for: groupedStage))
+            }
+            blocks.append(IntervalBlock(steps: steps, iterations: max(stage.repeats, 1)))
+        }
+
+        return CustomWorkout(
+            activity: activity,
+            location: location,
+            displayName: title,
+            warmup: warmup.map(workoutStep(for:)),
+            blocks: blocks,
+            cooldown: cooldown.map(workoutStep(for:))
+        )
+    }
+
+    private func workoutStep(for stage: WatchProgramMicroStagePayload) -> WorkoutStep {
+        WorkoutStep(goal: workoutGoal(for: stage), alert: workoutAlert(for: stage), displayName: stage.title)
+    }
+
+    private func workoutGoal(for stage: WatchProgramMicroStagePayload) -> WorkoutGoal {
+        switch stage.objective.kind {
+        case .distance, .routeDistance:
+            return .distance(max(stage.objective.targetValue, 0.1), .kilometers)
+        case .energy:
+            return .energy(max(stage.objective.targetValue, 1), .kilocalories)
+        case .time, .heartRateZone, .pacer:
+            return .time(Double(max(stage.plannedMinutes, 1)), .minutes)
+        }
+    }
+
+    private func workoutAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        switch stage.objective.kind {
+        case .heartRateZone:
+            return .heartRate(zone: Int(stage.objective.secondaryValue ?? 3))
+        case .pacer:
+            if let range = (stage.objective.label ?? "").numberRange {
+                return .power(range.lowerBound...range.upperBound, unit: .watts)
+            }
+            return nil
+        default:
+            return nil
+        }
     }
 
     private func zoneIndex(for heartRate: Double) -> Int {
@@ -1701,6 +2394,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 displayState = .running
                 statusMessage = "Workout in progress"
                 broadcastCompanionSnapshot()
+                persistCurrentSession()
             case .paused:
                 accumulatedElapsedTime = currentElapsedTime(at: date)
                 pauseStartedAt = date
@@ -1708,6 +2402,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 displayState = .paused
                 statusMessage = "Workout paused"
                 broadcastCompanionSnapshot()
+                persistCurrentSession()
             case .ended:
                 elapsedTime = currentElapsedTime(at: date)
                 displayState = .ended
@@ -1747,6 +2442,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                     self.postWorkoutDestination = .nextWorkoutPicker
                 case .advancePhase:
                     self.currentPhaseIndex = min(self.currentPhaseIndex + 1, max(self.phaseQueue.count - 1, 0))
+                    self.currentMicroStageIndex = 0
                     if let nextPhase = self.currentPhase {
                         self.startWorkout(
                             title: nextPhase.title,
@@ -1768,6 +2464,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                     self.displayState = .idle
                 }
                 self.pendingEndAction = .none
+                self.clearPersistedSession()
             default:
                 break
             }
@@ -1784,6 +2481,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
             isMirroringToPhone = false
             pauseStartedAt = nil
             accumulatedElapsedTime = 0
+            persistCurrentSession()
         }
     }
 }
@@ -1801,6 +2499,7 @@ extension WatchWorkoutManager: HKLiveWorkoutBuilderDelegate {
                 lastZoneSampleDate = now
             }
             rebuildMetrics()
+            persistCurrentSession()
         }
     }
 }
@@ -1976,5 +2675,23 @@ private func shortWorkoutElapsedString(_ elapsed: TimeInterval) -> String {
 private extension HKWorkoutActivityType {
     var preferenceKey: String {
         String(rawValue)
+    }
+}
+
+private extension String {
+    var firstNumberValue: Double? {
+        let scanner = Scanner(string: self)
+        scanner.charactersToBeSkipped = CharacterSet(charactersIn: " ")
+        var value: Double = 0
+        return scanner.scanDouble(&value) ? value : nil
+    }
+
+    var numberRange: ClosedRange<Double>? {
+        let numbers = components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted)
+            .compactMap { Double($0) }
+        guard numbers.count >= 2 else { return nil }
+        let lower = min(numbers[0], numbers[1])
+        let upper = max(numbers[0], numbers[1])
+        return lower...upper
     }
 }

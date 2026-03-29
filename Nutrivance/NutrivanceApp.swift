@@ -113,6 +113,44 @@ private struct WatchProgramPlanPayload: Codable {
     let expiresAt: Date?
 }
 
+private struct WatchPhaseObjectivePayload: Codable {
+    enum Kind: String, Codable {
+        case time
+        case distance
+        case energy
+        case heartRateZone
+        case pacer
+        case routeDistance
+    }
+
+    let kind: Kind
+    let targetValue: Double
+    let secondaryValue: Double?
+    let label: String?
+
+    init(
+        kind: Kind,
+        targetValue: Double,
+        secondaryValue: Double? = nil,
+        label: String? = nil
+    ) {
+        self.kind = kind
+        self.targetValue = targetValue
+        self.secondaryValue = secondaryValue
+        self.label = label
+    }
+}
+
+private struct WatchProgramMicroStagePayload: Codable {
+    let id: UUID
+    let title: String
+    let notes: String
+    let plannedMinutes: Int
+    let repeats: Int
+    let repeatSetLabel: String?
+    let objective: WatchPhaseObjectivePayload
+}
+
 private struct WatchProgramPhasePayload: Codable {
     let id: UUID
     let title: String
@@ -121,6 +159,30 @@ private struct WatchProgramPhasePayload: Codable {
     let activityRawValue: UInt
     let locationRawValue: Int
     let plannedMinutes: Int
+    let objective: WatchPhaseObjectivePayload?
+    let microStages: [WatchProgramMicroStagePayload]?
+
+    init(
+        id: UUID,
+        title: String,
+        subtitle: String,
+        activityID: String,
+        activityRawValue: UInt,
+        locationRawValue: Int,
+        plannedMinutes: Int,
+        objective: WatchPhaseObjectivePayload?,
+        microStages: [WatchProgramMicroStagePayload]? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.activityID = activityID
+        self.activityRawValue = activityRawValue
+        self.locationRawValue = locationRawValue
+        self.plannedMinutes = plannedMinutes
+        self.objective = objective
+        self.microStages = microStages
+    }
 }
 
 private struct WatchCoachCacheEntry: Codable {
@@ -340,13 +402,69 @@ private func watchProgramPlanPayload(from plan: ProgramWorkoutPlanRecord) -> Wat
                 activityID: $0.activityID,
                 activityRawValue: $0.activityRawValue,
                 locationRawValue: $0.locationRawValue,
-                plannedMinutes: $0.plannedMinutes
+                plannedMinutes: $0.plannedMinutes,
+                objective: WatchPhaseObjectivePayload(
+                    kind: .time,
+                    targetValue: Double($0.plannedMinutes)
+                ),
+                microStages: $0.microStages?.map { stage in
+                    WatchProgramMicroStagePayload(
+                        id: stage.id,
+                        title: stage.title,
+                        notes: stage.notes,
+                        plannedMinutes: max(stage.plannedMinutes, 1),
+                        repeats: max(stage.repeats, 1),
+                        repeatSetLabel: stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stage.repeatSetLabel,
+                        objective: watchObjectivePayload(from: stage)
+                    )
+                }
             )
         },
         sourceDeviceLabel: plan.sourceDeviceLabel,
         createdAt: plan.createdAt,
         expiresAt: plan.expiresAt
     )
+}
+
+private func watchObjectivePayload(from stage: ProgramCustomWorkoutMicroStage) -> WatchPhaseObjectivePayload {
+    switch stage.goal {
+    case .open, .time:
+        return WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(stage.plannedMinutes, 1)), label: stage.goal.title)
+    case .distance:
+        return WatchPhaseObjectivePayload(
+            kind: .distance,
+            targetValue: max(stage.targetValueText.firstNumberValue ?? Double(max(stage.plannedMinutes, 1)) / 3, 0.1),
+            label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    case .energy:
+        return WatchPhaseObjectivePayload(
+            kind: .energy,
+            targetValue: max(stage.targetValueText.firstNumberValue ?? Double(max(stage.plannedMinutes * 8, 40)), 1),
+            label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    case .heartRateZone:
+        return WatchPhaseObjectivePayload(
+            kind: .heartRateZone,
+            targetValue: Double(max(stage.plannedMinutes, 1)),
+            secondaryValue: stage.targetValueText.firstNumberValue ?? 3,
+            label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    case .power, .pace, .cadence:
+        return WatchPhaseObjectivePayload(
+            kind: .pacer,
+            targetValue: Double(max(stage.plannedMinutes, 1)),
+            label: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stage.goal.title : stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+}
+
+private extension String {
+    var firstNumberValue: Double? {
+        let scanner = Scanner(string: self)
+        scanner.charactersToBeSkipped = CharacterSet(charactersIn: " ")
+        var value: Double = 0
+        return scanner.scanDouble(&value) ? value : nil
+    }
 }
 
 extension WatchDashboardSyncBridge: WCSessionDelegate {

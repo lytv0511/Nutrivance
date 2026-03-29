@@ -230,6 +230,42 @@ private enum CompanionWorkoutSource {
     case thisDevice
 }
 
+private struct CompanionPersistedWorkoutStep: Codable {
+    let id: UUID
+    let title: String
+    let notes: String
+    let plannedMinutes: Int
+    let repeats: Int
+    let objectiveStatusText: String
+    let isObjectiveComplete: Bool
+}
+
+private struct CompanionPersistedWorkoutPhase: Codable {
+    let id: UUID
+    let title: String
+    let subtitle: String
+    let activityRawValue: UInt
+    let locationRawValue: Int
+    let plannedMinutes: Int
+    let objectiveStatusText: String
+    let isObjectiveComplete: Bool
+}
+
+private struct CompanionPersistedWorkoutSession: Codable {
+    let sourceRawValue: String
+    let title: String
+    let stateText: String
+    let elapsedTime: TimeInterval
+    let startedAt: Date?
+    let activityRawValue: UInt
+    let localWorkoutTitle: String
+    let localWorkoutSubtitle: String
+    let phaseQueue: [CompanionPersistedWorkoutPhase]
+    let currentPhaseIndex: Int
+    let stepQueue: [CompanionPersistedWorkoutStep]
+    let currentMicroStageIndex: Int
+}
+
 @MainActor
 final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     static let shared = CompanionWorkoutLiveManager()
@@ -302,6 +338,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let pacerTarget: MirroredPacerPayload?
         let phaseQueue: [MirroredPhasePayload]
         let currentPhaseIndex: Int
+        let stepQueue: [MirroredStepPayload]
+        let currentMicroStageIndex: Int
         let effortPrompt: MirroredEffortPromptPayload?
     }
 
@@ -334,6 +372,18 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let activityRawValue: UInt
         let locationRawValue: Int
         let plannedMinutes: Int
+        let objectiveStatusText: String
+        let isObjectiveComplete: Bool
+    }
+
+    private struct MirroredStepPayload: Codable {
+        let id: UUID
+        let title: String
+        let notes: String
+        let plannedMinutes: Int
+        let repeats: Int
+        let objectiveStatusText: String
+        let isObjectiveComplete: Bool
     }
 
     private struct MirroredEffortPromptPayload: Codable {
@@ -349,6 +399,18 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let activityRawValue: UInt
         let locationRawValue: Int
         let plannedMinutes: Int
+        let objectiveStatusText: String
+        let isObjectiveComplete: Bool
+    }
+
+    struct WorkoutStep: Identifiable, Hashable {
+        let id: UUID
+        let title: String
+        let notes: String
+        let plannedMinutes: Int
+        let repeats: Int
+        let objectiveStatusText: String
+        let isObjectiveComplete: Bool
     }
 
     struct EffortPromptPhase: Identifiable, Hashable {
@@ -396,6 +458,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     @Published private(set) var isWorkoutActive = false
     @Published private(set) var phaseQueue: [WorkoutPhase] = []
     @Published private(set) var currentPhaseIndex = 0
+    @Published private(set) var stepQueue: [WorkoutStep] = []
+    @Published private(set) var currentMicroStageIndex = 0
     @Published private(set) var pendingEffortPrompt: EffortPromptPhase?
     private var source: CompanionWorkoutSource = .appleWatch
     @Published private(set) var launchStatusMessage: String?
@@ -415,6 +479,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     private var localWorkoutTitle = "Workout"
     private var localWorkoutSubtitle = ""
     private var pendingLocalEndAction: WorkoutControlCommand?
+    private let persistenceKey = "companion_live_workout_session_v2"
 
     private enum CompanionLifecycleKeys {
         static let workoutLifecycle = "workoutLifecycle"
@@ -447,6 +512,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     }
 
     var currentPhaseRemainingTime: TimeInterval? {
+        if stepQueue.indices.contains(currentMicroStageIndex) {
+            return max(TimeInterval(stepQueue[currentMicroStageIndex].plannedMinutes * 60) - elapsedTime, 0)
+        }
         guard phaseQueue.indices.contains(currentPhaseIndex) else { return nil }
         return max(TimeInterval(phaseQueue[currentPhaseIndex].plannedMinutes * 60) - elapsedTime, 0)
     }
@@ -466,6 +534,12 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         healthStore.workoutSessionMirroringStartHandler = { [weak self] session in
             Task { @MainActor in
                 self?.attachMirroredSession(session)
+            }
+        }
+        restorePersistedSessionIfNeeded()
+        if #available(iOS 26.0, *) {
+            Task { @MainActor [weak self] in
+                await self?.recoverActiveWorkoutSessionIfNeeded()
             }
         }
 #if canImport(WatchConnectivity)
@@ -501,6 +575,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             builder.delegate = self
             rebuildMetrics()
         }
+        persistCurrentSession()
     }
 
     private func startElapsedTimer() {
@@ -648,10 +723,24 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                 subtitle: $0.subtitle,
                 activityRawValue: $0.activityRawValue,
                 locationRawValue: $0.locationRawValue,
-                plannedMinutes: $0.plannedMinutes
+                plannedMinutes: $0.plannedMinutes,
+                objectiveStatusText: $0.objectiveStatusText,
+                isObjectiveComplete: $0.isObjectiveComplete
             )
         }
         currentPhaseIndex = payload.currentPhaseIndex
+        stepQueue = payload.stepQueue.map {
+            WorkoutStep(
+                id: $0.id,
+                title: $0.title,
+                notes: $0.notes,
+                plannedMinutes: $0.plannedMinutes,
+                repeats: $0.repeats,
+                objectiveStatusText: $0.objectiveStatusText,
+                isObjectiveComplete: $0.isObjectiveComplete
+            )
+        }
+        currentMicroStageIndex = payload.currentMicroStageIndex
         pendingEffortPrompt = payload.effortPrompt.map {
             EffortPromptPhase(phaseID: $0.phaseID, title: $0.title, subtitle: $0.subtitle)
         }
@@ -659,6 +748,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         if shouldAutoPresentLiveView {
             isVisible = true
         }
+        persistCurrentSession()
     }
 
     private func handleWatchLifecycleState(_ state: String, reason: String?) {
@@ -725,6 +815,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         subtitle: String,
         activity: HKWorkoutActivityType,
         location: HKWorkoutSessionLocationType,
+        phases: [ProgramWorkoutPlanPhase] = [],
         routeName: String? = nil,
         trailheadCoordinate: CLLocationCoordinate2D? = nil,
         routeCoordinates: [CLLocationCoordinate2D] = []
@@ -744,6 +835,32 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             "activityRawValue": Int(activity.rawValue),
             "locationRawValue": location.rawValue
         ]
+        if !phases.isEmpty {
+            payload["phasePayloads"] = phases.map { phase in
+                [
+                    "id": phase.id.uuidString,
+                    "title": phase.title,
+                    "subtitle": phase.subtitle,
+                    "activityID": phase.activityID,
+                    "activityRawValue": Int(phase.activityRawValue),
+                    "locationRawValue": phase.locationRawValue,
+                    "plannedMinutes": phase.plannedMinutes,
+                    "microStages": (phase.microStages ?? []).map { stage in
+                        [
+                            "id": stage.id.uuidString,
+                            "title": stage.title,
+                            "notes": stage.notes,
+                            "role": stage.role.rawValue,
+                            "goal": stage.goal.rawValue,
+                            "plannedMinutes": stage.plannedMinutes,
+                            "repeats": stage.repeats,
+                            "targetValueText": stage.targetValueText,
+                            "repeatSetLabel": stage.repeatSetLabel
+                        ]
+                    }
+                ]
+            }
+        }
         if let routeName, !routeName.isEmpty {
             payload["routeName"] = routeName
         }
@@ -829,6 +946,79 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 #endif
     }
 
+    func sendWorkoutToAppleWorkoutAppOnWatch(
+        title: String,
+        subtitle: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        phases: [ProgramWorkoutPlanPhase]
+    ) {
+#if canImport(WatchConnectivity)
+        activateIfNeeded()
+        guard WCSession.isSupported() else {
+            launchStatusMessage = "Apple Watch is unavailable on this device."
+            return
+        }
+
+        let session = WCSession.default
+        let phasePayloads: [[String: Any]] = phases.map { phase in
+            [
+                "id": phase.id.uuidString,
+                "title": phase.title,
+                "subtitle": phase.subtitle,
+                "activityID": phase.activityID,
+                "activityRawValue": Int(phase.activityRawValue),
+                "locationRawValue": phase.locationRawValue,
+                "plannedMinutes": phase.plannedMinutes,
+                "microStages": (phase.microStages ?? []).map { stage in
+                    [
+                        "id": stage.id.uuidString,
+                        "title": stage.title,
+                        "notes": stage.notes,
+                        "role": stage.role.rawValue,
+                        "goal": stage.goal.rawValue,
+                        "plannedMinutes": stage.plannedMinutes,
+                        "repeats": stage.repeats,
+                        "targetValueText": stage.targetValueText,
+                        "repeatSetLabel": stage.repeatSetLabel
+                    ]
+                }
+            ]
+        }
+        let payload: [String: Any] = [
+            "workoutStart": true,
+            "openInWorkoutApp": true,
+            "title": title,
+            "subtitle": subtitle,
+            "activityRawValue": Int(activity.rawValue),
+            "locationRawValue": location.rawValue,
+            "phasePayloads": phasePayloads
+        ]
+
+        launchStatusMessage = "Sending to Apple Workout on watch..."
+        if session.activationState != .activated {
+            session.activate()
+        }
+
+        if session.isReachable {
+            session.sendMessage(payload) { [weak self] reply in
+                Task { @MainActor in
+                    self?.launchStatusMessage = (reply["accepted"] as? Bool) == true
+                        ? "Apple Workout is opening on Apple Watch."
+                        : "Apple Watch did not confirm the Workout app handoff."
+                }
+            } errorHandler: { [weak self] _ in
+                Task { @MainActor in
+                    self?.launchStatusMessage = "Watch is not reachable. Open Nutrivance on Apple Watch to use Workout app handoff."
+                }
+            }
+        } else {
+            session.transferUserInfo(payload)
+            launchStatusMessage = "Handoff queued for Apple Watch."
+        }
+#endif
+    }
+
     func submitEffortScoreOnPhone(_ score: Int) {
 #if canImport(WatchConnectivity)
         activateIfNeeded()
@@ -881,12 +1071,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             stateText = SessionStateText.phonePaused
             localSession.pause()
             stopElapsedTimer()
+            persistCurrentSession()
         case .resume:
             guard let localSession else { return }
             startedAt = Date().addingTimeInterval(-elapsedTime)
             stateText = SessionStateText.phoneRunning
             localSession.resume()
             startElapsedTimer()
+            persistCurrentSession()
         case .split:
             appendSplit()
         case .stop:
@@ -1007,6 +1199,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
         let startDate = Date()
         startedAt = startDate
+        session.prepare()
         session.startActivity(with: startDate)
         startElapsedTimer()
 
@@ -1020,6 +1213,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             do {
                 try await builder.beginCollection(at: startDate)
                 self.rebuildMetrics()
+                self.persistCurrentSession()
             } catch {
                 self.launchStatusMessage = "Could not begin live workout collection."
                 self.finishSession()
@@ -1128,6 +1322,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         pacerTarget = nil
         phaseQueue = []
         currentPhaseIndex = 0
+        stepQueue = []
+        currentMicroStageIndex = 0
         pendingEffortPrompt = nil
         builder = nil
         lastLocation = nil
@@ -1142,6 +1338,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         stopElapsedTimer()
         isWorkoutActive = false
         stateText = SessionStateText.ended
+        clearPersistedSession()
         let cleanupDelay = immediate ? 0.0 : 6.0
         DispatchQueue.main.asyncAfter(deadline: .now() + cleanupDelay) { [weak self] in
             guard let self else { return }
@@ -1152,6 +1349,152 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             self.startedAt = nil
             self.source = .appleWatch
         }
+    }
+
+    private func persistCurrentSession() {
+        guard isWorkoutActive else { return }
+        let payload = CompanionPersistedWorkoutSession(
+            sourceRawValue: source == .thisDevice ? "thisDevice" : "appleWatch",
+            title: title,
+            stateText: stateText,
+            elapsedTime: elapsedTime,
+            startedAt: startedAt,
+            activityRawValue: activityType.rawValue,
+            localWorkoutTitle: localWorkoutTitle,
+            localWorkoutSubtitle: localWorkoutSubtitle,
+            phaseQueue: phaseQueue.map {
+                CompanionPersistedWorkoutPhase(
+                    id: $0.id,
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    activityRawValue: $0.activityRawValue,
+                    locationRawValue: $0.locationRawValue,
+                    plannedMinutes: $0.plannedMinutes,
+                    objectiveStatusText: $0.objectiveStatusText,
+                    isObjectiveComplete: $0.isObjectiveComplete
+                )
+            },
+            currentPhaseIndex: currentPhaseIndex,
+            stepQueue: stepQueue.map {
+                CompanionPersistedWorkoutStep(
+                    id: $0.id,
+                    title: $0.title,
+                    notes: $0.notes,
+                    plannedMinutes: $0.plannedMinutes,
+                    repeats: $0.repeats,
+                    objectiveStatusText: $0.objectiveStatusText,
+                    isObjectiveComplete: $0.isObjectiveComplete
+                )
+            },
+            currentMicroStageIndex: currentMicroStageIndex
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        UserDefaults.standard.set(data, forKey: persistenceKey)
+    }
+
+    private func clearPersistedSession() {
+        UserDefaults.standard.removeObject(forKey: persistenceKey)
+    }
+
+    private func restorePersistedSessionIfNeeded() {
+        guard !isWorkoutActive,
+              let data = UserDefaults.standard.data(forKey: persistenceKey),
+              let payload = try? JSONDecoder().decode(CompanionPersistedWorkoutSession.self, from: data) else {
+            return
+        }
+
+        title = payload.title
+        stateText = payload.stateText
+        elapsedTime = payload.elapsedTime
+        startedAt = payload.startedAt ?? Date().addingTimeInterval(-payload.elapsedTime)
+        activityType = HKWorkoutActivityType(rawValue: payload.activityRawValue) ?? .running
+        localWorkoutTitle = payload.localWorkoutTitle
+        localWorkoutSubtitle = payload.localWorkoutSubtitle
+        source = payload.sourceRawValue == "thisDevice" ? .thisDevice : .appleWatch
+        phaseQueue = payload.phaseQueue.map {
+            WorkoutPhase(
+                id: $0.id,
+                title: $0.title,
+                subtitle: $0.subtitle,
+                activityRawValue: $0.activityRawValue,
+                locationRawValue: $0.locationRawValue,
+                plannedMinutes: $0.plannedMinutes,
+                objectiveStatusText: $0.objectiveStatusText,
+                isObjectiveComplete: $0.isObjectiveComplete
+            )
+        }
+        currentPhaseIndex = payload.currentPhaseIndex
+        stepQueue = payload.stepQueue.map {
+            WorkoutStep(
+                id: $0.id,
+                title: $0.title,
+                notes: $0.notes,
+                plannedMinutes: $0.plannedMinutes,
+                repeats: $0.repeats,
+                objectiveStatusText: $0.objectiveStatusText,
+                isObjectiveComplete: $0.isObjectiveComplete
+            )
+        }
+        currentMicroStageIndex = payload.currentMicroStageIndex
+        isWorkoutActive = true
+        shouldAutoPresentLiveView = false
+    }
+
+    @available(iOS 26.0, *)
+    private func recoverActiveWorkoutSessionIfNeeded() async {
+        guard localSession == nil, mirroredSession == nil else { return }
+        let recoveredSession = await withCheckedContinuation { continuation in
+            healthStore.recoverActiveWorkoutSession(completion: { session, _ in
+                continuation.resume(returning: session)
+            })
+        }
+        guard let recoveredSession else {
+            if !isWorkoutActive {
+                clearPersistedSession()
+            }
+            return
+        }
+
+        if source == .thisDevice {
+            attachRecoveredLocalSession(recoveredSession)
+        } else {
+            attachMirroredSession(recoveredSession)
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private func attachRecoveredLocalSession(_ session: HKWorkoutSession) {
+        let restoredTitle = localWorkoutTitle.isEmpty ? title : localWorkoutTitle
+        let restoredSubtitle = localWorkoutSubtitle
+        resetForNewSession()
+        localWorkoutTitle = restoredTitle
+        localWorkoutSubtitle = restoredSubtitle
+        localSession = session
+        mirroredSession = nil
+        builder = session.associatedWorkoutBuilder()
+        builder?.delegate = self
+        session.delegate = self
+        title = restoredTitle
+        activityType = session.workoutConfiguration.activityType
+        source = .thisDevice
+        isWorkoutActive = true
+        stateText = session.state == .paused ? SessionStateText.phonePaused : SessionStateText.phoneRunning
+        if let persistedData = UserDefaults.standard.data(forKey: persistenceKey),
+           let payload = try? JSONDecoder().decode(CompanionPersistedWorkoutSession.self, from: persistedData),
+           let restoredStart = payload.startedAt {
+            startedAt = restoredStart
+            elapsedTime = Date().timeIntervalSince(restoredStart)
+        } else {
+            startedAt = Date()
+        }
+        pageKinds = localPageKinds(for: activityType, location: session.workoutConfiguration.locationType)
+        shouldAutoPresentLiveView = false
+        isVisible = false
+        if session.state == .running {
+            startElapsedTimer()
+        }
+        rebuildMetrics()
+        persistCurrentSession()
     }
 }
 
@@ -1172,8 +1515,10 @@ extension CompanionWorkoutLiveManager: HKWorkoutSessionDelegate {
                 if source == .thisDevice {
                     startElapsedTimer()
                 }
+                persistCurrentSession()
             case .paused:
                 stateText = source == .thisDevice ? SessionStateText.phonePaused : "Paused"
+                persistCurrentSession()
             case .ended:
                 if source == .thisDevice {
                     Task { @MainActor in
@@ -1218,6 +1563,7 @@ extension CompanionWorkoutLiveManager: HKLiveWorkoutBuilderDelegate {
         Task { @MainActor in
             rebuildMetrics()
             updateDerivedSeries()
+            persistCurrentSession()
         }
     }
 }
@@ -1382,6 +1728,11 @@ private struct CompanionWorkoutControlsDrawer: View {
         return manager.phaseQueue.indices.contains(nextIndex) ? manager.phaseQueue[nextIndex] : nil
     }
 
+    private var nextStep: CompanionWorkoutLiveManager.WorkoutStep? {
+        let nextIndex = manager.currentMicroStageIndex + 1
+        return manager.stepQueue.indices.contains(nextIndex) ? manager.stepQueue[nextIndex] : nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -1421,7 +1772,15 @@ private struct CompanionWorkoutControlsDrawer: View {
                         CompanionWorkoutControlButton(symbol: "stop.fill", title: "Stop", tint: .red) {
                             manager.sendControl(.stop)
                         }
-                        if let nextPhase {
+                        if let nextStep {
+                            CompanionWorkoutControlButton(
+                                symbol: "forward.end.fill",
+                                title: "Next: \(nextStep.title) \(nextStep.plannedMinutes)m",
+                                tint: .green
+                            ) {
+                                manager.sendControl(.nextPhase)
+                            }
+                        } else if let nextPhase {
                             CompanionWorkoutControlButton(
                                 symbol: "forward.end.fill",
                                 title: "Next: \(nextPhase.title) \(nextPhase.plannedMinutes)m",
@@ -1454,6 +1813,46 @@ private struct CompanionWorkoutControlsDrawer: View {
                             }
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
+                    if !manager.stepQueue.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Label("Current Workout Steps", systemImage: "list.bullet.indent")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                Text("\(min(manager.currentMicroStageIndex + 1, max(manager.stepQueue.count, 1)))/\(manager.stepQueue.count)")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.65))
+                            }
+
+                            ForEach(Array(manager.stepQueue.enumerated()), id: \.element.id) { index, step in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: microStageSymbol(for: index))
+                                        .foregroundStyle(microStageTint(for: index))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(step.title)
+                                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                                            .foregroundStyle(.white)
+                                        Text(step.objectiveStatusText)
+                                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(.white.opacity(0.65))
+                                        if !step.notes.isEmpty {
+                                            Text(step.notes)
+                                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                                .foregroundStyle(.white.opacity(0.52))
+                                        }
+                                    }
+                                    Spacer()
+                                }
+                            }
+                        }
+                        .padding(16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .fill(Color.white.opacity(0.05))
+                        )
                     }
 
                     if manager.phaseQueue.count > 1 {
@@ -1532,6 +1931,32 @@ private struct CompanionWorkoutControlsDrawer: View {
         return "circle"
     }
 
+    private func microStageSymbol(for index: Int) -> String {
+        if index < manager.currentMicroStageIndex {
+            return "checkmark.circle.fill"
+        }
+        if index == manager.currentMicroStageIndex {
+            return "play.circle.fill"
+        }
+        if index == manager.currentMicroStageIndex + 1 {
+            return "forward.circle.fill"
+        }
+        return "circle"
+    }
+
+    private func microStageTint(for index: Int) -> Color {
+        if index < manager.currentMicroStageIndex {
+            return .green
+        }
+        if index == manager.currentMicroStageIndex {
+            return .orange
+        }
+        if index == manager.currentMicroStageIndex + 1 {
+            return .cyan
+        }
+        return .white.opacity(0.36)
+    }
+
     private func queueTint(for index: Int) -> Color {
         if index < manager.currentPhaseIndex {
             return .green
@@ -1550,12 +1975,12 @@ private struct CompanionWorkoutControlsDrawer: View {
             return "Completed"
         }
         if index == manager.currentPhaseIndex {
-            return "Current • \(max(Int((manager.currentPhaseRemainingTime ?? 0) / 60), 0)) min left"
+            return "Current • \(phase.objectiveStatusText)"
         }
         if index == manager.currentPhaseIndex + 1 {
-            return "Next • \(phase.plannedMinutes) min"
+            return "Next • \(phase.objectiveStatusText)"
         }
-        return "\(phase.plannedMinutes) min planned"
+        return phase.objectiveStatusText
     }
 }
 

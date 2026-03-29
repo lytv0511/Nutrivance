@@ -13,6 +13,7 @@ struct ProgramBuilderView: View {
 
     @State private var searchText = ""
     @State private var selectedMode: ProgramBuilderMode = .guided
+    @State private var selectedPlanDepth: ProgramPlanDepth = .simple
     @State private var selectedActivityIDs: [String] = ["running"]
     @State private var customActivities: [ProgramWorkoutType] = []
     @State private var customActivityName = ""
@@ -24,6 +25,8 @@ struct ProgramBuilderView: View {
     @State private var routeObjectiveName = ""
     @State private var routeRepeats = 1
     @State private var selectedRouteTemplateID: UUID?
+    @State private var customMicroStages: [ProgramCustomWorkoutMicroStage] = []
+    @State private var coachRegenerationNote = ""
     @State private var plannedRouteLaunchMetadata: RouteLaunchMetadata?
     @State private var routeTemplateIDsWithSavedRoutes: Set<UUID> = []
     @State private var hasLoadedRouteTemplateAvailability = false
@@ -94,6 +97,7 @@ struct ProgramBuilderView: View {
     private var coachContextID: String {
         [
             selectedMode.rawValue,
+            selectedPlanDepth.rawValue,
             selectedActivityIDs.joined(separator: ","),
             String(Int(availableMinutes.rounded())),
             targetValueText,
@@ -123,12 +127,15 @@ struct ProgramBuilderView: View {
             .joined(separator: ",")
         return [
             selectedMode.rawValue,
+            selectedPlanDepth.rawValue,
             selectedActivityIDs.joined(separator: ","),
             String(availableMinutes),
             allocationKey,
             selectedTargetMetric.rawValue,
             String(selectedZone),
             targetValueText,
+            customMicroStages.map { "\($0.title):\($0.plannedMinutes):\($0.repeats)" }.joined(separator: ","),
+            coachRegenerationNote,
             routeObjectiveName,
             String(routeRepeats),
             selectedRouteTemplateID?.uuidString ?? "",
@@ -159,6 +166,10 @@ struct ProgramBuilderView: View {
         .onChange(of: selectedActivityIDs) { _, newValue in
             rebalanceWeights(for: newValue)
             syncTargetMetric()
+            ensureMicroStagesAreReady()
+        }
+        .onChange(of: selectedPlanDepth) { _, _ in
+            ensureMicroStagesAreReady()
         }
         .onChange(of: routePlanningContextID) { _, _ in
             plannedRouteLaunchMetadata = nil
@@ -199,6 +210,7 @@ struct ProgramBuilderView: View {
         restoreCachedDraftIfNeeded()
         rebalanceWeights(for: selectedActivityIDs)
         syncTargetMetric()
+        ensureMicroStagesAreReady()
     }
 
     private func buildPlanPhases() -> [ProgramWorkoutPlanPhase] {
@@ -206,6 +218,7 @@ struct ProgramBuilderView: View {
         guard !activities.isEmpty else { return [] }
 
         if activities.count == 1, let activity = activities.first {
+            let generatedMicroStages = resolvedMicroStages(for: activity)
             return [
                 ProgramWorkoutPlanPhase(
                     title: activity.title,
@@ -213,7 +226,8 @@ struct ProgramBuilderView: View {
                     activityID: activity.id,
                     activityRawValue: activity.hkWorkoutActivityType.rawValue,
                     locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
-                    plannedMinutes: max(Int(availableMinutes.rounded()), 1)
+                    plannedMinutes: max(Int(availableMinutes.rounded()), 1),
+                    microStages: generatedMicroStages.isEmpty ? nil : generatedMicroStages
                 )
             ]
         }
@@ -248,7 +262,8 @@ struct ProgramBuilderView: View {
                 activityID: activity.id,
                 activityRawValue: activity.hkWorkoutActivityType.rawValue,
                 locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
-                plannedMinutes: max(plannedMinutesByActivity[activity.id] ?? 1, 1)
+                plannedMinutes: max(plannedMinutesByActivity[activity.id] ?? 1, 1),
+                microStages: nil
             )
         }
     }
@@ -412,6 +427,13 @@ struct ProgramBuilderView: View {
                     }
                     .pickerStyle(.segmented)
 
+                    Picker("Plan Depth", selection: $selectedPlanDepth) {
+                        ForEach(ProgramPlanDepth.allCases) { depth in
+                            Text(depth.title).tag(depth)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
                     switch selectedMode {
                     case .guided:
                         guidedPlanningView
@@ -425,6 +447,12 @@ struct ProgramBuilderView: View {
 
             ProgramSectionCard {
                 workoutLaunchSection
+            }
+
+            if selectedActivities.count == 1, let primary = selectedActivities.first {
+                ProgramSectionCard {
+                    singleActivityCustomWorkoutSection(for: primary)
+                }
             }
 
             ProgramSectionCard {
@@ -580,9 +608,27 @@ struct ProgramBuilderView: View {
                                     subtitle: launchSubtitle,
                                     activity: activity.hkWorkoutActivityType,
                                     location: activity.preferredLocationType(for: selectedMode),
+                                    phases: buildPlanPhases(),
                                     routeName: routeLaunch.name.isEmpty ? nil : routeLaunch.name,
                                     trailheadCoordinate: routeLaunch.trailhead,
                                     routeCoordinates: routeLaunch.coordinates
+                                )
+                            }
+                        }
+
+                        if selectedActivities.count == 1 {
+                            ProgramLaunchButton(
+                                title: "Workout App",
+                                subtitle: "Open in first-party Apple Workout",
+                                symbol: "figure.outdoor.cycle",
+                                tint: .white
+                            ) {
+                                liveWorkoutManager.sendWorkoutToAppleWorkoutAppOnWatch(
+                                    title: launchTitle,
+                                    subtitle: launchSubtitle,
+                                    activity: activity.hkWorkoutActivityType,
+                                    location: activity.preferredLocationType(for: selectedMode),
+                                    phases: buildPlanPhases()
                                 )
                             }
                         }
@@ -945,6 +991,7 @@ struct ProgramBuilderView: View {
             selectedActivityIDs: selectedActivityIDs,
             availableMinutes: Int(availableMinutes.rounded()),
             modeRawValue: selectedMode.rawValue,
+            selectedPlanDepthRawValue: selectedPlanDepth.rawValue,
             allocationWeights: allocationWeights,
             targetMetricRawValue: selectedTargetMetric.rawValue,
             selectedZone: selectedZone,
@@ -970,6 +1017,7 @@ struct ProgramBuilderView: View {
         selectedActivityIDs = plan.selectedActivityIDs
         availableMinutes = Double(plan.availableMinutes)
         selectedMode = ProgramBuilderMode(rawValue: plan.modeRawValue) ?? .guided
+        selectedPlanDepth = ProgramPlanDepth(rawValue: plan.selectedPlanDepthRawValue) ?? .simple
         allocationWeights = plan.allocationWeights
         selectedTargetMetric = ProgramTargetMetric(rawValue: plan.targetMetricRawValue ?? ProgramTargetMetric.pace.rawValue) ?? .pace
         selectedZone = plan.selectedZone
@@ -978,6 +1026,7 @@ struct ProgramBuilderView: View {
         routeRepeats = plan.routeRepeats
         selectedRouteTemplateID = plan.selectedRouteTemplateID
         planner.generatedBlueprint = plan.blueprint
+        customMicroStages = plan.resolvedPhases.first?.microStages ?? []
         plannedRouteLaunchMetadata = RouteLaunchMetadata(
             name: plan.routeName ?? "",
             trailhead: plan.trailheadCoordinate,
@@ -994,6 +1043,7 @@ struct ProgramBuilderView: View {
     private func persistBuilderDraft() {
         let draft = ProgramBuilderDraftState(
             selectedModeRawValue: selectedMode.rawValue,
+            selectedPlanDepthRawValue: selectedPlanDepth.rawValue,
             selectedActivityIDs: selectedActivityIDs,
             availableMinutes: availableMinutes,
             allocationWeights: allocationWeights,
@@ -1003,6 +1053,8 @@ struct ProgramBuilderView: View {
             routeObjectiveName: routeObjectiveName,
             routeRepeats: routeRepeats,
             selectedRouteTemplateID: selectedRouteTemplateID,
+            customMicroStages: customMicroStages,
+            coachRegenerationNote: coachRegenerationNote,
             coachAdvice: planner.coachAdvice,
             generatedBlueprint: planner.generatedBlueprint,
             updatedAt: Date()
@@ -1016,6 +1068,7 @@ struct ProgramBuilderView: View {
         guard let draft = planStore.cachedDraft else { return }
 
         selectedMode = ProgramBuilderMode(rawValue: draft.selectedModeRawValue) ?? .guided
+        selectedPlanDepth = ProgramPlanDepth(rawValue: draft.selectedPlanDepthRawValue) ?? .simple
         selectedActivityIDs = draft.selectedActivityIDs
         availableMinutes = draft.availableMinutes
         allocationWeights = draft.allocationWeights
@@ -1025,6 +1078,8 @@ struct ProgramBuilderView: View {
         routeObjectiveName = draft.routeObjectiveName
         routeRepeats = draft.routeRepeats
         selectedRouteTemplateID = draft.selectedRouteTemplateID
+        customMicroStages = draft.customMicroStages
+        coachRegenerationNote = draft.coachRegenerationNote
         if let coachAdvice = draft.coachAdvice, !coachAdvice.isEmpty {
             planner.coachAdvice = coachAdvice
         }
@@ -1123,16 +1178,449 @@ struct ProgramBuilderView: View {
             selectedActivities: selectedActivities,
             availableMinutes: Int(availableMinutes.rounded()),
             mode: selectedMode,
+            planDepth: selectedPlanDepth,
             allocations: selectedActivities.reduce(into: [:]) { partial, activity in
                 partial[activity.title] = allocationText(for: activity.id)
             },
             target: target,
             route: route,
+            microStages: selectedActivities.count == 1 ? resolvedMicroStages(for: selectedActivities[0]) : [],
+            normalizedRegenerationNote: normalizedCoachRegenerationNote,
             recentWorkouts: engine.workoutAnalytics.prefix(8).map { insight(from: $0.workout, analytics: $0.analytics) },
             recoveryScore: engine.recoveryScore,
             readinessScore: engine.readinessScore,
             strainScore: engine.strainScore
         )
+    }
+
+    private var normalizedCoachRegenerationNote: String {
+        normalizeCoachRegenerationText(coachRegenerationNote)
+    }
+
+    private func ensureMicroStagesAreReady() {
+        guard selectedActivities.count == 1, let activity = selectedActivities.first else {
+            customMicroStages = []
+            return
+        }
+
+        guard selectedPlanDepth == .comprehensive else {
+            if customMicroStages.isEmpty {
+                customMicroStages = [ProgramCustomWorkoutMicroStage.simpleDefault(for: activity, totalMinutes: Int(availableMinutes.rounded()))]
+            }
+            return
+        }
+
+        if customMicroStages.isEmpty {
+            customMicroStages = defaultMicroStages(for: activity)
+        }
+    }
+
+    private func resolvedMicroStages(for activity: ProgramWorkoutType) -> [ProgramCustomWorkoutMicroStage] {
+        if !customMicroStages.isEmpty {
+            return customMicroStages
+        }
+        return selectedPlanDepth == .comprehensive
+            ? defaultMicroStages(for: activity)
+            : [ProgramCustomWorkoutMicroStage.simpleDefault(for: activity, totalMinutes: Int(availableMinutes.rounded()))]
+    }
+
+    private func defaultMicroStages(for activity: ProgramWorkoutType) -> [ProgramCustomWorkoutMicroStage] {
+        let totalMinutes = max(Int(availableMinutes.rounded()), 15)
+        let warmupMinutes = max(8, min(15, Int((Double(totalMinutes) * 0.15).rounded())))
+        let cooldownMinutes = max(8, min(15, Int((Double(totalMinutes) * 0.12).rounded())))
+        let workMinutes = max(totalMinutes - warmupMinutes - cooldownMinutes, 10)
+
+        switch activity.id {
+        case "cycling", "mountain-biking":
+            let primarySetRepeats = max(3, min(5, workMinutes / 12))
+            let secondarySetRepeats = max(2, min(3, workMinutes / 18))
+            return [
+                ProgramCustomWorkoutMicroStage(
+                    title: "Warmup",
+                    notes: "Spin smooth and open the legs before the main set.",
+                    role: .warmup,
+                    goal: .time,
+                    plannedMinutes: warmupMinutes,
+                    repeats: 1,
+                    targetValueText: "",
+                    repeatSetLabel: ""
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "Pacer Stage",
+                    notes: "Settle into trail rhythm before the next reset.",
+                    role: .work,
+                    goal: .pace,
+                    plannedMinutes: 4,
+                    repeats: primarySetRepeats,
+                    targetValueText: "steady trail pace",
+                    repeatSetLabel: "Trail Rhythm Set"
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "HR Reset",
+                    notes: "Bring HR back into the planned aerobic zone before the next hit.",
+                    role: .recovery,
+                    goal: .heartRateZone,
+                    plannedMinutes: 3,
+                    repeats: primarySetRepeats,
+                    targetValueText: "Zone 2",
+                    repeatSetLabel: "Trail Rhythm Set"
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "Power Stage",
+                    notes: "Ride the stronger section with smooth torque and clean exits.",
+                    role: .work,
+                    goal: .power,
+                    plannedMinutes: 6,
+                    repeats: secondarySetRepeats,
+                    targetValueText: "220-260 W",
+                    repeatSetLabel: "Power Control Set"
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "HR Settle",
+                    notes: "Let breathing come down without fully losing momentum.",
+                    role: .recovery,
+                    goal: .heartRateZone,
+                    plannedMinutes: 4,
+                    repeats: secondarySetRepeats,
+                    targetValueText: "Zone 2",
+                    repeatSetLabel: "Power Control Set"
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "Cooldown",
+                    notes: "Ride easy and bring breathing all the way down.",
+                    role: .cooldown,
+                    goal: .time,
+                    plannedMinutes: cooldownMinutes,
+                    repeats: 1,
+                    targetValueText: "",
+                    repeatSetLabel: ""
+                )
+            ]
+        case "running", "trail-running":
+            return [
+                ProgramCustomWorkoutMicroStage(
+                    title: "Warmup",
+                    notes: "Ease in and let cadence come up naturally.",
+                    role: .warmup,
+                    goal: .time,
+                    plannedMinutes: warmupMinutes,
+                    repeats: 1,
+                    targetValueText: "",
+                    repeatSetLabel: ""
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "Main Set",
+                    notes: "Stay on the target without drifting harder than planned.",
+                    role: .work,
+                    goal: selectedMode == .target ? mappedGoal(for: selectedTargetMetric) : .pace,
+                    plannedMinutes: max(workMinutes, 10),
+                    repeats: 1,
+                    targetValueText: selectedMode == .target ? normalizedTargetDescriptor() : "controlled pace",
+                    repeatSetLabel: ""
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "Cooldown",
+                    notes: "Bring it home easy and relaxed.",
+                    role: .cooldown,
+                    goal: .time,
+                    plannedMinutes: cooldownMinutes,
+                    repeats: 1,
+                    targetValueText: "",
+                    repeatSetLabel: ""
+                )
+            ]
+        default:
+            return [
+                ProgramCustomWorkoutMicroStage(
+                    title: "Warmup",
+                    notes: "Start controlled and prepare for the work set.",
+                    role: .warmup,
+                    goal: .time,
+                    plannedMinutes: warmupMinutes,
+                    repeats: 1,
+                    targetValueText: "",
+                    repeatSetLabel: ""
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "Main Set",
+                    notes: "The core work of the session.",
+                    role: .work,
+                    goal: selectedMode == .target ? mappedGoal(for: selectedTargetMetric) : .time,
+                    plannedMinutes: max(workMinutes, 10),
+                    repeats: 1,
+                    targetValueText: selectedMode == .target ? normalizedTargetDescriptor() : "",
+                    repeatSetLabel: ""
+                ),
+                ProgramCustomWorkoutMicroStage(
+                    title: "Cooldown",
+                    notes: "Ease down gradually and finish clean.",
+                    role: .cooldown,
+                    goal: .time,
+                    plannedMinutes: cooldownMinutes,
+                    repeats: 1,
+                    targetValueText: "",
+                    repeatSetLabel: ""
+                )
+            ]
+        }
+    }
+
+    private func normalizedTargetDescriptor() -> String {
+        if selectedTargetMetric == .heartRateZone {
+            return "Zone \(selectedZone)"
+        }
+        return targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func mappedGoal(for metric: ProgramTargetMetric) -> ProgramMicroStageGoal {
+        switch metric {
+        case .pace:
+            return .pace
+        case .power:
+            return .power
+        case .heartRateZone:
+            return .heartRateZone
+        case .cadence:
+            return .cadence
+        case .distance:
+            return .distance
+        }
+    }
+
+    @ViewBuilder
+    private func singleActivityCustomWorkoutSection(for activity: ProgramWorkoutType) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Single-Workout Structure")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text(selectedPlanDepth == .simple
+                         ? "Simple keeps this as one clean goal for the whole \(activity.title.lowercased()) session."
+                         : "Comprehensive lets you build warmup, repeat blocks, recovery steps, and cooldown inside one \(activity.title.lowercased()) workout.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                Spacer()
+                Text(selectedPlanDepth.title)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(activity.tint, in: Capsule())
+            }
+
+            if selectedPlanDepth == .simple {
+                let stage = ProgramCustomWorkoutMicroStage.simpleDefault(for: activity, totalMinutes: Int(availableMinutes.rounded()))
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Session Goal", systemImage: activity.symbol)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(stage.simpleSummary)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.78))
+                    Text("Switch to Comprehensive if you want repeatable micro-stages like warmup, power blocks, HR resets, and cooldown inside this one workout type.")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+                .padding(14)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            } else {
+                comprehensiveMicroStageEditor(for: activity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func comprehensiveMicroStageEditor(for activity: ProgramWorkoutType) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Micro Stages")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Button {
+                    customMicroStages.append(
+                        ProgramCustomWorkoutMicroStage.simpleDefault(
+                            for: activity,
+                            totalMinutes: max(Int(availableMinutes.rounded() / Double(max(customMicroStages.count + 1, 1))), 5)
+                        )
+                    )
+                } label: {
+                    Label("Add", systemImage: "plus")
+                        .font(.subheadline.weight(.bold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+            }
+
+            ForEach($customMicroStages) { $stage in
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        TextField("Stage name", text: $stage.title)
+                            .textInputAutocapitalization(.words)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        if customMicroStages.count > 1 {
+                            Button(role: .destructive) {
+                                customMicroStages.removeAll { $0.id == stage.id }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 14, weight: .bold))
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+
+                    Picker("Role", selection: $stage.role) {
+                        ForEach(ProgramMicroStageRole.allCases) { role in
+                            Text(role.title).tag(role)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Picker("Goal", selection: $stage.goal) {
+                        ForEach(activity.supportedMicroStageGoals) { goal in
+                            Text(goal.title).tag(goal)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack(spacing: 10) {
+                        Stepper("Minutes \(stage.plannedMinutes)", value: $stage.plannedMinutes, in: 1...180)
+                            .foregroundStyle(.white)
+                        Stepper("Repeats \(stage.repeats)", value: $stage.repeats, in: 1...12)
+                            .foregroundStyle(.white)
+                    }
+
+                    TextField("Repeat set label, e.g. Trail Rhythm Set", text: $stage.repeatSetLabel)
+                        .textInputAutocapitalization(.words)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    if stage.goal.requiresDescriptorInput {
+                        TextField(stage.goal.placeholder, text: $stage.targetValueText)
+                            .textInputAutocapitalization(.never)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+
+                    TextField("Notes or cues", text: $stage.notes, axis: .vertical)
+                        .lineLimit(2...4)
+                        .textInputAutocapitalization(.sentences)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    Text(stage.displaySummary)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+                .padding(14)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Regenerate With Coach")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                Text("Say what to change and Nutrivance will normalize it into cleaner planning guidance before rebuilding the micro-stage suggestion.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.68))
+
+                TextField("Example: make the middle set more power-focused and extend cooldown", text: $coachRegenerationNote, axis: .vertical)
+                    .lineLimit(2...4)
+                    .textInputAutocapitalization(.sentences)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                if !normalizedCoachRegenerationNote.isEmpty {
+                    Text("Normalized: \(normalizedCoachRegenerationNote)")
+                        .font(.footnote)
+                        .foregroundStyle(.orange.opacity(0.88))
+                }
+
+                Button {
+                    customMicroStages = regenerateMicroStages(for: activity, note: normalizedCoachRegenerationNote)
+                } label: {
+                    Label("Regenerate Structure", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.headline.weight(.bold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+            }
+        }
+    }
+
+    private func regenerateMicroStages(for activity: ProgramWorkoutType, note: String) -> [ProgramCustomWorkoutMicroStage] {
+        var stages = defaultMicroStages(for: activity)
+        guard !note.isEmpty else { return stages }
+
+        if note.localizedCaseInsensitiveContains("longer cooldown"),
+           let cooldownIndex = stages.lastIndex(where: { $0.role == .cooldown }) {
+            stages[cooldownIndex].plannedMinutes += 5
+        }
+
+        if note.localizedCaseInsensitiveContains("shorter cooldown"),
+           let cooldownIndex = stages.lastIndex(where: { $0.role == .cooldown }) {
+            stages[cooldownIndex].plannedMinutes = max(5, stages[cooldownIndex].plannedMinutes - 5)
+        }
+
+        if note.localizedCaseInsensitiveContains("longer warmup"),
+           let warmupIndex = stages.firstIndex(where: { $0.role == .warmup }) {
+            stages[warmupIndex].plannedMinutes += 5
+        }
+
+        if note.localizedCaseInsensitiveContains("power"),
+           let workIndices = stages.indices.filter({ stages[$0].role == .work }) as [Int]? {
+            for index in workIndices {
+                stages[index].goal = .power
+                if stages[index].targetValueText.isEmpty {
+                    stages[index].targetValueText = "steady power range"
+                }
+            }
+        }
+
+        if note.localizedCaseInsensitiveContains("pace"),
+           let workIndices = stages.indices.filter({ stages[$0].role == .work }) as [Int]? {
+            for index in workIndices {
+                stages[index].goal = .pace
+                if stages[index].targetValueText.isEmpty {
+                    stages[index].targetValueText = "steady pace band"
+                }
+            }
+        }
+
+        if note.localizedCaseInsensitiveContains("zone"),
+           let recoveryIndex = stages.firstIndex(where: { $0.role == .recovery || $0.goal == .heartRateZone }) {
+            stages[recoveryIndex].goal = .heartRateZone
+            if stages[recoveryIndex].targetValueText.isEmpty {
+                stages[recoveryIndex].targetValueText = "Zone 2"
+            }
+        }
+
+        if let repeats = note.firstPositiveInteger,
+           let workIndex = stages.firstIndex(where: { $0.role == .work }) {
+            stages[workIndex].repeats = min(max(repeats, 1), 12)
+            if let recoveryIndex = stages.firstIndex(where: { $0.role == .recovery }) {
+                stages[recoveryIndex].repeats = min(max(repeats, 1), 12)
+            }
+        }
+
+        if note.localizedCaseInsensitiveContains("mountain biking") || note.localizedCaseInsensitiveContains("bike"),
+           stages.count >= 6 {
+            stages[1].repeatSetLabel = "Trail Rhythm Set"
+            stages[2].repeatSetLabel = "Trail Rhythm Set"
+            stages[3].repeatSetLabel = "Power Control Set"
+            stages[4].repeatSetLabel = "Power Control Set"
+        }
+
+        return stages
     }
 
     private func launchSubtitle(for activity: ProgramWorkoutType) -> String {
@@ -1634,6 +2122,22 @@ private enum ProgramBuilderMode: String, CaseIterable, Identifiable {
     }
 }
 
+private enum ProgramPlanDepth: String, CaseIterable, Identifiable {
+    case simple
+    case comprehensive
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .simple:
+            return "Simple"
+        case .comprehensive:
+            return "Comprehensive"
+        }
+    }
+}
+
 private enum ProgramWorkoutCategory: String, CaseIterable {
     case run = "Running"
     case ride = "Cycling"
@@ -1687,6 +2191,144 @@ private enum ProgramTargetMetric: String, CaseIterable, Identifiable {
         case .distance:
             return "Use this when finishing a set distance matters more than intensity details."
         }
+    }
+}
+
+enum ProgramMicroStageRole: String, CaseIterable, Codable, Hashable, Identifiable {
+    case warmup
+    case steady
+    case work
+    case recovery
+    case cooldown
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .warmup: return "Warmup"
+        case .steady: return "Steady"
+        case .work: return "Work"
+        case .recovery: return "Recovery"
+        case .cooldown: return "Cooldown"
+        }
+    }
+}
+
+enum ProgramMicroStageGoal: String, CaseIterable, Codable, Hashable, Identifiable {
+    case open
+    case time
+    case distance
+    case energy
+    case heartRateZone
+    case power
+    case pace
+    case cadence
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .open: return "Open"
+        case .time: return "Time"
+        case .distance: return "Distance"
+        case .energy: return "Energy"
+        case .heartRateZone: return "HR Zone"
+        case .power: return "Power"
+        case .pace: return "Pace"
+        case .cadence: return "Cadence"
+        }
+    }
+
+    var placeholder: String {
+        switch self {
+        case .distance: return "Distance target, e.g. 10 km"
+        case .energy: return "Energy target, e.g. 300 kcal"
+        case .heartRateZone: return "Zone 2"
+        case .power: return "Power range, e.g. 220-260 W"
+        case .pace: return "Pace or speed band"
+        case .cadence: return "Cadence target"
+        case .open, .time: return ""
+        }
+    }
+
+    var requiresDescriptorInput: Bool {
+        switch self {
+        case .open, .time:
+            return false
+        default:
+            return true
+        }
+    }
+}
+
+struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
+    let id: UUID
+    var title: String
+    var notes: String
+    var roleRawValue: String
+    var goalRawValue: String
+    var plannedMinutes: Int
+    var repeats: Int
+    var targetValueText: String
+    var repeatSetLabel: String
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        notes: String,
+        role: ProgramMicroStageRole,
+        goal: ProgramMicroStageGoal,
+        plannedMinutes: Int,
+        repeats: Int,
+        targetValueText: String,
+        repeatSetLabel: String = ""
+    ) {
+        self.id = id
+        self.title = title
+        self.notes = notes
+        self.roleRawValue = role.rawValue
+        self.goalRawValue = goal.rawValue
+        self.plannedMinutes = plannedMinutes
+        self.repeats = repeats
+        self.targetValueText = targetValueText
+        self.repeatSetLabel = repeatSetLabel
+    }
+
+    var role: ProgramMicroStageRole {
+        get { ProgramMicroStageRole(rawValue: roleRawValue) ?? .work }
+        set { roleRawValue = newValue.rawValue }
+    }
+
+    var goal: ProgramMicroStageGoal {
+        get { ProgramMicroStageGoal(rawValue: goalRawValue) ?? .time }
+        set { goalRawValue = newValue.rawValue }
+    }
+
+    var simpleSummary: String {
+        let target = targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(max(plannedMinutes, 1)) min • \(goal.title)\(target.isEmpty ? "" : " • \(target)")"
+    }
+
+    var displaySummary: String {
+        let target = targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let descriptor = target.isEmpty ? goal.title : "\(goal.title) \(target)"
+        let groupLabel = repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let repeatText = repeats > 1 ? " • Repeat \(repeats)x" : ""
+        let groupText = groupLabel.isEmpty ? "" : " • \(groupLabel)"
+        return "\(role.title) • \(max(plannedMinutes, 1)) min • \(descriptor)\(repeatText)\(groupText)"
+    }
+
+    fileprivate static func simpleDefault(for activity: ProgramWorkoutType, totalMinutes: Int) -> ProgramCustomWorkoutMicroStage {
+        ProgramCustomWorkoutMicroStage(
+            title: activity.title,
+            notes: "One continuous workout with a single main objective.",
+            role: .work,
+            goal: .time,
+            plannedMinutes: max(totalMinutes, 5),
+            repeats: 1,
+            targetValueText: "",
+            repeatSetLabel: ""
+        )
     }
 }
 
@@ -1864,6 +2506,27 @@ private struct ProgramWorkoutType: Identifiable, Hashable {
         }
         return .indoor
     }
+
+    var supportedMicroStageGoals: [ProgramMicroStageGoal] {
+        var goals: [ProgramMicroStageGoal] = [.time, .open]
+        for target in supportedTargets {
+            let mapped: ProgramMicroStageGoal
+            switch target {
+            case .pace: mapped = .pace
+            case .power: mapped = .power
+            case .heartRateZone: mapped = .heartRateZone
+            case .cadence: mapped = .cadence
+            case .distance: mapped = .distance
+            }
+            if !goals.contains(mapped) {
+                goals.append(mapped)
+            }
+        }
+        if !goals.contains(.energy), category == .strength || category == .ride || category == .endurance {
+            goals.append(.energy)
+        }
+        return goals
+    }
 }
 
 private struct ProgramPlannerRequest {
@@ -1881,9 +2544,12 @@ private struct ProgramPlannerRequest {
     let selectedActivities: [ProgramWorkoutType]
     let availableMinutes: Int
     let mode: ProgramBuilderMode
+    let planDepth: ProgramPlanDepth
     let allocations: [String: String]
     let target: TargetPreference?
     let route: RoutePreference?
+    let microStages: [ProgramCustomWorkoutMicroStage]
+    let normalizedRegenerationNote: String
     let recentWorkouts: [ProgramRecentWorkout]
     let recoveryScore: Double
     let readinessScore: Double
@@ -1911,7 +2577,27 @@ struct ProgramStoredCoordinate: Codable, Hashable {
 }
 
 struct ProgramBuilderDraftState: Codable, Hashable {
+    private enum CodingKeys: String, CodingKey {
+        case selectedModeRawValue
+        case selectedPlanDepthRawValue
+        case selectedActivityIDs
+        case availableMinutes
+        case allocationWeights
+        case selectedTargetMetricRawValue
+        case selectedZone
+        case targetValueText
+        case routeObjectiveName
+        case routeRepeats
+        case selectedRouteTemplateID
+        case customMicroStages
+        case coachRegenerationNote
+        case coachAdvice
+        case generatedBlueprint
+        case updatedAt
+    }
+
     let selectedModeRawValue: String
+    let selectedPlanDepthRawValue: String
     let selectedActivityIDs: [String]
     let availableMinutes: Double
     let allocationWeights: [String: Double]
@@ -1921,9 +2607,67 @@ struct ProgramBuilderDraftState: Codable, Hashable {
     let routeObjectiveName: String
     let routeRepeats: Int
     let selectedRouteTemplateID: UUID?
+    let customMicroStages: [ProgramCustomWorkoutMicroStage]
+    let coachRegenerationNote: String
     let coachAdvice: String?
     let generatedBlueprint: ProgramGeneratedBlueprint?
     let updatedAt: Date
+
+    init(
+        selectedModeRawValue: String,
+        selectedPlanDepthRawValue: String,
+        selectedActivityIDs: [String],
+        availableMinutes: Double,
+        allocationWeights: [String : Double],
+        selectedTargetMetricRawValue: String,
+        selectedZone: Int,
+        targetValueText: String,
+        routeObjectiveName: String,
+        routeRepeats: Int,
+        selectedRouteTemplateID: UUID?,
+        customMicroStages: [ProgramCustomWorkoutMicroStage],
+        coachRegenerationNote: String,
+        coachAdvice: String?,
+        generatedBlueprint: ProgramGeneratedBlueprint?,
+        updatedAt: Date
+    ) {
+        self.selectedModeRawValue = selectedModeRawValue
+        self.selectedPlanDepthRawValue = selectedPlanDepthRawValue
+        self.selectedActivityIDs = selectedActivityIDs
+        self.availableMinutes = availableMinutes
+        self.allocationWeights = allocationWeights
+        self.selectedTargetMetricRawValue = selectedTargetMetricRawValue
+        self.selectedZone = selectedZone
+        self.targetValueText = targetValueText
+        self.routeObjectiveName = routeObjectiveName
+        self.routeRepeats = routeRepeats
+        self.selectedRouteTemplateID = selectedRouteTemplateID
+        self.customMicroStages = customMicroStages
+        self.coachRegenerationNote = coachRegenerationNote
+        self.coachAdvice = coachAdvice
+        self.generatedBlueprint = generatedBlueprint
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedModeRawValue = try container.decode(String.self, forKey: .selectedModeRawValue)
+        selectedPlanDepthRawValue = try container.decodeIfPresent(String.self, forKey: .selectedPlanDepthRawValue) ?? ProgramPlanDepth.simple.rawValue
+        selectedActivityIDs = try container.decode([String].self, forKey: .selectedActivityIDs)
+        availableMinutes = try container.decode(Double.self, forKey: .availableMinutes)
+        allocationWeights = try container.decode([String: Double].self, forKey: .allocationWeights)
+        selectedTargetMetricRawValue = try container.decode(String.self, forKey: .selectedTargetMetricRawValue)
+        selectedZone = try container.decode(Int.self, forKey: .selectedZone)
+        targetValueText = try container.decode(String.self, forKey: .targetValueText)
+        routeObjectiveName = try container.decode(String.self, forKey: .routeObjectiveName)
+        routeRepeats = try container.decode(Int.self, forKey: .routeRepeats)
+        selectedRouteTemplateID = try container.decodeIfPresent(UUID.self, forKey: .selectedRouteTemplateID)
+        customMicroStages = try container.decodeIfPresent([ProgramCustomWorkoutMicroStage].self, forKey: .customMicroStages) ?? []
+        coachRegenerationNote = try container.decodeIfPresent(String.self, forKey: .coachRegenerationNote) ?? ""
+        coachAdvice = try container.decodeIfPresent(String.self, forKey: .coachAdvice)
+        generatedBlueprint = try container.decodeIfPresent(ProgramGeneratedBlueprint.self, forKey: .generatedBlueprint)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
 }
 
 struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
@@ -1934,6 +2678,7 @@ struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
     let activityRawValue: UInt
     let locationRawValue: Int
     let plannedMinutes: Int
+    let microStages: [ProgramCustomWorkoutMicroStage]?
 
     init(
         id: UUID = UUID(),
@@ -1942,7 +2687,8 @@ struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
         activityID: String,
         activityRawValue: UInt,
         locationRawValue: Int,
-        plannedMinutes: Int
+        plannedMinutes: Int,
+        microStages: [ProgramCustomWorkoutMicroStage]? = nil
     ) {
         self.id = id
         self.title = title
@@ -1951,10 +2697,42 @@ struct ProgramWorkoutPlanPhase: Identifiable, Codable, Hashable {
         self.activityRawValue = activityRawValue
         self.locationRawValue = locationRawValue
         self.plannedMinutes = plannedMinutes
+        self.microStages = microStages
     }
 }
 
 struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case summary
+        case todayFocus
+        case blocks
+        case cautionNote
+        case selectedActivityIDs
+        case availableMinutes
+        case modeRawValue
+        case selectedPlanDepthRawValue
+        case allocationWeights
+        case targetMetricRawValue
+        case selectedZone
+        case targetValueText
+        case routeObjectiveName
+        case routeRepeats
+        case selectedRouteTemplateID
+        case primaryActivityID
+        case activityRawValue
+        case locationRawValue
+        case routeName
+        case trailhead
+        case routeCoordinates
+        case phases
+        case createdAt
+        case updatedAt
+        case expiresAt
+        case sourceDeviceLabel
+    }
+
     let id: UUID
     let title: String
     let summary: String
@@ -1964,6 +2742,7 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
     let selectedActivityIDs: [String]
     let availableMinutes: Int
     let modeRawValue: String
+    let selectedPlanDepthRawValue: String
     let allocationWeights: [String: Double]
     let targetMetricRawValue: String?
     let selectedZone: Int
@@ -1982,6 +2761,98 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
     var updatedAt: Date
     var expiresAt: Date?
     let sourceDeviceLabel: String
+
+    init(
+        id: UUID,
+        title: String,
+        summary: String,
+        todayFocus: String,
+        blocks: [ProgramGeneratedBlueprint.Block],
+        cautionNote: String?,
+        selectedActivityIDs: [String],
+        availableMinutes: Int,
+        modeRawValue: String,
+        selectedPlanDepthRawValue: String,
+        allocationWeights: [String : Double],
+        targetMetricRawValue: String?,
+        selectedZone: Int,
+        targetValueText: String,
+        routeObjectiveName: String,
+        routeRepeats: Int,
+        selectedRouteTemplateID: UUID?,
+        primaryActivityID: String,
+        activityRawValue: UInt,
+        locationRawValue: Int,
+        routeName: String?,
+        trailhead: ProgramStoredCoordinate?,
+        routeCoordinates: [ProgramStoredCoordinate],
+        phases: [ProgramWorkoutPlanPhase]?,
+        createdAt: Date,
+        updatedAt: Date,
+        expiresAt: Date?,
+        sourceDeviceLabel: String
+    ) {
+        self.id = id
+        self.title = title
+        self.summary = summary
+        self.todayFocus = todayFocus
+        self.blocks = blocks
+        self.cautionNote = cautionNote
+        self.selectedActivityIDs = selectedActivityIDs
+        self.availableMinutes = availableMinutes
+        self.modeRawValue = modeRawValue
+        self.selectedPlanDepthRawValue = selectedPlanDepthRawValue
+        self.allocationWeights = allocationWeights
+        self.targetMetricRawValue = targetMetricRawValue
+        self.selectedZone = selectedZone
+        self.targetValueText = targetValueText
+        self.routeObjectiveName = routeObjectiveName
+        self.routeRepeats = routeRepeats
+        self.selectedRouteTemplateID = selectedRouteTemplateID
+        self.primaryActivityID = primaryActivityID
+        self.activityRawValue = activityRawValue
+        self.locationRawValue = locationRawValue
+        self.routeName = routeName
+        self.trailhead = trailhead
+        self.routeCoordinates = routeCoordinates
+        self.phases = phases
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.expiresAt = expiresAt
+        self.sourceDeviceLabel = sourceDeviceLabel
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        summary = try container.decode(String.self, forKey: .summary)
+        todayFocus = try container.decode(String.self, forKey: .todayFocus)
+        blocks = try container.decode([ProgramGeneratedBlueprint.Block].self, forKey: .blocks)
+        cautionNote = try container.decodeIfPresent(String.self, forKey: .cautionNote)
+        selectedActivityIDs = try container.decode([String].self, forKey: .selectedActivityIDs)
+        availableMinutes = try container.decode(Int.self, forKey: .availableMinutes)
+        modeRawValue = try container.decode(String.self, forKey: .modeRawValue)
+        selectedPlanDepthRawValue = try container.decodeIfPresent(String.self, forKey: .selectedPlanDepthRawValue) ?? ProgramPlanDepth.simple.rawValue
+        allocationWeights = try container.decode([String: Double].self, forKey: .allocationWeights)
+        targetMetricRawValue = try container.decodeIfPresent(String.self, forKey: .targetMetricRawValue)
+        selectedZone = try container.decode(Int.self, forKey: .selectedZone)
+        targetValueText = try container.decode(String.self, forKey: .targetValueText)
+        routeObjectiveName = try container.decode(String.self, forKey: .routeObjectiveName)
+        routeRepeats = try container.decode(Int.self, forKey: .routeRepeats)
+        selectedRouteTemplateID = try container.decodeIfPresent(UUID.self, forKey: .selectedRouteTemplateID)
+        primaryActivityID = try container.decode(String.self, forKey: .primaryActivityID)
+        activityRawValue = try container.decode(UInt.self, forKey: .activityRawValue)
+        locationRawValue = try container.decode(Int.self, forKey: .locationRawValue)
+        routeName = try container.decodeIfPresent(String.self, forKey: .routeName)
+        trailhead = try container.decodeIfPresent(ProgramStoredCoordinate.self, forKey: .trailhead)
+        routeCoordinates = try container.decode([ProgramStoredCoordinate].self, forKey: .routeCoordinates)
+        phases = try container.decodeIfPresent([ProgramWorkoutPlanPhase].self, forKey: .phases)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
+        sourceDeviceLabel = try container.decode(String.self, forKey: .sourceDeviceLabel)
+    }
 
     var blueprint: ProgramGeneratedBlueprint {
         ProgramGeneratedBlueprint(
@@ -2020,7 +2891,8 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
                 activityID: primaryActivityID,
                 activityRawValue: activityRawValue,
                 locationRawValue: locationRawValue,
-                plannedMinutes: max(availableMinutes, 1)
+                plannedMinutes: max(availableMinutes, 1),
+                microStages: nil
             )
         ]
     }
@@ -2293,20 +3165,23 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         let readiness = Int(request.readinessScore.rounded())
         let recovery = Int(request.recoveryScore.rounded())
         let strain = Int(request.strainScore.rounded())
+        let depthLead = request.planDepth == .comprehensive
+            ? "Build something layered inside the workout if it earns its place, not just because it sounds smart. "
+            : "Keep it clean and direct. "
 
         if request.selectedActivities.isEmpty {
             return "Today looks like a good day to choose the type of session first, then set the constraint that matters most. Start by deciding whether you want skill, controlled aerobic work, or something short and punchy."
         }
 
         if recovery >= 75 && readiness >= 75 {
-            return "You look fairly ready today. Keep the \(activities) session purposeful and contained inside the \(request.availableMinutes)-minute window you set. If you want quality, anchor it around one clear objective instead of stacking too many demands. Strain is at \(strain), so you have room to do something meaningful without forcing extra pieces that you did not ask for."
+            return "\(depthLead)You look fairly ready today. Keep the \(activities) session purposeful and contained inside the \(request.availableMinutes)-minute window you set. If you want quality, anchor it around one clear objective instead of stacking too many demands. Strain is at \(strain), so you have room to do something meaningful without forcing extra pieces that you did not ask for."
         }
 
         if recovery < 55 || readiness < 55 {
-            return "Today reads more like a control day than a reach day. Keep \(activities) honest, smooth, and sustainable inside the \(request.availableMinutes)-minute window. Focus on rhythm, technique, and leaving yourself better than you started. With recovery at \(recovery) and readiness at \(readiness), the best move today is usually restraint rather than chasing extra load."
+            return "\(depthLead)Today reads more like a control day than a reach day. Keep \(activities) honest, smooth, and sustainable inside the \(request.availableMinutes)-minute window. Focus on rhythm, technique, and leaving yourself better than you started. With recovery at \(recovery) and readiness at \(readiness), the best move today is usually a smarter structure or a longer cooldown, not abandoning quality altogether."
         }
 
-        return "You are in a workable middle zone today. Let the \(activities) session be specific, but keep the overall ask clean. Use the time you set, stay close to the main intent, and avoid layering extras unless you explicitly want them. Recovery \(recovery), readiness \(readiness), and strain \(strain) suggest a solid day for focused work without needing to overcomplicate it."
+        return "\(depthLead)You are in a workable middle zone today. Let the \(activities) session be specific, but keep the overall ask clean. Use the time you set, stay close to the main intent, and avoid layering extras unless you explicitly want them. Recovery \(recovery), readiness \(readiness), and strain \(strain) suggest a solid day for focused work without needing to overcomplicate it."
     }
 
     private func fallbackBlueprint(for request: ProgramPlannerRequest, engine: HealthStateEngine) -> ProgramGeneratedBlueprint {
@@ -2378,20 +3253,25 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
     private func coachPrompt(for request: ProgramPlannerRequest) -> String {
         let selectedActivities = request.selectedActivities.map(\.title).joined(separator: ", ")
         let recent = request.recentWorkouts.prefix(5).map(describeProgramWorkout).joined(separator: " ")
+        let microStageSummary = request.microStages.map(\.displaySummary).joined(separator: " | ")
         return """
         Today context:
         - Selected activities: \(selectedActivities.isEmpty ? "none selected yet" : selectedActivities)
         - Available time: \(request.availableMinutes) minutes
         - Planning mode: \(request.mode.title)
+        - Plan depth: \(request.planDepth.title)
         - Recovery score: \(Int(request.recoveryScore.rounded())) / 100
         - Readiness score: \(Int(request.readinessScore.rounded())) / 100
         - Strain score: \(Int(request.strainScore.rounded())) / 21
         - Recent workouts: \(recent.isEmpty ? "none loaded" : recent)
         - Target preference: \(request.target?.metric.title ?? "none"), \(request.target?.descriptor ?? "none")
         - Route preference: \(request.route?.name ?? "none"), repeats \(request.route?.repeats ?? 0)
+        - Current micro-stage draft: \(microStageSummary.isEmpty ? "none" : microStageSummary)
+        - Regeneration note: \(request.normalizedRegenerationNote.isEmpty ? "none" : request.normalizedRegenerationNote)
 
         Give general advice for the next session, with the emphasis on what the user can realistically do today.
         Never prescribe a specific workout, interval recipe, or named session.
+        If plan depth is comprehensive, you may support more structure inside one workout type, but stay performance-forward instead of defaulting to recovery rhetoric.
         Keep it plain text, direct, supportive, and under 170 words.
         """
     }
@@ -2401,20 +3281,26 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         let allocations = request.allocations.map { "\($0.key): \($0.value)" }.sorted().joined(separator: "; ")
         let targetLine = request.target.map { "\($0.metric.title): \($0.descriptor.isEmpty ? "general focus" : $0.descriptor)" } ?? "none"
         let routeLine = request.route.map { "\($0.name.isEmpty ? "unnamed route" : $0.name), repeats \($0.repeats), template \($0.templateName ?? "none")" } ?? "none"
+        let microStageSummary = request.microStages.map(\.displaySummary).joined(separator: " | ")
 
         return """
         Build a structured workout blueprint from these exact user constraints:
         - Activities selected: \(selectedActivities)
         - Available minutes: \(request.availableMinutes)
         - Planning mode: \(request.mode.title)
+        - Plan depth: \(request.planDepth.title)
         - Activity allocations: \(allocations)
         - Target preference: \(targetLine)
         - Route preference: \(routeLine)
+        - Existing micro-stage structure: \(microStageSummary.isEmpty ? "none" : microStageSummary)
+        - Regeneration note: \(request.normalizedRegenerationNote.isEmpty ? "none" : request.normalizedRegenerationNote)
 
         Hard constraints:
         - Do not invent cooldown, warmup, mobility, stretching, or extra sports unless the user explicitly selected them.
         - Do not act clever or add a block "because it would be smart."
         - Keep the blueprint faithful to the selected activities and the time budget.
+        - If this is one activity and plan depth is comprehensive, it is allowed to describe internal structure inside that single workout type.
+        - Use recovery, readiness, strain, and recent workouts to shape the structure, but do not turn the entire plan into generic conservative recovery language.
         - Make the block titles concise and useful.
         - Keep the focus and cue practical.
         - The summary should reflect today, not a generic training plan.
@@ -2500,6 +3386,43 @@ private func insight(from workout: HKWorkout, analytics: WorkoutAnalytics) -> Pr
         intensity: intensity,
         highlight: analytics.heartRates.isEmpty ? nil : "heart rate stayed tracked through the session"
     )
+}
+
+private func normalizeCoachRegenerationText(_ text: String) -> String {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+
+    let collapsed = trimmed
+        .replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\t", with: " ")
+        .components(separatedBy: .whitespaces)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+
+    let lowered = collapsed.lowercased()
+    let normalized = lowered
+        .replacingOccurrences(of: "hr", with: "heart rate")
+        .replacingOccurrences(of: "mtb", with: "mountain biking")
+        .replacingOccurrences(of: "cd", with: "cooldown")
+        .replacingOccurrences(of: "wu", with: "warmup")
+        .replacingOccurrences(of: "z2", with: "zone 2")
+        .replacingOccurrences(of: "z3", with: "zone 3")
+        .replacingOccurrences(of: "z4", with: "zone 4")
+        .replacingOccurrences(of: "z5", with: "zone 5")
+
+    if normalized.count > 220 {
+        return String(normalized.prefix(220))
+    }
+    return normalized
+}
+
+private extension String {
+    var firstPositiveInteger: Int? {
+        let digits = components(separatedBy: CharacterSet.decimalDigits.inverted)
+            .first { !$0.isEmpty }
+        guard let digits, let value = Int(digits), value > 0 else { return nil }
+        return value
+    }
 }
 
 private func describeProgramWorkout(_ workout: ProgramRecentWorkout) -> String {
