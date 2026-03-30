@@ -711,6 +711,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             estimatedMaxHeartRate = await estimatedMaximumHeartRate()
             restorePersistedSessionIfNeeded()
             await recoverActiveWorkoutSessionIfNeeded()
+            normalizePostWorkoutDestinationAfterStartup()
 #if canImport(WatchConnectivity)
             if WCSession.isSupported() {
                 let session = WCSession.default
@@ -2110,6 +2111,25 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private func clearPersistedSession() {
         UserDefaults.standard.removeObject(forKey: persistenceKey)
+    }
+
+    private func normalizePostWorkoutDestinationAfterStartup() {
+        guard !isSessionActive else { return }
+
+        if !pendingEffortQueue.isEmpty {
+            postWorkoutDestination = .effortPrompt
+            if displayState == .running || displayState == .paused || displayState == .preparing {
+                displayState = .ended
+            }
+            return
+        }
+
+        postWorkoutDestination = .none
+        if displayState == .ended || displayState == .failed {
+            displayState = .idle
+        }
+        lastCompletedWorkoutTitle = nil
+        lastCompletedWorkoutSubtitle = nil
     }
 
     private func recoverActiveWorkoutSessionIfNeeded() async {

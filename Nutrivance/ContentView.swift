@@ -252,10 +252,29 @@ private struct CompanionPersistedWorkoutPhase: Codable {
 }
 
 private struct CompanionPersistedWorkoutSession: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case sourceRawValue
+        case title
+        case stateText
+        case elapsedTime
+        case pausedElapsedTime
+        case isPaused
+        case startedAt
+        case activityRawValue
+        case localWorkoutTitle
+        case localWorkoutSubtitle
+        case phaseQueue
+        case currentPhaseIndex
+        case stepQueue
+        case currentMicroStageIndex
+    }
+
     let sourceRawValue: String
     let title: String
     let stateText: String
     let elapsedTime: TimeInterval
+    let pausedElapsedTime: TimeInterval?
+    let isPaused: Bool?
     let startedAt: Date?
     let activityRawValue: UInt
     let localWorkoutTitle: String
@@ -264,6 +283,56 @@ private struct CompanionPersistedWorkoutSession: Codable {
     let currentPhaseIndex: Int
     let stepQueue: [CompanionPersistedWorkoutStep]
     let currentMicroStageIndex: Int
+
+    init(
+        sourceRawValue: String,
+        title: String,
+        stateText: String,
+        elapsedTime: TimeInterval,
+        pausedElapsedTime: TimeInterval? = nil,
+        isPaused: Bool? = nil,
+        startedAt: Date?,
+        activityRawValue: UInt,
+        localWorkoutTitle: String,
+        localWorkoutSubtitle: String,
+        phaseQueue: [CompanionPersistedWorkoutPhase],
+        currentPhaseIndex: Int,
+        stepQueue: [CompanionPersistedWorkoutStep],
+        currentMicroStageIndex: Int
+    ) {
+        self.sourceRawValue = sourceRawValue
+        self.title = title
+        self.stateText = stateText
+        self.elapsedTime = elapsedTime
+        self.pausedElapsedTime = pausedElapsedTime
+        self.isPaused = isPaused
+        self.startedAt = startedAt
+        self.activityRawValue = activityRawValue
+        self.localWorkoutTitle = localWorkoutTitle
+        self.localWorkoutSubtitle = localWorkoutSubtitle
+        self.phaseQueue = phaseQueue
+        self.currentPhaseIndex = currentPhaseIndex
+        self.stepQueue = stepQueue
+        self.currentMicroStageIndex = currentMicroStageIndex
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceRawValue = try container.decode(String.self, forKey: .sourceRawValue)
+        title = try container.decode(String.self, forKey: .title)
+        stateText = try container.decode(String.self, forKey: .stateText)
+        elapsedTime = try container.decode(TimeInterval.self, forKey: .elapsedTime)
+        pausedElapsedTime = try container.decodeIfPresent(TimeInterval.self, forKey: .pausedElapsedTime)
+        isPaused = try container.decodeIfPresent(Bool.self, forKey: .isPaused)
+        startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+        activityRawValue = try container.decode(UInt.self, forKey: .activityRawValue)
+        localWorkoutTitle = try container.decode(String.self, forKey: .localWorkoutTitle)
+        localWorkoutSubtitle = try container.decode(String.self, forKey: .localWorkoutSubtitle)
+        phaseQueue = try container.decode([CompanionPersistedWorkoutPhase].self, forKey: .phaseQueue)
+        currentPhaseIndex = try container.decode(Int.self, forKey: .currentPhaseIndex)
+        stepQueue = try container.decode([CompanionPersistedWorkoutStep].self, forKey: .stepQueue)
+        currentMicroStageIndex = try container.decode(Int.self, forKey: .currentMicroStageIndex)
+    }
 }
 
 @MainActor
@@ -471,8 +540,11 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     private var localSession: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var startedAt: Date?
+    private var pausedElapsedTime: TimeInterval = 0
     private var elapsedTimer: Timer?
+    private var lastSnapshotElapsedTime: TimeInterval = 0
     private var hasActivated = false
+    private var persistedSource: CompanionWorkoutSource = .appleWatch
     private var authorizationRequestInFlight = false
     private var locationAuthorizationContinuation: CheckedContinuation<Bool, Never>?
     private var lastLocation: CLLocation?
@@ -582,10 +654,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     private func startElapsedTimer() {
         elapsedTimer?.invalidate()
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let startedAt = self.startedAt else { return }
-                self.elapsedTime = Date().timeIntervalSince(startedAt)
+                guard let self else { return }
+                if self.isPaused {
+                    self.elapsedTime = self.pausedElapsedTime
+                } else if let startedAt = self.startedAt {
+                    self.elapsedTime = self.pausedElapsedTime + Date().timeIntervalSince(startedAt)
+                }
             }
         }
     }
@@ -674,8 +750,19 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         source = .appleWatch
         launchStatusMessage = nil
         activityType = HKWorkoutActivityType(rawValue: payload.activityRawValue) ?? .running
+        
+        // Sync elapsed time and state with watch
+        lastSnapshotElapsedTime = payload.elapsedTime
         elapsedTime = payload.elapsedTime
-        startedAt = Date().addingTimeInterval(-payload.elapsedTime)
+        pausedElapsedTime = payload.elapsedTime
+        
+        if normalizedState == "paused" {
+            startedAt = nil
+            stopElapsedTimer()
+        } else {
+            startedAt = Date()
+            startElapsedTimer()
+        }
         metrics = payload.metrics.map {
             LiveMetric(
                 id: $0.id,
@@ -1126,12 +1213,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         case .pause:
             guard let localSession else { return }
             stateText = SessionStateText.phonePaused
+            pausedElapsedTime = elapsedTime
+            startedAt = nil
             localSession.pause()
             stopElapsedTimer()
             persistCurrentSession()
         case .resume:
             guard let localSession else { return }
-            startedAt = Date().addingTimeInterval(-elapsedTime)
+            startedAt = Date()
             stateText = SessionStateText.phoneRunning
             localSession.resume()
             startElapsedTimer()
@@ -1410,11 +1499,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     private func persistCurrentSession() {
         guard isWorkoutActive else { return }
+        persistedSource = source
         let payload = CompanionPersistedWorkoutSession(
             sourceRawValue: source == .thisDevice ? "thisDevice" : "appleWatch",
             title: title,
             stateText: stateText,
             elapsedTime: elapsedTime,
+            pausedElapsedTime: pausedElapsedTime,
+            isPaused: isPaused,
             startedAt: startedAt,
             activityRawValue: activityType.rawValue,
             localWorkoutTitle: localWorkoutTitle,
@@ -1463,11 +1555,17 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         title = payload.title
         stateText = payload.stateText
         elapsedTime = payload.elapsedTime
-        startedAt = payload.startedAt ?? Date().addingTimeInterval(-payload.elapsedTime)
+        pausedElapsedTime = payload.pausedElapsedTime ?? payload.elapsedTime
+        if payload.isPaused == true {
+            startedAt = nil
+        } else {
+            startedAt = payload.startedAt ?? Date().addingTimeInterval(-payload.elapsedTime)
+        }
         activityType = HKWorkoutActivityType(rawValue: payload.activityRawValue) ?? .running
         localWorkoutTitle = payload.localWorkoutTitle
         localWorkoutSubtitle = payload.localWorkoutSubtitle
         source = payload.sourceRawValue == "thisDevice" ? .thisDevice : .appleWatch
+        persistedSource = source
         phaseQueue = payload.phaseQueue.map {
             WorkoutPhase(
                 id: $0.id,
@@ -1575,6 +1673,9 @@ extension CompanionWorkoutLiveManager: HKWorkoutSessionDelegate {
                 persistCurrentSession()
             case .paused:
                 stateText = source == .thisDevice ? SessionStateText.phonePaused : "Paused"
+                pausedElapsedTime = elapsedTime
+                startedAt = nil
+                stopElapsedTimer()
                 persistCurrentSession()
             case .ended:
                 if source == .thisDevice {
@@ -1744,6 +1845,7 @@ private struct CompanionWorkoutLiveOverlay: View {
                     Spacer()
                     Text(companionElapsedString(manager.elapsedTime))
                         .font(.system(size: 32, weight: .black, design: .rounded).monospacedDigit())
+                        .lineLimit(1)
                     Button {
                         manager.dismissLiveView()
                     } label: {
@@ -2539,10 +2641,21 @@ private struct CompanionWorkoutPacerBar: View {
 }
 
 private func companionElapsedString(_ elapsed: TimeInterval) -> String {
-    let formatter = DateComponentsFormatter()
-    formatter.allowedUnits = elapsed >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
-    formatter.zeroFormattingBehavior = [.pad]
-    return formatter.string(from: elapsed) ?? "00:00"
+    let totalCentiseconds = Int((elapsed * 100).rounded())
+    let centiseconds = totalCentiseconds % 100
+    let totalSeconds = totalCentiseconds / 100
+    let seconds = totalSeconds % 60
+    let totalMinutes = totalSeconds / 60
+    let minutes = totalMinutes % 60
+    let hours = totalMinutes / 60
+
+    if hours > 0 {
+        return String(format: "%02d:%02d:%02d.%02d", hours, minutes, seconds, centiseconds)
+    }
+    if minutes > 0 {
+        return String(format: "%02d:%02d.%02d", minutes, seconds, centiseconds)
+    }
+    return String(format: "%02d.%02d", seconds, centiseconds)
 }
 
 private func companionTintColor(named name: String) -> Color {

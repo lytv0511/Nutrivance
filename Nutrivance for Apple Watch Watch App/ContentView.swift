@@ -14,6 +14,28 @@ import SwiftUI
 import WatchKit
 import WorkoutKit
 
+private struct WatchDoubleTapActionModifier: ViewModifier {
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                TapGesture(count: 2)
+                    .onEnded {
+                        WKInterfaceDevice.current().play(.click)
+                        action()
+                    }
+            )
+    }
+}
+
+private extension View {
+    func watchDoubleTapAction(_ action: @escaping () -> Void) -> some View {
+        modifier(WatchDoubleTapActionModifier(action: action))
+    }
+}
+
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store = WatchDashboardStore()
@@ -211,7 +233,7 @@ private struct ActiveWorkoutCardsView: View {
         .background(Color.black.ignoresSafeArea())
         .overlay(alignment: .topTrailing) {
             if isLuminanceReduced {
-                WorkoutAlwaysOnClock()
+                WorkoutAlwaysOnElapsedTime(manager: manager)
                     .padding(.top, 8)
                     .padding(.trailing, 10)
             }
@@ -300,13 +322,19 @@ private struct ActiveWorkoutCardsView: View {
                 routeCoordinates: manager.routeCoordinates
             )
         }
+        .watchDoubleTapAction {
+            guard manager.isNextPhaseReady else { return }
+            manager.advanceToNextPhase()
+        }
     }
 }
 
-private struct WorkoutAlwaysOnClock: View {
+private struct WorkoutAlwaysOnElapsedTime: View {
+    @ObservedObject var manager: WatchWorkoutManager
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(workoutAlwaysOnClockString(from: context.date))
+        TimelineView(.periodic(from: .now, by: 0.01)) { context in
+            Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: true))
                 .font(.system(size: 16, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(.white.opacity(0.88))
                 .padding(.horizontal, 10)
@@ -314,7 +342,7 @@ private struct WorkoutAlwaysOnClock: View {
                 .background(Color.black.opacity(0.55), in: Capsule())
         }
         .allowsHitTesting(false)
-        .accessibilityLabel("Current time")
+        .accessibilityLabel("Workout elapsed time")
     }
 }
 
@@ -3667,6 +3695,11 @@ private struct WorkoutLauncherView: View {
         store.workoutTemplates.first(where: { $0.activity == quickStartActivity }) ?? store.workoutTemplates.first ?? .defaults[0]
     }
 
+    private func startSelectedQuickStart() {
+        store.queuedWorkout = selectedQuickStartTemplate.title
+        store.workoutManager.start(template: selectedQuickStartTemplate)
+    }
+
     var body: some View {
         VStack(spacing: 10) {
             ScrollView {
@@ -3787,8 +3820,7 @@ private struct WorkoutLauncherView: View {
                         }
 
                         Button {
-                            store.queuedWorkout = selectedQuickStartTemplate.title
-                            store.workoutManager.start(template: selectedQuickStartTemplate)
+                            startSelectedQuickStart()
                         } label: {
                             HStack {
                                 Text("Start Now")
@@ -3931,6 +3963,10 @@ private struct WorkoutLauncherView: View {
         .onAppear {
             quickStartActivity = selectedQuickStartTemplate.activity
         }
+        .watchDoubleTapAction {
+            guard !store.workoutManager.isSessionActive else { return }
+            startSelectedQuickStart()
+        }
     }
 }
 
@@ -4018,6 +4054,11 @@ private struct WatchCustomWorkoutBuilderView: View {
             updatedDraft.stages[index][keyPath: keyPath] = newValue
             manager.customDraft = updatedDraft
         }
+    }
+
+    private func startCustomDraft() {
+        store.queuedWorkout = draft.displayName
+        manager.startCustomWorkout()
     }
 
     var body: some View {
@@ -4187,8 +4228,7 @@ private struct WatchCustomWorkoutBuilderView: View {
                 SectionCard(title: "Actions") {
                     VStack(alignment: .leading, spacing: 8) {
                         Button {
-                            store.queuedWorkout = draft.displayName
-                            manager.startCustomWorkout()
+                            startCustomDraft()
                         } label: {
                             HStack {
                                 Text("Start Custom Workout")
@@ -4219,6 +4259,9 @@ private struct WatchCustomWorkoutBuilderView: View {
             .padding(10)
         }
         .navigationTitle("Custom Workout")
+        .watchDoubleTapAction {
+            startCustomDraft()
+        }
     }
 }
 
@@ -4473,7 +4516,7 @@ private struct WorkoutEffortPromptView: View {
         .onAppear {
             selectedEffort = Double(manager.lastEffortScore ?? 5)
         }
-        .onTapGesture(count: 2) {
+        .watchDoubleTapAction {
             commitEffort()
         }
     }
@@ -4483,6 +4526,13 @@ private struct JournalComposerView: View {
     @ObservedObject var store: WatchDashboardStore
     let title: String
     @State private var draft = ""
+
+    private func saveDraft() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        store.addJournalSnippet(trimmed)
+        draft = ""
+    }
 
     var body: some View {
         ScrollView {
@@ -4495,8 +4545,7 @@ private struct JournalComposerView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         Button("Save") {
-                            store.addJournalSnippet(draft)
-                            draft = ""
+                            saveDraft()
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.pink)
@@ -4521,6 +4570,9 @@ private struct JournalComposerView: View {
                 }
             }
             .padding(10)
+        }
+        .watchDoubleTapAction {
+            saveDraft()
         }
         .navigationTitle(title)
     }
@@ -5493,16 +5545,24 @@ private func specificMetricCards(
 }
 
 private func shortElapsedString(_ elapsed: TimeInterval) -> String {
-    let formatter = DateComponentsFormatter()
-    formatter.allowedUnits = elapsed >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
-    formatter.zeroFormattingBehavior = [.pad]
-    return formatter.string(from: elapsed) ?? "00:00"
+    let totalCentiseconds = Int((elapsed * 100).rounded())
+    let centiseconds = totalCentiseconds % 100
+    let totalSeconds = totalCentiseconds / 100
+    let seconds = totalSeconds % 60
+    let totalMinutes = totalSeconds / 60
+    let minutes = totalMinutes % 60
+    let hours = totalMinutes / 60
+
+    if hours > 0 {
+        return String(format: "%02d:%02d:%02d.%02d", hours, minutes, seconds, centiseconds)
+    }
+    if minutes > 0 {
+        return String(format: "%02d:%02d.%02d", minutes, seconds, centiseconds)
+    }
+    return String(format: "%02d.%02d", seconds, centiseconds)
 }
 
 private func workoutElapsedDisplayString(_ elapsed: TimeInterval, reducedLuminance: Bool) -> String {
-    if reducedLuminance {
-        return shortElapsedString(elapsed.rounded(.down))
-    }
     return preciseWorkoutElapsedString(elapsed)
 }
 

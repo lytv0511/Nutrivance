@@ -2170,17 +2170,24 @@ struct ProgramBuilderView: View {
 
     private func wheelComparableValue(for value: String) -> Double? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.isEmpty { return nil }
         if trimmed.hasPrefix("zone ") {
             return Double(trimmed.replacingOccurrences(of: "zone ", with: ""))
         }
         if trimmed.contains(":") {
-            let parts = trimmed.split(separator: ":")
-            guard parts.count == 2,
-                  let minutes = Double(parts[0]),
-                  let seconds = Double(parts[1]) else { return nil }
+            let segments = trimmed.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard segments.count == 2,
+                  let minutes = Double(segments[0]) else { return nil }
+            let afterColon = String(segments[1])
+            let secDigits = afterColon.prefix { $0.isNumber || $0 == "." }
+            guard !secDigits.isEmpty, let seconds = Double(secDigits) else { return nil }
             return (minutes * 60) + seconds
         }
-        return Double(trimmed)
+        if let leading = trimmed.captureGroups(for: #"^(-?\d+(?:\.\d+)?)"#).first?.first,
+           let parsed = Double(leading) {
+            return parsed
+        }
+        return nil
     }
 
     private func plannedMinutesWheelBinding(activityID: String, stageID: UUID) -> Binding<String> {
@@ -2434,7 +2441,7 @@ struct ProgramBuilderView: View {
     private func inferredTargetBehavior(from text: String, goal: ProgramMicroStageGoal) -> ProgramStageTargetBehavior {
         let normalized = text.lowercased()
         // Check for threshold keywords
-        if normalized.contains("above") || normalized.contains("at least") || normalized.contains("minimum") || 
+        if normalized.contains("above") || normalized.contains("at least") || normalized.contains("minimum") ||
            normalized.contains("more than") || normalized.contains("over ") || normalized.contains("exceeding") {
             // For certain goals, "above" means we want a minimum threshold
             switch goal {
@@ -2444,7 +2451,7 @@ struct ProgramBuilderView: View {
                 return .range
             }
         }
-        if normalized.contains("below") || normalized.contains("at most") || normalized.contains("maximum") || 
+        if normalized.contains("below") || normalized.contains("at most") || normalized.contains("maximum") ||
            normalized.contains("less than") || normalized.contains("under ") || normalized.contains("not exceeding") {
             // For certain goals, "below" means we want a maximum threshold
             switch goal {
