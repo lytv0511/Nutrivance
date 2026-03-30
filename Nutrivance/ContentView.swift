@@ -130,7 +130,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active, hasDismissedStartupCurtain else { return }
             showStartupCurtain = false
-            companionWorkoutManager.activateIfNeeded()
+            companionWorkoutManager.refreshRemoteContextIfNeeded()
         }
         .onAppear {
             companionWorkoutManager.activateIfNeeded()
@@ -558,6 +558,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         static let state = "state"
         static let reason = "reason"
         static let effortScore = "effortScore"
+        static let request = "request"
+        static let liveWorkoutSnapshot = "liveWorkoutSnapshot"
         static let injectedPlacement = "injectedPlacement"
         static let injectedTitle = "injectedTitle"
         static let injectedSubtitle = "injectedSubtitle"
@@ -623,24 +625,58 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             }
         }
 #endif
+        refreshRemoteContextIfNeeded()
     }
 
     private func attachMirroredSession(_ session: HKWorkoutSession) {
+        let restoredTitle = title
+        let restoredStateText = stateText
+        let restoredElapsedTime = elapsedTime
+        let restoredPausedElapsedTime = pausedElapsedTime
+        let restoredPageKinds = pageKinds
+        let restoredPhaseQueue = phaseQueue
+        let restoredCurrentPhaseIndex = currentPhaseIndex
+        let restoredStepQueue = stepQueue
+        let restoredCurrentMicroStageIndex = currentMicroStageIndex
+        let shouldPreserveRestoredWatchContext = source == .appleWatch && isWorkoutActive
+
         resetForNewSession()
         mirroredSession = session
         localSession = nil
         session.delegate = self
         activityType = session.workoutConfiguration.activityType
-        title = session.workoutConfiguration.activityType.name
-        stateText = SessionStateText.watchLive
+        title = shouldPreserveRestoredWatchContext && !restoredTitle.isEmpty
+            ? restoredTitle
+            : session.workoutConfiguration.activityType.name
+        stateText = shouldPreserveRestoredWatchContext && !restoredStateText.isEmpty
+            ? restoredStateText
+            : SessionStateText.watchLive
         source = .appleWatch
         launchStatusMessage = nil
-        startedAt = Date()
-        startElapsedTimer()
+        elapsedTime = shouldPreserveRestoredWatchContext ? restoredElapsedTime : 0
+        pausedElapsedTime = shouldPreserveRestoredWatchContext ? restoredPausedElapsedTime : 0
+        if shouldPreserveRestoredWatchContext, !restoredPageKinds.isEmpty {
+            pageKinds = restoredPageKinds
+        }
+        if shouldPreserveRestoredWatchContext {
+            phaseQueue = restoredPhaseQueue
+            currentPhaseIndex = restoredCurrentPhaseIndex
+            stepQueue = restoredStepQueue
+            currentMicroStageIndex = restoredCurrentMicroStageIndex
+        }
         isWorkoutActive = true
         shouldAutoPresentLiveView = true
         isVisible = true
         print("[Companion] Attached mirrored session from watch, activity: \(activityType.name)")
+
+        let normalizedState = stateText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedState == "paused" {
+            startedAt = nil
+            stopElapsedTimer()
+        } else {
+            startedAt = Date().addingTimeInterval(-pausedElapsedTime)
+            startElapsedTimer()
+        }
 
         if #available(iOS 26.0, *) {
             let builder = session.associatedWorkoutBuilder()
@@ -649,6 +685,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             print("[Companion] Associated workout builder attached")
             rebuildMetrics()
         }
+        requestLiveWorkoutSnapshot(reason: "attach-mirrored-session")
         persistCurrentSession()
     }
 
@@ -856,6 +893,34 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         finishSession()
     }
 
+    private func handleFallbackSnapshotUpdate(_ payload: [String: Any]) {
+        guard (payload["snapshotUpdate"] as? Bool) == true else { return }
+
+        if let elapsed = payload["elapsedTime"] as? Double {
+            elapsedTime = elapsed
+            pausedElapsedTime = elapsed
+            lastSnapshotElapsedTime = elapsed
+        }
+        if let state = payload["stateText"] as? String, !state.isEmpty {
+            stateText = state
+            let normalizedState = state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if normalizedState == "paused" {
+                startedAt = nil
+                stopElapsedTimer()
+            } else if normalizedState != "ended" && normalizedState != "failed" && normalizedState != "idle" {
+                startedAt = Date()
+                startElapsedTimer()
+            }
+        }
+
+        source = .appleWatch
+        isWorkoutActive = true
+        if shouldAutoPresentLiveView {
+            isVisible = true
+        }
+        persistCurrentSession()
+    }
+
     func primePresentationFromWatchRequest() {
         activateIfNeeded()
         isWorkoutActive = true
@@ -865,6 +930,17 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             source = .appleWatch
             shouldAutoPresentLiveView = true
             isVisible = true
+        }
+        requestLiveWorkoutSnapshot(reason: "watch-requested-presentation")
+    }
+
+    func refreshRemoteContextIfNeeded() {
+        if !hasActivated {
+            activateIfNeeded()
+            return
+        }
+        if source == .appleWatch || mirroredSession != nil || persistedSource == .appleWatch {
+            requestLiveWorkoutSnapshot(reason: "scene-active")
         }
     }
 
@@ -919,26 +995,90 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let session = WCSession.default
         launchStatusMessage = "Starting on Apple Watch..."
 
+        guard session.isPaired else {
+            launchStatusMessage = "No Apple Watch is paired with this iPhone."
+            return
+        }
+        guard session.isWatchAppInstalled else {
+            launchStatusMessage = "Install Nutrivance on your Apple Watch, then try again."
+            return
+        }
+
         if session.activationState != .activated {
             session.activate()
         }
 
-        // Build minimal payload first (for quick startup)
-        var minimalPayload: [String: Any] = [
+        // One property-list-safe payload. Optional keys omitted (never NSNull) so sendMessage / transferUserInfo succeed.
+        let payload = Self.buildWatchWorkoutStartUserInfo(
+            title: title,
+            subtitle: subtitle,
+            activity: activity,
+            location: location,
+            phases: phases,
+            routeName: routeName,
+            trailheadCoordinate: trailheadCoordinate,
+            routeCoordinates: routeCoordinates
+        )
+
+        let queueOnWatch: () -> Void = {
+            session.transferUserInfo(payload)
+        }
+
+        // isReachable is only true while the watch app is frontmost; pairing alone is not enough.
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: { [weak self] reply in
+                Task { @MainActor in
+                    if (reply["accepted"] as? Bool) == true {
+                        self?.primePresentationFromWatchRequest()
+                        self?.launchStatusMessage = "Apple Watch workout started."
+                    } else {
+                        queueOnWatch()
+                        self?.launchStatusMessage = Self.watchWorkoutDeliveredOpenWatchAppMessage
+                    }
+                }
+            }, errorHandler: { [weak self] error in
+                Task { @MainActor in
+                    print("[Companion] Watch sendMessage failed (\(error.localizedDescription)); using transferUserInfo.")
+                    queueOnWatch()
+                    self?.launchStatusMessage = Self.watchWorkoutDeliveredOpenWatchAppMessage
+                }
+            })
+        } else {
+            queueOnWatch()
+            launchStatusMessage = Self.watchWorkoutDeliveredOpenWatchAppMessage
+        }
+#else
+        launchStatusMessage = "Watch connectivity is unavailable."
+#endif
+    }
+
+#if canImport(WatchConnectivity)
+    /// Shown when the workout is handed off via `transferUserInfo` or when immediate `sendMessage` is unavailable.
+    private static let watchWorkoutDeliveredOpenWatchAppMessage =
+        "Workout sent to Apple Watch. Open Nutrivance on your watch to begin."
+
+    private static func buildWatchWorkoutStartUserInfo(
+        title: String,
+        subtitle: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        phases: [ProgramWorkoutPlanPhase],
+        routeName: String?,
+        trailheadCoordinate: CLLocationCoordinate2D?,
+        routeCoordinates: [CLLocationCoordinate2D],
+        maxRoutePoints: Int = 80
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
             "workoutStart": true,
             "title": title,
             "subtitle": subtitle,
             "activityRawValue": Int(activity.rawValue),
             "locationRawValue": location.rawValue
         ]
-        
-        // Build full payload (for queued delivery)
-        var fullPayload: [String: Any] = minimalPayload
-        
-        // Add phase payloads if present
+
         if !phases.isEmpty {
-            let phasePayloads = phases.map { phase in
-                [
+            let phasePayloads = phases.map { phase -> [String: Any] in
+                var phaseDict: [String: Any] = [
                     "id": phase.id.uuidString,
                     "title": phase.title,
                     "subtitle": phase.subtitle,
@@ -946,89 +1086,62 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                     "activityRawValue": Int(phase.activityRawValue),
                     "locationRawValue": phase.locationRawValue,
                     "plannedMinutes": phase.plannedMinutes,
-                    "microStages": (phase.microStages ?? []).map { stage in
-                        [
-                            "id": stage.id.uuidString,
-                            "title": stage.title,
-                            "notes": stage.notes,
-                            "role": stage.role.rawValue,
-                            "goal": stage.goal.rawValue,
-                            "targetBehavior": stage.targetBehavior.rawValue,
-                            "plannedMinutes": stage.plannedMinutes,
-                            "repeats": stage.repeats,
-                            "targetValueText": stage.targetValueText,
-                            "repeatSetLabel": stage.repeatSetLabel,
-                            "circuitGroupID": stage.circuitGroupID?.uuidString as Any
-                        ]
-                    },
-                    "circuitGroups": (phase.circuitGroups ?? []).map { group in
-                        [
-                            "id": group.id.uuidString,
-                            "title": group.title,
-                            "repeats": group.repeats
-                        ]
-                    }
+                    "microStages": (phase.microStages ?? []).map { microStageDictionary($0) }
                 ]
+                let groups = (phase.circuitGroups ?? []).map { group -> [String: Any] in
+                    [
+                        "id": group.id.uuidString,
+                        "title": group.title,
+                        "repeats": group.repeats
+                    ]
+                }
+                if !groups.isEmpty {
+                    phaseDict["circuitGroups"] = groups
+                }
+                return phaseDict
             }
-            fullPayload["phasePayloads"] = phasePayloads
-        }
-        
-        if let routeName, !routeName.isEmpty {
-            fullPayload["routeName"] = routeName
-        }
-        if let trailheadCoordinate {
-            fullPayload["trailheadLatitude"] = trailheadCoordinate.latitude
-            fullPayload["trailheadLongitude"] = trailheadCoordinate.longitude
-        }
-        if !routeCoordinates.isEmpty {
-            fullPayload["routeCoordinates"] = routeCoordinates.map { [$0.latitude, $0.longitude] }
+            payload["phasePayloads"] = phasePayloads
         }
 
-        if session.isReachable {
-            // Try sending full payload via direct message
-            session.sendMessage(fullPayload, replyHandler: { [weak self] reply in
-                Task { @MainActor in
-                    if (reply["accepted"] as? Bool) == true {
-                        self?.primePresentationFromWatchRequest()
-                        self?.launchStatusMessage = "Apple Watch workout started."
-                    } else {
-                        self?.launchStatusMessage = "Apple Watch did not confirm the workout start."
-                    }
-                }
-            }, errorHandler: { [weak self] error in
-                Task { @MainActor in
-                    // Fallback: send minimal payload via direct message for quick feedback
-                    WCSession.default.sendMessage(minimalPayload, replyHandler: { reply in
-                        Task { @MainActor in
-                            if (reply["accepted"] as? Bool) == true {
-                                self?.primePresentationFromWatchRequest()
-                                self?.launchStatusMessage = "Apple Watch workout started."
-                            } else {
-                                // Queue full payload for later delivery
-                                WCSession.default.transferUserInfo(fullPayload)
-                                self?.launchStatusMessage = "Queuing workout details to send when reachable..."
-                            }
-                        }
-                    }, errorHandler: { _ in
-                        // Send both minimal and full payloads for background delivery
-                        WCSession.default.transferUserInfo(minimalPayload)
-                        WCSession.default.transferUserInfo(fullPayload)
-                        self?.launchStatusMessage = "Queuing workout to send when reachable..."
-                    })
-                }
-            })
-        } else {
-            // Watch not reachable: queue payloads
-            session.transferUserInfo(minimalPayload)
-            if !phases.isEmpty {
-                session.transferUserInfo(fullPayload)
-            }
-            launchStatusMessage = "Queuing workout to send when reachable..."
+        if let routeName, !routeName.isEmpty {
+            payload["routeName"] = routeName
         }
-#else
-        launchStatusMessage = "Watch connectivity is unavailable."
-#endif
+        if let trailheadCoordinate {
+            payload["trailheadLatitude"] = trailheadCoordinate.latitude
+            payload["trailheadLongitude"] = trailheadCoordinate.longitude
+        }
+        if !routeCoordinates.isEmpty {
+            let capped = routeCoordinates.count > maxRoutePoints
+                ? Array(routeCoordinates.prefix(maxRoutePoints))
+                : routeCoordinates
+            payload["routeCoordinates"] = capped.map { [$0.latitude, $0.longitude] }
+        }
+
+        return payload
     }
+
+    private static func microStageDictionary(_ stage: ProgramCustomWorkoutMicroStage) -> [String: Any] {
+        var dict: [String: Any] = [
+            "id": stage.id.uuidString,
+            "title": stage.title,
+            "notes": stage.notes,
+            "role": stage.role.rawValue,
+            "goal": stage.goal.rawValue,
+            "targetBehavior": stage.targetBehavior.rawValue,
+            "plannedMinutes": stage.plannedMinutes,
+            "repeats": stage.repeats,
+            "targetValueText": stage.targetValueText
+        ]
+        let label = stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty {
+            dict["repeatSetLabel"] = label
+        }
+        if let circuitID = stage.circuitGroupID {
+            dict["circuitGroupID"] = circuitID.uuidString
+        }
+        return dict
+    }
+#endif
 
     func dismissLiveView() {
         guard isWorkoutActive else { return }
@@ -1040,6 +1153,34 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         guard isWorkoutActive else { return }
         shouldAutoPresentLiveView = true
         isVisible = true
+        if source == .appleWatch || mirroredSession != nil {
+            requestLiveWorkoutSnapshot(reason: "reopen-live-view")
+        }
+    }
+
+    private func requestLiveWorkoutSnapshot(reason: String) {
+#if canImport(WatchConnectivity)
+        guard source == .appleWatch || mirroredSession != nil || persistedSource == .appleWatch else { return }
+        guard WCSession.isSupported() else { return }
+
+        let session = WCSession.default
+        if session.activationState != .activated {
+            session.activate()
+        }
+
+        let payload: [String: Any] = [
+            CompanionLifecycleKeys.request: CompanionLifecycleKeys.liveWorkoutSnapshot,
+            CompanionLifecycleKeys.reason: reason
+        ]
+
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil) { error in
+                print("[Companion] Snapshot request failed: \(error.localizedDescription)")
+            }
+        } else {
+            session.transferUserInfo(payload)
+        }
+#endif
     }
 
     func sendControl(_ command: WorkoutControlCommand) {
@@ -1785,6 +1926,9 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
         error: Error?
     ) {
         print("[Companion] WCSession activation completed: state=\(activationState.rawValue), error=\(error?.localizedDescription ?? "none")")
+        Task { @MainActor in
+            self.refreshRemoteContextIfNeeded()
+        }
     }
 
     nonisolated func session(
@@ -1793,21 +1937,40 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
         replyHandler: @escaping ([String : Any]) -> Void
     ) {
         Task { @MainActor in
-            guard let state = message[CompanionLifecycleKeys.workoutLifecycle] as? String else {
+            if let state = message[CompanionLifecycleKeys.workoutLifecycle] as? String {
+                let reason = message[CompanionLifecycleKeys.reason] as? String
+                self.handleWatchLifecycleState(state, reason: reason)
+                replyHandler(["accepted": true])
+                return
+            }
+
+            if (message["snapshotUpdate"] as? Bool) == true {
+                self.handleFallbackSnapshotUpdate(message)
+                replyHandler(["accepted": true])
+                return
+            }
+
+            guard WatchDashboardSyncBridge.shared.handleIncomingMessage(message, replyHandler: replyHandler) else {
                 replyHandler([:])
                 return
             }
-            let reason = message[CompanionLifecycleKeys.reason] as? String
-            self.handleWatchLifecycleState(state, reason: reason)
-            replyHandler(["accepted": true])
         }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
         Task { @MainActor in
-            guard let state = userInfo[CompanionLifecycleKeys.workoutLifecycle] as? String else { return }
-            let reason = userInfo[CompanionLifecycleKeys.reason] as? String
-            self.handleWatchLifecycleState(state, reason: reason)
+            if let state = userInfo[CompanionLifecycleKeys.workoutLifecycle] as? String {
+                let reason = userInfo[CompanionLifecycleKeys.reason] as? String
+                self.handleWatchLifecycleState(state, reason: reason)
+                return
+            }
+
+            if (userInfo["snapshotUpdate"] as? Bool) == true {
+                self.handleFallbackSnapshotUpdate(userInfo)
+                return
+            }
+
+            _ = WatchDashboardSyncBridge.shared.handleIncomingUserInfo(userInfo)
         }
     }
 
@@ -1846,6 +2009,11 @@ private struct CompanionWorkoutLiveOverlay: View {
                     Text(companionElapsedString(manager.elapsedTime))
                         .font(.system(size: 32, weight: .black, design: .rounded).monospacedDigit())
                         .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .allowsTightening(true)
+                        .layoutPriority(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minWidth: 0, maxWidth: 132, alignment: .trailing)
                     Button {
                         manager.dismissLiveView()
                     } label: {

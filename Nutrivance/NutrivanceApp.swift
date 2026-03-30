@@ -249,9 +249,67 @@ final class WatchDashboardSyncBridge: NSObject {
 
     func activateIfNeeded() {
         guard let session else { return }
-        session.delegate = self
         session.activate()
         scheduleSnapshotRefresh(reason: "startup", delayNanoseconds: 1_000_000_000)
+    }
+
+    func handleSessionActivationResult(
+        _ activationState: WCSessionActivationState,
+        error: Error?
+    ) {
+        let stateString: String
+        switch activationState {
+        case .activated:
+            stateString = "ACTIVATED"
+        case .inactive:
+            stateString = "INACTIVE"
+        case .notActivated:
+            stateString = "NOT_ACTIVATED"
+        @unknown default:
+            stateString = "UNKNOWN"
+        }
+        print("[iPhone Dashboard] WCSession activation: state=\(stateString), error=\(error?.localizedDescription ?? "none")")
+        hasActivatedSession = error == nil && activationState == .activated
+        pushLatestPayloadToWatch()
+        scheduleSnapshotRefresh(reason: "session-activated")
+    }
+
+    func handleIncomingMessage(
+        _ message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) -> Bool {
+        switch message[Keys.request] as? String {
+        case Keys.dashboardSnapshot:
+            if latestPayloadData == nil {
+                publishLatestSnapshot(reason: "watch-request")
+            }
+            replyHandler([
+                Keys.dashboardPayload: latestPayloadData ?? Data()
+            ])
+            return true
+        case Keys.showLiveWorkout:
+            CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
+            replyHandler([Keys.accepted: true])
+            return true
+        default:
+            return false
+        }
+    }
+
+    func handleIncomingUserInfo(_ userInfo: [String: Any]) -> Bool {
+        var handled = false
+
+        if userInfo[Keys.showLiveWorkout] as? Bool == true ||
+            userInfo[Keys.request] as? String == Keys.showLiveWorkout {
+            CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
+            handled = true
+        }
+        if userInfo[Keys.request] as? String == Keys.dashboardSnapshot {
+            scheduleSnapshotRefresh(reason: "watch-userinfo-request")
+            handled = true
+        }
+
+        return handled
     }
 
     func handleScenePhaseChange(_ phase: ScenePhase) {
@@ -517,21 +575,7 @@ extension WatchDashboardSyncBridge: WCSessionDelegate {
         error: Error?
     ) {
         Task { @MainActor in
-            let stateString: String
-            switch activationState {
-            case .activated:
-                stateString = "ACTIVATED"
-            case .inactive:
-                stateString = "INACTIVE"
-            case .notActivated:
-                stateString = "NOT_ACTIVATED"
-            @unknown default:
-                stateString = "UNKNOWN"
-            }
-            print("[iPhone Dashboard] WCSession activation: state=\(stateString), error=\(error?.localizedDescription ?? "none")")
-            self.hasActivatedSession = error == nil && activationState == .activated
-            self.pushLatestPayloadToWatch()
-            self.scheduleSnapshotRefresh(reason: "session-activated")
+            self.handleSessionActivationResult(activationState, error: error)
         }
     }
 
@@ -541,31 +585,16 @@ extension WatchDashboardSyncBridge: WCSessionDelegate {
         replyHandler: @escaping ([String : Any]) -> Void
     ) {
         Task { @MainActor in
-            switch message[Keys.request] as? String {
-            case Keys.dashboardSnapshot:
-                if self.latestPayloadData == nil {
-                    self.publishLatestSnapshot(reason: "watch-request")
-                }
-                replyHandler([
-                    Keys.dashboardPayload: self.latestPayloadData ?? Data()
-                ])
-            case Keys.showLiveWorkout:
-                CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
-                replyHandler([Keys.accepted: true])
-            default:
+            guard self.handleIncomingMessage(message, replyHandler: replyHandler) else {
                 replyHandler([:])
+                return
             }
         }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
         Task { @MainActor in
-            if userInfo[Keys.showLiveWorkout] as? Bool == true {
-                CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
-            }
-            if userInfo[Keys.request] as? String == Keys.dashboardSnapshot {
-                self.scheduleSnapshotRefresh(reason: "watch-userinfo-request")
-            }
+            _ = self.handleIncomingUserInfo(userInfo)
         }
     }
 

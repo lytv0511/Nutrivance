@@ -237,6 +237,7 @@ struct WatchLiveMetric: Identifiable, Hashable {
 enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable {
     case metricsPrimary
     case metricsSecondary
+    case planTracking
     case heartRateZones
     case segments
     case splits
@@ -254,6 +255,8 @@ enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable
             return "Main Metrics"
         case .metricsSecondary:
             return "Detail Metrics"
+        case .planTracking:
+            return "Goals & Stages"
         case .heartRateZones:
             return "HR Zones"
         case .segments:
@@ -562,6 +565,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         static let workoutLifecycle = "workoutLifecycle"
         static let reason = "reason"
         static let effortScore = "effortScore"
+        static let request = "request"
+        static let liveWorkoutSnapshot = "liveWorkoutSnapshot"
     }
     @Published private(set) var postWorkoutDestination: PostWorkoutDestination = .none
     @Published private(set) var lastCompletedWorkoutTitle: String?
@@ -663,8 +668,40 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         workoutSession?.state
     }
 
+    /// True when the session carries a structured plan (program phases and/or micro-stages) worth tracking separately from raw metrics.
+    var shouldShowPlanTrackingTab: Bool {
+        guard isSessionActive else { return false }
+        if phaseQueue.count > 1 { return true }
+        if let first = phaseQueue.first, let stages = first.microStages, !stages.isEmpty { return true }
+        return false
+    }
+
     var orderedWorkoutPages: [WatchWorkoutPageKind] {
-        orderedPages(for: activeActivity ?? .running)
+        var pages = orderedPages(for: activeActivity ?? .running)
+        guard shouldShowPlanTrackingTab else { return pages }
+        let tab = WatchWorkoutPageKind.planTracking
+        guard !pages.contains(tab) else { return pages }
+        if let mainIdx = pages.firstIndex(of: .metricsPrimary) {
+            pages.insert(tab, at: min(mainIdx + 1, pages.count))
+        } else {
+            pages.insert(tab, at: 0)
+        }
+        return pages
+    }
+
+    /// Progress line for a micro-stage row in the plan UI (handles past / future / current phase).
+    func planTrackingRowStatus(
+        phaseIndex: Int,
+        stageIndex: Int,
+        stage: WatchProgramMicroStagePayload
+    ) -> (summaryText: String, isComplete: Bool) {
+        if phaseIndex < currentPhaseIndex {
+            return ("Completed", true)
+        }
+        if phaseIndex > currentPhaseIndex {
+            return (upcomingMicroStageText(for: stage), false)
+        }
+        return microStageStatus(for: stage, at: stageIndex)
     }
 
     func orderedPages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
@@ -672,10 +709,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     func isPageEnabled(_ page: WatchWorkoutPageKind, for activity: HKWorkoutActivityType) -> Bool {
-        orderedPages(for: activity).contains(page)
+        if page == .planTracking { return false }
+        return orderedPages(for: activity).contains(page)
     }
 
     func setPageEnabled(_ isEnabled: Bool, page: WatchWorkoutPageKind, for activity: HKWorkoutActivityType) {
+        guard page != .planTracking else { return }
         var pages = orderedPages(for: activity)
         if isEnabled {
             if !pages.contains(page) {
@@ -696,6 +735,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     func movePage(_ page: WatchWorkoutPageKind, direction: Int, for activity: HKWorkoutActivityType) {
+        guard page != .planTracking else { return }
         var pages = orderedPages(for: activity)
         guard let index = pages.firstIndex(of: page) else { return }
         let destination = min(max(index + direction, 0), pages.count - 1)
@@ -719,10 +759,25 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 session.activate()
             }
 #endif
+            refreshRecoveredWorkoutContext()
             if #available(watchOS 10.0, *) {
                 schedulerAuthorizationState = await WorkoutScheduler.shared.requestAuthorization()
                 scheduledPlans = await WorkoutScheduler.shared.scheduledWorkouts
             }
+        }
+    }
+
+    func refreshRecoveredWorkoutContext() {
+        guard isSessionActive || workoutSession != nil else { return }
+        if displayState == .running {
+            startElapsedTimer()
+        } else if displayState == .paused {
+            stopElapsedTimer()
+        }
+        Task { @MainActor in
+            self.isMirroringToPhone = await self.ensureCompanionMirroring()
+            self.broadcastCompanionSnapshot()
+            self.persistCurrentSession()
         }
     }
 
@@ -1537,6 +1592,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         microStageStartZoneDurations = liveZoneDurations
     }
 
+    /// Clamps 1-based zone labels (from plan / NLP) to `liveZoneDurations` indices. Returns 0 if zone data is not ready.
+    private func safeHeartRateZoneIndex(zoneNumber: Int) -> Int {
+        guard !liveZoneDurations.isEmpty else { return 0 }
+        return max(0, min(zoneNumber - 1, liveZoneDurations.count - 1))
+    }
+
     private func currentSegmentObjectiveStatus() -> (summaryText: String, isComplete: Bool) {
         if let currentMicroStage {
             return microStageStatus(for: currentMicroStage, at: currentMicroStageIndex)
@@ -1897,10 +1958,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return ("\(Int(currentEnergyKilocalories.rounded())) / \(Int(targetKilocalories.rounded())) kcal", currentEnergyKilocalories >= targetKilocalories)
         case .heartRateZone:
             let zoneNumber = Int(objective.secondaryValue ?? 3)
-            let zoneSeconds = liveZoneDurations[max(0, min(zoneNumber - 1, liveZoneDurations.count - 1))] ?? 0
+            let zIdx = safeHeartRateZoneIndex(zoneNumber: zoneNumber)
+            let displayZone = zIdx + 1
+            let zoneSeconds = liveZoneDurations.isEmpty ? 0 : liveZoneDurations[zIdx]
             let currentMinutes = zoneSeconds / 60
             let targetMinutes = max(objective.targetValue, 1)
-            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(zoneNumber)", currentMinutes >= targetMinutes)
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(displayZone)", currentMinutes >= targetMinutes)
         case .power, .cadence, .speed, .pace:
             let currentMinutes = elapsedTime / 60
             let targetMinutes = max(objective.targetValue, 1)
@@ -1938,11 +2001,13 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return ("\(Int(energyDelta.rounded())) / \(Int(targetKilocalories.rounded())) kcal", energyDelta >= targetKilocalories)
         case .heartRateZone:
             let zoneNumber = Int(stage.objective.secondaryValue ?? 3)
-            let priorZoneSeconds = microStageStartZoneDurations[max(0, zoneNumber - 1)] ?? 0
-            let currentZoneSeconds = liveZoneDurations[max(0, zoneNumber - 1)] ?? 0
+            let zIdx = safeHeartRateZoneIndex(zoneNumber: zoneNumber)
+            let displayZone = zIdx + 1
+            let priorZoneSeconds = microStageStartZoneDurations.indices.contains(zIdx) ? microStageStartZoneDurations[zIdx] : 0
+            let currentZoneSeconds = liveZoneDurations.isEmpty ? 0 : liveZoneDurations[zIdx]
             let currentMinutes = max(currentZoneSeconds - priorZoneSeconds, 0) / 60
             let targetMinutes = max(stage.objective.targetValue, 1)
-            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(zoneNumber)", currentMinutes >= targetMinutes)
+            return ("\(Int(currentMinutes.rounded())) / \(Int(targetMinutes.rounded())) min in Z\(displayZone)", currentMinutes >= targetMinutes)
         case .power, .cadence, .speed, .pace:
             let targetMinutes = max(stage.objective.targetValue, 1)
             let currentMinutes = elapsedTime / 60
@@ -2174,26 +2239,34 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    /// WatchConnectivity / plist bridging may deliver integers as `NSNumber`; accept those so micro-stages are not dropped.
+    private static func decodeWCInt(_ value: Any?) -> Int? {
+        if let v = value as? Int { return v }
+        if let n = value as? NSNumber { return n.intValue }
+        if let s = value as? String, let v = Int(s) { return v }
+        return nil
+    }
+
     private func decodePhasePayloads(from payloads: [[String: Any]]?) -> [WatchProgramPhasePayload] {
         guard let payloads else { return [] }
         return payloads.compactMap { phasePayload in
             guard let title = phasePayload["title"] as? String,
                   let subtitle = phasePayload["subtitle"] as? String,
                   let activityID = phasePayload["activityID"] as? String,
-                  let activityRawValue = phasePayload["activityRawValue"] as? Int,
-                  let locationRawValue = phasePayload["locationRawValue"] as? Int,
-                  let plannedMinutes = phasePayload["plannedMinutes"] as? Int else {
+                  let activityRawValue = Self.decodeWCInt(phasePayload["activityRawValue"]),
+                  let locationRawValue = Self.decodeWCInt(phasePayload["locationRawValue"]),
+                  let plannedMinutes = Self.decodeWCInt(phasePayload["plannedMinutes"]) else {
                 return nil
             }
 
             let stagePayloads = (phasePayload["microStages"] as? [[String: Any]] ?? []).compactMap { stagePayload -> WatchProgramMicroStagePayload? in
                 guard let title = stagePayload["title"] as? String,
-                      let notes = stagePayload["notes"] as? String,
                       let goal = stagePayload["goal"] as? String,
-                      let plannedMinutes = stagePayload["plannedMinutes"] as? Int,
-                      let repeats = stagePayload["repeats"] as? Int else {
+                      let plannedMinutes = Self.decodeWCInt(stagePayload["plannedMinutes"]) else {
                     return nil
                 }
+                let repeats = max(Self.decodeWCInt(stagePayload["repeats"]) ?? 1, 1)
+                let notes = stagePayload["notes"] as? String ?? ""
                 let targetValueText = stagePayload["targetValueText"] as? String ?? ""
                 let roleRawValue = stagePayload["role"] as? String
                 let goalRawValue = stagePayload["goal"] as? String
@@ -2206,7 +2279,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     plannedMinutes: plannedMinutes,
                     repeats: repeats,
                     repeatSetLabel: stagePayload["repeatSetLabel"] as? String,
-                    targetValueText: targetValueText,
+                    targetValueText: targetValueText.isEmpty ? nil : targetValueText,
                     targetBehaviorRawValue: stagePayload["targetBehavior"] as? String,
                     circuitGroupID: UUID(uuidString: stagePayload["circuitGroupID"] as? String ?? ""),
                     objective: workoutObjective(
@@ -2860,6 +2933,10 @@ extension WatchWorkoutManager: WCSessionDelegate {
                 print("[Watch] Processing workoutControl: \(command)")
                 self.handleCompanionControlCommand(command)
                 replyHandler([CompanionLaunchKeys.accepted: true])
+            } else if message[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
+                print("[Watch] Re-sending active workout snapshot to iPhone")
+                self.refreshRecoveredWorkoutContext()
+                replyHandler([CompanionLaunchKeys.accepted: self.isSessionActive || self.workoutSession != nil])
             } else if let effortScore = message[CompanionLifecycleKeys.effortScore] as? Int {
                 print("[Watch] Processing effortScore: \(effortScore)")
                 self.submitEffortScore(effortScore)
@@ -2884,6 +2961,9 @@ extension WatchWorkoutManager: WCSessionDelegate {
             if let command = userInfo["workoutControl"] as? String {
                 print("[Watch] Processing userInfo workoutControl: \(command)")
                 self.handleCompanionControlCommand(command)
+            } else if userInfo[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
+                print("[Watch] Re-sending active workout snapshot from userInfo request")
+                self.refreshRecoveredWorkoutContext()
             } else if let effortScore = userInfo[CompanionLifecycleKeys.effortScore] as? Int {
                 print("[Watch] Processing userInfo effortScore: \(effortScore)")
                 self.submitEffortScore(effortScore)
@@ -2932,7 +3012,8 @@ private final class WatchWorkoutTabPreferences {
         }
 
         let decoded = rawPages.compactMap(WatchWorkoutPageKind.init(rawValue:))
-        let sanitized = decoded.filter(defaultPages.contains)
+        let allowed = Set(defaultPages + [.planTracking])
+        let sanitized = decoded.filter { allowed.contains($0) }
         let missing = defaultPages.filter { !sanitized.contains($0) }
         return sanitized + missing
     }

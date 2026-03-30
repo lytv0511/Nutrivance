@@ -88,6 +88,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 store.refreshLiveData()
+                workoutManager.refreshRecoveredWorkoutContext()
             }
         }
     }
@@ -397,6 +398,8 @@ private struct WorkoutLivePageView: View {
                 WorkoutMetricsCard(manager: manager, variant: .primary)
             case .metricsSecondary:
                 WorkoutMetricsCard(manager: manager, variant: .secondary)
+            case .planTracking:
+                WorkoutPlanTrackingCard(manager: manager)
             case .heartRateZones:
                 WorkoutZonesCard(manager: manager)
             case .segments:
@@ -427,6 +430,272 @@ private struct WorkoutLivePageView: View {
                     .padding(.trailing, 6)
             }
         }
+    }
+}
+
+private struct WorkoutPlanTrackingCard: View {
+    @ObservedObject var manager: WatchWorkoutManager
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
+                    .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                    .foregroundStyle(.yellow)
+
+                Text("Goals & stages")
+                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.78))
+
+                if let context = planTrackingLiveContextLine(manager: manager) {
+                    Text(context)
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.cyan.opacity(0.92))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                }
+
+                ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { phaseIndex, phase in
+                    PlanTrackingPhaseBlock(manager: manager, phaseIndex: phaseIndex, phase: phase)
+                }
+
+                if manager.isNextPhaseReady {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Current stage goal met — move on when you are ready.")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.green.opacity(0.95))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            manager.advanceToNextPhase()
+                        } label: {
+                            Label("Next stage", systemImage: "forward.circle.fill")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+private struct PlanTrackingPhaseBlock: View {
+    @ObservedObject var manager: WatchWorkoutManager
+    let phaseIndex: Int
+    let phase: WatchProgramPhasePayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Block \(phaseIndex + 1)")
+                    .font(.system(size: 8, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                if phaseIndex == manager.currentPhaseIndex {
+                    Text("NOW")
+                        .font(.system(size: 7, weight: .black))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.4), in: Capsule())
+                }
+            }
+
+            Text(phase.title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+
+            if let stages = phase.microStages, !stages.isEmpty {
+                ForEach(Array(stages.enumerated()), id: \.element.id) { stageIndex, stage in
+                    PlanTrackingMicroStageRow(
+                        manager: manager,
+                        phaseIndex: phaseIndex,
+                        stageIndex: stageIndex,
+                        stage: stage
+                    )
+                }
+            } else {
+                let status = manager.objectiveStatus(for: phase, at: phaseIndex)
+                PlanTrackingObjectiveRow(summary: status.summaryText, isComplete: status.isComplete)
+            }
+        }
+        .padding(8)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+private struct PlanTrackingMicroStageRow: View {
+    @ObservedObject var manager: WatchWorkoutManager
+    let phaseIndex: Int
+    let stageIndex: Int
+    let stage: WatchProgramMicroStagePayload
+
+    private var status: (summaryText: String, isComplete: Bool) {
+        manager.planTrackingRowStatus(phaseIndex: phaseIndex, stageIndex: stageIndex, stage: stage)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: rowSymbol)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(rowSymbolTint)
+                .frame(width: 18, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Text(watchPlanStageRoleTitle(stage.roleRawValue))
+                        .font(.system(size: 7, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(watchPlanStageRoleTint(stage.roleRawValue).opacity(0.42), in: Capsule())
+
+                    if stage.repeats > 1 {
+                        Text("×\(stage.repeats)")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+
+                if let label = stage.repeatSetLabel, !label.isEmpty {
+                    Text(label)
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.orange.opacity(0.85))
+                        .lineLimit(1)
+                }
+
+                Text(stage.title)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.88)
+
+                Text(watchPlanStageGoalLine(stage))
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.85)
+
+                Text(status.summaryText)
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(status.isComplete ? Color.green : Color.white.opacity(0.92))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var rowSymbol: String {
+        if status.isComplete {
+            return "checkmark.circle.fill"
+        }
+        if phaseIndex == manager.currentPhaseIndex, stageIndex == manager.currentMicroStageIndex {
+            return "largecircle.fill.circle"
+        }
+        return "circle"
+    }
+
+    private var rowSymbolTint: Color {
+        if status.isComplete { return .green }
+        if phaseIndex == manager.currentPhaseIndex, stageIndex == manager.currentMicroStageIndex {
+            return .yellow
+        }
+        return .white.opacity(0.35)
+    }
+}
+
+private struct PlanTrackingObjectiveRow: View {
+    let summary: String
+    let isComplete: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(isComplete ? Color.green : Color.white.opacity(0.35))
+            Text(summary)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(isComplete ? Color.green : Color.white.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private func planTrackingLiveContextLine(manager: WatchWorkoutManager) -> String? {
+    guard let stage = manager.currentMicroStage else { return nil }
+    switch stage.objective.kind {
+    case .power:
+        guard let watts = manager.currentPowerWatts else { return nil }
+        return "Power now: \(Int(watts.rounded())) W"
+    case .cadence:
+        guard let rpm = manager.currentCadence else { return nil }
+        return "Cadence now: \(Int(rpm.rounded())) rpm"
+    case .speed:
+        guard let mps = manager.currentSpeedMetersPerSecond else { return nil }
+        return String(format: "Speed now: %.1f km/h", mps * 3.6)
+    case .heartRateZone:
+        guard let hr = manager.currentHeartRate else { return nil }
+        return "HR now: \(Int(hr.rounded())) bpm"
+    case .pace, .time, .distance, .energy, .routeDistance:
+        return nil
+    }
+}
+
+private func watchPlanStageRoleTitle(_ raw: String?) -> String {
+    switch raw?.lowercased() {
+    case "warmup": return "Warmup"
+    case "goal": return "Goal"
+    case "steady": return "Steady"
+    case "work": return "Work"
+    case "recovery": return "Recovery"
+    case "cooldown": return "Cooldown"
+    default: return "Stage"
+    }
+}
+
+private func watchPlanStageRoleTint(_ raw: String?) -> Color {
+    switch raw?.lowercased() {
+    case "warmup": return .blue
+    case "goal": return .purple
+    case "steady": return .green
+    case "work": return .red
+    case "recovery": return .mint
+    case "cooldown": return .indigo
+    default: return .orange
+    }
+}
+
+private func watchPlanStageGoalLine(_ stage: WatchProgramMicroStagePayload) -> String {
+    var parts: [String] = []
+    if let goal = stage.goalRawValue, !goal.isEmpty {
+        parts.append(goal.replacingOccurrences(of: "_", with: " ").capitalized)
+    }
+    if let phrase = watchPlanTargetBehaviorPhrase(stage.targetBehaviorRawValue) {
+        parts.append(phrase)
+    }
+    if let text = stage.targetValueText, !text.isEmpty {
+        parts.append(text)
+    }
+    let minutes = max(stage.plannedMinutes, 1)
+    parts.append("\(minutes) min")
+    return parts.joined(separator: " · ")
+}
+
+private func watchPlanTargetBehaviorPhrase(_ raw: String?) -> String? {
+    guard let raw, !raw.isEmpty, raw != "range" else { return nil }
+    switch raw {
+    case "aboveThreshold": return "Above target"
+    case "belowThreshold": return "Below target"
+    case "completionGoal": return "Completion"
+    default: return nil
     }
 }
 
@@ -1261,7 +1530,8 @@ private struct WorkoutControlsCard: View {
         GeometryReader { geometry in
             let gridWidth = max(geometry.size.width - 10, 160.0)
 
-            ScrollView(.vertical, showsIndicators: false) {
+            ZStack {
+                ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 6) {
                     let columns = [GridItem(.fixed((gridWidth - 4) / 2), spacing: 4), GridItem(.fixed((gridWidth - 4) / 2), spacing: 4)]
 
@@ -1326,7 +1596,8 @@ private struct WorkoutControlsCard: View {
                 .padding(.top, 4)
                 .padding(.bottom, 12)
             }
-            .overlay {
+            .frame(width: geometry.size.width, height: geometry.size.height)
+
                 if showsQueueOverlay {
                     WatchWorkoutQueueOverlayView(
                         manager: manager,
@@ -1335,8 +1606,11 @@ private struct WorkoutControlsCard: View {
                             showsQueueOverlay = false
                         }
                     )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .zIndex(100)
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
     }
 }
@@ -1346,19 +1620,39 @@ private struct WatchWorkoutQueueOverlayView: View {
     @Binding var insertionPlacement: WatchWorkoutManager.QueueInsertionPlacement
     let dismiss: () -> Void
 
-    private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
+    private var templateColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 72), spacing: 6),
+            GridItem(.flexible(minimum: 72), spacing: 6)
+        ]
+    }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.opacity(0.94)
-                .ignoresSafeArea()
+        GeometryReader { geo in
+            let safeTop: CGFloat = 6
+            let closeRowHeight: CGFloat = 44
+            let scrollTopInset = safeTop + closeRowHeight + 4
+            let templateCount = WatchWorkoutTemplate.defaults.count + 1
+            let templateRows = CGFloat((templateCount + 1) / 2)
+            let gridSpacing: CGFloat = 6
+            let availableForGrid = max(geo.size.height - scrollTopInset - 200, 120)
+            let templateCellHeight = max(
+                54,
+                floor((availableForGrid - gridSpacing * max(templateRows - 1, 0)) / max(templateRows, 1))
+            )
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
+            ZStack(alignment: .topLeading) {
+                Color.black.opacity(0.94)
+                    .ignoresSafeArea(.all)
+
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 6) {
                         Label("Queue & Add", systemImage: "list.bullet.rectangle")
                             .font(.system(size: 12, weight: .black, design: .rounded))
-                        Spacer()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Spacer(minLength: 0)
                         Text("\(manager.phaseQueue.count) items")
                             .font(.system(size: 10, weight: .bold, design: .rounded))
                             .foregroundStyle(.white.opacity(0.68))
@@ -1431,7 +1725,7 @@ private struct WatchWorkoutQueueOverlayView: View {
                             }
                         }
 
-                        LazyVGrid(columns: columns, spacing: 6) {
+                        LazyVGrid(columns: templateColumns, spacing: gridSpacing) {
                             ForEach(WatchWorkoutTemplate.defaults) { template in
                                 Button {
                                     manager.injectTemplate(template, placement: insertionPlacement)
@@ -1439,15 +1733,15 @@ private struct WatchWorkoutQueueOverlayView: View {
                                 } label: {
                                     VStack(spacing: 4) {
                                         Image(systemName: template.symbol)
-                                            .font(.system(size: 12, weight: .bold))
+                                            .font(.system(size: 14, weight: .bold))
                                         Text(template.title)
-                                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                                            .font(.system(size: 10, weight: .bold, design: .rounded))
                                             .multilineTextAlignment(.center)
                                             .lineLimit(2)
-                                            .minimumScaleFactor(0.72)
+                                            .minimumScaleFactor(0.7)
                                     }
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 48)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .frame(height: templateCellHeight)
                                     .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
@@ -1459,33 +1753,41 @@ private struct WatchWorkoutQueueOverlayView: View {
                             } label: {
                                 VStack(spacing: 4) {
                                     Image(systemName: "slider.horizontal.3")
-                                        .font(.system(size: 12, weight: .bold))
+                                        .font(.system(size: 14, weight: .bold))
                                     Text("Custom")
-                                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
                                 }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 48)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .frame(height: templateCellHeight)
                                 .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 8)
+                .padding(.top, scrollTopInset)
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: max(geo.size.height - safeTop, 120))
             }
 
             Button(action: dismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .black))
+                    .font(.system(size: 12, weight: .black))
                     .foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
-                    .background(Color.white.opacity(0.12), in: Circle())
+                    .frame(width: 32, height: 32)
+                    .background(Color.white.opacity(0.16), in: Circle())
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .padding(.top, 8)
-            .padding(.trailing, 8)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+            .padding(.leading, 10)
+            .padding(.top, safeTop + 4)
+            .zIndex(200)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
         .transition(.opacity)
     }
@@ -3989,7 +4291,7 @@ private struct WatchWorkoutViewsEditorView: View {
 
                 SectionCard(title: "Workout Views") {
                     VStack(spacing: 8) {
-                        ForEach(WatchWorkoutPageKind.allCases) { page in
+                        ForEach(WatchWorkoutPageKind.allCases.filter { $0 != .planTracking }) { page in
                             WorkoutViewEditorRow(
                                 page: page,
                                 isEnabled: Binding(
@@ -5331,6 +5633,8 @@ private func workoutPageSymbol(_ page: WatchWorkoutPageKind) -> String {
         return "gauge.with.dots.needle.50percent"
     case .metricsSecondary:
         return "list.bullet.rectangle"
+    case .planTracking:
+        return "list.clipboard.fill"
     case .heartRateZones:
         return "heart.text.square.fill"
     case .segments:

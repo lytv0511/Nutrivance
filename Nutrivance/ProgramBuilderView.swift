@@ -1186,7 +1186,8 @@ struct ProgramBuilderView: View {
             routeName: routeLaunch?.name,
             trailhead: routeLaunch?.trailhead.map(ProgramStoredCoordinate.init),
             routeCoordinates: routeLaunch?.coordinates.map(ProgramStoredCoordinate.init) ?? [],
-            phases: phases.count > 1 ? phases : nil,
+            // Always persist phases (including micro-stages) so Watch/iPhone sync and dashboard payloads carry structured targets for single-activity plans.
+            phases: phases.isEmpty ? nil : phases,
             createdAt: Date(),
             updatedAt: Date(),
             expiresAt: expiresAt,
