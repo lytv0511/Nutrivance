@@ -64,7 +64,7 @@
 		156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */; };
 		1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1570E2662D67B75300F42CB5 /* FuelCheckView.swift */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
-		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		157C20AA2D6E6D6800D1FA9A /* MindfulnessRealmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */; };
 		157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */; };
 		157C20AE2D6E6DDA00D1FA9A /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */; };
@@ -143,7 +143,7 @@
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
 			dstSubfolderSpec = 16;
 			files = (
-				15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch Watch App.app in Embed Watch Content */,
+				15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -218,7 +218,7 @@
 		156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionUnit.swift; sourceTree = "<group>"; };
 		1570E2662D67B75300F42CB5 /* FuelCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuelCheckView.swift; sourceTree = "<group>"; };
 		15741EA42CEFE2F400CDE4F9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nutrivance for Apple Watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nutrivance for Apple Watch.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindfulnessRealmView.swift; sourceTree = "<group>"; };
 		157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodTrackerView.swift; sourceTree = "<group>"; };
 		157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalView.swift; sourceTree = "<group>"; };
@@ -550,7 +550,7 @@
 				15D7FF9D2CD142690048E050 /* Nutrivance.app */,
 				15D7FFAF2CD1426A0048E050 /* NutrivanceTests.xctest */,
 				15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */,
-				15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */,
+				15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -707,7 +707,7 @@
 			packageProductDependencies = (
 			);
 			productName = "Nutrivance for Apple Watch Watch App";
-			productReference = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch Watch App.app */;
+			productReference = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */;
 			productType = "com.apple.product-type.application";
 		};
 		15D7FF9C2CD142690048E050 /* Nutrivance */ = {
@@ -1024,7 +1024,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.watchkitapp;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Nutrivance for Apple Watch";
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1064,7 +1064,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.watchkitapp;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Nutrivance for Apple Watch";
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

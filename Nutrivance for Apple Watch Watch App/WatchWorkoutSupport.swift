@@ -314,6 +314,8 @@ struct WatchLiveMetric: Identifiable, Hashable {
 enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable {
     case metricsPrimary
     case metricsSecondary
+    case metricsTertiary
+    case metricsQuaternary
     case planTracking
     case heartRateZones
     case segments
@@ -332,6 +334,10 @@ enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable
             return "Main Metrics"
         case .metricsSecondary:
             return "Detail Metrics"
+        case .metricsTertiary:
+            return "More Metrics"
+        case .metricsQuaternary:
+            return "Extra Metrics"
         case .planTracking:
             return "Goals & Stages"
         case .heartRateZones:
@@ -351,6 +357,29 @@ enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable
         case .map:
             return "Map"
         }
+    }
+
+    var metricPageIndex: Int? {
+        switch self {
+        case .metricsPrimary:
+            return 0
+        case .metricsSecondary:
+            return 1
+        case .metricsTertiary:
+            return 2
+        case .metricsQuaternary:
+            return 3
+        default:
+            return nil
+        }
+    }
+
+    var isAutomaticMetricPage: Bool {
+        metricPageIndex != nil
+    }
+
+    static var metricPageCases: [WatchWorkoutPageKind] {
+        [.metricsPrimary, .metricsSecondary, .metricsTertiary, .metricsQuaternary]
     }
 }
 
@@ -723,6 +752,39 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         return max(objective.targetValue * 60 - currentObjectiveProgressTime(at: Date()), 0)
     }
 
+    var compactCurrentStageTitle: String? {
+        currentMicroStage?.title ?? currentPhase?.title
+    }
+
+    var compactCurrentStageTargetText: String? {
+        if let currentMicroStage {
+            return compactTargetText(for: currentMicroStage)
+        }
+        guard let currentPhase else { return nil }
+        return compactTargetText(for: currentPhase)
+    }
+
+    var compactCurrentStageProgressText: String? {
+        if let currentMicroStage {
+            return compactProgressText(for: currentMicroStage, at: currentMicroStageIndex)
+        }
+        guard let currentPhase else { return nil }
+        return compactProgressText(for: currentPhase, at: currentPhaseIndex)
+    }
+
+    var isCompactCurrentStageTargetSatisfied: Bool {
+        if let currentMicroStage {
+            switch currentMicroStage.objective.kind {
+            case .power, .cadence, .speed, .pace:
+                return metricObjectiveSatisfied(for: currentMicroStage)
+            default:
+                return microStageStatus(for: currentMicroStage, at: currentMicroStageIndex).isComplete
+            }
+        }
+        guard let currentPhase else { return false }
+        return objectiveStatus(for: currentPhase, at: currentPhaseIndex).isComplete
+    }
+
     var isNextPhaseReady: Bool {
         guard hasMoreStepsInCurrentPhase || nextPhase != nil else { return false }
         return currentSegmentObjectiveStatus().isComplete
@@ -757,6 +819,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private var currentSplitStartDistanceMeters: Double = 0
     private var autoSplitLengthMeters: Double?
     private let workoutTabPreferences = WatchWorkoutTabPreferences()
+    private let workoutMetricPreferences = WatchWorkoutMetricPreferences()
     private var hasAnnouncedCurrentPhaseReady = false
     private var nextPhaseReminderIdentifier: String?
     private var microStageStartDate: Date?
@@ -781,7 +844,19 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     var orderedWorkoutPages: [WatchWorkoutPageKind] {
-        var pages = orderedPages(for: activeActivity ?? .running)
+        let activity = activeActivity ?? .running
+        let basePages = orderedPages(for: activity)
+        let automaticMetricPages = automaticMetricPages(for: activity)
+        var pages: [WatchWorkoutPageKind] = []
+
+        for page in basePages {
+            if page == .metricsPrimary {
+                pages.append(contentsOf: automaticMetricPages)
+            } else if !page.isAutomaticMetricPage {
+                pages.append(page)
+            }
+        }
+
         guard shouldShowPlanTrackingTab else { return pages }
         let tab = WatchWorkoutPageKind.planTracking
         guard !pages.contains(tab) else { return pages }
@@ -813,11 +888,13 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     func isPageEnabled(_ page: WatchWorkoutPageKind, for activity: HKWorkoutActivityType) -> Bool {
+        if page.isAutomaticMetricPage && page != .metricsPrimary { return false }
         if page == .planTracking { return false }
         return orderedPages(for: activity).contains(page)
     }
 
     func setPageEnabled(_ isEnabled: Bool, page: WatchWorkoutPageKind, for activity: HKWorkoutActivityType) {
+        guard !page.isAutomaticMetricPage || page == .metricsPrimary else { return }
         guard page != .planTracking else { return }
         var pages = orderedPages(for: activity)
         if isEnabled {
@@ -839,6 +916,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     func movePage(_ page: WatchWorkoutPageKind, direction: Int, for activity: HKWorkoutActivityType) {
+        guard !page.isAutomaticMetricPage || page == .metricsPrimary else { return }
         guard page != .planTracking else { return }
         var pages = orderedPages(for: activity)
         guard let index = pages.firstIndex(of: page) else { return }
@@ -847,6 +925,43 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         pages.move(fromOffsets: IndexSet(integer: index), toOffset: destination > index ? destination + 1 : destination)
         workoutTabPreferences.setOrderedPages(pages, for: activity)
         objectWillChange.send()
+    }
+
+    func availableMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        workoutMetricPreferences.availableMetricIDs(for: activity)
+    }
+
+    func orderedMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        workoutMetricPreferences.orderedMetricIDs(for: activity)
+    }
+
+    func metricIDs(for page: WatchWorkoutPageKind, activity: HKWorkoutActivityType) -> [String] {
+        guard let pageIndex = page.metricPageIndex else { return [] }
+        let orderedIDs = orderedMetricIDs(for: activity)
+        let startIndex = pageIndex * 3
+        guard startIndex < orderedIDs.count else { return [] }
+        let endIndex = min(startIndex + 3, orderedIDs.count)
+        return Array(orderedIDs[startIndex..<endIndex])
+    }
+
+    func isMetricEnabled(_ metricID: String, for activity: HKWorkoutActivityType) -> Bool {
+        orderedMetricIDs(for: activity).contains(metricID)
+    }
+
+    func setMetricEnabled(_ isEnabled: Bool, metricID: String, for activity: HKWorkoutActivityType) {
+        workoutMetricPreferences.setMetricEnabled(isEnabled, metricID: metricID, for: activity)
+        objectWillChange.send()
+    }
+
+    func moveMetric(_ metricID: String, direction: Int, for activity: HKWorkoutActivityType) {
+        workoutMetricPreferences.moveMetric(metricID, direction: direction, for: activity)
+        objectWillChange.send()
+    }
+
+    private func automaticMetricPages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
+        let metricCount = max(orderedMetricIDs(for: activity).count, 1)
+        let pagesNeeded = max(1, Int(ceil(Double(metricCount) / 3.0)))
+        return Array(WatchWorkoutPageKind.metricPageCases.prefix(pagesNeeded))
     }
 
     func activate() {
@@ -1396,6 +1511,11 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            self.isMirroringToPhone = await self.ensureCompanionMirroring()
+            _ = await self.requestCompanionPresentation()
+            self.broadcastCompanionSnapshot()
+            self.persistCurrentSession()
+
             do {
                 try await builder.beginCollection(at: startDate)
             } catch {
@@ -2308,6 +2428,110 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    private func compactTargetText(for stage: WatchProgramMicroStagePayload) -> String {
+        switch stage.objective.kind {
+        case .time:
+            return "\(max(stage.plannedMinutes, 1)) min"
+        case .distance:
+            return String(format: "%.1f km", max(stage.objective.targetValue, 0.1))
+        case .energy:
+            return "\(Int(max(stage.objective.targetValue, 1).rounded())) kcal"
+        case .heartRateZone:
+            return "Zone \(Int(stage.objective.secondaryValue ?? 3))"
+        case .power, .cadence, .speed, .pace:
+            return objectiveDisplayLabel(for: stage.objective)
+        case .routeDistance:
+            return String(format: "%.1f km route", max(stage.objective.targetValue, 0.1))
+        }
+    }
+
+    private func compactTargetText(for phase: WatchProgramPhasePayload) -> String {
+        let objective = phase.objective ?? WatchPhaseObjectivePayload(
+            kind: .time,
+            targetValue: Double(max(phase.plannedMinutes, 1))
+        )
+
+        switch objective.kind {
+        case .time:
+            return "\(max(phase.plannedMinutes, 1)) min"
+        case .distance:
+            return String(format: "%.1f km", max(objective.targetValue, 0.1))
+        case .energy:
+            return "\(Int(max(objective.targetValue, 1).rounded())) kcal"
+        case .heartRateZone:
+            return "Zone \(Int(objective.secondaryValue ?? 3))"
+        case .power, .cadence, .speed, .pace:
+            return objectiveDisplayLabel(for: objective)
+        case .routeDistance:
+            return String(format: "%.1f km route", max(objective.targetValue, 0.1))
+        }
+    }
+
+    private func compactProgressText(for stage: WatchProgramMicroStagePayload, at index: Int) -> String {
+        let roundSuffix = compactRoundSuffix(for: index)
+
+        switch stage.objective.kind {
+        case .time:
+            let targetSeconds = max(stage.objective.targetValue, 1) * 60
+            let remaining = max(targetSeconds - currentSegmentElapsedTime(at: Date()), 0)
+            return "\(shortWorkoutElapsedString(remaining)) left\(roundSuffix)"
+        case .distance:
+            let currentKilometers = max(totalDistanceMeters - microStageStartDistanceMeters, 0) / 1000
+            return String(format: "%.1f/%.1f km%@", currentKilometers, max(stage.objective.targetValue, 0.1), roundSuffix)
+        case .energy:
+            let currentEnergy = max(currentEnergyKilocalories - microStageStartEnergyKilocalories, 0)
+            return "\(Int(currentEnergy.rounded()))/\(Int(max(stage.objective.targetValue, 1).rounded())) kcal\(roundSuffix)"
+        case .heartRateZone:
+            let zoneNumber = Int(stage.objective.secondaryValue ?? 3)
+            let zIdx = safeHeartRateZoneIndex(zoneNumber: zoneNumber)
+            let priorZoneSeconds = microStageStartZoneDurations.indices.contains(zIdx) ? microStageStartZoneDurations[zIdx] : 0
+            let currentZoneSeconds = liveZoneDurations.isEmpty ? 0 : liveZoneDurations[zIdx]
+            let currentMinutes = max(currentZoneSeconds - priorZoneSeconds, 0) / 60
+            return "\(Int(currentMinutes.rounded()))/\(Int(max(stage.objective.targetValue, 1).rounded())) min\(roundSuffix)"
+        case .power, .cadence, .speed, .pace:
+            let currentMinutes = objectiveProgressTime(for: stage, at: Date()) / 60
+            return "\(Int(currentMinutes.rounded()))/\(Int(max(stage.objective.targetValue, 1).rounded())) min\(roundSuffix)"
+        case .routeDistance:
+            let currentKilometers = max(totalDistanceMeters - microStageStartDistanceMeters, 0) / 1000
+            return String(format: "%.1f/%.1f km%@", currentKilometers, max(stage.objective.targetValue, 0.1), roundSuffix)
+        }
+    }
+
+    private func compactProgressText(for phase: WatchProgramPhasePayload, at index: Int) -> String {
+        let objective = phase.objective ?? WatchPhaseObjectivePayload(
+            kind: .time,
+            targetValue: Double(max(phase.plannedMinutes, 1))
+        )
+
+        switch objective.kind {
+        case .time:
+            let targetSeconds = max(objective.targetValue, 1) * 60
+            let remaining = max(targetSeconds - elapsedTime, 0)
+            return "\(shortWorkoutElapsedString(remaining)) left"
+        case .distance:
+            return String(format: "%.1f/%.1f km", totalDistanceMeters / 1000, max(objective.targetValue, 0.1))
+        case .energy:
+            return "\(Int(currentEnergyKilocalories.rounded()))/\(Int(max(objective.targetValue, 1).rounded())) kcal"
+        case .heartRateZone:
+            let zoneNumber = Int(objective.secondaryValue ?? 3)
+            let zIdx = safeHeartRateZoneIndex(zoneNumber: zoneNumber)
+            let currentZoneSeconds = liveZoneDurations.isEmpty ? 0 : liveZoneDurations[zIdx]
+            let currentMinutes = currentZoneSeconds / 60
+            return "\(Int(currentMinutes.rounded()))/\(Int(max(objective.targetValue, 1).rounded())) min"
+        case .power, .cadence, .speed, .pace:
+            let currentMinutes = currentObjectiveProgressTime(at: Date()) / 60
+            return "\(Int(currentMinutes.rounded()))/\(Int(max(objective.targetValue, 1).rounded())) min"
+        case .routeDistance:
+            return String(format: "%.1f/%.1f km route", totalDistanceMeters / 1000, max(objective.targetValue, 0.1))
+        }
+    }
+
+    private func compactRoundSuffix(for stageIndex: Int) -> String {
+        let progress = repeatGroupProgress(for: stageIndex)
+        guard progress.iterations > 1 else { return "" }
+        return "; Round \(min(currentRepeatIteration + 1, progress.iterations))/\(progress.iterations)"
+    }
+
     private func upcomingObjectiveText(for phase: WatchProgramPhasePayload, objective: WatchPhaseObjectivePayload) -> String {
         switch objective.kind {
         case .time:
@@ -3193,6 +3417,15 @@ extension WatchWorkoutManager: WCSessionDelegate {
                 if session.isReachable {
                     self.statusMessage = "Connected to iPhone"
                     print("[Watch] iPhone is reachable, ready to receive commands")
+                    if self.isSessionActive || self.workoutSession != nil {
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            self.isMirroringToPhone = await self.ensureCompanionMirroring()
+                            _ = await self.requestCompanionPresentation()
+                            self.broadcastCompanionSnapshot()
+                            self.persistCurrentSession()
+                        }
+                    }
                 } else {
                     self.statusMessage = "iPhone not in range"
                     print("[Watch] iPhone not immediately reachable, will receive via background transfer")
@@ -3214,6 +3447,17 @@ extension WatchWorkoutManager: WCSessionDelegate {
                 self.statusMessage = "Unknown iPhone connection state"
                 print("[Watch] Unknown activation state: \(activationState.rawValue)")
             }
+        }
+    }
+
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in
+            guard session.isReachable, self.isSessionActive || self.workoutSession != nil else { return }
+            self.statusMessage = "Connected to iPhone"
+            self.isMirroringToPhone = await self.ensureCompanionMirroring()
+            _ = await self.requestCompanionPresentation()
+            self.broadcastCompanionSnapshot()
+            self.persistCurrentSession()
         }
     }
 
@@ -3332,18 +3576,105 @@ private final class WatchWorkoutTabPreferences {
     static func defaultPages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
         switch activity {
         case .cycling:
-            return [.metricsPrimary, .metricsSecondary, .heartRateZones, .splits, .elevationGraph, .powerGraph, .powerZones, .pacer, .map]
+            return [.metricsPrimary, .heartRateZones, .splits, .elevationGraph, .powerGraph, .powerZones, .pacer, .map]
         case .running, .walking, .hiking:
-            return [.metricsPrimary, .metricsSecondary, .heartRateZones, .segments, .splits, .elevationGraph, .pacer, .map]
+            return [.metricsPrimary, .heartRateZones, .segments, .splits, .elevationGraph, .pacer, .map]
         case .swimming:
             return [.metricsPrimary, .heartRateZones, .splits, .segments]
         default:
-            return [.metricsPrimary, .metricsSecondary, .heartRateZones, .splits, .map]
+            return [.metricsPrimary, .heartRateZones, .splits, .map]
         }
     }
 }
 
-private func watchWorkoutDisplayName(_ activityType: HKWorkoutActivityType) -> String {
+@MainActor
+private final class WatchWorkoutMetricPreferences {
+    private let defaults = UserDefaults.standard
+    private let storageKey = "watch.workout.metricPreferences"
+
+    func availableMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        Self.defaultMetricIDs(for: activity)
+    }
+
+    func orderedMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        let defaultMetricIDs = Self.defaultMetricIDs(for: activity)
+        guard
+            let data = defaults.data(forKey: storageKey),
+            let stored = try? JSONDecoder().decode([String: [String]].self, from: data),
+            let rawMetricIDs = stored[activity.preferenceKey]
+        else {
+            return defaultMetricIDs
+        }
+
+        let allowed = Set(defaultMetricIDs)
+        let sanitized = rawMetricIDs.filter { allowed.contains($0) }
+        let missing = defaultMetricIDs.filter { !sanitized.contains($0) }
+        return sanitized + missing
+    }
+
+    func setMetricEnabled(_ isEnabled: Bool, metricID: String, for activity: HKWorkoutActivityType) {
+        let availableMetricIDs = Self.defaultMetricIDs(for: activity)
+        guard availableMetricIDs.contains(metricID) else { return }
+        var metricIDs = orderedMetricIDs(for: activity)
+
+        if isEnabled {
+            if !metricIDs.contains(metricID) {
+                let defaultIndex = availableMetricIDs.firstIndex(of: metricID) ?? availableMetricIDs.count
+                let insertionIndex = metricIDs.firstIndex(where: { currentID in
+                    (availableMetricIDs.firstIndex(of: currentID) ?? availableMetricIDs.count) > defaultIndex
+                }) ?? metricIDs.count
+                metricIDs.insert(metricID, at: insertionIndex)
+            }
+        } else {
+            metricIDs.removeAll { $0 == metricID }
+        }
+
+        persist(metricIDs, for: activity)
+    }
+
+    func moveMetric(_ metricID: String, direction: Int, for activity: HKWorkoutActivityType) {
+        var metricIDs = orderedMetricIDs(for: activity)
+        guard let index = metricIDs.firstIndex(of: metricID) else { return }
+        let destination = min(max(index + direction, 0), metricIDs.count - 1)
+        guard destination != index else { return }
+        metricIDs.move(fromOffsets: IndexSet(integer: index), toOffset: destination > index ? destination + 1 : destination)
+        persist(metricIDs, for: activity)
+    }
+
+    private func persist(_ metricIDs: [String], for activity: HKWorkoutActivityType) {
+        var stored: [String: [String]] = [:]
+        if
+            let data = defaults.data(forKey: storageKey),
+            let decoded = try? JSONDecoder().decode([String: [String]].self, from: data)
+        {
+            stored = decoded
+        }
+
+        stored[activity.preferenceKey] = metricIDs
+        if let data = try? JSONEncoder().encode(stored) {
+            defaults.set(data, forKey: storageKey)
+        }
+    }
+
+    private static func defaultMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        switch activity {
+        case .running:
+            return ["rolling-mile", "avg-pace", "distance", "cadence", "stride", "gct", "vo", "elev", "speed-current", "energy"]
+        case .walking:
+            return ["avg-pace", "distance", "cadence", "stride", "gct", "vo", "elev", "speed-current", "energy"]
+        case .hiking:
+            return ["distance", "avg-pace", "elev", "flights", "cadence", "stride", "energy", "speed-current"]
+        case .cycling:
+            return ["avg-speed", "power-current", "distance", "cadence", "power-avg", "elev", "speed-current", "energy"]
+        case .swimming:
+            return ["distance", "strokes", "swim-pace", "energy", "hr-avg"]
+        default:
+            return ["distance", "energy", "avg-speed", "cadence", "power-current", "power-avg", "elev", "hr-avg"]
+        }
+    }
+}
+
+func watchWorkoutDisplayName(_ activityType: HKWorkoutActivityType) -> String {
     switch activityType {
     case .running:
         return "Running"
