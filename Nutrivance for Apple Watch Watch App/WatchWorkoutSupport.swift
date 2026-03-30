@@ -927,6 +927,17 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         objectWillChange.send()
     }
 
+    func resetPagesToDefault(for activity: HKWorkoutActivityType) {
+        let defaultPages = WatchWorkoutTabPreferences.defaultPages(for: activity)
+        let editablePages = WatchWorkoutPageKind.allCases.filter { $0 != .planTracking && !$0.isAutomaticMetricPage }
+
+        for page in editablePages {
+            setPageEnabled(defaultPages.contains(page), page: page, for: activity)
+        }
+
+        objectWillChange.send()
+    }
+
     func availableMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
         workoutMetricPreferences.availableMetricIDs(for: activity)
     }

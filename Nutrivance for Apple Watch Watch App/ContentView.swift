@@ -1808,21 +1808,42 @@ private struct WorkoutPacerBar: View {
     var body: some View {
         GeometryReader { proxy in
             let clampedProgress = progress.clamped(to: 0...1)
-            let width = proxy.size.width
-            let markerX = width * CGFloat(clampedProgress)
+            let totalWidth = proxy.size.width
+            let maxBarWidth: CGFloat = isCompact ? 160 : 210
+            let barWidth = min(totalWidth, maxBarWidth)
+            let horizontalInset = max(0, (totalWidth - barWidth) / 2)
+            let markerX = barWidth * CGFloat(clampedProgress)
             let markerWidth: CGFloat = isCompact ? 18 : 22
             let laneHeight: CGFloat = isCompact ? 10 : 12
             let markerHeight: CGFloat = isCompact ? 16 : 18
-            let centerWidth = width * (isCompact ? 0.38 : 0.42)
-            let centerOffset = (width - centerWidth) / 2
+            let centerWidth = barWidth * (isCompact ? 0.38 : 0.42)
+            let centerOffset = (barWidth - centerWidth) / 2
 
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
                     .fill(Color.red.opacity(0.3))
-                    .frame(height: laneHeight)
+                    .frame(width: barWidth, height: laneHeight)
 
                 Capsule(style: .continuous)
                     .fill(Color.green.opacity(0.78))
+                    .frame(width: centerWidth, height: laneHeight)
+                    .offset(x: centerOffset)
+
+                Capsule(style: .continuous)
+                    .fill(inTarget ? Color.green : Color.white.opacity(0.92))
+                    .frame(width: markerWidth, height: markerHeight)
+                    .offset(x: max(0, min(barWidth - markerWidth, markerX - (markerWidth / 2))))
+                    .overlay {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: isCompact ? 5 : 6, weight: .black))
+                            .foregroundStyle(inTarget ? .black : .mint)
+                    }
+            }
+            .clipped()
+            .offset(x: horizontalInset)
+        }
+    }
+}                    .fill(Color.green.opacity(0.78))
                     .frame(width: centerWidth, height: laneHeight)
                     .offset(x: centerOffset)
 
@@ -4890,42 +4911,53 @@ private struct WatchWorkoutMetricEditorView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 10) {
-                SectionCard(title: "Rules") {
-                    Text("Each metrics tab shows the timer, current heart rate, and up to 3 extra metrics. Reorder the enabled metrics below to choose which tab and slot each one occupies.")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.74))
-                }
+        List {
+            Section("Rules") {
+                Text("Each metrics tab shows the timer, current heart rate, and up to 3 extra metrics. Reorder the enabled metrics below to choose which tab and slot each one occupies.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.74))
+            }
 
-                SectionCard(title: "Metrics") {
-                    VStack(spacing: 8) {
-                        ForEach(metricRows, id: \.self) { metricID in
-                            WatchWorkoutMetricEditorRow(
-                                metricID: metricID,
-                                slotText: metricSlotText(for: metricID),
-                                isEnabled: Binding(
-                                    get: {
-                                        manager.isMetricEnabled(metricID, for: activity)
-                                    },
-                                    set: { isEnabled in
-                                        manager.setMetricEnabled(isEnabled, metricID: metricID, for: activity)
-                                    }
-                                ),
-                                moveUp: {
-                                    manager.moveMetric(metricID, direction: -1, for: activity)
-                                },
-                                moveDown: {
-                                    manager.moveMetric(metricID, direction: 1, for: activity)
-                                }
-                            )
-                        }
-                    }
+            Section("Metrics") {
+                ForEach(metricRows, id: \.self) { metricID in
+                    let isEnabled = manager.isMetricEnabled(metricID, for: activity)
+                    let position = orderedMetricIDs.firstIndex(of: metricID)
+                    let atTop = position == 0
+                    let atBottom = position == orderedMetricIDs.count - 1
+
+                    WatchWorkoutMetricEditorRow(
+                        metricID: metricID,
+                        slotText: metricSlotText(for: metricID),
+                        isEnabled: Binding(
+                            get: {
+                                isEnabled
+                            },
+                            set: { newValue in
+                                manager.setMetricEnabled(newValue, metricID: metricID, for: activity)
+                            }
+                        ),
+                        moveUp: {
+                            manager.moveMetric(metricID, direction: -1, for: activity)
+                        },
+                        moveDown: {
+                            manager.moveMetric(metricID, direction: 1, for: activity)
+                        },
+                        canMoveUp: isEnabled && position != nil && !atTop,
+                        canMoveDown: isEnabled && position != nil && !atBottom
+                    )
                 }
             }
-            .padding(10)
         }
+        .listStyle(.plain)
         .navigationTitle(watchWorkoutDisplayName(activity))
+        .toolbar {
+            Button("Reset") {
+                let defaultMetricIDs = WatchWorkoutManager.shared.availableMetricIDs(for: activity)
+                defaultMetricIDs.forEach { metric in
+                    manager.setMetricEnabled(true, metricID: metric, for: activity)
+                }
+            }
+        }
     }
 
     private func metricSlotText(for metricID: String) -> String {
@@ -4955,7 +4987,7 @@ private struct WatchWorkoutViewsEditorView: View {
 
                 SectionCard(title: "Workout Views") {
                     VStack(spacing: 8) {
-                        ForEach(WatchWorkoutPageKind.allCases.filter { $0 != .planTracking }) { page in
+                        ForEach(WatchWorkoutPageKind.allCases.filter { $0 != .planTracking && !$0.isAutomaticMetricPage }) { page in
                             WorkoutViewEditorRow(
                                 page: page,
                                 isEnabled: Binding(
@@ -4976,10 +5008,40 @@ private struct WatchWorkoutViewsEditorView: View {
                         }
                     }
                 }
+
+                SectionCard(title: "Auto Metric Pages") {
+                    VStack(spacing: 4) {
+                        Text("Metric pages are generated automatically from the active metric order. Adjust metrics to influence how many tabs are created.")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.68))
+
+                        Text("Enabled metrics: \(manager.orderedMetricIDs(for: customizationActivity).count)")
+                            .font(.caption2.weight(.semibold))
+
+                        Text("Current metric pages: \(max(1, Int(ceil(Double(max(manager.orderedMetricIDs(for: customizationActivity).count, 1)) / 3.0))))")
+                            .font(.caption2.weight(.semibold))
+
+                        ForEach(WatchWorkoutPageKind.metricPageCases, id: \.self) { page in
+                            HStack {
+                                Text(page.title)
+                                    .font(.caption2)
+                                Spacer() 
+                                Text(page == .metricsPrimary ? "Required" : "Auto")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.7))
+                            }
+                        }
+                    }
+                }
             }
             .padding(10)
         }
         .navigationTitle("Workout Views")
+        .toolbar {
+            Button("Reset") {
+                manager.resetPagesToDefault(for: customizationActivity)
+            }
+        }
     }
 }
 
@@ -4989,6 +5051,8 @@ private struct WatchWorkoutMetricEditorRow: View {
     @Binding var isEnabled: Bool
     let moveUp: () -> Void
     let moveDown: () -> Void
+    let canMoveUp: Bool
+    let canMoveDown: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -5009,13 +5073,13 @@ private struct WatchWorkoutMetricEditorRow: View {
                     Image(systemName: "arrow.up")
                 }
                 .buttonStyle(.bordered)
-                .disabled(!isEnabled)
+                .disabled(!canMoveUp)
 
                 Button(action: moveDown) {
                     Image(systemName: "arrow.down")
                 }
                 .buttonStyle(.bordered)
-                .disabled(!isEnabled)
+                .disabled(!canMoveDown)
             }
         }
         .padding(10)
