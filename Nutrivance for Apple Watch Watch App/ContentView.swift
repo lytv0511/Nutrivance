@@ -433,54 +433,429 @@ private struct WorkoutLivePageView: View {
     }
 }
 
+private struct PlanTrackingStageSummary: Identifiable {
+    let id: UUID
+    let title: String
+    let goalLine: String
+    let statusText: String
+    let isComplete: Bool
+    let isCurrent: Bool
+    let isNext: Bool
+    let isUpcoming: Bool
+}
+
+private func planTrackingStageSummaries(manager: WatchWorkoutManager) -> [PlanTrackingStageSummary] {
+    var summaries: [PlanTrackingStageSummary] = []
+    var encounteredCurrent = false
+
+    for (phaseIndex, phase) in manager.phaseQueue.enumerated() {
+        if let stages = phase.microStages, !stages.isEmpty {
+            for (stageIndex, stage) in stages.enumerated() {
+                let status = manager.planTrackingRowStatus(phaseIndex: phaseIndex, stageIndex: stageIndex, stage: stage)
+                let isCurrent = phaseIndex == manager.currentPhaseIndex && stageIndex == manager.currentMicroStageIndex
+                let isNext = !encounteredCurrent && !isCurrent && phaseIndex >= manager.currentPhaseIndex && status.isComplete == false
+                if isCurrent {
+                    encounteredCurrent = true
+                } else if isNext {
+                    encounteredCurrent = true
+                }
+                summaries.append(
+                    PlanTrackingStageSummary(
+                        id: stage.id,
+                        title: stage.title,
+                        goalLine: watchPlanStageGoalLine(stage),
+                        statusText: status.summaryText,
+                        isComplete: status.isComplete,
+                        isCurrent: isCurrent,
+                        isNext: isNext,
+                        isUpcoming: phaseIndex > manager.currentPhaseIndex || (phaseIndex == manager.currentPhaseIndex && stageIndex > manager.currentMicroStageIndex)
+                    )
+                )
+            }
+        } else {
+            let status = manager.objectiveStatus(for: phase, at: phaseIndex)
+            let isCurrent = phaseIndex == manager.currentPhaseIndex
+            let isNext = !encounteredCurrent && !isCurrent && phaseIndex > manager.currentPhaseIndex
+            if isCurrent {
+                encounteredCurrent = true
+            } else if isNext {
+                encounteredCurrent = true
+            }
+            summaries.append(
+                PlanTrackingStageSummary(
+                    id: phase.id,
+                    title: phase.title,
+                    goalLine: phase.subtitle.isEmpty ? "\(phase.plannedMinutes) min" : phase.subtitle,
+                    statusText: status.summaryText,
+                    isComplete: status.isComplete,
+                    isCurrent: isCurrent,
+                    isNext: isNext,
+                    isUpcoming: phaseIndex > manager.currentPhaseIndex
+                )
+            )
+        }
+    }
+
+    if let currentIndex = summaries.firstIndex(where: { $0.isCurrent }) {
+        let nextIndex = summaries.index(after: currentIndex)
+        if summaries.indices.contains(nextIndex) && !summaries[nextIndex].isNext {
+            summaries[nextIndex] = PlanTrackingStageSummary(
+                id: summaries[nextIndex].id,
+                title: summaries[nextIndex].title,
+                goalLine: summaries[nextIndex].goalLine,
+                statusText: summaries[nextIndex].statusText,
+                isComplete: summaries[nextIndex].isComplete,
+                isCurrent: summaries[nextIndex].isCurrent,
+                isNext: true,
+                isUpcoming: summaries[nextIndex].isUpcoming
+            )
+        }
+    }
+
+    return summaries
+}
+
 private struct WorkoutPlanTrackingCard: View {
     @ObservedObject var manager: WatchWorkoutManager
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+    @State private var showsExpandedStages = false
+
+    private var stageSummaries: [PlanTrackingStageSummary] {
+        planTrackingStageSummaries(manager: manager)
+    }
+
+    private var currentSummary: PlanTrackingStageSummary? {
+        stageSummaries.first(where: { $0.isCurrent })
+    }
+
+    private var nextSummary: PlanTrackingStageSummary? {
+        stageSummaries.first(where: { $0.isNext })
+    }
+
+    private var remainingSummaryCount: Int {
+        max(stageSummaries.filter { $0.isUpcoming && !$0.isNext }.count, 0)
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 21, weight: .black, design: .rounded).monospacedDigit())
-                    .fontWidth(.condensed)
-                    .foregroundStyle(.yellow)
+        GeometryReader { geometry in
+            Group {
+                if showsExpandedStages {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            planTrackingHeader
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { phaseIndex, phase in
+                                    PlanTrackingPhaseBlock(manager: manager, phaseIndex: phaseIndex, phase: phase)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                            )
 
-                Text("Goals & stages")
-                    .font(.system(size: 10, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.78))
-
-                if let context = planTrackingLiveContextLine(manager: manager) {
-                    Text(context)
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.cyan.opacity(0.92))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.85)
-                }
-
-                ForEach(Array(manager.phaseQueue.enumerated()), id: \.element.id) { phaseIndex, phase in
-                    PlanTrackingPhaseBlock(manager: manager, phaseIndex: phaseIndex, phase: phase)
-                }
-
-                if manager.isNextPhaseReady {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Current stage goal met — move on when you are ready.")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.green.opacity(0.95))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button {
-                            manager.advanceToNextPhase()
-                        } label: {
-                            Label("Next stage", systemImage: "forward.circle.fill")
-                                .font(.system(size: 10, weight: .bold))
+                            Button {
+                                showsExpandedStages = false
+                            } label: {
+                                Text("Show Less")
+                                    .font(.system(size: 14, weight: .black, design: .rounded))
+                                    .foregroundStyle(.black)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
                     }
-                    .padding(.top, 2)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        planTrackingHeader
+
+                        if let currentSummary {
+                            PlanTrackingSummaryCard(
+                                title: "This Stage",
+                                summary: currentSummary,
+                                accent: .green
+                            )
+                        }
+
+                        if let nextSummary {
+                            PlanTrackingSummaryCard(
+                                title: "Next Stage",
+                                summary: nextSummary,
+                                accent: .cyan
+                            )
+                        }
+
+                        if remainingSummaryCount > 0 {
+                            Text("\(remainingSummaryCount) more...")
+                                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.78))
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if remainingSummaryCount > 0 || stageSummaries.count > 2 {
+                            Button {
+                                showsExpandedStages = true
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text("Show More")
+                                        .font(.system(size: 15, weight: .black, design: .rounded))
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "chevron.down.circle.fill")
+                                        .font(.system(size: 16, weight: .black))
+                                }
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 11)
+                                .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
                 }
             }
-            .padding(.horizontal, 6)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+        }
+        .navigationTitle("Goals & Stages")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var planTrackingHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Goals & Stages")
+                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                Text(planTrackingHeaderLine(manager: manager))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.74))
+                    .lineLimit(2)
+            }
+
+            if !isLuminanceReduced {
+                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
+                    .font(.system(size: 30, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                    .foregroundStyle(.yellow)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            if let context = planTrackingLiveContextLine(manager: manager) {
+                Text(context)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.cyan)
+                    .lineLimit(2)
+            }
+
+            if manager.isNextPhaseReady {
+                Button {
+                    manager.advanceToNextPhase()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "forward.circle.fill")
+                            .font(.system(size: 17, weight: .black))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Current goal met")
+                                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                            Text("Advance whenever you are ready")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(.black.opacity(0.7))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.green)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.12), Color.white.opacity(0.04)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+    }
+}
+
+private struct PlanTrackingStatChip: View {
+    let title: String
+    let value: String
+    let accent: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 8, weight: .heavy, design: .rounded))
+                .foregroundStyle(accent)
+            Text(value)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(accent.opacity(0.16))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(accent.opacity(0.24), lineWidth: 1)
+        )
+    }
+}
+
+private struct PlanTrackingSummaryCard: View {
+    let title: String
+    let summary: PlanTrackingStageSummary
+    let accent: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .foregroundStyle(accent)
+
+            Text(summary.title)
+                .font(.system(size: 18, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+                .minimumScaleFactor(0.84)
+
+            Text(summary.goalLine)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(3)
+
+            Text(summary.statusText)
+                .font(.system(size: 14, weight: .black, design: .rounded))
+                .foregroundStyle(summary.isComplete ? .green : .white)
+                .lineLimit(3)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(accent.opacity(0.14))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(accent.opacity(0.28), lineWidth: 1)
+        )
+    }
+}
+
+private struct PlanTrackingPhaseBadge: View {
+    let title: String
+    let tint: Color
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 8, weight: .black, design: .rounded))
+            .foregroundStyle(tint == .white ? .white.opacity(0.72) : tint)
+            .padding(.horizontal, 7)
             .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(tint == .white ? Color.white.opacity(0.08) : tint.opacity(0.18))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(tint.opacity(tint == .white ? 0.12 : 0.32), lineWidth: 1)
+            )
+    }
+}
+
+private struct PlanTrackingStatusLabel: View {
+    let text: String
+    let isComplete: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .foregroundStyle(isComplete ? Color.green : Color.white.opacity(0.92))
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isComplete ? Color.green.opacity(0.14) : Color.white.opacity(0.06))
+            )
+    }
+}
+
+private struct PlanTrackingInfoLine: View {
+    let symbol: String
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 10)
+            Text(text)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct PlanTrackingDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.06))
+            .frame(width: 1)
+            .padding(.vertical, 2)
+    }
+}
+
+private struct PlanTrackingStateDot: View {
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(tint.opacity(0.18))
+                .frame(width: 22, height: 22)
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .black))
+                .foregroundStyle(tint)
         }
     }
 }
@@ -490,43 +865,66 @@ private struct PlanTrackingPhaseBlock: View {
     let phaseIndex: Int
     let phase: WatchProgramPhasePayload
 
+    private var isCurrent: Bool { phaseIndex == manager.currentPhaseIndex }
+
+    private var phaseTint: Color {
+        if phaseIndex < manager.currentPhaseIndex { return .green }
+        if isCurrent { return .yellow }
+        return .white
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Text("Block \(phaseIndex + 1)")
-                    .font(.system(size: 8, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.45))
-                if phaseIndex == manager.currentPhaseIndex {
-                    Text("NOW")
-                        .font(.system(size: 7, weight: .black))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.4), in: Capsule())
+                PlanTrackingPhaseBadge(title: "BLOCK \(phaseIndex + 1)", tint: .white)
+                if phaseIndex < manager.currentPhaseIndex {
+                    PlanTrackingPhaseBadge(title: "DONE", tint: .green)
+                } else if isCurrent {
+                    PlanTrackingPhaseBadge(title: "NOW", tint: .yellow)
+                } else if phaseIndex == manager.currentPhaseIndex + 1 {
+                    PlanTrackingPhaseBadge(title: "UP NEXT", tint: .cyan)
                 }
+                Spacer(minLength: 0)
             }
 
             Text(phase.title)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(.system(size: 14, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
+                .lineLimit(3)
+                .minimumScaleFactor(0.88)
+
+            if let subtitle = nonEmptyPlanText(phase.subtitle) {
+                Text(subtitle)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(2)
+            }
 
             if let stages = phase.microStages, !stages.isEmpty {
-                ForEach(Array(stages.enumerated()), id: \.element.id) { stageIndex, stage in
-                    PlanTrackingMicroStageRow(
-                        manager: manager,
-                        phaseIndex: phaseIndex,
-                        stageIndex: stageIndex,
-                        stage: stage
-                    )
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(stages.enumerated()), id: \.element.id) { stageIndex, stage in
+                        PlanTrackingMicroStageRow(
+                            manager: manager,
+                            phaseIndex: phaseIndex,
+                            stageIndex: stageIndex,
+                            stage: stage
+                        )
+                    }
                 }
             } else {
                 let status = manager.objectiveStatus(for: phase, at: phaseIndex)
                 PlanTrackingObjectiveRow(summary: status.summaryText, isComplete: status.isComplete)
             }
         }
-        .padding(8)
-        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(phaseTint.opacity(isCurrent ? 0.12 : 0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(phaseTint.opacity(isCurrent ? 0.28 : 0.08), lineWidth: 1)
+        )
     }
 }
 
@@ -541,61 +939,39 @@ private struct PlanTrackingMicroStageRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: rowSymbol)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(rowSymbolTint)
-                .frame(width: 18, alignment: .center)
+        HStack(alignment: .top, spacing: 8) {
+            VStack(spacing: 0) {
+                PlanTrackingStateDot(symbol: rowSymbol, tint: rowSymbolTint)
+                PlanTrackingDivider()
+            }
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 4) {
-                    Text(watchPlanStageRoleTitle(stage.roleRawValue))
-                        .font(.system(size: 7, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(watchPlanStageRoleTint(stage.roleRawValue).opacity(0.42), in: Capsule())
-
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    PlanTrackingPhaseBadge(title: watchPlanStageRoleTitle(stage.roleRawValue).uppercased(), tint: watchPlanStageRoleTint(stage.roleRawValue))
                     if stage.repeats > 1 {
-                        Text("×\(stage.repeats)")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.55))
+                        PlanTrackingPhaseBadge(title: "×\(stage.repeats)", tint: .white)
                     }
                 }
 
-                if let label = stage.repeatSetLabel, !label.isEmpty {
-                    Text(label)
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(.orange.opacity(0.85))
-                        .lineLimit(1)
-                }
-
                 Text(stage.title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .minimumScaleFactor(0.88)
 
-                Text(watchPlanStageGoalLine(stage))
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(3)
-                    .minimumScaleFactor(0.85)
+                if let label = nonEmptyPlanText(stage.repeatSetLabel) {
+                    PlanTrackingInfoLine(symbol: "repeat", text: label, tint: .orange)
+                }
 
-                Text(status.summaryText)
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(status.isComplete ? Color.green : Color.white.opacity(0.92))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
+                PlanTrackingInfoLine(symbol: "scope", text: watchPlanStageGoalLine(stage), tint: .white.opacity(0.75))
+                PlanTrackingStatusLabel(text: status.summaryText, isComplete: status.isComplete)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 4)
     }
 
     private var rowSymbol: String {
-        if status.isComplete {
-            return "checkmark.circle.fill"
-        }
+        if status.isComplete { return "checkmark.circle.fill" }
         if phaseIndex == manager.currentPhaseIndex, stageIndex == manager.currentMicroStageIndex {
             return "largecircle.fill.circle"
         }
@@ -616,16 +992,17 @@ private struct PlanTrackingObjectiveRow: View {
     let isComplete: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(isComplete ? Color.green : Color.white.opacity(0.35))
-            Text(summary)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(isComplete ? Color.green : Color.white.opacity(0.9))
-                .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 8) {
+            VStack(spacing: 0) {
+                PlanTrackingStateDot(
+                    symbol: isComplete ? "checkmark.circle.fill" : "circle",
+                    tint: isComplete ? .green : .white.opacity(0.35)
+                )
+                PlanTrackingDivider()
+            }
+
+            PlanTrackingStatusLabel(text: summary, isComplete: isComplete)
         }
-        .padding(.vertical, 2)
     }
 }
 
@@ -699,6 +1076,30 @@ private func watchPlanTargetBehaviorPhrase(_ raw: String?) -> String? {
     }
 }
 
+private func planTrackingHeaderLine(manager: WatchWorkoutManager) -> String {
+    let blockText = "Block \(min(manager.currentPhaseIndex + 1, max(manager.phaseQueue.count, 1)))/\(max(manager.phaseQueue.count, 1))"
+    if let next = manager.nextAdvanceTitle, !next.isEmpty {
+        return "\(blockText) • Next \(next)"
+    }
+    return blockText
+}
+
+private func planTrackingCurrentLabel(manager: WatchWorkoutManager) -> String {
+    if let stage = manager.currentMicroStage {
+        return stage.title
+    }
+    if let phase = manager.currentPhase {
+        return phase.title
+    }
+    return "In progress"
+}
+
+private func nonEmptyPlanText(_ text: String?) -> String? {
+    guard let text else { return nil }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
 private struct GoalCompleteBanner: View {
     let completedTitle: String
     let nextTitle: String
@@ -745,11 +1146,13 @@ private struct WorkoutMetricsCard: View {
     var body: some View {
         GeometryReader { geometry in
             VStack(alignment: .leading, spacing: 4) {
-                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
-                    .fontWidth(.condensed)
-                    .foregroundStyle(.yellow)
-                    .privacySensitive()
+                if !isLuminanceReduced {
+                    Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
+                        .font(.system(size: 24, weight: .black, design: .rounded).monospacedDigit())
+                        .fontWidth(.condensed)
+                        .foregroundStyle(.yellow)
+                        .privacySensitive()
+                }
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(manager.currentHeartRate.map { "\(Int($0.rounded()))" } ?? "--")
@@ -804,10 +1207,12 @@ private struct WorkoutZonesCard: View {
             let timeInZone = manager.liveZoneDurations[safe: currentZone] ?? 0
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
-                    .fontWidth(.condensed)
-                    .foregroundStyle(.yellow)
+                if !isLuminanceReduced {
+                    Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
+                        .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                        .fontWidth(.condensed)
+                        .foregroundStyle(.yellow)
+                }
 
                 WorkoutZoneStrip(currentZone: currentZone)
                     .padding(.vertical, 1)
@@ -1030,9 +1435,11 @@ private struct WorkoutPowerZonesCard: View {
         GeometryReader { geometry in
             let timeInZone = manager.powerZoneDurations[safe: currentZone] ?? 0
             VStack(alignment: .leading, spacing: 7) {
-                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.yellow)
+                if !isLuminanceReduced {
+                    Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
+                        .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.yellow)
+                }
 
                 WorkoutPowerZoneStrip(currentZone: currentZone)
                     .padding(.vertical, 2)
@@ -1077,9 +1484,11 @@ private struct WorkoutPacerCard: View {
     var body: some View {
         GeometryReader { geometry in
             VStack(alignment: .leading, spacing: 7) {
-                Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.yellow)
+                if !isLuminanceReduced {
+                    Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
+                        .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.yellow)
+                }
 
                 if let pacerTarget = manager.pacerTarget {
                     WorkoutPacerBar(
@@ -1140,9 +1549,11 @@ private struct WorkoutMetricGraphScaffold: View {
         GeometryReader { geometry in
             let columnWidth = max((geometry.size.width - 24) / 2, 58)
             VStack(alignment: .leading, spacing: 6) {
-                Text(workoutElapsedDisplayString(elapsedTime, reducedLuminance: isLuminanceReduced))
-                    .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.yellow)
+                if !isLuminanceReduced {
+                    Text(workoutElapsedDisplayString(elapsedTime, reducedLuminance: isLuminanceReduced))
+                        .font(.system(size: 23, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.yellow)
+                }
 
                 WorkoutHistorySparkline(points: points, accent: accent)
                     .frame(height: max(56, geometry.size.height * 0.28))

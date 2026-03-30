@@ -547,6 +547,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     private var persistedSource: CompanionWorkoutSource = .appleWatch
     private var authorizationRequestInFlight = false
     private var locationAuthorizationContinuation: CheckedContinuation<Bool, Never>?
+    private var remoteSyncRetryTask: Task<Void, Never>?
     private var lastLocation: CLLocation?
     private var localWorkoutTitle = "Workout"
     private var localWorkoutSubtitle = ""
@@ -685,7 +686,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             print("[Companion] Associated workout builder attached")
             rebuildMetrics()
         }
-        requestLiveWorkoutSnapshot(reason: "attach-mirrored-session")
+        requestLiveWorkoutSnapshotBurst(reason: "attach-mirrored-session")
         persistCurrentSession()
     }
 
@@ -931,7 +932,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             shouldAutoPresentLiveView = true
             isVisible = true
         }
-        requestLiveWorkoutSnapshot(reason: "watch-requested-presentation")
+        requestLiveWorkoutSnapshotBurst(reason: "watch-requested-presentation")
     }
 
     func refreshRemoteContextIfNeeded() {
@@ -940,7 +941,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             return
         }
         if source == .appleWatch || mirroredSession != nil || persistedSource == .appleWatch {
-            requestLiveWorkoutSnapshot(reason: "scene-active")
+            requestLiveWorkoutSnapshotBurst(reason: "scene-active")
         }
     }
 
@@ -1154,7 +1155,30 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         shouldAutoPresentLiveView = true
         isVisible = true
         if source == .appleWatch || mirroredSession != nil {
-            requestLiveWorkoutSnapshot(reason: "reopen-live-view")
+            requestLiveWorkoutSnapshotBurst(reason: "reopen-live-view")
+        }
+    }
+
+    func syncVisibleLiveWorkoutIfNeeded() {
+        guard isVisible, source == .appleWatch || mirroredSession != nil || persistedSource == .appleWatch else { return }
+        requestLiveWorkoutSnapshotBurst(reason: "live-view-visible")
+    }
+
+    private func requestLiveWorkoutSnapshotBurst(reason: String) {
+        remoteSyncRetryTask?.cancel()
+        remoteSyncRetryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let delays: [UInt64] = [0, 350_000_000, 1_000_000_000, 2_000_000_000]
+            for (index, delay) in delays.enumerated() {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                guard !Task.isCancelled else { return }
+                self.requestLiveWorkoutSnapshot(reason: index == 0 ? reason : "\(reason)-retry-\(index)")
+                if !self.isVisible && !self.canReopenLiveView {
+                    return
+                }
+            }
         }
     }
 
@@ -1931,6 +1955,14 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
         }
     }
 
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in
+            if session.isReachable {
+                self.syncVisibleLiveWorkoutIfNeeded()
+            }
+        }
+    }
+
     nonisolated func session(
         _ session: WCSession,
         didReceiveMessage message: [String : Any],
@@ -2050,6 +2082,7 @@ private struct CompanionWorkoutLiveOverlay: View {
         }
         .onAppear {
             selectedPage = manager.pageKinds.first ?? .metricsPrimary
+            manager.syncVisibleLiveWorkoutIfNeeded()
         }
         .onChange(of: manager.pageKinds) { _, newValue in
             guard let first = newValue.first else { return }
