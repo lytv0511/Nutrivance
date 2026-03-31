@@ -970,6 +970,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                 launchStatusMessage = location == .outdoor
                     ? "Started on iPhone. GPS and connected HealthKit-compatible sensors will appear here."
                     : "Started on iPhone."
+
+                // Request watch to auto-present live workout UI when iPhone workout starts
+                self.requestWatchPresentation()
             } catch {
                 launchStatusMessage = "Could not start the workout on iPhone."
             }
@@ -2014,6 +2017,28 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
         print("[Companion] WCSession deactivated. Reactivating...")
         session.activate()
+    }
+
+    /// Request watch to present live workout UI
+    func requestWatchPresentation() {
+        guard let session = WCSession.isSupported() ? WCSession.default : nil else {
+            print("WatchConnectivity not supported")
+            return
+        }
+
+        let payload: [String: Any] = ["request": "showLiveWorkout"]
+
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: { response in
+                print("[Companion] Watch presentation requested; response=\(response)")
+            }, errorHandler: { error in
+                print("[Companion] Failed to request watch presentation: \(error.localizedDescription)")
+                session.transferUserInfo(payload)
+            })
+        } else {
+            session.transferUserInfo(payload)
+            print("[Companion] Watch not reachable; transferred userInfo for presentation request")
+        }
     }
     #endif
 }

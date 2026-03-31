@@ -8,6 +8,7 @@ struct WatchDashboardPayload: Codable {
     let strainWeek: [WatchMetricPointPayload]
     let recoveryWeek: [WatchMetricPointPayload]
     let readinessWeek: [WatchMetricPointPayload]
+    let mindfulnessWeek: [WatchMetricPointPayload]
     let trainingLoadWeek: [WatchMetricPointPayload]
     let hrvWeek: [WatchMetricPointPayload]
     let hrrWeek: [WatchMetricPointPayload]
@@ -251,6 +252,7 @@ extension WatchDashboardStore {
         strainWeek = payload.strainWeek.map { MetricPoint(date: $0.date, value: $0.value) }
         recoveryWeek = payload.recoveryWeek.map { MetricPoint(date: $0.date, value: $0.value) }
         readinessWeek = payload.readinessWeek.map { MetricPoint(date: $0.date, value: $0.value) }
+        mindfulnessWeek = payload.mindfulnessWeek.map { MetricPoint(date: $0.date, value: $0.value) }
         trainingLoadWeek = payload.trainingLoadWeek.map { MetricPoint(date: $0.date, value: $0.value) }
         hrvWeek = payload.hrvWeek.map { MetricPoint(date: $0.date, value: $0.value) }
         hrrWeek = payload.hrrWeek.map { MetricPoint(date: $0.date, value: $0.value) }

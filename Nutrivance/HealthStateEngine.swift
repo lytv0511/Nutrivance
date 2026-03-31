@@ -333,6 +333,7 @@ final class HealthStateEngine: ObservableObject {
     @Published var favoriteSport: String? = nil
     @Published var trainingFrequency: Double? = nil // sessions/week
     @Published var trainingFrequencyBySport: [String: Double] = [:] // sport: sessions/week
+    @Published var mindfulnessMinutesByDay: [Date: Double] = [:] // [date: minutes of mindfulness]
 
     // MARK: - Workout Analytics
     @Published var workoutAnalytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
@@ -1693,6 +1694,40 @@ final class HealthStateEngine: ObservableObject {
         healthStore.execute(query)
     }
 
+    // MARK: - Mindfulness
+    private func fetchMindfulness(days: Int = 7) {
+        guard let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) else {
+            return
+        }
+
+        let calendar = Calendar.current
+        let endDate = Date()
+        guard let startDate = calendar.date(byAdding: .day, value: -(days - 1), to: calendar.startOfDay(for: endDate)) else {
+            return
+        }
+
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let query = HKSampleQuery(
+            sampleType: mindfulType,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: nil
+        ) { [weak self] _, samples, _ in
+            guard let self else { return }
+            
+            let grouped = (samples as? [HKCategorySample] ?? []).reduce(into: [Date: Double]()) { partialResult, sample in
+                let day = calendar.startOfDay(for: sample.startDate)
+                partialResult[day, default: 0] += sample.endDate.timeIntervalSince(sample.startDate) / 60
+            }
+            
+            DispatchQueue.main.async {
+                self.mindfulnessMinutesByDay = grouped
+                self.scheduleScoresRefresh()
+            }
+        }
+        healthStore.execute(query)
+    }
+
     // MARK: - Favorite Sport & Training Frequency
     private func inferFavoriteSportAndFrequency() {
         // Analyze workouts over the last 28 days to determine favorite sport and frequency
@@ -2472,6 +2507,7 @@ final class HealthStateEngine: ObservableObject {
         self.fetchBaselines()
         self.fetchTrainingLoad()
         self.fetchSleepQuality(days: longTermLookbackDays)
+        self.fetchMindfulness(days: 7)
         print("[refreshAllMetrics] calling fetchVitals...")
         self.fetchVitals(days: longTermLookbackDays)
         self.fetchIntensityMetrics(days: longTermLookbackDays)

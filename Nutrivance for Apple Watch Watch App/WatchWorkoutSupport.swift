@@ -813,6 +813,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private var accumulatedElapsedTime: TimeInterval = 0
     private var pauseStartedAt: Date?
     private var pendingEndAction: EndAction = .none
+    private var persistenceTicks: Int = 0
     private var lastPowerSampleDate: Date?
     private var lastHistorySampleElapsedTime: TimeInterval = 0
     private var currentSplitStartElapsedTime: TimeInterval = 0
@@ -887,6 +888,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         workoutTabPreferences.orderedPages(for: activity)
     }
 
+    func availableEditablePages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
+        WatchWorkoutTabPreferences
+            .defaultPages(for: activity)
+            .filter { !$0.isAutomaticMetricPage && $0 != .planTracking }
+    }
+
     func isPageEnabled(_ page: WatchWorkoutPageKind, for activity: HKWorkoutActivityType) -> Bool {
         if page.isAutomaticMetricPage && page != .metricsPrimary { return false }
         if page == .planTracking { return false }
@@ -929,7 +936,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     func resetPagesToDefault(for activity: HKWorkoutActivityType) {
         let defaultPages = WatchWorkoutTabPreferences.defaultPages(for: activity)
-        let editablePages = WatchWorkoutPageKind.allCases.filter { $0 != .planTracking && !$0.isAutomaticMetricPage }
+        let editablePages = availableEditablePages(for: activity)
 
         for page in editablePages {
             setPageEnabled(defaultPages.contains(page), page: page, for: activity)
@@ -1794,6 +1801,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private func startElapsedTimer() {
         elapsedTimer?.invalidate()
+        persistenceTicks = 0
         elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
@@ -1802,6 +1810,13 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     self.refreshPhaseSuggestionStatus()
                 } else if self.displayState == .paused {
                     self.elapsedTime = self.accumulatedElapsedTime
+                }
+                
+                // Persist session every 5 seconds (500 ticks at 0.01 interval)
+                self.persistenceTicks += 1
+                if self.persistenceTicks >= 500 {
+                    self.persistenceTicks = 0
+                    self.persistCurrentSession()
                 }
             }
         }
@@ -3484,6 +3499,15 @@ extension WatchWorkoutManager: WCSessionDelegate {
                 print("[Watch] Processing workoutControl: \(command)")
                 self.handleCompanionControlCommand(command)
                 replyHandler([CompanionLaunchKeys.accepted: true])
+            } else if message["request"] as? String == "showLiveWorkout" {
+                print("[Watch] Received iPhone request to show live workout")
+                if self.isSessionActive {
+                    // Workout is already active; ensure this view gets foregrounded when possible
+                    self.statusMessage = "iPhone requested live workout display"
+                } else {
+                    self.statusMessage = "iPhone requested workout view"
+                }
+                replyHandler([CompanionLaunchKeys.accepted: true])
             } else if message[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
                 print("[Watch] Re-sending active workout snapshot to iPhone")
                 self.refreshRecoveredWorkoutContext()
@@ -3512,6 +3536,13 @@ extension WatchWorkoutManager: WCSessionDelegate {
             if let command = userInfo["workoutControl"] as? String {
                 print("[Watch] Processing userInfo workoutControl: \(command)")
                 self.handleCompanionControlCommand(command)
+            } else if userInfo["request"] as? String == "showLiveWorkout" {
+                print("[Watch] Received iPhone userInfo request to show live workout")
+                if self.isSessionActive {
+                    self.statusMessage = "iPhone requested live workout display"
+                } else {
+                    self.statusMessage = "iPhone requested workout view"
+                }
             } else if userInfo[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
                 print("[Watch] Re-sending active workout snapshot from userInfo request")
                 self.refreshRecoveredWorkoutContext()
@@ -3550,12 +3581,26 @@ extension WatchDashboardStore {
 @MainActor
 private final class WatchWorkoutTabPreferences {
     private let defaults = UserDefaults.standard
+    private let ubiquitousStore = NSUbiquitousKeyValueStore.default
     private let storageKey = "watch.workout.tabPreferences"
+
+    private func storedData() -> Data? {
+        if let cloudData = ubiquitousStore.data(forKey: storageKey) {
+            return cloudData
+        }
+        return defaults.data(forKey: storageKey)
+    }
+
+    private func persistData(_ data: Data) {
+        defaults.set(data, forKey: storageKey)
+        ubiquitousStore.set(data, forKey: storageKey)
+        ubiquitousStore.synchronize()
+    }
 
     func orderedPages(for activity: HKWorkoutActivityType) -> [WatchWorkoutPageKind] {
         let defaultPages = Self.defaultPages(for: activity)
         guard
-            let data = defaults.data(forKey: storageKey),
+            let data = storedData(),
             let stored = try? JSONDecoder().decode([String: [String]].self, from: data),
             let rawPages = stored[activity.preferenceKey]
         else {
@@ -3564,15 +3609,13 @@ private final class WatchWorkoutTabPreferences {
 
         let decoded = rawPages.compactMap(WatchWorkoutPageKind.init(rawValue:))
         let allowed = Set(defaultPages + [.planTracking])
-        let sanitized = decoded.filter { allowed.contains($0) }
-        let missing = defaultPages.filter { !sanitized.contains($0) }
-        return sanitized + missing
+        return decoded.filter { allowed.contains($0) }
     }
 
     func setOrderedPages(_ pages: [WatchWorkoutPageKind], for activity: HKWorkoutActivityType) {
         var stored: [String: [String]] = [:]
         if
-            let data = defaults.data(forKey: storageKey),
+            let data = storedData(),
             let decoded = try? JSONDecoder().decode([String: [String]].self, from: data)
         {
             stored = decoded
@@ -3580,7 +3623,7 @@ private final class WatchWorkoutTabPreferences {
 
         stored[activity.preferenceKey] = pages.map(\.rawValue)
         if let data = try? JSONEncoder().encode(stored) {
-            defaults.set(data, forKey: storageKey)
+            persistData(data)
         }
     }
 
@@ -3601,7 +3644,21 @@ private final class WatchWorkoutTabPreferences {
 @MainActor
 private final class WatchWorkoutMetricPreferences {
     private let defaults = UserDefaults.standard
+    private let ubiquitousStore = NSUbiquitousKeyValueStore.default
     private let storageKey = "watch.workout.metricPreferences"
+
+    private func storedData() -> Data? {
+        if let cloudData = ubiquitousStore.data(forKey: storageKey) {
+            return cloudData
+        }
+        return defaults.data(forKey: storageKey)
+    }
+
+    private func persistData(_ data: Data) {
+        defaults.set(data, forKey: storageKey)
+        ubiquitousStore.set(data, forKey: storageKey)
+        ubiquitousStore.synchronize()
+    }
 
     func availableMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
         Self.defaultMetricIDs(for: activity)
@@ -3610,7 +3667,7 @@ private final class WatchWorkoutMetricPreferences {
     func orderedMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
         let defaultMetricIDs = Self.defaultMetricIDs(for: activity)
         guard
-            let data = defaults.data(forKey: storageKey),
+            let data = storedData(),
             let stored = try? JSONDecoder().decode([String: [String]].self, from: data),
             let rawMetricIDs = stored[activity.preferenceKey]
         else {
@@ -3618,9 +3675,7 @@ private final class WatchWorkoutMetricPreferences {
         }
 
         let allowed = Set(defaultMetricIDs)
-        let sanitized = rawMetricIDs.filter { allowed.contains($0) }
-        let missing = defaultMetricIDs.filter { !sanitized.contains($0) }
-        return sanitized + missing
+        return rawMetricIDs.filter { allowed.contains($0) }
     }
 
     func setMetricEnabled(_ isEnabled: Bool, metricID: String, for activity: HKWorkoutActivityType) {
@@ -3663,7 +3718,7 @@ private final class WatchWorkoutMetricPreferences {
 
         stored[activity.preferenceKey] = metricIDs
         if let data = try? JSONEncoder().encode(stored) {
-            defaults.set(data, forKey: storageKey)
+            persistData(data)
         }
     }
 

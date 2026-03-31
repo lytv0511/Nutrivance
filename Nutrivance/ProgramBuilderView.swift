@@ -64,12 +64,14 @@ struct ProgramBuilderView: View {
     @State private var coachRegenerationNotesByActivityID: [String: String] = [:]
     @State private var stagePromptTextByStageID: [UUID: String] = [:]
     @State private var stageCardHeightByActivityID: [String: CGFloat] = [:]
+    @State private var collapsedStageIDs: Set<UUID> = []
     @State private var launchButtonHeight: CGFloat = 0
     @State private var plannedRouteLaunchMetadata: RouteLaunchMetadata?
     @State private var routeTemplateIDsWithSavedRoutes: Set<UUID> = []
     @State private var hasLoadedRouteTemplateAvailability = false
     @State private var isSearchSectionExpanded = false
     @State private var hasRestoredCachedDraft = false
+    @State private var isWorkoutStagesViewPresented = false
     @State private var planSyncStatusMessage: String?
     @State private var stageRegenerationStatusByActivityID: [String: String] = [:]
 
@@ -85,10 +87,6 @@ struct ProgramBuilderView: View {
         selectedActivityIDs.compactMap { id in
             catalog.first(where: { $0.id == id })
         }
-    }
-
-    private var wideLayout: Bool {
-        UIDevice.current.userInterfaceIdiom == .pad
     }
 
     private var isPhoneLayout: Bool {
@@ -221,11 +219,24 @@ struct ProgramBuilderView: View {
         .navigationTitle("Program Builder")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                NavigationLink(destination: ProgramBuilderWorkoutViewsLayoutView()) {
+                    Image(systemName: "square.grid.2x2")
+                }
+                NavigationLink(destination: ProgramBuilderMetricLayoutView()) {
+                    Image(systemName: "gauge")
+                }
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") {
                     dismissProgramBuilderKeyboard()
                 }
+            }
+        }
+        .fullScreenCover(isPresented: $isWorkoutStagesViewPresented) {
+            NavigationStack {
+                workoutStagesExpandedView
             }
         }
         .task(id: coachContextID) {
@@ -262,7 +273,7 @@ struct ProgramBuilderView: View {
 
     @ViewBuilder
     private func contentLayout(for width: CGFloat) -> some View {
-        if wideLayout || width > 920 {
+        if shouldUseWideLayout(for: width) {
             HStack(alignment: .top, spacing: 24) {
                 leftColumn
                     .frame(width: min(430, width * 0.36))
@@ -282,6 +293,10 @@ struct ProgramBuilderView: View {
             }
             .padding(16)
         }
+    }
+
+    private func shouldUseWideLayout(for width: CGFloat) -> Bool {
+        isPadDevice && width >= 980
     }
 
     private func handleViewAppear() {
@@ -1186,8 +1201,7 @@ struct ProgramBuilderView: View {
             routeName: routeLaunch?.name,
             trailhead: routeLaunch?.trailhead.map(ProgramStoredCoordinate.init),
             routeCoordinates: routeLaunch?.coordinates.map(ProgramStoredCoordinate.init) ?? [],
-            // Always persist phases (including micro-stages) so Watch/iPhone sync and dashboard payloads carry structured targets for single-activity plans.
-            phases: phases.isEmpty ? nil : phases,
+            phases: phases.count > 1 ? phases : nil,
             createdAt: Date(),
             updatedAt: Date(),
             expiresAt: expiresAt,
@@ -1804,11 +1818,25 @@ struct ProgramBuilderView: View {
                 }
                 .buttonStyle(.glass)
                 .foregroundStyle(.white)
+
+                Button {
+                    isWorkoutStagesViewPresented = true
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.subheadline.weight(.black))
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.glass)
+                .foregroundStyle(.white)
             }
 
             VStack(alignment: .leading, spacing: 14) {
                 if !stages.isEmpty {
-                    stageEditorGrid(
+                    Text("Swipe through stages here, or open the full editor to see the whole workout at once.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+
+                    stagePreviewRail(
                         activity: activity,
                         stages: stages,
                         totalStages: stages.count
@@ -1819,40 +1847,74 @@ struct ProgramBuilderView: View {
     }
 
     @ViewBuilder
-    private func stageEditorGrid(
+    private func stagePreviewRail(
         activity: ProgramWorkoutType,
         stages: [ProgramCustomWorkoutMicroStage],
         totalStages: Int
     ) -> some View {
-        if isPadDevice {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14, alignment: .top)], spacing: 14) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
                 ForEach(stages) { stage in
                     microStageEditorCard(
                         for: activity,
                         stage: stage,
                         index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
-                        stageCount: totalStages
+                        stageCount: totalStages,
+                        isCollapsed: collapsedStageIDs.contains(stage.id),
+                        onToggleCollapsed: {
+                            toggleCollapsedState(for: stage.id)
+                        }
+                    )
+                    .frame(width: 308)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .onPreferenceChange(ProgramStageCardHeightPreferenceKey.self) { newHeight in
+            guard newHeight > 0 else { return }
+            stageCardHeightByActivityID[activity.id] = newHeight
+        }
+    }
+
+    @ViewBuilder
+    private func stageEditorGrid(
+        activity: ProgramWorkoutType,
+        stages: [ProgramCustomWorkoutMicroStage],
+        totalStages: Int,
+        availableWidth: CGFloat? = nil
+    ) -> some View {
+        let width = availableWidth ?? 720
+        let columns = stageEditorColumns(for: width)
+
+        if columns.count == 1 {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                ForEach(stages) { stage in
+                    microStageEditorCard(
+                        for: activity,
+                        stage: stage,
+                        index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                        stageCount: totalStages,
+                        isCollapsed: collapsedStageIDs.contains(stage.id),
+                        onToggleCollapsed: {
+                            toggleCollapsedState(for: stage.id)
+                        }
                     )
                 }
             }
         } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(stages) { stage in
-                        microStageEditorCard(
-                            for: activity,
-                            stage: stage,
-                            index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
-                            stageCount: totalStages
-                        )
-                        .frame(width: 300)
-                    }
+            LazyVGrid(columns: columns, spacing: 14) {
+                ForEach(stages) { stage in
+                    microStageEditorCard(
+                        for: activity,
+                        stage: stage,
+                        index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                        stageCount: totalStages,
+                        isCollapsed: collapsedStageIDs.contains(stage.id),
+                        onToggleCollapsed: {
+                            toggleCollapsedState(for: stage.id)
+                        }
+                    )
                 }
-                .padding(.vertical, 2)
-            }
-            .onPreferenceChange(ProgramStageCardHeightPreferenceKey.self) { newHeight in
-                guard newHeight > 0 else { return }
-                stageCardHeightByActivityID[activity.id] = newHeight
             }
         }
     }
@@ -1897,7 +1959,9 @@ struct ProgramBuilderView: View {
         for activity: ProgramWorkoutType,
         stage: ProgramCustomWorkoutMicroStage,
         index: Int,
-        stageCount: Int
+        stageCount: Int,
+        isCollapsed: Bool = false,
+        onToggleCollapsed: (() -> Void)? = nil
     ) -> some View {
         let stageBinding = comprehensiveStageBinding(activityID: activity.id, stageID: stage.id)
         let availableGoals = allowedGoals(for: stageBinding.role.wrappedValue, activity: activity)
@@ -1920,6 +1984,14 @@ struct ProgramBuilderView: View {
             }
 
             HStack(spacing: 8) {
+                if let onToggleCollapsed {
+                    Button(action: onToggleCollapsed) {
+                        Label(isCollapsed ? "Expand" : "Collapse", systemImage: isCollapsed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 Button {
                     moveMicroStage(for: activity, from: index, to: index - 1)
                 } label: {
@@ -1943,90 +2015,94 @@ struct ProgramBuilderView: View {
                     .foregroundStyle(.white.opacity(0.66))
             }
 
-            HStack(alignment: .top, spacing: 10) {
-                compactMenuField(title: "Role") {
-                    Picker("Role", selection: stageBinding.role) {
-                        ForEach(ProgramMicroStageRole.allCases) { role in
-                            Text(role.title).tag(role)
+            if isCollapsed {
+                collapsedStageSummary(for: stageBinding.wrappedValue, index: index)
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    compactMenuField(title: "Role") {
+                        Picker("Role", selection: stageBinding.role) {
+                            ForEach(ProgramMicroStageRole.allCases) { role in
+                                Text(role.title).tag(role)
+                            }
                         }
+                        .pickerStyle(.menu)
                     }
-                    .pickerStyle(.menu)
-                }
 
-                compactMenuField(title: "Goal") {
-                    Picker("Goal", selection: stageBinding.goal) {
-                        ForEach(availableGoals) { goal in
-                            Text(goal.title).tag(goal)
+                    compactMenuField(title: "Goal") {
+                        Picker("Goal", selection: stageBinding.goal) {
+                            ForEach(availableGoals) { goal in
+                                Text(goal.title).tag(goal)
+                            }
                         }
+                        .pickerStyle(.menu)
                     }
-                    .pickerStyle(.menu)
                 }
-            }
 
-            HStack(alignment: .top, spacing: 10) {
-                wheelMetricPicker(
-                    title: "Minutes",
-                    selection: plannedMinutesWheelBinding(activityID: activity.id, stageID: stage.id),
-                    options: minuteWheelOptions
-                )
+                HStack(alignment: .top, spacing: 10) {
+                    wheelMetricPicker(
+                        title: "Minutes",
+                        selection: plannedMinutesWheelBinding(activityID: activity.id, stageID: stage.id),
+                        options: minuteWheelOptions
+                    )
 
-                wheelMetricPicker(
-                    title: "Repeats",
-                    selection: stageRepeatsWheelBinding(activityID: activity.id, stageID: stage.id),
-                    options: repeatWheelOptions
-                )
-            }
-
-            if stageBinding.goal.wrappedValue.requiresDescriptorInput {
-                stageTargetEditor(for: activity, stageID: stage.id)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Describe This Stage")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.72))
-
-                TextField(
-                    "Example: hold 90-100 rpm for 5 minutes",
-                    text: stagePromptBinding(stageID: stage.id),
-                    axis: .vertical
-                )
-                .lineLimit(2...4)
-                .textInputAutocapitalization(.sentences)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                Button {
-                    applyNaturalLanguageStagePrompt(for: activity, stageID: stage.id)
-                } label: {
-                    Label("Apply Description", systemImage: "sparkles")
-                        .font(.subheadline.weight(.bold))
+                    wheelMetricPicker(
+                        title: "Repeats",
+                        selection: stageRepeatsWheelBinding(activityID: activity.id, stageID: stage.id),
+                        options: repeatWheelOptions
+                    )
                 }
-                .buttonStyle(.bordered)
-                .foregroundStyle(.white)
-            }
 
-            TextField("Notes", text: stageBinding.notes, axis: .vertical)
-                .lineLimit(2...4)
-                .textInputAutocapitalization(.sentences)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                if stageBinding.goal.wrappedValue.requiresDescriptorInput {
+                    stageTargetEditor(for: activity, stageID: stage.id)
+                }
 
-            HStack(alignment: .top, spacing: 10) {
-                Text(stageBinding.wrappedValue.displaySummary)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.68))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Describe This Stage")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.72))
 
-                Text(stageBinding.wrappedValue.targetBehavior.editorDescription)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.58))
-                    .frame(maxWidth: 120, alignment: .trailing)
+                    TextField(
+                        "Example: hold 90-100 rpm for 5 minutes",
+                        text: stagePromptBinding(stageID: stage.id),
+                        axis: .vertical
+                    )
+                    .lineLimit(2...4)
+                    .textInputAutocapitalization(.sentences)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    Button {
+                        applyNaturalLanguageStagePrompt(for: activity, stageID: stage.id)
+                    } label: {
+                        Label("Apply Description", systemImage: "sparkles")
+                            .font(.subheadline.weight(.bold))
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundStyle(.white)
+                }
+
+                TextField("Notes", text: stageBinding.notes, axis: .vertical)
+                    .lineLimit(2...4)
+                    .textInputAutocapitalization(.sentences)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                HStack(alignment: .top, spacing: 10) {
+                    Text(stageBinding.wrappedValue.displaySummary)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.68))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Text(stageBinding.wrappedValue.targetBehavior.editorDescription)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.58))
+                        .frame(maxWidth: 120, alignment: .trailing)
+                }
             }
         }
-        .frame(minHeight: stageCardHeightByActivityID[activity.id], alignment: .top)
+        .frame(minHeight: isCollapsed ? nil : stageCardHeightByActivityID[activity.id], alignment: .top)
         .padding(12)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .background(
@@ -2035,6 +2111,160 @@ struct ProgramBuilderView: View {
                     .preference(key: ProgramStageCardHeightPreferenceKey.self, value: geometry.size.height)
             }
         )
+    }
+
+    @ViewBuilder
+    private func collapsedStageSummary(for stage: ProgramCustomWorkoutMicroStage, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(stage.role.title)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange, in: Capsule())
+
+                if !stage.goal.title.isEmpty {
+                    Text(stage.goal.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+            }
+
+            Text(stage.displaySummary)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+
+            if !stage.notes.isEmpty {
+                Text(stage.notes)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(2)
+            }
+
+                Text("Stage \(index + 1) at a glance")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .padding(.top, 4)
+    }
+
+    private var workoutStagesExpandedView: some View {
+        GeometryReader { proxy in
+            ZStack {
+                programBuilderBackground.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        Text("Review every stage in one place. Wide windows flow into multiple columns, while narrow windows fall back to a single readable stack.")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.72))
+
+                        ForEach(selectedActivities) { activity in
+                            workoutStagesSection(for: activity, availableWidth: proxy.size.width)
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+        }
+        .navigationTitle("Workout Stages")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Done") {
+                    isWorkoutStagesViewPresented = false
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(allSelectedStagesCollapsed ? "Expand All" : "Collapse All") {
+                    if allSelectedStagesCollapsed {
+                        expandAllStages()
+                    } else {
+                        collapseAllStages()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workoutStagesSection(for activity: ProgramWorkoutType, availableWidth: CGFloat) -> some View {
+        let stages = resolvedMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id))
+
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(activity.title, systemImage: activity.symbol)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("\(stages.count) stages")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+
+                Spacer()
+
+                Button {
+                    addMicroStage(for: activity)
+                } label: {
+                    Label("Add Stage", systemImage: "plus")
+                        .font(.subheadline.weight(.bold))
+                }
+                .buttonStyle(.glass)
+                .foregroundStyle(.white)
+            }
+
+            stageEditorGrid(
+                activity: activity,
+                stages: stages,
+                totalStages: stages.count,
+                availableWidth: max(availableWidth - 40, 320)
+            )
+        }
+        .padding(18)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(activity.tint.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private func stageEditorColumns(for width: CGFloat) -> [GridItem] {
+        if width < 760 {
+            return [GridItem(.flexible(), spacing: 14, alignment: .top)]
+        }
+        return [GridItem(.adaptive(minimum: 320, maximum: 420), spacing: 14, alignment: .top)]
+    }
+
+    private var allSelectedStageIDs: Set<UUID> {
+        Set(
+            selectedActivities.flatMap { activity in
+                resolvedMicroStages(for: activity, totalMinutes: allocationMinutes(for: activity.id)).map(\.id)
+            }
+        )
+    }
+
+    private var allSelectedStagesCollapsed: Bool {
+        let ids = allSelectedStageIDs
+        return !ids.isEmpty && ids.isSubset(of: collapsedStageIDs)
+    }
+
+    private func toggleCollapsedState(for stageID: UUID) {
+        if collapsedStageIDs.contains(stageID) {
+            collapsedStageIDs.remove(stageID)
+        } else {
+            collapsedStageIDs.insert(stageID)
+        }
+    }
+
+    private func collapseAllStages() {
+        collapsedStageIDs.formUnion(allSelectedStageIDs)
+    }
+
+    private func expandAllStages() {
+        collapsedStageIDs.subtract(allSelectedStageIDs)
     }
 
     @ViewBuilder
@@ -2171,23 +2401,29 @@ struct ProgramBuilderView: View {
 
     private func wheelComparableValue(for value: String) -> Double? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.isEmpty { return nil }
         if trimmed.hasPrefix("zone ") {
             return Double(trimmed.replacingOccurrences(of: "zone ", with: ""))
         }
         if trimmed.contains(":") {
-            let segments = trimmed.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-            guard segments.count == 2,
-                  let minutes = Double(segments[0]) else { return nil }
-            let afterColon = String(segments[1])
-            let secDigits = afterColon.prefix { $0.isNumber || $0 == "." }
-            guard !secDigits.isEmpty, let seconds = Double(secDigits) else { return nil }
+            let parts = trimmed.split(separator: ":")
+            guard parts.count == 2,
+                  let minutes = Double(parts[0]),
+                  let seconds = Double(parts[1]) else { return nil }
             return (minutes * 60) + seconds
         }
-        if let leading = trimmed.captureGroups(for: #"^(-?\d+(?:\.\d+)?)"#).first?.first,
-           let parsed = Double(leading) {
-            return parsed
+        if let numeric = Double(trimmed) {
+            return numeric
         }
+
+        let numericCharacters = trimmed
+            .replacingOccurrences(of: ",", with: "")
+            .components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted)
+            .joined()
+
+        if !numericCharacters.isEmpty, let numeric = Double(numericCharacters) {
+            return numeric
+        }
+
         return nil
     }
 
@@ -2254,7 +2490,7 @@ struct ProgramBuilderView: View {
                 let goal = comprehensiveStageBinding(activityID: activityID, stageID: stageID).goal.wrappedValue
                 let options = wheelOptions(for: goal)
                 let raw = comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue
-                let parts = raw.components(separatedBy: "-").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                let parts = normalizedRangeParts(from: raw)
                 switch component {
                 case .lower:
                     return nearestWheelOption(for: parts.first ?? "", options: options, fallback: options.first ?? "")
@@ -2263,8 +2499,9 @@ struct ProgramBuilderView: View {
                 }
             },
             set: { newValue in
+                let goal = comprehensiveStageBinding(activityID: activityID, stageID: stageID).goal.wrappedValue
                 let current = comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue
-                var parts = current.components(separatedBy: "-").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                var parts = normalizedRangeParts(from: current)
                 if parts.isEmpty { parts = ["", ""] }
                 if parts.count == 1 { parts.append("") }
                 switch component {
@@ -2273,7 +2510,10 @@ struct ProgramBuilderView: View {
                 case .upper:
                     parts[1] = newValue
                 }
-                comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue = parts.filter { !$0.isEmpty }.joined(separator: "-")
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).targetValueText.wrappedValue = formattedRangeText(
+                    from: parts,
+                    goal: goal
+                )
             }
         )
     }
@@ -2302,6 +2542,39 @@ struct ProgramBuilderView: View {
             return "Maximum"
         case .completionGoal:
             return "Target"
+        }
+    }
+
+    private func normalizedRangeParts(from raw: String) -> [String] {
+        raw.components(separatedBy: "-")
+            .map { component in
+                component
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .components(separatedBy: CharacterSet(charactersIn: "0123456789:.").inverted)
+                    .joined()
+            }
+            .filter { !$0.isEmpty }
+    }
+
+    private func formattedRangeText(from parts: [String], goal: ProgramMicroStageGoal) -> String {
+        let cleaned = parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !cleaned.isEmpty else { return "" }
+
+        let joined = cleaned.joined(separator: "-")
+        switch goal {
+        case .power:
+            return "\(joined) W"
+        case .cadence:
+            return "\(joined) rpm"
+        case .speed:
+            return "\(joined) mph"
+        case .pace:
+            return joined
+        default:
+            return joined
         }
     }
 
@@ -2442,7 +2715,7 @@ struct ProgramBuilderView: View {
     private func inferredTargetBehavior(from text: String, goal: ProgramMicroStageGoal) -> ProgramStageTargetBehavior {
         let normalized = text.lowercased()
         // Check for threshold keywords
-        if normalized.contains("above") || normalized.contains("at least") || normalized.contains("minimum") ||
+        if normalized.contains("above") || normalized.contains("at least") || normalized.contains("minimum") || 
            normalized.contains("more than") || normalized.contains("over ") || normalized.contains("exceeding") {
             // For certain goals, "above" means we want a minimum threshold
             switch goal {
@@ -2452,7 +2725,7 @@ struct ProgramBuilderView: View {
                 return .range
             }
         }
-        if normalized.contains("below") || normalized.contains("at most") || normalized.contains("maximum") ||
+        if normalized.contains("below") || normalized.contains("at most") || normalized.contains("maximum") || 
            normalized.contains("less than") || normalized.contains("under ") || normalized.contains("not exceeding") {
             // For certain goals, "below" means we want a maximum threshold
             switch goal {
@@ -3013,6 +3286,662 @@ struct ProgramBuilderView: View {
         return (0..<maximumPoints).map { index in
             let sampledIndex = Int((Double(index) * step).rounded())
             return coordinates[min(coordinates.count - 1, sampledIndex)]
+        }
+    }
+}
+
+private struct ProgramBuilderMetricLayoutView: View {
+    @StateObject private var preferences = ProgramBuilderMetricPreferences()
+    @State private var selectedActivity: HKWorkoutActivityType = .running
+
+    private var metricOrder: [String] {
+        preferences.orderedMetricIDs(for: selectedActivity)
+    }
+
+    private var metricRows: [String] {
+        let disabled = preferences.availableMetricIDs(for: selectedActivity).filter { !metricOrder.contains($0) }
+        return metricOrder + disabled
+    }
+
+    private struct MetricRowData {
+        let metricID: String
+        let position: Int?
+        let positionValue: Int
+        let atTop: Bool
+        let atBottom: Bool
+        let slotText: String
+    }
+
+    var body: some View {
+        let currentMetricOrder = metricOrder
+        let lastIndex = currentMetricOrder.count - 1
+        
+        let metricRowData: [MetricRowData] = metricRows.map { metricID in
+            let position = currentMetricOrder.firstIndex(of: metricID)
+            let positionValue = position ?? -1
+            let atTop = positionValue == 0
+            let atBottom = positionValue == lastIndex
+            
+            let slotText: String
+            if let pos = position {
+                let tabNumber = (pos / 3) + 1
+                let slotNumber = (pos % 3) + 1
+                slotText = "Tab \(tabNumber) · Slot \(slotNumber)"
+            } else {
+                slotText = "Hidden"
+            }
+            
+            let isEnabled = preferences.isMetricEnabled(metricID, for: selectedActivity)
+            
+            return MetricRowData(
+                metricID: metricID,
+                position: position,
+                positionValue: positionValue,
+                atTop: atTop,
+                atBottom: atBottom,
+                slotText: slotText
+            )
+        }
+        
+        return ZStack {
+            programBuilderBackground.ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    Picker("Workout", selection: $selectedActivity) {
+                        Text("Running").tag(HKWorkoutActivityType.running)
+                        Text("Walking").tag(HKWorkoutActivityType.walking)
+                        Text("Cycling").tag(HKWorkoutActivityType.cycling)
+                        Text("Hiking").tag(HKWorkoutActivityType.hiking)
+                        Text("Swimming").tag(HKWorkoutActivityType.swimming)
+                    }
+                    .pickerStyle(.wheel)
+                    .frame(height: 120)
+                    .clipped()
+                    .padding(.horizontal)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Metric Order")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        
+                        VStack(spacing: 10) {
+                            ForEach(metricRowData, id: \.metricID) { data in
+                                let isEnabledBinding = Binding(
+                                    get: { preferences.isMetricEnabled(data.metricID, for: selectedActivity) },
+                                    set: { newValue in
+                                        preferences.setMetricEnabled(newValue, metricID: data.metricID, for: selectedActivity)
+                                    }
+                                )
+                                
+                                let moveUpAction = { preferences.moveMetric(data.metricID, direction: -1, for: selectedActivity) }
+                                let moveDownAction = { preferences.moveMetric(data.metricID, direction: 1, for: selectedActivity) }
+                                let canMoveUp = preferences.isMetricEnabled(data.metricID, for: selectedActivity) && data.position != nil && !data.atTop
+                                let canMoveDown = preferences.isMetricEnabled(data.metricID, for: selectedActivity) && data.position != nil && !data.atBottom
+
+                                ProgramBuilderMetricRow(
+                                    title: data.metricID,
+                                    slotText: data.slotText,
+                                    isEnabled: isEnabledBinding,
+                                    moveUp: moveUpAction,
+                                    moveDown: moveDownAction,
+                                    canMoveUp: canMoveUp,
+                                    canMoveDown: canMoveDown
+                                )
+                            }
+                        }
+                        .padding(18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                .fill(Color.black.opacity(0.36))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                    }
+                }
+                .padding(12)
+            }
+        }
+        .navigationTitle("Workout Metric Layout")
+        .toolbar {
+            Button("Reset") {
+                let defaults = ProgramBuilderMetricPreferences.defaultMetricIDs(for: selectedActivity)
+                defaults.forEach { preferences.setMetricEnabled(true, metricID: $0, for: selectedActivity) }
+            }
+        }
+    }
+}
+
+private enum ProgramBuilderWorkoutPageKind: String, CaseIterable, Identifiable {
+    case metricsPrimary
+    case metricsSecondary
+    case metricsTertiary
+    case metricsQuaternary
+    case planTracking
+    case heartRateZones
+    case segments
+    case splits
+    case elevationGraph
+    case powerGraph
+    case powerZones
+    case pacer
+    case map
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .metricsPrimary:
+            return "Main Metrics"
+        case .metricsSecondary:
+            return "Detail Metrics"
+        case .metricsTertiary:
+            return "More Metrics"
+        case .metricsQuaternary:
+            return "Extra Metrics"
+        case .planTracking:
+            return "Goals & Stages"
+        case .heartRateZones:
+            return "HR Zones"
+        case .segments:
+            return "Segments"
+        case .splits:
+            return "Splits"
+        case .elevationGraph:
+            return "Elevation"
+        case .powerGraph:
+            return "Power"
+        case .powerZones:
+            return "Power Zones"
+        case .pacer:
+            return "Pacer"
+        case .map:
+            return "Map"
+        }
+    }
+
+    var isAutomaticMetricPage: Bool {
+        switch self {
+        case .metricsPrimary, .metricsSecondary, .metricsTertiary, .metricsQuaternary:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private struct ProgramBuilderWorkoutViewsLayoutView: View {
+    @StateObject private var preferences = ProgramBuilderWorkoutTabPreferences()
+    @State private var selectedActivity: HKWorkoutActivityType = .running
+
+    private var availablePages: [ProgramBuilderWorkoutPageKind] {
+        ProgramBuilderWorkoutTabPreferences.availableEditablePages(for: selectedActivity)
+    }
+
+    private var orderedEditablePages: [ProgramBuilderWorkoutPageKind] {
+        preferences.orderedPages(for: selectedActivity)
+            .filter { availablePages.contains($0) }
+    }
+
+    private var pageRows: [ProgramBuilderWorkoutPageKind] {
+        let disabled = availablePages.filter { !orderedEditablePages.contains($0) }
+        return orderedEditablePages + disabled
+    }
+
+    var body: some View {
+        ZStack {
+            programBuilderBackground.ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    Picker("Workout", selection: $selectedActivity) {
+                        Text("Running").tag(HKWorkoutActivityType.running)
+                        Text("Walking").tag(HKWorkoutActivityType.walking)
+                        Text("Cycling").tag(HKWorkoutActivityType.cycling)
+                        Text("Hiking").tag(HKWorkoutActivityType.hiking)
+                        Text("Swimming").tag(HKWorkoutActivityType.swimming)
+                    }
+                    .pickerStyle(.wheel)
+                    .frame(height: 120)
+                    .clipped()
+                    .padding(.horizontal)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Workout Views")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+
+                        VStack(spacing: 10) {
+                            ForEach(pageRows) { page in
+                                let position = orderedEditablePages.firstIndex(of: page)
+                                let atTop = position == 0
+                                let atBottom = position == orderedEditablePages.count - 1
+
+                                ProgramBuilderWorkoutViewRow(
+                                    page: page,
+                                    isEnabled: Binding(
+                                        get: { preferences.isPageEnabled(page, for: selectedActivity) },
+                                        set: { preferences.setPageEnabled($0, page: page, for: selectedActivity) }
+                                    ),
+                                    moveUp: {
+                                        preferences.movePage(page, direction: -1, for: selectedActivity)
+                                    },
+                                    moveDown: {
+                                        preferences.movePage(page, direction: 1, for: selectedActivity)
+                                    },
+                                    canMoveUp: preferences.isPageEnabled(page, for: selectedActivity) && position != nil && !atTop,
+                                    canMoveDown: preferences.isPageEnabled(page, for: selectedActivity) && position != nil && !atBottom
+                                )
+                            }
+                        }
+                        .padding(18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                .fill(Color.black.opacity(0.36))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Auto Metric Pages")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+
+                        Text("Metric pages are generated from the metric order and stay in sync with the watch.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.72))
+
+                        Text("Enabled metrics: \(preferences.metricCount(for: selectedActivity))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+
+                        Text("Current metric pages: \(preferences.metricPageCount(for: selectedActivity))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(Color.black.opacity(0.36))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                }
+                .padding(12)
+            }
+        }
+        .navigationTitle("Workout Views")
+        .toolbar {
+            Button("Reset") {
+                preferences.resetPagesToDefault(for: selectedActivity)
+            }
+        }
+    }
+}
+
+private final class ProgramBuilderMetricPreferences: ObservableObject {
+    private let defaults = UserDefaults.standard
+    private let ubiquitousStore = NSUbiquitousKeyValueStore.default
+    private let storageKey = "watch.workout.metricPreferences"
+
+    private func storedData() -> Data? {
+        if let cloudData = ubiquitousStore.data(forKey: storageKey) {
+            return cloudData
+        }
+        return defaults.data(forKey: storageKey)
+    }
+
+    private func persistData(_ data: Data) {
+        defaults.set(data, forKey: storageKey)
+        ubiquitousStore.set(data, forKey: storageKey)
+        ubiquitousStore.synchronize()
+    }
+
+    func availableMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        Self.defaultMetricIDs(for: activity)
+    }
+
+    func orderedMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        let defaultMetricIDs = Self.defaultMetricIDs(for: activity)
+        guard
+            let data = storedData(),
+            let stored = try? JSONDecoder().decode([String: [String]].self, from: data),
+            let rawMetricIDs = stored[activity.preferenceKey]
+        else {
+            return defaultMetricIDs
+        }
+
+        let allowed = Set(defaultMetricIDs)
+        return rawMetricIDs.filter { allowed.contains($0) }
+    }
+
+    func isMetricEnabled(_ metricID: String, for activity: HKWorkoutActivityType) -> Bool {
+        orderedMetricIDs(for: activity).contains(metricID)
+    }
+
+    func setMetricEnabled(_ isEnabled: Bool, metricID: String, for activity: HKWorkoutActivityType) {
+        let availableMetricIDs = Self.defaultMetricIDs(for: activity)
+        guard availableMetricIDs.contains(metricID) else { return }
+        var metricIDs = orderedMetricIDs(for: activity)
+
+        if isEnabled {
+            if !metricIDs.contains(metricID) {
+                let defaultIndex = availableMetricIDs.firstIndex(of: metricID) ?? availableMetricIDs.count
+                let insertionIndex = metricIDs.firstIndex(where: { currentID in
+                    (availableMetricIDs.firstIndex(of: currentID) ?? availableMetricIDs.count) > defaultIndex
+                }) ?? metricIDs.count
+                metricIDs.insert(metricID, at: insertionIndex)
+            }
+        } else {
+            metricIDs.removeAll { $0 == metricID }
+        }
+
+        persist(metricIDs, for: activity)
+        objectWillChange.send()
+    }
+
+    func moveMetric(_ metricID: String, direction: Int, for activity: HKWorkoutActivityType) {
+        var metricIDs = orderedMetricIDs(for: activity)
+        guard let index = metricIDs.firstIndex(of: metricID) else { return }
+        let destination = min(max(index + direction, 0), metricIDs.count - 1)
+        guard destination != index else { return }
+        metricIDs.move(fromOffsets: IndexSet(integer: index), toOffset: destination > index ? destination + 1 : destination)
+        persist(metricIDs, for: activity)
+        objectWillChange.send()
+    }
+
+    private func persist(_ metricIDs: [String], for activity: HKWorkoutActivityType) {
+        var stored: [String: [String]] = [:]
+        if
+            let data = storedData(),
+            let decoded = try? JSONDecoder().decode([String: [String]].self, from: data)
+        {
+            stored = decoded
+        }
+
+        stored[activity.preferenceKey] = metricIDs
+        if let data = try? JSONEncoder().encode(stored) {
+            persistData(data)
+        }
+    }
+
+    static func defaultMetricIDs(for activity: HKWorkoutActivityType) -> [String] {
+        switch activity {
+        case .running:
+            return ["rolling-mile", "avg-pace", "distance", "cadence", "stride", "gct", "vo", "elev", "speed-current", "energy"]
+        case .walking:
+            return ["avg-pace", "distance", "cadence", "stride", "gct", "vo", "elev", "speed-current", "energy"]
+        case .hiking:
+            return ["distance", "avg-pace", "elev", "flights", "cadence", "stride", "energy", "speed-current"]
+        case .cycling:
+            return ["avg-speed", "power-current", "distance", "cadence", "power-avg", "elev", "speed-current", "energy"]
+        case .swimming:
+            return ["distance", "strokes", "swim-pace", "energy", "hr-avg"]
+        default:
+            return ["distance", "energy", "avg-speed", "cadence", "power-current", "power-avg", "elev", "hr-avg"]
+        }
+    }
+}
+
+private final class ProgramBuilderWorkoutTabPreferences: ObservableObject {
+    private let defaults = UserDefaults.standard
+    private let ubiquitousStore = NSUbiquitousKeyValueStore.default
+    private let storageKey = "watch.workout.tabPreferences"
+
+    private func storedData() -> Data? {
+        if let cloudData = ubiquitousStore.data(forKey: storageKey) {
+            return cloudData
+        }
+        return defaults.data(forKey: storageKey)
+    }
+
+    private func persistData(_ data: Data) {
+        defaults.set(data, forKey: storageKey)
+        ubiquitousStore.set(data, forKey: storageKey)
+        ubiquitousStore.synchronize()
+    }
+
+    func orderedPages(for activity: HKWorkoutActivityType) -> [ProgramBuilderWorkoutPageKind] {
+        let defaultPages = Self.defaultPages(for: activity)
+        guard
+            let data = storedData(),
+            let stored = try? JSONDecoder().decode([String: [String]].self, from: data),
+            let rawPages = stored[activity.preferenceKey]
+        else {
+            return defaultPages
+        }
+
+        let decoded = rawPages.compactMap(ProgramBuilderWorkoutPageKind.init(rawValue:))
+        let allowed = Set(defaultPages + [.planTracking])
+        return decoded.filter { allowed.contains($0) }
+    }
+
+    func isPageEnabled(_ page: ProgramBuilderWorkoutPageKind, for activity: HKWorkoutActivityType) -> Bool {
+        if page.isAutomaticMetricPage && page != .metricsPrimary { return false }
+        if page == .planTracking { return false }
+        return orderedPages(for: activity).contains(page)
+    }
+
+    func setPageEnabled(_ isEnabled: Bool, page: ProgramBuilderWorkoutPageKind, for activity: HKWorkoutActivityType) {
+        guard !page.isAutomaticMetricPage || page == .metricsPrimary else { return }
+        guard page != .planTracking else { return }
+        var pages = orderedPages(for: activity)
+
+        if isEnabled {
+            if !pages.contains(page) {
+                let defaultPages = Self.defaultPages(for: activity)
+                let insertionIndex = defaultPages.firstIndex(of: page).map { desiredIndex in
+                    pages.firstIndex(where: { current in
+                        guard let currentIndex = defaultPages.firstIndex(of: current) else { return false }
+                        return currentIndex > desiredIndex
+                    }) ?? pages.count
+                } ?? pages.count
+                pages.insert(page, at: insertionIndex)
+            }
+        } else {
+            pages.removeAll { $0 == page }
+        }
+
+        persist(pages, for: activity)
+        objectWillChange.send()
+    }
+
+    func movePage(_ page: ProgramBuilderWorkoutPageKind, direction: Int, for activity: HKWorkoutActivityType) {
+        guard !page.isAutomaticMetricPage || page == .metricsPrimary else { return }
+        guard page != .planTracking else { return }
+        var pages = orderedPages(for: activity)
+        guard let index = pages.firstIndex(of: page) else { return }
+        let destination = min(max(index + direction, 0), pages.count - 1)
+        guard destination != index else { return }
+        pages.move(fromOffsets: IndexSet(integer: index), toOffset: destination > index ? destination + 1 : destination)
+        persist(pages, for: activity)
+        objectWillChange.send()
+    }
+
+    func resetPagesToDefault(for activity: HKWorkoutActivityType) {
+        let defaultPages = Self.defaultPages(for: activity)
+        let editablePages = Self.availableEditablePages(for: activity)
+
+        for page in editablePages {
+            setPageEnabled(defaultPages.contains(page), page: page, for: activity)
+        }
+    }
+
+    func metricCount(for activity: HKWorkoutActivityType) -> Int {
+        ProgramBuilderMetricPreferences().orderedMetricIDs(for: activity).count
+    }
+
+    func metricPageCount(for activity: HKWorkoutActivityType) -> Int {
+        max(1, Int(ceil(Double(max(metricCount(for: activity), 1)) / 3.0)))
+    }
+
+    private func persist(_ pages: [ProgramBuilderWorkoutPageKind], for activity: HKWorkoutActivityType) {
+        var stored: [String: [String]] = [:]
+        if
+            let data = storedData(),
+            let decoded = try? JSONDecoder().decode([String: [String]].self, from: data)
+        {
+            stored = decoded
+        }
+
+        stored[activity.preferenceKey] = pages.map(\.rawValue)
+        if let data = try? JSONEncoder().encode(stored) {
+            persistData(data)
+        }
+    }
+
+    static func availableEditablePages(for activity: HKWorkoutActivityType) -> [ProgramBuilderWorkoutPageKind] {
+        defaultPages(for: activity)
+            .filter { !$0.isAutomaticMetricPage && $0 != .planTracking }
+    }
+
+    static func defaultPages(for activity: HKWorkoutActivityType) -> [ProgramBuilderWorkoutPageKind] {
+        switch activity {
+        case .cycling:
+            return [.metricsPrimary, .heartRateZones, .splits, .elevationGraph, .powerGraph, .powerZones, .pacer, .map]
+        case .running, .walking, .hiking:
+            return [.metricsPrimary, .heartRateZones, .segments, .splits, .elevationGraph, .pacer, .map]
+        case .swimming:
+            return [.metricsPrimary, .heartRateZones, .splits, .segments]
+        default:
+            return [.metricsPrimary, .heartRateZones, .splits, .map]
+        }
+    }
+}
+
+private struct ProgramBuilderMetricRow: View {
+    let title: String
+    let slotText: String
+    @Binding var isEnabled: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.white)
+
+            Text(slotText)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.7))
+
+            HStack(spacing: 12) {
+                Toggle("Visible", isOn: $isEnabled)
+                    .foregroundStyle(.white)
+
+                Spacer(minLength: 0)
+
+                VStack(spacing: 2) {
+                    Button(action: moveUp) {
+                        Image(systemName: "chevron.up")
+                            .foregroundStyle(canMoveUp ? .white : .gray)
+                    }
+                    .disabled(!canMoveUp)
+
+                    Button(action: moveDown) {
+                        Image(systemName: "chevron.down")
+                            .foregroundStyle(canMoveDown ? .white : .gray)
+                    }
+                    .disabled(!canMoveDown)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct ProgramBuilderWorkoutViewRow: View {
+    let page: ProgramBuilderWorkoutPageKind
+    @Binding var isEnabled: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(page.title, systemImage: programBuilderWorkoutPageSymbol(page))
+                .font(.headline)
+                .foregroundStyle(.white)
+
+            HStack(spacing: 12) {
+                Toggle("Visible", isOn: $isEnabled)
+                    .foregroundStyle(.white)
+
+                Spacer(minLength: 0)
+
+                VStack(spacing: 2) {
+                    Button(action: moveUp) {
+                        Image(systemName: "chevron.up")
+                            .foregroundStyle(canMoveUp ? .white : .gray)
+                    }
+                    .disabled(!canMoveUp)
+
+                    Button(action: moveDown) {
+                        Image(systemName: "chevron.down")
+                            .foregroundStyle(canMoveDown ? .white : .gray)
+                    }
+                    .disabled(!canMoveDown)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+    }
+}
+
+private func programBuilderWorkoutPageSymbol(_ page: ProgramBuilderWorkoutPageKind) -> String {
+    switch page {
+    case .metricsPrimary:
+        return "gauge.open.with.lines.needle.33percent"
+    case .metricsSecondary:
+        return "list.bullet.rectangle"
+    case .metricsTertiary:
+        return "filemenu.and.selection"
+    case .metricsQuaternary:
+        return "rectangle.grid.2x2"
+    case .planTracking:
+        return "list.clipboard.fill"
+    case .heartRateZones:
+        return "heart.text.square.fill"
+    case .segments:
+        return "chart.bar.xaxis"
+    case .splits:
+        return "flag.checkered.2.crossed"
+    case .elevationGraph:
+        return "mountain.2.fill"
+    case .powerGraph:
+        return "bolt.fill"
+    case .powerZones:
+        return "bolt.heart.fill"
+    case .pacer:
+        return "speedometer"
+    case .map:
+        return "map.fill"
+    }
+}
+
+private extension HKWorkoutActivityType {
+    var preferenceKey: String {
+        switch self {
+        case .running: return "running"
+        case .walking: return "walking"
+        case .cycling: return "cycling"
+        case .hiking: return "hiking"
+        case .swimming: return "swimming"
+        default: return "other"
         }
     }
 }

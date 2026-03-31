@@ -30,6 +30,7 @@ private struct WatchDashboardPayload: Codable {
     let strainWeek: [WatchMetricPointPayload]
     let recoveryWeek: [WatchMetricPointPayload]
     let readinessWeek: [WatchMetricPointPayload]
+    let mindfulnessWeek: [WatchMetricPointPayload]
     let trainingLoadWeek: [WatchMetricPointPayload]
     let hrvWeek: [WatchMetricPointPayload]
     let hrrWeek: [WatchMetricPointPayload]
@@ -409,6 +410,13 @@ final class WatchDashboardSyncBridge: NSObject {
         let sleepHours = engine.anchoredSleepDuration[today] ?? engine.dailySleepDuration[today] ?? engine.sleepHours ?? 0
         let recommendedSleepHours = min(max(engine.sleepBaseline60Day?.mean ?? engine.sleepBaseline7Day ?? 8.0, 7.0), 9.0)
         let sleepDebtHours = max(0, recommendedSleepHours - sleepHours)
+        
+        // Calculate mindfulness week scores
+        let mindfulnessWeek = weekDays.map { day -> WatchMetricPointPayload in
+            let mindfulMinutes = engine.mindfulnessMinutesByDay[day] ?? 0
+            let score = min(100.0, mindfulMinutes * 5.0)
+            return WatchMetricPointPayload(date: day, value: score)
+        }
 
         return WatchDashboardPayload(
             generatedAt: Date(),
@@ -419,6 +427,7 @@ final class WatchDashboardSyncBridge: NSObject {
             readinessWeek: weekDays.compactMap { day in
                 readinessLookup[day].map { WatchMetricPointPayload(date: day, value: $0) }
             },
+            mindfulnessWeek: mindfulnessWeek,
             trainingLoadWeek: loadSnapshots.map { WatchMetricPointPayload(date: $0.date, value: $0.totalDailyLoad) },
             hrvWeek: engine.timeSeries(for: "hrv", days: 7).map { WatchMetricPointPayload(date: $0.0, value: $0.1) },
             hrrWeek: watchFilteredDailyValues(engine.dailyHRRAggregates, endingAt: today, days: 7).map {
