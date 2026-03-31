@@ -486,6 +486,10 @@ struct JournalView: View {
                 )
                 loadEntries()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNewJournalEntry)) { _ in
+                currentEntry = JournalEntry()
+                showingEditor = true
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 loadEntries()
             }

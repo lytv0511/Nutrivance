@@ -1956,6 +1956,7 @@ struct SleepSummaryCard: View {
 // MARK: - SleepStagesDropdownCard
 struct SleepStagesDropdownCard: View {
     let stages: [SleepStageData]
+    var expandAll: Binding<Bool>?
     
     @State private var isExpanded: Bool = false
     @State private var expandedStageIds: [UUID: Bool] = [:]
@@ -2041,6 +2042,7 @@ struct SleepStagesDropdownCard: View {
                 impact.impactOccurred()
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
                     isExpanded.toggle()
+                    expandAll?.wrappedValue = isExpanded
                 }
             }) {
                 HStack {

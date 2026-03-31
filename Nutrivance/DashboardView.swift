@@ -419,6 +419,25 @@ struct DashboardView: View {
                         }
                     }
             )
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlChartRange7d)) { _ in
+                selectedChartRange = .week
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlChartRange30d)) { _ in
+                selectedChartRange = .month
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlChartRangeFeelGood)) { _ in
+                activeDetailView = .feelGood
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlDisplayUnits)) { _ in
+                showUnitSettings = true
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlArrangeDashboard)) { _ in
+                showArrangementSheet = true
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+            }
             .navigationTitle("Dashboard")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {

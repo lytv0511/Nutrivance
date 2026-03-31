@@ -325,6 +325,7 @@ enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable
     case powerZones
     case pacer
     case map
+    case targetTracker
 
     var id: String { rawValue }
 
@@ -356,6 +357,8 @@ enum WatchWorkoutPageKind: String, CaseIterable, Codable, Hashable, Identifiable
             return "Pacer"
         case .map:
             return "Map"
+        case .targetTracker:
+            return "Target Tracker"
         }
     }
 
@@ -828,6 +831,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         return max(objective.targetValue * 60 - currentObjectiveProgressTime(at: Date()), 0)
     }
 
+    var currentStageElapsedTime: TimeInterval? {
+        guard let stage = currentMicroStage else { return nil }
+        if stage.objective.kind == .time {
+            return objectiveProgressTime(for: stage, at: Date())
+        }
+        return elapsedTime
+    }
+
     var compactCurrentStageTitle: String? {
         currentMicroStage?.title ?? currentPhase?.title
     }
@@ -883,6 +894,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private let healthStore = HKHealthStore()
     private var workoutSession: HKWorkoutSession?
     private var workoutBuilder: HKLiveWorkoutBuilder?
+    private var routeBuilder: HKWorkoutRouteBuilder?
     private var elapsedTimer: Timer?
     private var estimatedMaxHeartRate: Double = 190
     private var lastZoneSampleDate: Date?
@@ -920,6 +932,11 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         return false
     }
 
+    var shouldShowTargetTrackerTab: Bool {
+        guard isSessionActive, let stage = currentMicroStage else { return false }
+        return stage.goalRawValue != nil || stage.roleRawValue != nil
+    }
+
     var orderedWorkoutPages: [WatchWorkoutPageKind] {
         let activity = activeActivity ?? .running
         let basePages = orderedPages(for: activity)
@@ -936,11 +953,24 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
         guard shouldShowPlanTrackingTab else { return pages }
         let tab = WatchWorkoutPageKind.planTracking
-        guard !pages.contains(tab) else { return pages }
+        guard !pages.contains(tab) else { 
+            if shouldShowTargetTrackerTab && !pages.contains(.targetTracker) {
+                if let idx = pages.firstIndex(of: .planTracking) {
+                    pages.insert(.targetTracker, at: min(idx + 1, pages.count))
+                }
+            }
+            return pages
+        }
         if let mainIdx = pages.firstIndex(of: .metricsPrimary) {
             pages.insert(tab, at: min(mainIdx + 1, pages.count))
         } else {
             pages.insert(tab, at: 0)
+        }
+        
+        if shouldShowTargetTrackerTab && !pages.contains(.targetTracker) {
+            if let idx = pages.firstIndex(of: .planTracking) {
+                pages.insert(.targetTracker, at: min(idx + 1, pages.count))
+            }
         }
         return pages
     }
@@ -1564,6 +1594,12 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         let session = try HKWorkoutSession(healthStore: healthStore, configuration: configuration)
         let builder = session.associatedWorkoutBuilder()
         builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuration)
+        
+        if location == .outdoor {
+            routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
+        } else {
+            routeBuilder = nil
+        }
 
         workoutSession = session
         workoutBuilder = builder
@@ -1844,6 +1880,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             .runningVerticalOscillation,
             .cyclingCadence,
             .cyclingPower,
+            .cyclingSpeed,
+            .walkingSpeed,
             .flightsClimbed,
             .swimmingStrokeCount
         ].forEach { identifier in
@@ -2231,6 +2269,64 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         var cards: [WatchLiveMetric] = []
         let sampleElapsedTime = currentElapsedTime(at: Date())
 
+        if let distanceType = preferredDistanceType(),
+           let distance = workoutBuilder.statistics(for: distanceType)?.sumQuantity()?.doubleValue(for: .meter()) {
+            totalDistanceMeters = distance
+            let distanceValue = distance >= 1000
+                ? String(format: "%.2f km", distance / 1000)
+                : "\(Int(distance.rounded())) m"
+            cards.append(.init(id: "distance", title: "Distance", valueText: distanceValue, symbol: "location.fill", tint: .green))
+            print("[Watch] Distance: \(distance)m (\(distanceType.identifier))")
+        }
+
+        if let speedType = preferredSpeedType(),
+           let speedStats = workoutBuilder.statistics(for: speedType) {
+            print("[Watch] Speed type: \(speedType.identifier), has stats: \(speedStats != nil)")
+            if let current = speedStats.mostRecentQuantity()?.doubleValue(for: HKUnit.meter().unitDivided(by: .second())) {
+                currentSpeedMetersPerSecond = current
+                let isMetric = Locale.current.usesMetricSystem
+                if isMetric {
+                    let speedKMH = current * 3.6
+                    cards.append(.init(id: "speed-current", title: "Speed", valueText: String(format: "%.1f km/h", speedKMH), symbol: "speedometer", tint: .cyan))
+                } else {
+                    let speedMPH = current * 2.23694
+                    cards.append(.init(id: "speed-current", title: "Speed", valueText: String(format: "%.1f mph", speedMPH), symbol: "speedometer", tint: .cyan))
+                }
+                print("[Watch] Current speed: \(current) m/s (\(speedType.identifier))")
+            }
+            if let average = speedStats.averageQuantity()?.doubleValue(for: HKUnit.meter().unitDivided(by: .second())) {
+                let isMetric = Locale.current.usesMetricSystem
+                if isMetric {
+                    let avgKMH = average * 3.6
+                    cards.append(.init(id: "speed-avg", title: "Avg Speed", valueText: String(format: "%.1f km/h", avgKMH), symbol: "speedometer", tint: .cyan))
+                } else {
+                    let avgMPH = average * 2.23694
+                    cards.append(.init(id: "speed-avg", title: "Avg Speed", valueText: String(format: "%.1f mph", avgMPH), symbol: "speedometer", tint: .cyan))
+                }
+            }
+        } else {
+            print("[Watch] No speed type available")
+        }
+
+        if let flightsType = HKQuantityType.quantityType(forIdentifier: .flightsClimbed),
+           let flights = workoutBuilder.statistics(for: flightsType)?.sumQuantity()?.doubleValue(for: .count()) {
+            flightsClimbed = flights
+            let elevationGain = flights * 10
+            elevationGainFeet = max(elevationGainFeet, elevationGain)
+            print("[Watch] Flights climbed: \(flights)")
+        }
+
+        let estimatedElevationFeet = max((flightsClimbed ?? 0) * 10, elevationGainFeet)
+        currentElevationFeet = estimatedElevationFeet
+        elevationGainFeet = max(elevationGainFeet, estimatedElevationFeet)
+        let isMetric = Locale.current.usesMetricSystem
+        if isMetric {
+            let elevationMeters = estimatedElevationFeet / 3.28084
+            cards.append(.init(id: "elevation-gain", title: "Elevation", valueText: "\(Int(elevationMeters.rounded())) m", symbol: "mountain.2.fill", tint: .green))
+        } else {
+            cards.append(.init(id: "elevation-gain", title: "Elevation", valueText: "\(Int(estimatedElevationFeet.rounded())) ft", symbol: "mountain.2.fill", tint: .green))
+        }
+
         if let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate),
            let heartStats = workoutBuilder.statistics(for: heartRateType) {
             if let current = heartStats.mostRecentQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
@@ -2263,7 +2359,49 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
            let speedStats = workoutBuilder.statistics(for: speedType) {
             if let current = speedStats.mostRecentQuantity()?.doubleValue(for: HKUnit.meter().unitDivided(by: .second())) {
                 currentSpeedMetersPerSecond = current
-                cards.append(.init(id: "speed-current", title: "Speed", valueText: String(format: "%.1f km/h", current * 3.6), symbol: "speedometer", tint: .cyan))
+                let isMetric = Locale.current.usesMetricSystem
+                if isMetric {
+                    let speedKMH = current * 3.6
+                    cards.append(.init(id: "speed-current", title: "Speed", valueText: String(format: "%.1f km/h", speedKMH), symbol: "speedometer", tint: .cyan))
+                } else {
+                    let speedMPH = current * 2.23694
+                    cards.append(.init(id: "speed-current", title: "Speed", valueText: String(format: "%.1f mph", speedMPH), symbol: "speedometer", tint: .cyan))
+                }
+            }
+            if let average = speedStats.averageQuantity()?.doubleValue(for: HKUnit.meter().unitDivided(by: .second())) {
+                let isMetric = Locale.current.usesMetricSystem
+                if isMetric {
+                    let avgKMH = average * 3.6
+                    cards.append(.init(id: "speed-avg", title: "Avg Speed", valueText: String(format: "%.1f km/h", avgKMH), symbol: "speedometer", tint: .cyan))
+                } else {
+                    let avgMPH = average * 2.23694
+                    cards.append(.init(id: "speed-avg", title: "Avg Speed", valueText: String(format: "%.1f mph", avgMPH), symbol: "speedometer", tint: .cyan))
+                }
+            }
+        }
+
+        if let elevationType = HKQuantityType.quantityType(forIdentifier: .flightsClimbed),
+           let elevationStats = workoutBuilder.statistics(for: elevationType) {
+            let flights = elevationStats.sumQuantity()?.doubleValue(for: .count())
+            let elevationFeet = (flights ?? 0) * 10
+            currentElevationFeet = elevationFeet
+            elevationGainFeet = max(elevationGainFeet, elevationFeet)
+            let isMetric = Locale.current.usesMetricSystem
+            if isMetric {
+                cards.append(.init(id: "elevation-gain", title: "Elevation", valueText: "\(Int((elevationFeet / 3.28084).rounded())) m", symbol: "mountain.2.fill", tint: .green))
+            } else {
+                cards.append(.init(id: "elevation-gain", title: "Elevation", valueText: "\(Int(elevationFeet.rounded())) ft", symbol: "mountain.2.fill", tint: .green))
+            }
+        } else {
+            let estimatedElevationFeet = max((flightsClimbed ?? 0) * 10, elevationGainFeet)
+            currentElevationFeet = estimatedElevationFeet
+            elevationGainFeet = max(elevationGainFeet, estimatedElevationFeet)
+            let isMetric = Locale.current.usesMetricSystem
+            if isMetric {
+                let elevationMeters = estimatedElevationFeet / 3.28084
+                cards.append(.init(id: "elevation-gain", title: "Elevation", valueText: "\(Int(elevationMeters.rounded())) m", symbol: "mountain.2.fill", tint: .green))
+            } else {
+                cards.append(.init(id: "elevation-gain", title: "Elevation", valueText: "\(Int(estimatedElevationFeet.rounded())) ft", symbol: "mountain.2.fill", tint: .green))
             }
         }
 
@@ -2874,7 +3012,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     /// WatchConnectivity / plist bridging may deliver integers as `NSNumber`; accept those so micro-stages are not dropped.
-    private static func decodeWCInt(_ value: Any?) -> Int? {
+    private func decodeWCInt(_ value: Any?) -> Int? {
         if let v = value as? Int { return v }
         if let n = value as? NSNumber { return n.intValue }
         if let s = value as? String, let v = Int(s) { return v }
@@ -2887,19 +3025,19 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             guard let title = phasePayload["title"] as? String,
                   let subtitle = phasePayload["subtitle"] as? String,
                   let activityID = phasePayload["activityID"] as? String,
-                  let activityRawValue = Self.decodeWCInt(phasePayload["activityRawValue"]),
-                  let locationRawValue = Self.decodeWCInt(phasePayload["locationRawValue"]),
-                  let plannedMinutes = Self.decodeWCInt(phasePayload["plannedMinutes"]) else {
+                  let activityRawValue = self.decodeWCInt(phasePayload["activityRawValue"]),
+                  let locationRawValue = self.decodeWCInt(phasePayload["locationRawValue"]),
+                  let plannedMinutes = self.decodeWCInt(phasePayload["plannedMinutes"]) else {
                 return nil
             }
 
             let stagePayloads = (phasePayload["microStages"] as? [[String: Any]] ?? []).compactMap { stagePayload -> WatchProgramMicroStagePayload? in
                 guard let title = stagePayload["title"] as? String,
                       let goal = stagePayload["goal"] as? String,
-                      let plannedMinutes = Self.decodeWCInt(stagePayload["plannedMinutes"]) else {
+                      let plannedMinutes = self.decodeWCInt(stagePayload["plannedMinutes"]) else {
                     return nil
                 }
-                let repeats = max(Self.decodeWCInt(stagePayload["repeats"]) ?? 1, 1)
+                let repeats = max(self.decodeWCInt(stagePayload["repeats"]) ?? 1, 1)
                 let notes = stagePayload["notes"] as? String ?? ""
                 let targetValueText = stagePayload["targetValueText"] as? String ?? ""
                 let roleRawValue = stagePayload["role"] as? String
@@ -3289,7 +3427,18 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private func preferredSpeedType() -> HKQuantityType? {
         let identifiers: [HKQuantityTypeIdentifier] = [
             .runningSpeed,
-            .walkingSpeed
+            .walkingSpeed,
+            .cyclingSpeed
+        ]
+        return identifiers.compactMap(HKQuantityType.quantityType(forIdentifier:)).first {
+            workoutBuilder?.statistics(for: $0) != nil
+        }
+    }
+
+    private func preferredElevationType() -> HKQuantityType? {
+        let identifiers: [HKQuantityTypeIdentifier] = [
+            .distanceWalkingRunning,
+            .flightsClimbed
         ]
         return identifiers.compactMap(HKQuantityType.quantityType(forIdentifier:)).first {
             workoutBuilder?.statistics(for: $0) != nil
@@ -3601,6 +3750,10 @@ extension WatchWorkoutManager: WCSessionDelegate {
                 print("[Watch] Re-sending active workout snapshot to iPhone")
                 self.refreshRecoveredWorkoutContext()
                 replyHandler([CompanionLaunchKeys.accepted: self.isSessionActive || self.workoutSession != nil])
+            } else if message["requestSnapshotSync"] as? Bool == true {
+                print("[Watch] iPhone requested snapshot sync after crash recovery")
+                self.refreshRecoveredWorkoutContext()
+                replyHandler([CompanionLaunchKeys.accepted: self.isSessionActive || self.workoutSession != nil])
             } else if let effortScore = message[CompanionLifecycleKeys.effortScore] as? Int {
                 print("[Watch] Processing effortScore: \(effortScore)")
                 self.submitEffortScore(effortScore)
@@ -3634,6 +3787,9 @@ extension WatchWorkoutManager: WCSessionDelegate {
                 }
             } else if userInfo[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
                 print("[Watch] Re-sending active workout snapshot from userInfo request")
+                self.refreshRecoveredWorkoutContext()
+            } else if userInfo["requestSnapshotSync"] as? Bool == true {
+                print("[Watch] iPhone requested snapshot sync from userInfo after crash recovery")
                 self.refreshRecoveredWorkoutContext()
             } else if let effortScore = userInfo[CompanionLifecycleKeys.effortScore] as? Int {
                 print("[Watch] Processing userInfo effortScore: \(effortScore)")

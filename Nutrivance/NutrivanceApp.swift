@@ -1127,6 +1127,17 @@ extension Notification.Name {
     static let nutrivanceViewControlFilter4 = Notification.Name("nutrivance.viewControl.filter4")
     static let nutrivanceViewControlRefresh = Notification.Name("nutrivance.viewControl.refresh")
     static let nutrivanceViewControlSaveToJournal = Notification.Name("nutrivance.viewControl.saveToJournal")
+    static let nutrivanceViewControlExpandCollapse = Notification.Name("nutrivance.viewControl.expandCollapse")
+    static let nutrivanceViewControlLogNewQuest = Notification.Name("nutrivance.viewControl.logNewQuest")
+    static let nutrivanceViewControlNewJournalEntry = Notification.Name("nutrivance.viewControl.newJournalEntry")
+    static let nutrivanceViewControlRefreshWorkouts = Notification.Name("nutrivance.viewControl.refreshWorkouts")
+    static let nutrivanceViewControlChartRange7d = Notification.Name("nutrivance.viewControl.chartRange7d")
+    static let nutrivanceViewControlChartRange30d = Notification.Name("nutrivance.viewControl.chartRange30d")
+    static let nutrivanceViewControlChartRangeFeelGood = Notification.Name("nutrivance.viewControl.chartRangeFeelGood")
+    static let nutrivanceViewControlDisplayUnits = Notification.Name("nutrivance.viewControl.displayUnits")
+    static let nutrivanceViewControlArrangeDashboard = Notification.Name("nutrivance.viewControl.arrangeDashboard")
+    static let nutrivanceViewControlWorkoutViews = Notification.Name("nutrivance.viewControl.workoutViews")
+    static let nutrivanceViewControlWorkoutMetricLayout = Notification.Name("nutrivance.viewControl.workoutMetricLayout")
 }
 
 func toggleSystemSidebar() {
@@ -1876,7 +1887,7 @@ struct NutrivanceApp: App {
     
     private func hasContextualControls(for tab: RootTabSelection) -> Bool {
         switch tab {
-        case .strainRecovery, .stress, .sleep:
+        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder:
             return true
         default:
             return false
@@ -1891,6 +1902,10 @@ struct NutrivanceApp: App {
             return ["24H", "1W", "1M"]
         case .sleep:
             return ["Night", "Week", "Month", "Year"]
+        case .pastQuests:
+            return ["7d", "28d", "Year"]
+        case .journal, .workoutHistory:
+            return []
         default:
             return []
         }
@@ -1932,7 +1947,7 @@ struct NutrivanceApp: App {
                 Button("Labels") {
                     navigate(focus: .nutrition, view: "Labels", tab: .labels)
                 }
-                .keyboardShortcut("B", modifiers: [.command, .shift])
+                .keyboardShortcut("E", modifiers: [.command, .shift])
 
                 Button("Log") {
                     navigate(focus: .nutrition, view: "Log", tab: .log)
@@ -2032,7 +2047,7 @@ struct NutrivanceApp: App {
                 Button("Workout History") {
                     navigate(focus: .fitness, view: "Workout History", tab: .workoutHistory)
                 }
-                .keyboardShortcut("W", modifiers: [.command, .option])
+                .keyboardShortcut("H", modifiers: [.command, .shift])
 
                 Button("Activity Rings") {
                     navigate(focus: .fitness, view: "Activity Rings", tab: .activityRings)
@@ -2042,12 +2057,17 @@ struct NutrivanceApp: App {
                 Button("Heart Zones") {
                     navigate(focus: .fitness, view: "Heart Zones", tab: .heartZones)
                 }
-                .keyboardShortcut("H", modifiers: [.command, .shift])
+                .keyboardShortcut("Z", modifiers: [.command, .shift])
 
                 Button("Past Quests") {
                     navigate(focus: .fitness, view: "Past Quests", tab: .pastQuests)
                 }
                 .keyboardShortcut("P", modifiers: [.command, .shift])
+                
+                Button("Program Builder") {
+                    navigate(focus: .fitness, view: "Program Builder", tab: .programBuilder)
+                }
+                .keyboardShortcut("B", modifiers: [.command, .shift])
 
                 Button("Mindfulness Realm") {
                     navigate(focus: .mentalHealth, view: "Mindfulness Realm", tab: .mindfulnessRealm)
@@ -2086,40 +2106,39 @@ struct NutrivanceApp: App {
             }
             CommandMenu("View Controls") {
                 if hasContextualControls(for: navigationState.selectedRootTab) {
-                    Button("Today") {
-                        postViewControl(.nutrivanceViewControlToday)
-                    }
-                    .keyboardShortcut("T", modifiers: [.command])
-                    
-                    Button("Previous") {
-                        postViewControl(.nutrivanceViewControlPrevious)
-                    }
-                    .keyboardShortcut(.leftArrow, modifiers: [.command])
-                    
-                    Button("Next") {
-                        postViewControl(.nutrivanceViewControlNext)
-                    }
-                    .keyboardShortcut(.rightArrow, modifiers: [.command])
-                    
-                    ForEach(Array(filterButtonTitles(for: navigationState.selectedRootTab).enumerated()), id: \.offset) { index, title in
-                        Button(title) {
-                            switch index {
-                            case 0:
-                                postViewControl(.nutrivanceViewControlFilter1)
-                            case 1:
-                                postViewControl(.nutrivanceViewControlFilter2)
-                            case 2:
-                                postViewControl(.nutrivanceViewControlFilter3)
-                            case 3:
-                                postViewControl(.nutrivanceViewControlFilter4)
-                            default:
-                                break
-                            }
-                        }
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command])
-                    }
-
                     if navigationState.selectedRootTab == .strainRecovery {
+                        Button("Today") {
+                            postViewControl(.nutrivanceViewControlToday)
+                        }
+                        .keyboardShortcut("T", modifiers: [.command])
+
+                        Button("Previous") {
+                            postViewControl(.nutrivanceViewControlPrevious)
+                        }
+                        .keyboardShortcut(.leftArrow, modifiers: [.command])
+
+                        Button("Next") {
+                            postViewControl(.nutrivanceViewControlNext)
+                        }
+                        .keyboardShortcut(.rightArrow, modifiers: [.command])
+
+                        Divider()
+
+                        Button("1W") {
+                            postViewControl(.nutrivanceViewControlFilter1)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("1M") {
+                            postViewControl(.nutrivanceViewControlFilter2)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Button("1Y") {
+                            postViewControl(.nutrivanceViewControlFilter3)
+                        }
+                        .keyboardShortcut("3", modifiers: [.command])
+
                         Divider()
 
                         Button("Refresh Coach Summary") {
@@ -2131,6 +2150,172 @@ struct NutrivanceApp: App {
                             postViewControl(.nutrivanceViewControlSaveToJournal)
                         }
                         .keyboardShortcut("S", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .stress {
+                        Button("Today") {
+                            postViewControl(.nutrivanceViewControlToday)
+                        }
+                        .keyboardShortcut("T", modifiers: [.command])
+
+                        Button("Previous") {
+                            postViewControl(.nutrivanceViewControlPrevious)
+                        }
+                        .keyboardShortcut(.leftArrow, modifiers: [.command])
+
+                        Button("Next") {
+                            postViewControl(.nutrivanceViewControlNext)
+                        }
+                        .keyboardShortcut(.rightArrow, modifiers: [.command])
+
+                        Divider()
+
+                        Button("24H") {
+                            postViewControl(.nutrivanceViewControlFilter1)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("1W") {
+                            postViewControl(.nutrivanceViewControlFilter2)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Button("1M") {
+                            postViewControl(.nutrivanceViewControlFilter3)
+                        }
+                        .keyboardShortcut("3", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .sleep {
+                        Button("Today") {
+                            postViewControl(.nutrivanceViewControlToday)
+                        }
+                        .keyboardShortcut("T", modifiers: [.command])
+
+                        Button("Previous") {
+                            postViewControl(.nutrivanceViewControlPrevious)
+                        }
+                        .keyboardShortcut(.leftArrow, modifiers: [.command])
+
+                        Button("Next") {
+                            postViewControl(.nutrivanceViewControlNext)
+                        }
+                        .keyboardShortcut(.rightArrow, modifiers: [.command])
+
+                        Divider()
+
+                        Button("Night") {
+                            postViewControl(.nutrivanceViewControlFilter1)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("Week") {
+                            postViewControl(.nutrivanceViewControlFilter2)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Button("Month") {
+                            postViewControl(.nutrivanceViewControlFilter3)
+                        }
+                        .keyboardShortcut("3", modifiers: [.command])
+
+                        Button("Year") {
+                            postViewControl(.nutrivanceViewControlFilter4)
+                        }
+                        .keyboardShortcut("4", modifiers: [.command])
+
+                        Divider()
+
+                        Button("Expand/Collapse Stages") {
+                            postViewControl(.nutrivanceViewControlExpandCollapse)
+                        }
+                        .keyboardShortcut("E", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .pastQuests {
+                        Button("Today") {
+                            postViewControl(.nutrivanceViewControlToday)
+                        }
+                        .keyboardShortcut("T", modifiers: [.command])
+
+                        Divider()
+
+                        Button("7d") {
+                            postViewControl(.nutrivanceViewControlFilter1)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("28d") {
+                            postViewControl(.nutrivanceViewControlFilter2)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Button("Year") {
+                            postViewControl(.nutrivanceViewControlFilter3)
+                        }
+                        .keyboardShortcut("3", modifiers: [.command])
+
+                        Divider()
+
+                        Button("Log New Quest") {
+                            postViewControl(.nutrivanceViewControlLogNewQuest)
+                        }
+                        .keyboardShortcut("N", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .journal {
+                        Button("New Journal Entry") {
+                            postViewControl(.nutrivanceViewControlNewJournalEntry)
+                        }
+                        .keyboardShortcut("N", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .workoutHistory {
+                        Button("Refresh Workouts") {
+                            postViewControl(.nutrivanceViewControlRefreshWorkouts)
+                        }
+                        .keyboardShortcut("R", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .dashboard {
+                        Button("7 Days") {
+                            postViewControl(.nutrivanceViewControlChartRange7d)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("30 Days") {
+                            postViewControl(.nutrivanceViewControlChartRange30d)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Button("Feel Good Score") {
+                            postViewControl(.nutrivanceViewControlChartRangeFeelGood)
+                        }
+                        .keyboardShortcut("3", modifiers: [.command])
+
+                        Divider()
+
+                        Button("Display Units") {
+                            postViewControl(.nutrivanceViewControlDisplayUnits)
+                        }
+                        .keyboardShortcut("U", modifiers: [.command])
+
+                        Button("Arrange Dashboard") {
+                            postViewControl(.nutrivanceViewControlArrangeDashboard)
+                        }
+                        .keyboardShortcut("E", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .programBuilder {
+                        Button("Workout Views") {
+                            postViewControl(.nutrivanceViewControlWorkoutViews)
+                        }
+                        .keyboardShortcut("U", modifiers: [.command])
+
+                        Button("Workout Metric Layout") {
+                            postViewControl(.nutrivanceViewControlWorkoutMetricLayout)
+                        }
+                        .keyboardShortcut("E", modifiers: [.command])
                     }
                 } else {
                     Button("No View Controls Available") {}

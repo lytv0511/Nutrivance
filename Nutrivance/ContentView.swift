@@ -1752,6 +1752,28 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         currentMicroStageIndex = payload.currentMicroStageIndex
         isWorkoutActive = true
         shouldAutoPresentLiveView = false
+        if source == .appleWatch {
+            requestWatchSnapshotSync()
+        }
+    }
+
+    private func requestWatchSnapshotSync() {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated else {
+            session.activate()
+            return
+        }
+        let payload: [String: Any] = [
+            "requestSnapshotSync": true
+        ]
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil) { error in
+                print("[Companion] Failed to request snapshot sync: \(error.localizedDescription)")
+            }
+        } else {
+            session.transferUserInfo(payload)
+        }
     }
 
     @available(iOS 26.0, *)

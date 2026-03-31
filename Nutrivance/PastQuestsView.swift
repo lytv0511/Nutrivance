@@ -321,6 +321,11 @@ struct PastQuestsView: View {
                 Button { stepWindow(1) } label: { Image(systemName: "chevron.right") }.disabled(!canStepForward)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter1)) { _ in selectedWindow = .d7 }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter2)) { _ in selectedWindow = .d28 }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter3)) { _ in selectedWindow = .year }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlLogNewQuest)) { _ in isManualLoggerPresented = true }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in jumpToToday() }
         .sheet(isPresented: $isManualLoggerPresented) {
             ManualQuestLoggerSheet(defaultWorkoutID: selectedWorkoutID, workouts: availableWorkouts) { record in
                 store.append(record: record)
@@ -354,6 +359,10 @@ struct PastQuestsView: View {
         }
     }
 
+    private func jumpToToday() {
+        anchorDate = Date()
+    }
+
     private func filteredRecords(workoutID: String, goal: ProgramMicroStageGoal, role: ProgramMicroStageRole) -> [StageQuestRecord] {
         store.records.filter {
             $0.workoutID == workoutID && $0.goal == goal && $0.role == role && $0.completedAt >= periodStart && $0.completedAt < periodEnd
@@ -381,7 +390,7 @@ struct PastQuestsView: View {
         }
         selectedWorkoutID = availableWorkouts.contains(decoded.workoutID) ? decoded.workoutID : (availableWorkouts.first ?? "cycling")
         selectedWindow = StageHistoryWindow(rawValue: decoded.windowRawValue) ?? .d28
-        anchorDate = decoded.anchorDate
+        anchorDate = min(decoded.anchorDate, Date())
     }
     private func persistFilterState() {
         let state = StageHistoryFilterState(workoutID: selectedWorkoutID, windowRawValue: selectedWindow.rawValue, anchorDate: anchorDate)

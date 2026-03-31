@@ -14,6 +14,36 @@ import SwiftUI
 import WatchKit
 import WorkoutKit
 
+private enum ProgramMicroStageRole: String, CaseIterable {
+    case warmup
+    case goal
+    case steady
+    case work
+    case recovery
+    case cooldown
+
+    init?(storageValue: String) {
+        switch storageValue {
+        case "simpleGoal":
+            self = .goal
+        default:
+            self.init(rawValue: storageValue)
+        }
+    }
+}
+
+private enum ProgramMicroStageGoal: String, CaseIterable {
+    case open
+    case time
+    case distance
+    case energy
+    case heartRateZone
+    case power
+    case pace
+    case speed
+    case cadence
+}
+
 private struct WatchDoubleTapActionModifier: ViewModifier {
     let action: () -> Void
 
@@ -418,6 +448,8 @@ private struct WorkoutLivePageView: View {
                     WorkoutPacerCard(manager: manager)
                 case .map:
                     EmptyView()
+                case .targetTracker:
+                    WorkoutTargetTrackerCard(manager: manager)
                 }
             }
             .scaleEffect(pageScale, anchor: .top)
@@ -473,7 +505,7 @@ private func watchWorkoutLayoutScale(for size: CGSize, page: WatchWorkoutPageKin
     case .compact40:
         switch page {
         case .pacer:
-            return 0.74
+            return 0.82
         case .heartRateZones:
             return 0.82
         case .planTracking:
@@ -507,11 +539,11 @@ private func watchWorkoutLayoutScale(for size: CGSize, page: WatchWorkoutPageKin
 private func watchDenseCardInsets(for size: CGSize) -> (horizontal: CGFloat, top: CGFloat, bottom: CGFloat) {
     switch watchWorkoutScreenClass(for: size) {
     case .compact40:
-        return (8, 2, 4)
+        return (-10, -10, 10)
     case .regular46:
-        return (8, 1, 10)
+        return (10, -10, 10)
     case .ultra49:
-        return (9, 1, 12)
+        return (15, -10, 12)
     }
 }
 
@@ -761,6 +793,572 @@ private struct WorkoutPlanTrackingCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 6)
+    }
+}
+
+private struct WorkoutTargetTrackerCard: View {
+    @ObservedObject var manager: WatchWorkoutManager
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+    var body: some View {
+        GeometryReader { geometry in
+            let screenClass = watchWorkoutScreenClass(for: geometry.size)
+            let isCompactScreen = screenClass == .compact40
+            let insets = watchDenseCardInsets(for: geometry.size)
+
+            VStack(alignment: .leading, spacing: isCompactScreen ? 3 : 4) {
+                if let stage = manager.currentMicroStage {
+                    let goal = ProgramMicroStageGoal(rawValue: stage.goalRawValue ?? "") ?? .time
+                    let role = ProgramMicroStageRole(storageValue: stage.roleRawValue ?? "") ?? .steady
+                    
+                    Text(workoutElapsedDisplayString(manager.elapsedTime, reducedLuminance: isLuminanceReduced))
+                        .font(.system(size: isCompactScreen ? 20 : 24, weight: .black, design: .rounded).monospacedDigit())
+                        .fontWidth(.condensed)
+                        .foregroundStyle(.yellow)
+
+                    TargetTrackerStrip(stage: stage, manager: manager, isCompact: isCompactScreen)
+
+                    targetMetricDisplayInline(for: stage, manager: manager, isCompactScreen: isCompactScreen)
+
+                    HStack(alignment: .lastTextBaseline, spacing: 4) {
+                        let elapsed = manager.currentStageElapsedTime ?? 0
+                        let elapsedMinutes = Int(elapsed) / 60
+                        let elapsedSeconds = Int(elapsed) % 60
+                        
+                        Text(String(format: "%d:%02d", elapsedMinutes, elapsedSeconds))
+                            .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
+                            .fontWidth(.condensed)
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
+                            .foregroundStyle(.cyan)
+                        Text("STAGE TIME")
+                            .font(.system(size: isCompactScreen ? 6.5 : 7.5, weight: .black, design: .rounded))
+                            .fontWidth(.compressed)
+                            .foregroundStyle(.white.opacity(0.82))
+                        Spacer(minLength: 0)
+                    }
+
+                    if stage.repeats > 1 {
+                        HStack(alignment: .lastTextBaseline, spacing: 4) {
+                            Text("\(manager.currentRepeatIteration + 1)/\(stage.repeats)")
+                                .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
+                                .fontWidth(.condensed)
+                            Image(systemName: "repeat")
+                                .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
+                                .foregroundStyle(.orange)
+                            Text("ROUND")
+                                .font(.system(size: isCompactScreen ? 6.5 : 7.5, weight: .black, design: .rounded))
+                                .fontWidth(.compressed)
+                                .foregroundStyle(.white.opacity(0.82))
+                            Spacer(minLength: 0)
+                        }
+                    }
+                } else {
+                    Text("No active stage")
+                        .font(.system(size: isCompactScreen ? 14 : 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            .padding(.horizontal, insets.horizontal)
+            .padding(.top, insets.top)
+            .padding(.bottom, insets.bottom + (isCompactScreen ? 2 : 4))
+        }
+    }
+}
+
+private struct TargetTrackerStrip: View {
+    let stage: WatchProgramMicroStagePayload
+    let manager: WatchWorkoutManager
+    let isCompact: Bool
+
+    private var role: ProgramMicroStageRole {
+        ProgramMicroStageRole(storageValue: stage.roleRawValue ?? "") ?? .steady
+    }
+
+    private var goal: ProgramMicroStageGoal {
+        ProgramMicroStageGoal(rawValue: stage.goalRawValue ?? "") ?? .time
+    }
+
+    private var segments: [TargetTrackerSegment] {
+        buildSegments(for: role, goal: goal, stage: stage, manager: manager)
+    }
+
+    private var currentValue: Double? {
+        currentMetricValue(for: goal, manager: manager)
+    }
+
+    private var currentSegmentIndex: Int? {
+        guard let value = currentValue else { return nil }
+        return segments.firstIndex { $0.contains(value) }
+    }
+
+    private var arrowPositionInSegment: CGFloat? {
+        guard let value = currentValue, let idx = currentSegmentIndex else { return nil }
+        let segment = segments[idx]
+        let range = segment.maxValue - segment.minValue
+        guard range > 0 else { return 0.5 }
+        let normalized = (value - segment.minValue) / range
+        return CGFloat(max(0, min(1, normalized)))
+    }
+
+    private var targetRange: (min: Double, max: Double)? {
+        switch role {
+        case .steady:
+            return parseTargetRange(stage.targetValueText)
+        case .work:
+            if let min = parseSingleValue(stage.targetValueText) {
+                return (min, min * 1.5)
+            }
+        case .recovery:
+            if let max = parseSingleValue(stage.targetValueText) {
+                return (max * 0.5, max)
+            }
+        default:
+            return nil
+        }
+        return nil
+    }
+
+    private var currentPosition: TargetPosition {
+        guard let value = currentValue, let range = targetRange else { return .optimal }
+        if value < range.min { return .low }
+        if value > range.max { return .high }
+        return .optimal
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 2) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { idx, segment in
+                    segmentBox(idx: idx, segment: segment)
+                }
+            }
+            
+            if let idx = currentSegmentIndex, let pos = arrowPositionInSegment {
+                arrowIndicator(totalSegments: segments.count, currentIndex: idx, positionInSegment: pos)
+            }
+        }
+    }
+
+    private func segmentBox(idx: Int, segment: TargetTrackerSegment) -> some View {
+        let isExpanded: Bool
+        switch currentPosition {
+        case .low:
+            isExpanded = idx == 0
+        case .optimal:
+            isExpanded = idx == 1
+        case .high:
+            isExpanded = idx == 2
+        }
+        let segmentWidth: CGFloat = isExpanded ? (isCompact ? 52 : 62) : (isCompact ? 13 : 16)
+        let segmentHeight: CGFloat = isExpanded ? (isCompact ? 22 : 26) : (isCompact ? 16 : 20)
+
+        return Group {
+        if isExpanded {
+            HStack(spacing: 2) {
+                if let firstLabel = segmentStartLabel(segment) {
+                    Text(firstLabel)
+                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(segment.color)
+                    .frame(width: segmentWidth, height: segmentHeight)
+                    .overlay {
+                        HStack(spacing: 2) {
+                            Image(systemName: goalIcon(for: goal))
+                                .font(.system(size: isCompact ? 6 : 7, weight: .black))
+                            Text(positionLabel)
+                                .font(.system(size: isCompact ? 6 : 7, weight: .black, design: .rounded))
+                                .fontWidth(.compressed)
+                        }
+                        .foregroundStyle(.black)
+                    }
+                
+                if let lastLabel = segmentEndLabel(segment) {
+                    Text(lastLabel)
+                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+        } else {
+            HStack(spacing: 2) {
+                if let label = segmentStartLabel(segment) {
+                    Text(label)
+                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(segment.color)
+                    .frame(width: segmentWidth, height: segmentHeight)
+                
+                if let label = segmentEndLabel(segment) {
+                    Text(label)
+                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+        }
+        }
+    }
+
+    private var positionLabel: String {
+        let targetZone = targetZoneNumber
+        switch currentPosition {
+        case .low:
+            return "< \(targetZone)"
+        case .optimal:
+            return "In \(targetZone)"
+        case .high:
+            return "> \(targetZone)"
+        }
+    }
+
+    private var targetZoneNumber: String {
+        guard let range = targetRange else { return "" }
+        switch goal {
+        case .heartRateZone:
+            return "Zone \(Int(range.min))"
+        case .power:
+            return "\(Int(range.min))W"
+        case .cadence:
+            return "\(Int(range.min))"
+        case .speed:
+            return "\(Int(range.min))"
+        case .pace:
+            let minutes = Int(range.min) / 60
+            let seconds = Int(range.min) % 60
+            return "\(minutes):\(String(format: "%02d", seconds))"
+        default:
+            return "\(Int(range.min))"
+        }
+    }
+
+    @ViewBuilder
+    private func arrowIndicator(totalSegments: Int, currentIndex: Int, positionInSegment: CGFloat) -> some View {
+        GeometryReader { geometry in
+            let totalWidth = geometry.size.width
+            let segmentWidth = totalWidth / CGFloat(totalSegments)
+            let currentSegmentStart = CGFloat(currentIndex) * segmentWidth
+            let arrowOffset = currentSegmentStart + (positionInSegment * segmentWidth)
+
+            Image(systemName: "chevron.up")
+                .font(.system(size: isCompact ? 6 : 7, weight: .bold))
+                .foregroundStyle(.white)
+                .offset(x: arrowOffset - (isCompact ? 3 : 4))
+        }
+        .frame(height: isCompact ? 8 : 10)
+    }
+
+    private func segmentStartLabel(_ segment: TargetTrackerSegment) -> String? {
+        guard let label = segment.label else { return nil }
+        if let dashIndex = label.firstIndex(of: "-") {
+            return String(label[..<dashIndex])
+        }
+        return nil
+    }
+
+    private func segmentEndLabel(_ segment: TargetTrackerSegment) -> String? {
+        guard let label = segment.label else { return nil }
+        if let dashIndex = label.firstIndex(of: "-") {
+            return String(label[label.index(after: dashIndex)...])
+        }
+        return label
+    }
+
+    private func goalIcon(for goal: ProgramMicroStageGoal) -> String {
+        switch goal {
+        case .heartRateZone: return "heart.fill"
+        case .power: return "bolt.fill"
+        case .cadence: return "figure.run"
+        case .speed, .pace: return "speedometer"
+        case .distance: return "map.fill"
+        case .energy: return "flame.fill"
+        case .time: return "clock.fill"
+        case .open: return "circle"
+        }
+    }
+
+    private func buildSegments(for role: ProgramMicroStageRole, goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload, manager: WatchWorkoutManager) -> [TargetTrackerSegment] {
+        switch role {
+        case .steady: return buildSteadySegments(goal: goal, stage: stage)
+        case .work: return buildWorkSegments(goal: goal, stage: stage)
+        case .recovery: return buildRecoverySegments(goal: goal, stage: stage)
+        case .goal: return buildGoalSegments(goal: goal, stage: stage, manager: manager)
+        case .warmup, .cooldown: return buildDefaultSegments(goal: goal, stage: stage)
+        }
+    }
+
+    private func buildSteadySegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
+        guard let range = parseTargetRange(stage.targetValueText) else {
+            return buildDefaultThreeSegment(targetValue: 2, goal: goal, color: zoneColor(2))
+        }
+        return buildThreeSegmentForRange(range: range, goal: goal)
+    }
+
+    private func buildWorkSegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
+        guard let min = parseSingleValue(stage.targetValueText) else {
+            return buildDefaultThreeSegment(targetValue: 3, goal: goal, color: zoneColor(3))
+        }
+        return buildThreeSegmentForRange(range: (min, min * 1.5), goal: goal)
+    }
+
+    private func buildRecoverySegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
+        guard let max = parseSingleValue(stage.targetValueText) else {
+            return buildDefaultThreeSegment(targetValue: 2, goal: goal, color: zoneColor(2))
+        }
+        return buildThreeSegmentForRange(range: (max * 0.5, max), goal: goal)
+    }
+
+    private func buildGoalSegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload, manager: WatchWorkoutManager) -> [TargetTrackerSegment] {
+        let progress: Double
+        switch stage.objective.kind {
+        case .distance:
+            let target = Double(stage.plannedMinutes * 60 * 3)
+            progress = min(100, max(0, (manager.totalDistanceMeters / target) * 100))
+        case .energy:
+            let target = Double(stage.plannedMinutes * 10)
+            progress = min(100, max(0, (manager.currentEnergyKilocalories / target) * 100))
+        case .time:
+            let elapsed = manager.currentStageElapsedTime ?? 0
+            progress = min(100, max(0, (elapsed / Double(stage.plannedMinutes * 60)) * 100))
+        default:
+            progress = 0
+        }
+        return [
+            TargetTrackerSegment(label: nil, color: .purple.opacity(0.45), minValue: 0, maxValue: progress, isTarget: false),
+            TargetTrackerSegment(label: "GOAL", color: .green.opacity(0.98), minValue: progress, maxValue: 100, isTarget: true)
+        ]
+    }
+
+    private func buildDefaultSegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
+        [TargetTrackerSegment(label: goalNameForDisplay(goal), color: .blue.opacity(0.45), minValue: 0, maxValue: 100, isTarget: true)]
+    }
+
+    private func parseTargetRange(_ text: String?) -> (Double, Double)? {
+        guard let text = text else { return nil }
+        if text.contains("-") {
+            let parts = text.components(separatedBy: "-").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2,
+                  let first = extractNumberFromText(parts[0]),
+                  let second = extractNumberFromText(parts[1]) else { return nil }
+            return (min(first, second), max(first, second))
+        }
+        return nil
+    }
+
+    private func parseSingleValue(_ text: String?) -> Double? {
+        guard let text = text else { return nil }
+        return extractNumberFromText(text)
+    }
+
+    private func extractNumberFromText(_ text: String) -> Double? {
+        let numericString = text.components(separatedBy: CharacterSet.decimalDigits.union(CharacterSet(charactersIn: ".-")).inverted).joined()
+        return Double(numericString)
+    }
+
+    private func buildThreeSegmentForRange(range: (min: Double, max: Double), goal: ProgramMicroStageGoal) -> [TargetTrackerSegment] {
+        let lowerZone = zoneForValue(range.min, goal: goal)
+        let upperZone = zoneForValue(range.max, goal: goal)
+        let label = "\(Int(range.min))-\(Int(range.max))"
+        return [
+            TargetTrackerSegment(label: nil, color: zoneColor(lowerZone).opacity(0.45), minValue: 0, maxValue: range.min, isTarget: false),
+            TargetTrackerSegment(label: label, color: zoneColor(upperZone).opacity(0.98), minValue: range.min, maxValue: range.max, isTarget: true),
+            TargetTrackerSegment(label: nil, color: zoneColor(min(upperZone + 1, 4)).opacity(0.45), minValue: range.max, maxValue: range.max * 1.5, isTarget: false)
+        ]
+    }
+
+    private func buildDefaultThreeSegment(targetValue: Double, goal: ProgramMicroStageGoal, color: Color) -> [TargetTrackerSegment] {
+        let label = "\(Int(targetValue))"
+        let lowerZoneColor = zoneColor(max(Int(targetValue) - 1, 0))
+        let targetZoneColor = zoneColor(Int(targetValue))
+        let upperZoneColor = zoneColor(min(Int(targetValue) + 1, 4))
+        return [
+            TargetTrackerSegment(label: nil, color: lowerZoneColor.opacity(0.45), minValue: 0, maxValue: targetValue * 0.8, isTarget: false),
+            TargetTrackerSegment(label: label, color: targetZoneColor.opacity(0.98), minValue: targetValue * 0.8, maxValue: targetValue * 1.2, isTarget: true),
+            TargetTrackerSegment(label: nil, color: upperZoneColor.opacity(0.45), minValue: targetValue * 1.2, maxValue: targetValue * 1.6, isTarget: false)
+        ]
+    }
+}
+
+private struct TargetTrackerSegment: Identifiable {
+    let id = UUID()
+    let label: String?
+    let color: Color
+    let minValue: Double
+    let maxValue: Double
+    let isTarget: Bool
+
+    func contains(_ value: Double) -> Bool {
+        value >= minValue && value < maxValue
+    }
+}
+
+private enum TargetPosition {
+    case low
+    case optimal
+    case high
+}
+
+private func currentMetricValue(for goal: ProgramMicroStageGoal, manager: WatchWorkoutManager) -> Double? {
+    switch goal {
+    case .heartRateZone:
+        guard let hr = manager.currentHeartRate, let zone = manager.currentZoneIndex else { return nil }
+        return Double(zone + 1)
+    case .power:
+        return manager.currentPowerWatts
+    case .cadence:
+        return manager.currentCadence
+    case .speed:
+        return manager.currentSpeedMetersPerSecond.map { $0 * 3.6 }
+    case .pace:
+        guard let speed = manager.currentSpeedMetersPerSecond, speed > 0 else { return nil }
+        return 1609.34 / speed
+    case .distance:
+        return manager.totalDistanceMeters / 1000.0
+    case .energy:
+        return manager.currentEnergyKilocalories
+    default:
+        return nil
+    }
+}
+
+private func zoneForValue(_ value: Double, goal: ProgramMicroStageGoal) -> Int {
+    switch goal {
+    case .heartRateZone:
+        return min(max(Int(value) - 1, 0), 4)
+    case .power:
+        if value < 100 { return 0 }
+        else if value < 150 { return 1 }
+        else if value < 200 { return 2 }
+        else if value < 250 { return 3 }
+        else { return 4 }
+    case .cadence:
+        if value < 80 { return 0 }
+        else if value < 100 { return 1 }
+        else if value < 120 { return 2 }
+        else if value < 140 { return 3 }
+        else { return 4 }
+    default:
+        return 2
+    }
+}
+
+private func zoneColor(_ index: Int) -> Color {
+    switch index {
+    case 0:
+        return .blue
+    case 1:
+        return .cyan
+    case 2:
+        return .green
+    case 3:
+        return .orange
+    default:
+        return .red
+    }
+}
+
+private func goalNameForDisplay(_ goal: ProgramMicroStageGoal) -> String {
+    switch goal {
+    case .open: return "Open"
+    case .time: return "Time"
+    case .distance: return "Distance"
+    case .energy: return "Energy"
+    case .heartRateZone: return "HR Zone"
+    case .power: return "Power"
+    case .pace: return "Pace"
+    case .speed: return "Speed"
+    case .cadence: return "Cadence"
+    }
+}
+
+@ViewBuilder
+private func targetMetricDisplayInline(for stage: WatchProgramMicroStagePayload, manager: WatchWorkoutManager, isCompactScreen: Bool) -> some View {
+    let goal = ProgramMicroStageGoal(rawValue: stage.goalRawValue ?? "") ?? .time
+
+    switch goal {
+    case .heartRateZone:
+        if let hr = manager.currentHeartRate, let zone = manager.currentZoneIndex {
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
+                Text("Zone \(zone + 1)")
+                    .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                Text("\(Int(hr.rounded()))BPM")
+                    .font(.system(size: isCompactScreen ? 15 : 18, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                Image(systemName: "heart.fill")
+                    .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
+                    .foregroundStyle(.red)
+                Spacer(minLength: 0)
+            }
+        }
+    case .power:
+        if let watts = manager.currentPowerWatts {
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
+                Text("\(Int(watts.rounded()))")
+                    .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                Text("W")
+                    .font(.system(size: isCompactScreen ? 13 : 16, weight: .black, design: .rounded))
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
+                    .foregroundStyle(.yellow)
+                Spacer(minLength: 0)
+            }
+        }
+    case .cadence:
+        if let rpm = manager.currentCadence {
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
+                Text("\(Int(rpm.rounded()))")
+                    .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                Text("RPM")
+                    .font(.system(size: isCompactScreen ? 13 : 16, weight: .black, design: .rounded))
+                Image(systemName: "figure.run")
+                    .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
+                    .foregroundStyle(.mint)
+                Spacer(minLength: 0)
+            }
+        }
+    case .speed:
+        if let speed = manager.currentSpeedMetersPerSecond {
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
+                Text(String(format: "%.1f", speed * 3.6))
+                    .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                Text("km/h")
+                    .font(.system(size: isCompactScreen ? 13 : 16, weight: .black, design: .rounded))
+                Image(systemName: "speedometer")
+                    .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
+                    .foregroundStyle(.cyan)
+                Spacer(minLength: 0)
+            }
+        }
+    case .pace:
+        if let speed = manager.currentSpeedMetersPerSecond, speed > 0 {
+            let paceSeconds = 1609.34 / speed
+            let paceMinutes = Int(paceSeconds) / 60
+            let paceSecs = Int(paceSeconds) % 60
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
+                Text(String(format: "%d:%02d", paceMinutes, paceSecs))
+                    .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
+                    .fontWidth(.condensed)
+                Text("/mi")
+                    .font(.system(size: isCompactScreen ? 13 : 16, weight: .black, design: .rounded))
+                Image(systemName: "stopwatch.fill")
+                    .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
+                    .foregroundStyle(.orange)
+                Spacer(minLength: 0)
+            }
+        }
+    default:
+        EmptyView()
     }
 }
 
@@ -1280,8 +1878,6 @@ private struct WorkoutMetricsCard: View {
                             .minimumScaleFactor(0.62)
                             .layoutPriority(1)
 
-                        Spacer(minLength: 0)
-
                         HStack(alignment: .center, spacing: 5) {
                             Image(systemName: line.symbol)
                                 .font(.system(size: isCompactScreen ? 11 : 13, weight: .bold))
@@ -1305,9 +1901,9 @@ private struct WorkoutMetricsCard: View {
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, max(insets.horizontal - 1, 6))
-            .padding(.top, max(insets.top + 6, 8))
-            .padding(.bottom, max(insets.bottom + 6, 10))
+            .padding(.horizontal, insets.horizontal)
+            .padding(.top, insets.top)
+            .padding(.bottom, insets.bottom)
         }
         .onAppear {
             updatePulseAnimation()
@@ -1563,7 +2159,7 @@ private struct WorkoutSplitsCard: View {
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, insets.horizontal)
+            .padding(.horizontal, insets.horizontal/2)
             .padding(.top, insets.top)
             .padding(.bottom, insets.bottom)
         }
@@ -1794,7 +2390,7 @@ private struct WorkoutMetricGraphScaffold: View {
                 Spacer(minLength: 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .padding(.horizontal, insets.horizontal)
+            .padding(.horizontal, insets.horizontal/3)
             .padding(.top, insets.top)
             .padding(.bottom, insets.bottom)
         }
@@ -6447,21 +7043,6 @@ private func band(for value: Double, idealRange: ClosedRange<Double>) -> MetricB
     return .optimal
 }
 
-private func zoneColor(_ index: Int) -> Color {
-    switch index {
-    case 0:
-        return .blue
-    case 1:
-        return .cyan
-    case 2:
-        return .green
-    case 3:
-        return .orange
-    default:
-        return .red
-    }
-}
-
 private func detailMessage(for value: Double, title: String, band: MetricBand) -> String {
     switch band {
     case .low:
@@ -6647,6 +7228,8 @@ private func workoutPageSymbol(_ page: WatchWorkoutPageKind) -> String {
         return "speedometer"
     case .map:
         return "map.fill"
+    case .targetTracker:
+        return "target"
     }
 }
 

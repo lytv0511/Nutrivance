@@ -397,6 +397,17 @@ struct WorkoutHistoryView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 reloadPersistedHRZoneSettings()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlRefreshWorkouts)) { _ in
+                Task {
+                    isLoading = true
+                    if engine.hasNewDataAvailable {
+                        await engine.replaceWorkoutCacheWithNewData(days: 3650)
+                    } else {
+                        await engine.forceRefreshWorkoutAnalytics(days: 3650)
+                    }
+                    isLoading = false
+                }
+            }
             .onChange(of: navigationState.pendingWorkoutScrollID) { _, _ in
                 handlePendingWorkoutNavigation()
             }
