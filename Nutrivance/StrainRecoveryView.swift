@@ -109,7 +109,7 @@ struct StrainRecoveryView: View {
             GeometryReader { geometry in
                 ZStack {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 28) {
+                        LazyVStack(alignment: .leading, spacing: 28) {
                     // Time and Sport Filters
                     HStack {
                         HStack(spacing: 8) {
@@ -165,7 +165,6 @@ struct StrainRecoveryView: View {
                             anchorDate: coachSummaryAnchorDate,
                             aggressiveCachingController: aggressiveCachingController
                         )
-                        .id("ai-summary-\(timeFilter.rawValue)-\(sportFilter ?? "all")-\(coachSummaryAnchorDate.timeIntervalSinceReferenceDate)")
 
                     MetricSectionGroup(title: "Training Load") {
                         StrainRecoveryMathSection(
@@ -388,28 +387,28 @@ struct StrainRecoveryView: View {
     @MainActor
     private func ensureHistoricalCoverageIfNeeded() async {
         historicalCoverageTask?.cancel()
+        
+        let calendar = Calendar.current
+        let window = chartWindow(for: timeFilter, anchorDate: selectedDate)
+        let historicalWindowStart = calendar.date(byAdding: .day, value: -27, to: window.start) ?? window.start
+        let interactiveThreshold = calendar.date(byAdding: .day, value: -engine.interactiveWorkoutLookbackDaysForUI, to: Date()) ?? Date()
+        
+        guard selectedDate < interactiveThreshold else { return }
+        
         let task = Task { @MainActor in
-            let calendar = Calendar.current
-            let window = chartWindow(for: timeFilter, anchorDate: selectedDate)
-            let historicalWindowStart = calendar.date(byAdding: .day, value: -27, to: window.start) ?? window.start
-            let interactiveThreshold = calendar.date(byAdding: .day, value: -engine.interactiveWorkoutLookbackDaysForUI, to: Date()) ?? Date()
             let selectedYearStart = calendar.dateInterval(of: .year, for: selectedDate)?.start ?? window.start
             let yearPrefetchStart = calendar.date(byAdding: .day, value: -27, to: selectedYearStart) ?? selectedYearStart
-            let workoutCoverageStart = selectedDate < interactiveThreshold
-                ? min(yearPrefetchStart, historicalWindowStart)
-                : historicalWindowStart
+            let workoutCoverageStart = min(yearPrefetchStart, historicalWindowStart)
             let vitalCoverageStart = historicalWindowStart
             let needsWorkoutCoverage = engine.needsWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
             let needsRecoveryMetricsCoverage = engine.needsRecoveryMetricsCoverage(from: vitalCoverageStart, to: window.endExclusive)
             guard needsWorkoutCoverage || needsRecoveryMetricsCoverage else { return }
 
-            historicalCoverageMessage = selectedDate < interactiveThreshold
-                ? "Loading \(calendar.component(.year, from: selectedDate)) training and recovery history through \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
-                : "Refreshing recovery history..."
+            historicalCoverageMessage = "Loading \(calendar.component(.year, from: selectedDate)) training and recovery history through \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
             isLoadingHistoricalCoverage = true
             showsHistoricalCoverageOverlay = false
             let overlayTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 700_000_000)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
                 guard !Task.isCancelled, isLoadingHistoricalCoverage else { return }
                 showsHistoricalCoverageOverlay = true
             }
@@ -1152,9 +1151,10 @@ private func generateAggressiveCachingSummary(
                 model: model,
                 instructions: strainRecoveryModelInstructions
             )
+            let compactPrompt = compactCoachGenerationPrompt(promptWithSiblingTimeFilterContext(for: request, cache: cache), for: request.timeFilter)
             let cleaned = try await generateValidatedAggressiveCachingSummary(
                 session: session,
-                prompt: promptWithSiblingTimeFilterContext(for: request, cache: cache)
+                prompt: compactPrompt
             )
             guard !cleaned.isEmpty else { return false }
 
@@ -1186,7 +1186,14 @@ private func generateValidatedAggressiveCachingSummary(
     let maxAttempts = 3
 
     for _ in 0..<maxAttempts {
-        let response = try await session.respond(to: prompt)
+        let response = try await session.respond(
+            to: prompt,
+            options: GenerationOptions(
+                sampling: .greedy,
+                temperature: 0,
+                maximumResponseTokens: 350
+            )
+        )
         let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
         if !cleaned.isEmpty, !looksLikeInvalidAggressiveCachingSummary(cleaned) {
             return cleaned
@@ -1230,7 +1237,61 @@ private func looksLikeInvalidAggressiveCachingSummary(_ summary: String) -> Bool
         "junk output"
     ]
 
-    return suspiciousPhrases.contains(where: normalized.contains)
+    if suspiciousPhrases.contains(where: normalized.contains) {
+        return true
+    }
+
+    return containsRepeatedPhrase(in: summary)
+}
+
+private func containsRepeatedPhrase(in text: String) -> Bool {
+    let paragraphs = text
+        .components(separatedBy: "\n\n")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+    if paragraphs.count >= 2 {
+        var paragraphCounts: [String: Int] = [:]
+        for para in paragraphs {
+            let normalizedPara = para.lowercased()
+            paragraphCounts[normalizedPara, default: 0] += 1
+        }
+        if paragraphCounts.values.contains(where: { $0 >= 2 }) {
+            return true
+        }
+    }
+
+    let sentences = text
+        .components(separatedBy: CharacterSet(charactersIn: ".!?"))
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        .filter { !$0.isEmpty && $0.count > 30 }
+
+    var sentenceCounts: [String: Int] = [:]
+    for sentence in sentences {
+        sentenceCounts[sentence, default: 0] += 1
+    }
+    if sentenceCounts.values.contains(where: { $0 >= 2 }) {
+        return true
+    }
+
+    let phrasesToCheck = [15, 20, 25]
+    for phraseLength in phrasesToCheck {
+        var phraseCounts: [String: Int] = [:]
+        let words = text.lowercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+
+        guard words.count > phraseLength * 2 else { continue }
+
+        for i in 0..<(words.count - phraseLength) {
+            let phrase = words[i..<(i + phraseLength)].joined(separator: " ")
+            phraseCounts[phrase, default: 0] += 1
+        }
+
+        if phraseCounts.values.contains(where: { $0 >= 2 }) {
+            return true
+        }
+    }
+
+    return false
 }
 
 private let strainRecoveryModelInstructions = """
@@ -1276,7 +1337,7 @@ Classification calibration (important):
 - Treat "Spike" as extra strain, not automatic overtraining. Mention it, then give smart guardrails without alarmism.
 - Treat "Productive" and "Building" strain as positive/normal. Applaud Productive and do not worry-scroll for risk.
 \(strainRecoveryScorePromptReference)
-Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
+Keep the output plain text, no bullets, no markdown, and aim for roughly 180 to 260 words. Stay under 300 words total.
 """
 
 private let strainRecoverySessionInstructions = """
@@ -1317,7 +1378,7 @@ Specifically, strain around 11 to 17 with recovery around 70 to 89 is often a he
 When there is a meaningful mismatch pattern, point it out calmly and supportively, such as high strain with Adapt or Recover recovery, recovery drifting down across several dated windows while strain stays elevated, or multiple supporting signs like sleep debt, rising resting heart rate, suppressed HRV, poor HRR, or unstable vitals.
 If the scores are reasonably aligned, give credit. Compliment strong or solid matching of strain and recovery rather than searching for a negative angle.
 \(strainRecoveryScorePromptReference)
-Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
+Keep the output plain text, no bullets, no markdown, and aim for roughly 180 to 260 words. Stay under 300 words total.
 """
 
 private let strainRecoveryScorePromptReference = """
@@ -1473,7 +1534,101 @@ private func promptWithSiblingTimeFilterContext(
     """
 }
 
-private func compactCoachGenerationPrompt(_ prompt: String) -> String {
+private func compactCoachGenerationPrompt(_ prompt: String, for timeFilter: StrainRecoveryView.TimeFilter = .day) -> String {
+    let lines = prompt
+        .components(separatedBy: .newlines)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+
+    var compacted: [String] = []
+    var include = true
+
+    let isMonthFilter = timeFilter == .month
+
+    for line in lines {
+        if line.isEmpty {
+            continue
+        }
+        if line == "Interpretation rules" || line == "Focused evidence" || line == "Training load and workouts" || line.hasPrefix("Scores") {
+            include = false
+            continue
+        }
+        if !include {
+            if line == "Recovery and vitals" || line == "Sleep" || line == "Recovery classification" {
+                include = true
+            } else {
+                continue
+            }
+        }
+        
+        if isMonthFilter && line.hasPrefix("- ") {
+            continue
+        }
+        
+        compacted.append(line)
+    }
+
+    let result = compacted.joined(separator: "\n")
+    
+    let charLimit: Int
+    switch timeFilter {
+    case .day:
+        charLimit = 4500
+    case .week:
+        charLimit = 3800
+    case .month:
+        charLimit = 2800
+    }
+    
+    if result.count > charLimit {
+        return compactCoachGenerationPromptV2(prompt, for: timeFilter)
+    }
+    
+    return result
+}
+
+private func compactCoachGenerationPromptV2(_ prompt: String, for timeFilter: StrainRecoveryView.TimeFilter = .day) -> String {
+    let lines = prompt
+        .components(separatedBy: .newlines)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+
+    var compacted: [String] = []
+    var skipSection = false
+
+    let isMonthFilter = timeFilter == .month
+
+    for line in lines {
+        if line.isEmpty { continue }
+        
+        if line == "Coach me directly" || line == "Window" || line == "Focused evidence" || line == "Training load and workouts" || line == "Interpretation rules" {
+            skipSection = line == "Interpretation rules" || line == "Training load and workouts" || line == "Focused evidence"
+            continue
+        }
+        
+        if skipSection {
+            if line.hasPrefix("Scores") || line.hasPrefix("Recovery classification") || line.hasPrefix("Sleep") || line.hasPrefix("Recovery and vitals") {
+                skipSection = false
+            } else {
+                continue
+            }
+        }
+        
+        if isMonthFilter && line.hasPrefix("- ") {
+            continue
+        }
+        
+        compacted.append(line)
+    }
+
+    let result = compacted.joined(separator: "\n")
+    
+    if isMonthFilter && result.count > 2500 {
+        return compactCoachGenerationPromptV3(prompt)
+    }
+    
+    return result
+}
+
+private func compactCoachGenerationPromptV3(_ prompt: String) -> String {
     let lines = prompt
         .components(separatedBy: .newlines)
         .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -1482,17 +1637,32 @@ private func compactCoachGenerationPrompt(_ prompt: String) -> String {
     var include = true
 
     for line in lines {
-        if line.isEmpty {
-            continue
-        }
+        if line.isEmpty { continue }
+        
         if line == "Interpretation rules" {
             include = false
             continue
         }
-        if !include {
+        
+        if line == "Focused evidence" {
+            compacted.append(line)
             continue
         }
-        compacted.append(line)
+        
+        if line.hasPrefix("Scores") || line.hasPrefix("Recovery classification") || line.hasPrefix("Sleep") || line.hasPrefix("Recovery and vitals") {
+            include = true
+        }
+        
+        if include {
+            if line.hasPrefix("- ") {
+                let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: "- "))
+                if trimmed.count > 3 && trimmed.count < 100 {
+                    compacted.append(line)
+                }
+            } else {
+                compacted.append(line)
+            }
+        }
     }
 
     return compacted.joined(separator: "\n")
@@ -3051,7 +3221,7 @@ private struct StrainRecoveryAISummarySection: View {
             let generationPrompt = compactCoachGenerationPrompt(promptWithSiblingTimeFilterContext(
                 for: request,
                 cache: StrainRecoverySummaryPersistence.load()
-            ))
+            ), for: request.timeFilter)
 
             guard model.isAvailable else {
                 if requireAppleIntelligence {
@@ -3270,12 +3440,12 @@ private struct StrainRecoveryAISummarySection: View {
                 options: GenerationOptions(
                     sampling: retrySeedOffset == 0 ? .greedy : .random(top: 6, seed: UInt64(retrySeedOffset)),
                     temperature: retrySeedOffset == 0 ? 0 : min(0.9, 0.42 + (Double(attempt) * 0.12)),
-                    maximumResponseTokens: 420
+                    maximumResponseTokens: 350
                 )
             )
 
             let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleaned.isEmpty {
+            if !cleaned.isEmpty, !containsRepeatedPhrase(in: cleaned) {
                 return cleaned
             }
         }
@@ -3300,6 +3470,7 @@ private struct StrainRecoveryAISummarySection: View {
         Retry guidance:
         - The previous draft was rejected because it was repetitive, low-quality, or looped awkwardly.
         - Write one clean coaching paragraph with no repeated phrases, no filler, and no looping wording.
+        - Check your output before finishing. If you find yourself repeating the same sentence, phrase, or paragraph, rewrite it.
         - If evidence is thin, say that briefly instead of guessing.
         \(refreshVersion > 0 ? "- This is a refresh. Do not reuse the same opening, same thesis sentence, or same evidence ordering as the prior summary." : "")
         \(refreshVersion > 0 ? "- Keep the same facts if they are true, but choose a materially different coaching angle, framing, and sentence structure." : "")
@@ -5625,6 +5796,8 @@ struct StrainRecoveryMathSection: View {
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
     @State private var showTechnicalSheet = false
+    @State private var cachedLoadSnapshots: [WorkoutSummarySnapshot] = []
+    @State private var cachedLoadSnapshotsKey: String = ""
     
     private var totalLoad: Double {
         loadSnapshots.map(\.totalDailyLoad).reduce(0, +)
@@ -5642,13 +5815,23 @@ struct StrainRecoveryMathSection: View {
         Calendar.current.startOfDay(for: anchorDate)
     }
 
+    private var loadSnapshotsKey: String {
+        "\(chartTimeFilter.rawValue)-\(anchorDate.timeIntervalSince1970)-\(engine.workoutAnalytics.count)"
+    }
+    
     private var loadSnapshots: [WorkoutSummarySnapshot] {
+        if cachedLoadSnapshotsKey == loadSnapshotsKey {
+            return cachedLoadSnapshots
+        }
         let window = chartWindow(for: chartTimeFilter, anchorDate: anchorDate)
-        return dailyLoadSnapshots(
+        let snapshots = dailyLoadSnapshots(
             workouts: engine.workoutAnalytics,
             estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
             displayWindow: window
         )
+        cachedLoadSnapshotsKey = loadSnapshotsKey
+        cachedLoadSnapshots = snapshots
+        return snapshots
     }
 
     private var selectedSnapshot: WorkoutSummarySnapshot? {
@@ -5768,16 +5951,28 @@ struct RecoveryScoreSection: View {
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
     @State private var showTechnicalSheet = false
+    @State private var cachedRecoveryData: [(Date, Double)] = []
+    @State private var cachedRecoveryDataKey: String = ""
 
     private var selectedDay: Date {
         Calendar.current.startOfDay(for: anchorDate)
     }
 
+    private var recoveryDataCacheKey: String {
+        "\(chartTimeFilter.rawValue)-\(anchorDate.timeIntervalSince1970)-\(engine.recoveryScore)-\(engine.latestHRV ?? 0)"
+    }
+
     private var recoveryData: [(Date, Double)] {
+        if recoveryDataCacheKey == cachedRecoveryDataKey {
+            return cachedRecoveryData
+        }
         let window = chartWindow(for: chartTimeFilter, anchorDate: anchorDate)
-        return dateSequence(from: window.start, to: window.end).compactMap { day in
+        let data = dateSequence(from: window.start, to: window.end).compactMap { day in
             recoveryScore(for: day, engine: engine).map { (day, $0) }
         }
+        cachedRecoveryDataKey = recoveryDataCacheKey
+        cachedRecoveryData = data
+        return data
     }
 
     private var selectedRecoveryScore: Double {
@@ -5908,20 +6103,31 @@ struct ReadinessScoreSection: View {
     let headlineTimeFilter: StrainRecoveryView.TimeFilter
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
+    @State private var cachedLoadSnapshots: [WorkoutSummarySnapshot] = []
+    @State private var cachedReadinessData: [(Date, Double)] = []
+    @State private var cachedReadinessDataKey: String = ""
 
     private var selectedDay: Date {
         Calendar.current.startOfDay(for: anchorDate)
     }
 
+    private var readinessDataCacheKey: String {
+        "\(chartTimeFilter.rawValue)-\(anchorDate.timeIntervalSince1970)-\(engine.workoutAnalytics.count)-\(engine.readinessScore)"
+    }
+
     private var readinessData: [(Date, Double)] {
+        if readinessDataCacheKey == cachedReadinessDataKey {
+            return cachedReadinessData
+        }
         let window = chartWindow(for: chartTimeFilter, anchorDate: anchorDate)
         let loadSnapshots = dailyLoadSnapshots(
             workouts: engine.workoutAnalytics,
             estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
             displayWindow: window
         )
+        cachedLoadSnapshots = loadSnapshots
         let strainLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.strainScore) })
-        return dateSequence(from: window.start, to: window.end).compactMap { day in
+        let data = dateSequence(from: window.start, to: window.end).compactMap { day -> (Date, Double)? in
             guard let strain = strainLookup[day],
                   let recovery = recoveryScore(for: day, engine: engine),
                   let readiness = readinessScore(for: day, recoveryScore: recovery, strainScore: strain, engine: engine) else {
@@ -5929,15 +6135,23 @@ struct ReadinessScoreSection: View {
             }
             return (day, readiness)
         }
+        cachedReadinessDataKey = readinessDataCacheKey
+        cachedReadinessData = data
+        return data
     }
 
     private var selectedReadinessScore: Double {
         let window = chartWindow(for: chartTimeFilter, anchorDate: anchorDate)
-        let loadSnapshots = dailyLoadSnapshots(
-            workouts: engine.workoutAnalytics,
-            estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
-            displayWindow: window
-        )
+        let loadSnapshots: [WorkoutSummarySnapshot]
+        if cachedReadinessDataKey == readinessDataCacheKey && !cachedLoadSnapshots.isEmpty {
+            loadSnapshots = cachedLoadSnapshots
+        } else {
+            loadSnapshots = dailyLoadSnapshots(
+                workouts: engine.workoutAnalytics,
+                estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+                displayWindow: window
+            )
+        }
         let selectedStrain = loadSnapshots.last(where: { Calendar.current.isDate($0.date, inSameDayAs: selectedDay) })?.strainScore ?? engine.strainScore
         let selectedRecovery = recoveryScore(for: selectedDay, engine: engine) ?? engine.recoveryScore
         return readinessScore(
@@ -6956,6 +7170,8 @@ struct WorkoutContributionsSection: View {
     let anchorDate: Date
     let sportFilter: String?
     @State private var chartSelectedDate: Date? = nil
+    @State private var cachedWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
+    @State private var cachedWorkoutsKey: String = ""
     
     struct DailyLoadSnapshot: Identifiable {
         let date: Date
@@ -6986,12 +7202,22 @@ struct WorkoutContributionsSection: View {
         Calendar.current.date(byAdding: .day, value: -27, to: displayWindow.start) ?? displayWindow.start
     }
     
+    private var workoutsCacheKey: String {
+        "\(chartTimeFilter.rawValue)-\(anchorDate.timeIntervalSince1970)-\(sportFilter ?? "all")-\(engine.workoutAnalytics.count)"
+    }
+    
     private var workoutsForComputation: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
-        return engine.workoutAnalytics.filter { workout, _ in
+        if cachedWorkoutsKey == workoutsCacheKey {
+            return cachedWorkouts
+        }
+        let filtered = engine.workoutAnalytics.filter { workout, _ in
             let matchesDate = workout.startDate >= historicalWindowStart && workout.startDate < displayWindow.endExclusive
             let matchesSport = sportFilter == nil || workout.workoutActivityType.name == sportFilter
             return matchesDate && matchesSport
         }
+        cachedWorkoutsKey = workoutsCacheKey
+        cachedWorkouts = filtered
+        return filtered
     }
     
     private func workoutEffortScore(from workout: HKWorkout) -> Double? {
@@ -7806,8 +8032,17 @@ struct METAggregatesSection: View {
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
     let anchorDate: Date
+    @State private var cachedFilteredData: [(Date, Double)] = []
+    @State private var cachedKey: String = ""
+
+    private var cacheKey: String {
+        "\(chartTimeFilter.rawValue)-\(anchorDate.timeIntervalSince1970)-\(sportFilter ?? "all")-\(engine.workoutAnalytics.count)"
+    }
 
     var filteredData: [(Date, Double)] {
+        if cacheKey == cachedKey {
+            return cachedFilteredData
+        }
         var base = engine.dailyMETAggregates
         if let sport = sportFilter {
             let filteredWorkouts = engine.workoutAnalytics.filter { $0.workout.workoutActivityType.name == sport }
@@ -7819,7 +8054,10 @@ struct METAggregatesSection: View {
             }
             base = aggregates
         }
-        return filteredDailyValues(base, timeFilter: chartTimeFilter, anchorDate: anchorDate)
+        let result = filteredDailyValues(base, timeFilter: chartTimeFilter, anchorDate: anchorDate)
+        cachedKey = cacheKey
+        cachedFilteredData = result
+        return result
     }
 
     var body: some View {
@@ -7878,11 +8116,19 @@ struct VO2AggregatesSection: View {
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
     let anchorDate: Date
+    @State private var cachedFilteredData: [(Date, Double)] = []
+    @State private var cachedKey: String = ""
+
+    private var cacheKey: String {
+        "\(chartTimeFilter.rawValue)-\(anchorDate.timeIntervalSince1970)-\(sportFilter ?? "all")-\(engine.workoutAnalytics.count)"
+    }
 
     var filteredData: [(Date, Double)] {
+        if cacheKey == cachedKey {
+            return cachedFilteredData
+        }
         var base = engine.dailyVO2Aggregates
         if let sport = sportFilter {
-            // Filter workouts by sport and recompute aggregates
             let filteredWorkouts = engine.workoutAnalytics.filter { $0.workout.workoutActivityType.name == sport }
             var aggregates: [Date: [Double]] = [:]
             let calendar = Calendar.current
@@ -7894,7 +8140,10 @@ struct VO2AggregatesSection: View {
             }
             base = aggregates.mapValues { $0.reduce(0, +) / Double($0.count) }
         }
-        return filteredDailyValues(base, timeFilter: chartTimeFilter, anchorDate: anchorDate)
+        let result = filteredDailyValues(base, timeFilter: chartTimeFilter, anchorDate: anchorDate)
+        cachedKey = cacheKey
+        cachedFilteredData = result
+        return result
     }
 
     var body: some View {
@@ -7953,11 +8202,19 @@ struct HRRAggregatesSection: View {
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let sportFilter: String?
     let anchorDate: Date
+    @State private var cachedFilteredData: [(Date, Double)] = []
+    @State private var cachedKey: String = ""
+
+    private var cacheKey: String {
+        "\(chartTimeFilter.rawValue)-\(anchorDate.timeIntervalSince1970)-\(sportFilter ?? "all")-\(engine.workoutAnalytics.count)"
+    }
 
     var filteredData: [(Date, Double)] {
+        if cacheKey == cachedKey {
+            return cachedFilteredData
+        }
         var base = engine.dailyHRRAggregates
         if let sport = sportFilter {
-            // Filter workouts by sport and recompute aggregates
             let filteredWorkouts = engine.workoutAnalytics.filter { $0.workout.workoutActivityType.name == sport }
             var aggregates: [Date: Double] = [:]
             let calendar = Calendar.current
@@ -7969,7 +8226,10 @@ struct HRRAggregatesSection: View {
             }
             base = aggregates
         }
-        return filteredDailyValues(base, timeFilter: chartTimeFilter, anchorDate: anchorDate)
+        let result = filteredDailyValues(base, timeFilter: chartTimeFilter, anchorDate: anchorDate)
+        cachedKey = cacheKey
+        cachedFilteredData = result
+        return result
     }
 
     var body: some View {
