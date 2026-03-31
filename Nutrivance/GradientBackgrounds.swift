@@ -176,6 +176,17 @@ struct GradientBackgrounds {
             GradientFadeOverlay()
         }
     }
+
+    func programBuilderGradientFull(animationPhase: Binding<Double>) -> some View {
+        MeshGradientView(colors: lightProgramBuilderColors, darkColors: darkProgramBuilderColors, animationPhase: animationPhase)
+    }
+
+    func programBuilderGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            programBuilderGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
     
     private var lightWarmColors: [Color] {
         [
@@ -400,6 +411,37 @@ struct GradientBackgrounds {
         ]
     }
     
+    // Derived from Program Builder palette:
+    // Dark mode: (0.07,0.06,0.05) → (0.20,0.09,0.04) → (0.06,0.12,0.10)
+    // Light mode: softly lifted versions of the same hues.
+    private var lightProgramBuilderColors: [Color] {
+        [
+            Color(red: 0.96, green: 0.95, blue: 0.94),
+            Color(red: 0.98, green: 0.92, blue: 0.88),
+            Color(red: 0.90, green: 0.95, blue: 0.93),
+            Color(.systemBackground),
+            Color(red: 0.95, green: 0.93, blue: 0.92),
+            Color(.systemBackground),
+            Color(red: 0.98, green: 0.92, blue: 0.88),
+            Color(red: 0.90, green: 0.95, blue: 0.93),
+            Color(red: 0.96, green: 0.95, blue: 0.94)
+        ]
+    }
+
+    private var darkProgramBuilderColors: [Color] {
+        [
+            Color(red: 0.07, green: 0.06, blue: 0.05),
+            Color(red: 0.20, green: 0.09, blue: 0.04),
+            Color(red: 0.06, green: 0.12, blue: 0.10),
+            Color(.systemBackground),
+            Color(red: 0.07, green: 0.06, blue: 0.05),
+            Color(.systemBackground),
+            Color(red: 0.20, green: 0.09, blue: 0.04),
+            Color(red: 0.06, green: 0.12, blue: 0.10),
+            Color(red: 0.07, green: 0.06, blue: 0.05)
+        ]
+    }
+
     private var lightHealingColors: [Color] {
         [
             Color(red: 0.85, green: 0.95, blue: 0.90),  // Soft Mint
@@ -437,6 +479,20 @@ struct GradientBackgrounds {
             healingGradientFull(animationPhase: animationPhase)
             GradientFadeOverlay()
         }
+    }
+}
+
+struct MovingProgramBuilderBackground: View {
+    @State private var animationPhase: Double = 0
+
+    var body: some View {
+        GradientBackgrounds()
+            .programBuilderGradient(animationPhase: $animationPhase)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                    animationPhase = 20
+                }
+            }
     }
 }
 

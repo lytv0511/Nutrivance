@@ -106,10 +106,12 @@ struct ContentView_iPad_alt: View {
                 }
                 .customizationID("iPad.tab.strainVsRecovery")
                 .defaultVisibility(.hidden, for: .tabBar)
-                Tab("Personal Records", systemImage: "trophy.fill", value: RootTabSelection.personalRecords) {
-                    PersonalRecordsView()
+                Tab("Past Quests", systemImage: "trophy.fill", value: RootTabSelection.pastQuests) {
+                    NavigationStack {
+                        PastQuestsView()
+                    }
                 }
-                .customizationID("iPad.tab.personalRecords")
+                .customizationID("iPad.tab.pastQuests")
                 .defaultVisibility(.hidden, for: .tabBar)
                 Tab("Heart Zones", systemImage: "heart.circle.fill", value: RootTabSelection.heartZones) {
                     HeartZonesView()

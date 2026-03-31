@@ -72,8 +72,8 @@ struct ContentView_iPhone_alt: View {
             ActivityRingsView()
         case .heartZones:
             HeartZonesView()
-        case .personalRecords:
-            PersonalRecordsView()
+        case .pastQuests:
+            PastQuestsView()
         case .mindfulnessRealm:
             MindfulnessRealmView()
         case .moodTracker:

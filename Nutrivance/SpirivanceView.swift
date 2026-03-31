@@ -159,8 +159,8 @@ struct SpirivanceView: View {
                                         DistanceView()
                                     case "Calories Burned":
                                         CaloriesBurnedView()
-                                    case "Personal Records":
-                                        PersonalRecordsView()
+                                    case "Past Quests":
+                                        PastQuestsView()
                                     case "Pre-Workout Timing":
                                         PreWorkoutTimingView()
                                     case "Post-Workout Window":
@@ -300,8 +300,8 @@ struct SpirivanceView: View {
             return AnyView(DistanceView())
         case "Calories Burned":
             return AnyView(CaloriesBurnedView())
-        case "Personal Records":
-            return AnyView(PersonalRecordsView())
+        case "Past Quests":
+            return AnyView(PastQuestsView())
         case "Pre-Workout Timing":
             return AnyView(PreWorkoutTimingView())
         case "Post-Workout Window":
@@ -406,7 +406,7 @@ struct SpirivanceView: View {
             }
             
             Section(header: Text("Metrics")) {
-                ForEach(["Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records"], id: \.self) { item in
+                ForEach(["Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Past Quests"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -549,7 +549,7 @@ private func getIconName(for item: String) -> String {
     case "Step Count": return "figure.walk"
     case "Distance": return "location.fill"
     case "Calories Burned": return "flame.circle.fill"
-    case "Personal Records": return "trophy.fill"
+    case "Past Quests": return "trophy.fill"
     
     // Nutrition Timing
     case "Pre-Workout Timing": return "timer"

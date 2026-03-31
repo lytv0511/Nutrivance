@@ -121,7 +121,7 @@ enum AthleticCoachFocusMode: String, Codable {
         case .trendBalance:
             return "Focus on trends across the selected day, week, or month. Explain patterns such as repeated high-strain days, repeated recovery-led days, or balanced periods. Prefer pattern language over isolated data points."
         case .sportDeepDive:
-            return "Focus on the chosen sport and synthesize its load, zones, VO2, personal records, cadence, power, HRR, HRV, and consistency into one coherent sport-specific report. Exclude zeros and irrelevant modalities."
+            return "Focus on the chosen sport and synthesize its load, zones, VO2, Past Quests, cadence, power, HRR, HRV, and consistency into one coherent sport-specific report. Exclude zeros and irrelevant modalities."
         }
     }
 }

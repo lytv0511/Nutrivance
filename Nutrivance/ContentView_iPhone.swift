@@ -25,7 +25,7 @@
 //                   "Program Builder", "Workout Generator", "Recovery Score",
 //                   "Sleep Analysis", "Mobility Test", "Readiness Check",
 //                   "Strain vs Recovery", "Activity Rings", "Heart Zones",
-//                   "Step Count", "Distance", "Calories Burned", "Personal Records",
+//                   "Step Count", "Distance", "Calories Burned", "Past Quests",
 //                   "Pre-Workout Timing", "Post-Workout Window", "Performance Foods",
 //                   "Hydration Status", "Macro Balance"]
 //        case .mentalHealth:
@@ -114,7 +114,7 @@
 //                case "Step Count": StepCountView()
 //                case "Distance": DistanceView()
 //                case "Calories Burned": CaloriesBurnedView()
-//                case "Personal Records": PersonalRecordsView()
+//                case "Past Quests": PastQuestsView()
 //                case "Pre-Workout Timing": PreWorkoutTimingView()
 //                case "Post-Workout Window": PostWorkoutWindowView()
 //                case "Performance Foods": PerformanceFoodsView()
@@ -224,7 +224,7 @@
 //        case "Step Count": return "figure.walk"
 //        case "Distance": return "location.north"
 //        case "Calories Burned": return "flame"
-//        case "Personal Records": return "trophy"
+//        case "Past Quests": return "trophy"
 //        case "Pre-Workout Timing": return "timer"
 //        case "Post-Workout Window": return "clock.badge"
 //        case "Performance Foods": return "leaf"

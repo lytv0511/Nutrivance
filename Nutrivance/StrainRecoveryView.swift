@@ -1270,6 +1270,11 @@ When strain is in the productive or high range and recovery is still in Perform 
 Specifically, strain around 11 to 17 with recovery around 70 to 89 is often a healthy, trainable state rather than a recovery problem.
 When there is a meaningful mismatch pattern, point it out calmly and supportively, such as high strain with Adapt or Recover recovery, recovery drifting down across several dated windows while strain stays elevated, or multiple supporting signs like sleep debt, rising resting heart rate, suppressed HRV, poor HRR, or unstable vitals.
 If the scores are reasonably aligned, give credit. Compliment strong or solid matching of strain and recovery rather than searching for a negative angle.
+
+Classification calibration (important):
+- Treat "Adapt" as still capable and often fine. 60–69 should read as still good/workable; 40–50 is the rougher end of Adapt.
+- Treat "Spike" as extra strain, not automatic overtraining. Mention it, then give smart guardrails without alarmism.
+- Treat "Productive" and "Building" strain as positive/normal. Applaud Productive and do not worry-scroll for risk.
 \(strainRecoveryScorePromptReference)
 Keep the output plain text, no bullets, no markdown, and about 150 to 260 words.
 """
@@ -1329,6 +1334,11 @@ Score construction reference for this app:
 - Max heart rate is estimated as 211 minus 0.64 times age when a measured ceiling is unavailable, and the app updates upward if a workout exceeds that estimate.
 - A daily base load is added to strain at about 0.1 times active minutes, with a fallback baseline when dedicated active-minute data is not available.
 - Practical strain reading guide for this app: 0 to 5 low, 6 to 10 building, 11 to 14 productive, 15 to 17 high, and 18 to 21 overreaching territory. Recovery 90 to 100 is Full Send, 70 to 89 is Perform, 40 to 69 is Adapt, and 0 to 39 is Recover.
+- Scenario labels you may use (coach-friendly shorthand):
+  - Low Day: acute load ~8, chronic ~12 (low strain / light recent load).
+  - Building: acute ~24, chronic ~24 (moderate strain / steady build).
+  - Productive: acute ~60, chronic ~50 (trainable, strong work day).
+  - Spike: acute ~120, chronic ~60 (unusually high acute load vs baseline; extra strain, not automatic overtraining).
 - Interpret the scores as coaching signals, not diagnoses or disease severity scales.
 - Low strain plus high recovery usually means the athlete is fresh, recovered, or under-loaded, not automatically a problem.
 - High strain plus high recovery can be a positive match when recovery is keeping pace with load.
@@ -1337,6 +1347,7 @@ Score construction reference for this app:
 - High recovery and high readiness are positive coaching signals in this app and should be treated as supportive, not suspicious, unless there is unusually strong contradictory evidence.
 - Full Send and Perform should usually sound encouraging and confident. Adapt should still sound supportive and capable, not deflating or parental.
 - Avoid discouraging phrasing like this is concerning, you should take it easy, or keep it short and to the point unless the user explicitly asked for blunt caution.
+- Nuance: Adapt 60–69 is still good/workable; Adapt 40–50 is the rougher end where you should suggest controlled intent.
 """
 
 @MainActor
@@ -4653,7 +4664,7 @@ private struct SummarySuggestion: Identifiable, Hashable {
                     .init(
                         id: "sport-deep-\(sportID)",
                         title: "\(sport.capitalized) Deep Dive",
-                        queryText: "\(sport) deep dive on training load, heart rate zones, VO2 max, personal records, cadence or power when available, and baseline progress",
+                        queryText: "\(sport) deep dive on training load, heart rate zones, VO2 max, Past Quests, cadence or power when available, and baseline progress",
                         symbol: "brain.head.profile",
                         intent: .sportSpecific,
                         focusMode: .sportDeepDive,
@@ -4668,7 +4679,7 @@ private struct SummarySuggestion: Identifiable, Hashable {
                     .init(
                         id: "sport-pr-\(sportID)",
                         title: "\(sport.capitalized) PR Story",
-                        queryText: "\(sport) personal records and baseline changes including power, cadence, and lactate threshold if supported",
+                        queryText: "\(sport) Past Quests and baseline changes including power, cadence, and lactate threshold if supported",
                         symbol: "medal",
                         intent: .trendPB,
                         focusMode: .sportDeepDive,

@@ -200,7 +200,7 @@ struct SearchView: View {
     ]
     
     var filteredItems: [String] {
-        let allItems = ["Dashboard", "Program Builder", "Today's Plan", "Training Calendar", "Coach", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Workout History", "Activity Rings", "Heart Zones", "Personal Records", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
+        let allItems = ["Dashboard", "Program Builder", "Today's Plan", "Training Calendar", "Coach", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Workout History", "Activity Rings", "Heart Zones", "Past Quests", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
 
         let query = searchState.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
@@ -331,8 +331,8 @@ struct SearchView: View {
             return (.fitness, "Activity Rings", .activityRings)
         case "Heart Zones":
             return (.fitness, "Heart Zones", .heartZones)
-        case "Personal Records":
-            return (.fitness, "Personal Records", .personalRecords)
+        case "Past Quests":
+            return (.fitness, "Past Quests", .pastQuests)
         case "Mindfulness Realm":
             return (.mentalHealth, "Mindfulness Realm", .mindfulnessRealm)
         case "Mood Tracker":
@@ -595,8 +595,8 @@ struct SearchView: View {
             return AnyView(DistanceView())
         case "Calories Burned":
             return AnyView(CaloriesBurnedView())
-        case "Personal Records":
-            return AnyView(PersonalRecordsView())
+        case "Past Quests":
+            return AnyView(PastQuestsView())
         case "Pre-Workout Timing":
             return AnyView(PreWorkoutTimingView())
         case "Post-Workout Window":
@@ -722,7 +722,7 @@ struct SearchView: View {
             }
             
             Section(header: Text("Metrics")) {
-                ForEach(["Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Personal Records"], id: \.self) { item in
+                ForEach(["Activity Rings", "Heart Zones", "Step Count", "Distance", "Calories Burned", "Past Quests"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -866,7 +866,7 @@ private func getIconName(for item: String) -> String {
     case "Step Count": return "figure.walk"
     case "Distance": return "location.fill"
     case "Calories Burned": return "flame.circle.fill"
-    case "Personal Records": return "trophy.fill"
+    case "Past Quests": return "trophy.fill"
     
     // Nutrition Timing
     case "Pre-Workout Timing": return "timer"

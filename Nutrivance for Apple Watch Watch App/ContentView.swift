@@ -3193,6 +3193,10 @@ final class WatchDashboardStore: ObservableObject {
         ("REM", 1.7, Color.purple),
         ("Deep", 1.1, Color.indigo)
     ]
+    // Synced current values from iOS
+    @Published var syncedCurrentStrain: Double = 0
+    @Published var syncedCurrentRecovery: Double = 0
+    @Published var syncedCurrentReadiness: Double = 0
     let workoutTemplates = WatchWorkoutTemplate.defaults
     let wakeScheduler = WatchWakeScheduler()
     let workoutManager = WatchWorkoutManager.shared
@@ -3324,9 +3328,9 @@ final class WatchDashboardStore: ObservableObject {
 
     }
 
-    var currentStrain: Double { strainWeek.last?.value ?? 0 }
-    var currentRecovery: Double { recoveryWeek.last?.value ?? 0 }
-    var currentReadiness: Double { readinessWeek.last?.value ?? 0 }
+    var currentStrain: Double { syncedCurrentStrain > 0 ? syncedCurrentStrain : strainWeek.last?.value ?? 0 }
+    var currentRecovery: Double { syncedCurrentRecovery > 0 ? syncedCurrentRecovery : recoveryWeek.last?.value ?? 0 }
+    var currentReadiness: Double { syncedCurrentReadiness > 0 ? syncedCurrentReadiness : readinessWeek.last?.value ?? 0 }
     var currentMindfulness: Double { mindfulnessWeek.last?.value ?? 0 }
 
     var todayWorkouts: [WorkoutSession] {

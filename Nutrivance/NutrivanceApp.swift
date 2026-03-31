@@ -47,6 +47,10 @@ private struct WatchDashboardPayload: Codable {
     let sleepStages: [WatchSleepStagePayload]
     let incomingPlan: WatchProgramPlanPayload?
     let savedPlans: [WatchProgramPlanPayload]
+    // Current day values for immediate display
+    let currentStrain: Double
+    let currentRecovery: Double
+    let currentReadiness: Double
 }
 
 private struct WatchMetricPointPayload: Codable {
@@ -417,6 +421,11 @@ final class WatchDashboardSyncBridge: NSObject {
             let score = min(100.0, mindfulMinutes * 5.0)
             return WatchMetricPointPayload(date: day, value: score)
         }
+        
+        // Get today's current values
+        let currentStrain = loadSnapshots.last?.strainScore ?? 0
+        let currentRecovery = recoveryLookup[today] ?? 0
+        let currentReadiness = readinessLookup[today] ?? 0
 
         return WatchDashboardPayload(
             generatedAt: Date(),
@@ -461,7 +470,10 @@ final class WatchDashboardSyncBridge: NSObject {
             sleepConsistencyScore: sleepConsistencyScore,
             sleepStages: sleepStagePayloads,
             incomingPlan: ProgramWorkoutPlanStore.shared.activeInboxPlan.map(watchProgramPlanPayload(from:)),
-            savedPlans: ProgramWorkoutPlanStore.shared.repositoryPlans.prefix(8).map(watchProgramPlanPayload(from:))
+            savedPlans: ProgramWorkoutPlanStore.shared.repositoryPlans.prefix(8).map(watchProgramPlanPayload(from:)),
+            currentStrain: currentStrain,
+            currentRecovery: currentRecovery,
+            currentReadiness: currentReadiness
         )
     }
 }
@@ -1222,7 +1234,7 @@ enum RootTabSelection: Hashable {
     case workoutHistory
     case activityRings
     case heartZones
-    case personalRecords
+    case pastQuests
     case mindfulnessRealm
     case moodTracker
     case journal
@@ -1257,7 +1269,7 @@ enum AppDestination: String, CaseIterable, Hashable, Identifiable {
     case workoutHistory
     case activityRings
     case heartZones
-    case personalRecords
+    case pastQuests
     case mindfulnessRealm
     case moodTracker
     case journal
@@ -1388,7 +1400,7 @@ class NavigationState: ObservableObject {
             }
         case .fitness:
             switch tab {
-            case .dashboard, .programBuilder, .todaysPlan, .trainingCalendar, .coach, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .activityRings, .heartZones, .personalRecords:
+            case .dashboard, .programBuilder, .todaysPlan, .trainingCalendar, .coach, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .activityRings, .heartZones, .pastQuests:
                 return true
             default:
                 return false
@@ -1429,7 +1441,7 @@ class NavigationState: ObservableObject {
         case .workoutHistory: return .workoutHistory
         case .activityRings: return .activityRings
         case .heartZones: return .heartZones
-        case .personalRecords: return .personalRecords
+        case .pastQuests: return .pastQuests
         case .mindfulnessRealm: return .mindfulnessRealm
         case .moodTracker: return .moodTracker
         case .journal: return .journal
@@ -2032,8 +2044,8 @@ struct NutrivanceApp: App {
                 }
                 .keyboardShortcut("H", modifiers: [.command, .shift])
 
-                Button("Personal Records") {
-                    navigate(focus: .fitness, view: "Personal Records", tab: .personalRecords)
+                Button("Past Quests") {
+                    navigate(focus: .fitness, view: "Past Quests", tab: .pastQuests)
                 }
                 .keyboardShortcut("P", modifiers: [.command, .shift])
 

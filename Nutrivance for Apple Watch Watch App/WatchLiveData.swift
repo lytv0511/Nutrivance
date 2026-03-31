@@ -25,6 +25,10 @@ struct WatchDashboardPayload: Codable {
     let sleepStages: [WatchSleepStagePayload]
     let incomingPlan: WatchProgramPlanPayload?
     let savedPlans: [WatchProgramPlanPayload]
+    // Today's current values synced from iOS
+    let currentStrain: Double
+    let currentRecovery: Double
+    let currentReadiness: Double
 }
 
 struct WatchMetricPointPayload: Codable {
@@ -308,6 +312,10 @@ extension WatchDashboardStore {
         }
         incomingPlan = payload.incomingPlan
         savedPlans = payload.savedPlans
+        // Apply synced current values from iOS
+        syncedCurrentStrain = payload.currentStrain
+        syncedCurrentRecovery = payload.currentRecovery
+        syncedCurrentReadiness = payload.currentReadiness
         markSynced(at: payload.generatedAt)
     }
 

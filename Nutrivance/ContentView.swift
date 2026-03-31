@@ -55,18 +55,9 @@ struct ContentView: View {
         ZStack {
             Group {
                 if UIDevice.current.userInterfaceIdiom == .pad {
-    //                if horizontalSizeClass == .regular {
-    //                    ContentView_iPad_alt()
-    //                        .environmentObject(appState)
-//                    ContentView_iPad_alt()
                     ContentView_iPad_alt()
-    //                } else {
-    //                    ContentView_iPad()
-    //                        .environmentObject(appState)
-    //                }
                 } else if UIDevice.current.userInterfaceIdiom == .phone {
                     ContentView_iPhone_alt()
-//                    ContentView_iPad_alt()
                 }
             }
 

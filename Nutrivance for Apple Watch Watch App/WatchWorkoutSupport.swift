@@ -551,6 +551,81 @@ final class WatchWakeScheduler: ObservableObject {
     }
 }
 
+private struct WatchStageQuestRecord: Codable {
+    let id: UUID
+    let completedAt: Date
+    let workoutID: String
+    let goalRawValue: String
+    let roleRawValue: String
+    let valueMin: Double
+    let valueMax: Double
+    let minutes: Int
+    let repeats: Int
+}
+
+@MainActor
+private final class WatchStageQuestLogger {
+    static let shared = WatchStageQuestLogger()
+    private let storageKey = "stage_quest_records_v1"
+    private let defaults = UserDefaults.standard
+    private let cloud = NSUbiquitousKeyValueStore.default
+
+    func append(
+        completedAt: Date,
+        workoutID: String,
+        goalRawValue: String?,
+        roleRawValue: String?,
+        targetText: String?,
+        minutes: Int,
+        repeats: Int
+    ) {
+        let parsedRange = Self.parseRange(from: targetText)
+        let record = WatchStageQuestRecord(
+            id: UUID(),
+            completedAt: completedAt,
+            workoutID: workoutID,
+            goalRawValue: (goalRawValue?.isEmpty == false ? goalRawValue! : "time"),
+            roleRawValue: (roleRawValue?.isEmpty == false ? roleRawValue! : "work"),
+            valueMin: parsedRange.0,
+            valueMax: parsedRange.1,
+            minutes: max(minutes, 1),
+            repeats: max(repeats, 1)
+        )
+        var all = load()
+        all.append(record)
+        if let encoded = try? JSONEncoder().encode(all) {
+            defaults.set(encoded, forKey: storageKey)
+            cloud.set(encoded, forKey: storageKey)
+            cloud.synchronize()
+        }
+    }
+
+    private func load() -> [WatchStageQuestRecord] {
+        cloud.synchronize()
+        if let cloudData = cloud.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([WatchStageQuestRecord].self, from: cloudData) {
+            return decoded
+        }
+        if let localData = defaults.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([WatchStageQuestRecord].self, from: localData) {
+            return decoded
+        }
+        return []
+    }
+
+    private static func parseRange(from text: String?) -> (Double, Double) {
+        guard let text, !text.isEmpty else { return (0, 0) }
+        let values = text
+            .replacingOccurrences(of: ",", with: " ")
+            .split(whereSeparator: { !"0123456789.-".contains($0) })
+            .compactMap { Double($0) }
+        if let first = values.first, let last = values.last {
+            return (min(first, last), max(first, last))
+        }
+        return (0, 0)
+    }
+}
+
 @MainActor
 final class WatchWorkoutManager: NSObject, ObservableObject {
     static let shared = WatchWorkoutManager()
@@ -682,6 +757,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     @Published var customDraft = WatchCustomWorkoutDraft()
     @Published var statusMessage = "Choose a workout to begin."
     private var dismissedCompletionPromptPhaseID: UUID?
+    private let stageQuestLogger = WatchStageQuestLogger.shared
 
     var isSessionActive: Bool {
         displayState == .running || displayState == .paused || displayState == .preparing
@@ -2027,8 +2103,21 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private func advanceWithinCurrentPhaseIfNeeded() -> Bool {
         guard let currentPhase else { return false }
         guard !currentMicroStages.isEmpty else { return false }
+        guard let currentStage = currentMicroStage else { return false }
 
         let progress = repeatGroupProgress(for: currentMicroStageIndex)
+        let completedAllRoundsForCurrentStage = currentRepeatIteration + 1 >= progress.iterations
+        if completedAllRoundsForCurrentStage {
+            stageQuestLogger.append(
+                completedAt: Date(),
+                workoutID: currentPhase.activityID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                goalRawValue: currentStage.goalRawValue,
+                roleRawValue: currentStage.roleRawValue,
+                targetText: currentStage.targetValueText,
+                minutes: currentStage.plannedMinutes,
+                repeats: currentStage.repeats
+            )
+        }
         if currentMicroStageIndex < progress.endIndex {
             currentMicroStageIndex += 1
         } else if currentRepeatIteration + 1 < progress.iterations {
