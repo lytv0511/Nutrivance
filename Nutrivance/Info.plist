@@ -6,6 +6,19 @@
 	<array>
 		<string>com.nutrivance.strain-recovery.aggressive-caching</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.nutrivance</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nutrivance</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array/>
 	<key>LSSupportsAutomaticTermination</key>

@@ -805,7 +805,7 @@ private struct WorkoutTargetTrackerCard: View {
             let screenClass = watchWorkoutScreenClass(for: geometry.size)
             let isCompactScreen = screenClass == .compact40
             let insets = watchDenseCardInsets(for: geometry.size)
-            let horizontalPadding: CGFloat = isCompactScreen ? 12 : 14
+            let horizontalPadding: CGFloat = isCompactScreen ? 14 : 16
             let segmentSpacing: CGFloat = 2
             let segmentCount = 3
             let totalSpacing = segmentSpacing * CGFloat(segmentCount - 1)
@@ -903,39 +903,77 @@ private struct TargetTrackerStrip: View {
         }
     }
 
-    private var activeSegmentIndex: Int {
-        switch currentPosition {
-        case .low: return 0
-        case .optimal: return 1
-        case .high: return segmentCount - 1
-        }
-    }
-
     private var segmentLayout: [SegmentLayout] {
         let count = segmentCount
-        let activeIdx = activeSegmentIndex
+        let activeIdx: Int
         let spacing = segmentSpacing
         let totalSpacing = spacing * CGFloat(max(count - 1, 0))
         let availableForSegments = usableWidth - totalSpacing
         
-        var widths: [CGFloat] = []
-        let totalUnits = CGFloat(count == 3 ? 6 : 4)
-        
-        for i in 0..<count {
-            let units: CGFloat
-            if i == activeIdx {
-                units = count == 3 ? 4 : 3
-            } else {
-                units = 1
+        if role == .steady {
+            switch currentPosition {
+            case .low: activeIdx = 0
+            case .optimal: activeIdx = 1
+            case .high: activeIdx = 2
             }
-            widths.append((availableForSegments * units) / totalUnits)
+        } else {
+            activeIdx = activeSegmentIndex
         }
         
-        var offset: CGFloat = 0
-        return widths.map { width in
-            let layout = SegmentLayout(width: width, offset: offset)
-            offset += width + spacing
-            return layout
+        var calculatedWidths: [CGFloat] = []
+        
+        if count == 3 {
+            if activeIdx == 2 {
+                calculatedWidths = [
+                    availableForSegments * 1 / 6,
+                    availableForSegments * 1 / 6,
+                    availableForSegments * 4 / 6
+                ]
+            } else if activeIdx == 0 {
+                calculatedWidths = [
+                    availableForSegments * 4 / 6,
+                    availableForSegments * 1 / 6,
+                    availableForSegments * 1 / 6
+                ]
+            } else {
+                calculatedWidths = [
+                    availableForSegments * 1 / 6,
+                    availableForSegments * 4 / 6,
+                    availableForSegments * 1 / 6
+                ]
+            }
+        } else {
+            let totalUnits = CGFloat(count * 2 - 2)
+            for i in 0..<count {
+                let units: CGFloat = i == activeIdx ? 3 : 1
+                calculatedWidths.append(availableForSegments * units / totalUnits)
+            }
+        }
+        
+        var layouts: [SegmentLayout] = []
+        var runningOffset: CGFloat = 0
+        
+        for i in 0..<count {
+            let width = calculatedWidths[i]
+            layouts.append(SegmentLayout(width: width, offset: runningOffset))
+            runningOffset += width + spacing
+        }
+        
+        return layouts
+    }
+
+    private var activeSegmentIndex: Int {
+        switch role {
+        case .steady:
+            switch currentPosition {
+            case .low: return 0
+            case .optimal: return 1
+            case .high: return 2
+            }
+        case .work, .recovery:
+            return currentPosition == .high ? 1 : 0
+        default:
+            return 0
         }
     }
 
@@ -999,6 +1037,7 @@ private struct TargetTrackerStrip: View {
                     segmentBox(idx: idx, layout: layout)
                 }
             }
+            .padding(.trailing, 4)
             
             if let pos = arrowPositionInActiveSegment {
                 arrowIndicator(layout: segmentLayout[activeSegmentIndex], positionInSegment: pos)
@@ -1064,14 +1103,27 @@ private struct TargetTrackerStrip: View {
     }
 
     private var positionLabel: String {
-        let targetZone = targetZoneNumber
-        switch currentPosition {
-        case .low:
-            return "< \(targetZone)"
-        case .optimal:
-            return "In \(targetZone)"
-        case .high:
-            return "> \(targetZone)"
+        switch role {
+        case .steady:
+            guard let range = targetRange else { return "" }
+            switch currentPosition {
+            case .low:
+                return "< \(Int(range.min))"
+            case .optimal:
+                return "\(Int(range.min))-\(Int(range.max))"
+            case .high:
+                return "> \(Int(range.max))"
+            }
+        default:
+            let targetZone = targetZoneNumber
+            switch currentPosition {
+            case .low:
+                return "< \(targetZone)"
+            case .optimal:
+                return "In \(targetZone)"
+            case .high:
+                return "> \(targetZone)"
+            }
         }
     }
 

@@ -53,6 +53,7 @@ struct WorkoutActivityLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: WorkoutLiveActivityAttributes.self) { context in
             WorkoutLiveActivityView(context: context)
+                .widgetURL(URL(string: "nutrivance://liveworkout"))
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {

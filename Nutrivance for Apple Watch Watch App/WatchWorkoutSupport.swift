@@ -1270,6 +1270,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         displayState = .paused
         workoutSession.pause()
         broadcastCompanionSnapshot()
+        sendCompanionLifecycleUpdate(state: "paused", reason: "Workout paused")
     }
 
     func resume() {
@@ -1292,6 +1293,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         displayState = .running
         workoutSession.resume()
         broadcastCompanionSnapshot()
+        sendCompanionLifecycleUpdate(state: "running", reason: "Workout resumed")
     }
 
     func end() {
@@ -1656,6 +1658,10 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         startElapsedTimer()
         rebuildMetrics()
         broadcastCompanionSnapshot()
+        sendCompanionLifecycleUpdate(state: "running", reason: "Workout started")
+        
+        // Send workout started action to trigger iPhone Live Activity
+        sendWorkoutStartedToCompanion()
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -2590,8 +2596,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     if session.activationState == .activated && session.isReachable {
                         let fallbackPayload: [String: Any] = [
                             "snapshotUpdate": true,
-                            "elapsedTime": elapsedTime,
-                            "stateText": displayState.rawValue
+                            "snapshotData": data
                         ]
                         session.sendMessage(fallbackPayload, replyHandler: { response in
                             print("[Watch] WCSession fallback sent: \(response)")
@@ -2906,6 +2911,43 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             })
         } else {
             print("[WatchSync] iPhone not reachable, using background transfer for lifecycle update")
+            session.transferUserInfo(payload)
+        }
+#endif
+    }
+
+    private func sendWorkoutStartedToCompanion() {
+#if canImport(WatchConnectivity)
+        guard WCSession.isSupported() else { return }
+
+        let session = WCSession.default
+        if session.activationState != .activated {
+            session.activate()
+        }
+
+        let workoutType = activeTitle ?? watchWorkoutDisplayName(activeActivity ?? .running)
+        let activityIcon = watchWorkoutSymbol(activeActivity ?? .running)
+        let targetMinutes = phaseQueue.first?.plannedMinutes
+        let userInitials = "NV"
+
+        let payload: [String: Any] = [
+            "action": "workoutStarted",
+            "workoutType": workoutType,
+            "activityIcon": activityIcon,
+            "targetMinutes": targetMinutes ?? 60,
+            "userInitials": userInitials,
+            "maxHeartRate": NSNull()
+        ]
+
+        if session.isReachable {
+            session.sendMessage(payload) { [weak self] response in
+                print("[WatchSync] workoutStarted action sent: \(response)")
+            } errorHandler: { error in
+                print("[WatchSync] Failed to send workoutStarted: \(error.localizedDescription)")
+                session.transferUserInfo(payload)
+            }
+        } else {
+            print("[WatchSync] iPhone not reachable for workoutStarted, using background transfer")
             session.transferUserInfo(payload)
         }
 #endif
@@ -3555,6 +3597,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 displayState = .running
                 statusMessage = "Workout in progress"
                 broadcastCompanionSnapshot()
+                sendCompanionLifecycleUpdate(state: "running", reason: "Workout resumed on watch")
                 persistCurrentSession()
             case .paused:
                 accumulatedElapsedTime = currentElapsedTime(at: date)
@@ -3563,6 +3606,7 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 displayState = .paused
                 statusMessage = "Workout paused"
                 broadcastCompanionSnapshot()
+                sendCompanionLifecycleUpdate(state: "paused", reason: "Workout paused on watch")
                 persistCurrentSession()
             case .ended:
                 elapsedTime = currentElapsedTime(at: date)
@@ -4023,6 +4067,29 @@ func watchWorkoutDisplayName(_ activityType: HKWorkoutActivityType) -> String {
         return "Hiking"
     default:
         return "Workout"
+    }
+}
+
+func watchWorkoutSymbol(_ activityType: HKWorkoutActivityType) -> String {
+    switch activityType {
+    case .running:
+        return "figure.run"
+    case .walking:
+        return "figure.walk"
+    case .cycling:
+        return "bicycle"
+    case .swimming:
+        return "figure.pool.swim"
+    case .traditionalStrengthTraining, .functionalStrengthTraining:
+        return "dumbbell.fill"
+    case .highIntensityIntervalTraining:
+        return "flame.fill"
+    case .yoga:
+        return "figure.mind.and.body"
+    case .hiking:
+        return "figure.hiking"
+    default:
+        return "heart.fill"
     }
 }
 

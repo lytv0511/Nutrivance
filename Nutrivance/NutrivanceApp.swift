@@ -279,6 +279,16 @@ final class WatchDashboardSyncBridge: NSObject {
         scheduleSnapshotRefresh(reason: "session-activated")
     }
 
+    private func launchAppForLiveWorkout() {
+        if let url = URL(string: "nutrivance://liveworkout") {
+            #if os(iOS)
+            DispatchQueue.main.async {
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
+            #endif
+        }
+    }
+
     func handleIncomingMessage(
         _ message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
@@ -294,6 +304,7 @@ final class WatchDashboardSyncBridge: NSObject {
             return true
         case Keys.showLiveWorkout:
             CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
+            launchAppForLiveWorkout()
             replyHandler([Keys.accepted: true])
             return true
         default:
@@ -307,6 +318,7 @@ final class WatchDashboardSyncBridge: NSObject {
         if userInfo[Keys.showLiveWorkout] as? Bool == true ||
             userInfo[Keys.request] as? String == Keys.showLiveWorkout {
             CompanionWorkoutLiveManager.shared.primePresentationFromWatchRequest()
+            launchAppForLiveWorkout()
             handled = true
         }
         if userInfo[Keys.request] as? String == Keys.dashboardSnapshot {

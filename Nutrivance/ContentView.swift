@@ -901,22 +901,50 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     private func handleWatchLifecycleState(_ state: String, reason: String?) {
         let normalizedState = state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard ["ended", "failed", "idle"].contains(normalizedState) else { return }
+
         guard source == .appleWatch || mirroredSession != nil || isWorkoutActive else { return }
 
         switch normalizedState {
+        case "running":
+            stateText = SessionStateText.watchLive
+            isWorkoutActive = true
+            if shouldAutoPresentLiveView { isVisible = true }
+            if startedAt == nil {
+                startedAt = Date().addingTimeInterval(-elapsedTime)
+                startElapsedTimer()
+            }
+            launchStatusMessage = reason?.isEmpty == false ? reason : "Workout running on Apple Watch."
+            return
+        case "paused":
+            stateText = SessionStateText.phonePaused
+            isWorkoutActive = true
+            pausedElapsedTime = elapsedTime
+            startedAt = nil
+            stopElapsedTimer()
+            launchStatusMessage = reason?.isEmpty == false ? reason : "Workout paused on Apple Watch."
+            return
         case "failed":
             launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout became unavailable."
         case "idle":
             launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout cleared."
-        default:
+        case "ended":
             launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout finished."
+        default:
+            return
         }
+
         finishSession()
     }
 
     private func handleFallbackSnapshotUpdate(_ payload: [String: Any]) {
         guard (payload["snapshotUpdate"] as? Bool) == true else { return }
+
+        if let snapshotData = payload["snapshotData"] as? Data {
+            if let mirrorPayload = try? JSONDecoder().decode(MirroredWorkoutSnapshotPayload.self, from: snapshotData) {
+                applyRemoteSnapshot(mirrorPayload)
+                return
+            }
+        }
 
         if let elapsed = payload["elapsedTime"] as? Double {
             elapsedTime = elapsed
@@ -1342,13 +1370,32 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         if session.isReachable {
             session.sendMessage(payload) { [weak self] reply in
                 Task { @MainActor in
-                    self?.launchStatusMessage = (reply["accepted"] as? Bool) == true
+                    guard let strongSelf = self as? CompanionWorkoutLiveManager else { return }
+                    strongSelf.launchStatusMessage = (reply["accepted"] as? Bool) == true
                         ? "Apple Workout is opening on Apple Watch."
                         : "Apple Watch did not confirm the Workout app handoff."
+                    
+                    if #available(iOS 16.0, *) {
+                        let workoutConfig = HKWorkoutConfiguration()
+                        workoutConfig.activityType = activity
+                        workoutConfig.locationType = location
+                        HKHealthStore().startWatchApp(with: workoutConfig) { success, error in
+                            Task { @MainActor in
+                                if let error {
+                                    print("[Companion] Failed to start Watch app: \(error.localizedDescription)")
+                                } else if success {
+                                    print("[Companion] Requested watch app launch via HealthKit")
+                                } else {
+                                    print("[Companion] startWatchApp returned false without error")
+                                }
+                            }
+                        }
+                    }
                 }
             } errorHandler: { [weak self] _ in
                 Task { @MainActor in
-                    self?.launchStatusMessage = "Watch is not reachable. Open Nutrivance on Apple Watch to use Workout app handoff."
+                    guard let strongSelf = self as? CompanionWorkoutLiveManager else { return }
+                    strongSelf.launchStatusMessage = "Watch is not reachable. Open Nutrivance on Apple Watch to use Workout app handoff."
                 }
             }
         } else {

@@ -50,7 +50,24 @@ public class WorkoutLiveActivityManager {
     
     private var currentActivity: Activity<WorkoutLiveActivityAttributes>?
     
-    private init() {}
+    private init() {
+        // Recover active activity on manager initialization
+        recoverActiveActivity()
+    }
+    
+    /// Attempt to recover reference to an active Live Activity from the system
+    private func recoverActiveActivity() {
+        if let activeId = WorkoutActivityStorage.getActiveActivityId() {
+            for activity in Activity<WorkoutLiveActivityAttributes>.activities {
+                if activity.id == activeId {
+                    self.currentActivity = activity
+                    print("[WorkoutLiveActivityManager] Recovered active activity: \(activeId)")
+                    return
+                }
+            }
+            print("[WorkoutLiveActivityManager] Stored activity ID not found in system activities")
+        }
+    }
     
     public func startActivity(
         workoutType: String,
@@ -96,18 +113,24 @@ public class WorkoutLiveActivityManager {
             self.currentActivity = activity
             WorkoutActivityStorage.setActiveActivityId(activity.id)
             WorkoutActivityStorage.setActiveAttributes(attributes)
+            print("[WorkoutLiveActivityManager] Started live activity: \(activity.id)")
             
             return activity
         } catch {
-            print("Failed to request Live Activity: \(error)")
+            print("[WorkoutLiveActivityManager] Failed to request Live Activity: \(error)")
             throw error
         }
     }
     
     public func updateActivity(with state: WorkoutActivityState) async {
+        // Try to recover if lost reference
+        if currentActivity == nil {
+            recoverActiveActivity()
+        }
+        
         guard let activity = currentActivity else {
-            if let _ = WorkoutActivityStorage.getActiveActivityId() {
-                print("Warning: Lost reference to active activity")
+            if let activeId = WorkoutActivityStorage.getActiveActivityId() {
+                print("[WorkoutLiveActivityManager] Warning: Lost and could not recover activity \(activeId)")
             }
             return
         }
@@ -121,6 +144,11 @@ public class WorkoutLiveActivityManager {
     }
     
     public func endActivity(finalState: WorkoutActivityState? = nil) async {
+        // Try to recover if lost reference
+        if currentActivity == nil {
+            recoverActiveActivity()
+        }
+        
         guard let activity = currentActivity else { return }
         
         let finalContent = ActivityContent(
@@ -141,9 +169,18 @@ public class WorkoutLiveActivityManager {
         
         currentActivity = nil
         WorkoutActivityStorage.clearActiveActivity()
+        print("[WorkoutLiveActivityManager] Ended live activity")
     }
     
     public var isActivityActive: Bool {
-        currentActivity != nil
+        if currentActivity != nil {
+            return true
+        }
+        // Check if there's a stored ID we can recover
+        if WorkoutActivityStorage.getActiveActivityId() != nil {
+            recoverActiveActivity()
+            return currentActivity != nil
+        }
+        return false
     }
 }
