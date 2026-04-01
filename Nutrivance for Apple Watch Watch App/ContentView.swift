@@ -805,6 +805,11 @@ private struct WorkoutTargetTrackerCard: View {
             let screenClass = watchWorkoutScreenClass(for: geometry.size)
             let isCompactScreen = screenClass == .compact40
             let insets = watchDenseCardInsets(for: geometry.size)
+            let horizontalPadding: CGFloat = isCompactScreen ? 12 : 14
+            let segmentSpacing: CGFloat = 2
+            let segmentCount = 3
+            let totalSpacing = segmentSpacing * CGFloat(segmentCount - 1)
+            let usableWidth = geometry.size.width - (horizontalPadding * 2) - totalSpacing
 
             VStack(alignment: .leading, spacing: isCompactScreen ? 3 : 4) {
                 if let stage = manager.currentMicroStage {
@@ -816,22 +821,28 @@ private struct WorkoutTargetTrackerCard: View {
                         .fontWidth(.condensed)
                         .foregroundStyle(.yellow)
 
-                    TargetTrackerStrip(stage: stage, manager: manager, isCompact: isCompactScreen)
+                    TargetTrackerStrip(
+                        stage: stage,
+                        manager: manager,
+                        isCompact: isCompactScreen,
+                        usableWidth: usableWidth,
+                        segmentSpacing: segmentSpacing
+                    )
 
                     targetMetricDisplayInline(for: stage, manager: manager, isCompactScreen: isCompactScreen)
 
                     HStack(alignment: .lastTextBaseline, spacing: 4) {
-                        let elapsed = manager.currentStageElapsedTime ?? 0
-                        let elapsedMinutes = Int(elapsed) / 60
-                        let elapsedSeconds = Int(elapsed) % 60
+                        let inTargetTime = manager.currentStageInTargetTime ?? 0
+                        let inTargetMinutes = Int(inTargetTime) / 60
+                        let inTargetSeconds = Int(inTargetTime) % 60
                         
-                        Text(String(format: "%d:%02d", elapsedMinutes, elapsedSeconds))
+                        Text(String(format: "%d:%02d", inTargetMinutes, inTargetSeconds))
                             .font(.system(size: isCompactScreen ? 17 : 21, weight: .black, design: .rounded).monospacedDigit())
                             .fontWidth(.condensed)
                         Image(systemName: "clock.fill")
                             .font(.system(size: isCompactScreen ? 11 : 13, weight: .black))
                             .foregroundStyle(.cyan)
-                        Text("STAGE TIME")
+                        Text("IN ZONE")
                             .font(.system(size: isCompactScreen ? 6.5 : 7.5, weight: .black, design: .rounded))
                             .fontWidth(.compressed)
                             .foregroundStyle(.white.opacity(0.82))
@@ -873,6 +884,8 @@ private struct TargetTrackerStrip: View {
     let stage: WatchProgramMicroStagePayload
     let manager: WatchWorkoutManager
     let isCompact: Bool
+    let usableWidth: CGFloat
+    let segmentSpacing: CGFloat
 
     private var role: ProgramMicroStageRole {
         ProgramMicroStageRole(storageValue: stage.roleRawValue ?? "") ?? .steady
@@ -882,26 +895,52 @@ private struct TargetTrackerStrip: View {
         ProgramMicroStageGoal(rawValue: stage.goalRawValue ?? "") ?? .time
     }
 
-    private var segments: [TargetTrackerSegment] {
-        buildSegments(for: role, goal: goal, stage: stage, manager: manager)
+    private var segmentCount: Int {
+        switch role {
+        case .steady: return 3
+        case .work, .recovery: return 2
+        default: return 1
+        }
+    }
+
+    private var activeSegmentIndex: Int {
+        switch currentPosition {
+        case .low: return 0
+        case .optimal: return 1
+        case .high: return segmentCount - 1
+        }
+    }
+
+    private var segmentLayout: [SegmentLayout] {
+        let count = segmentCount
+        let activeIdx = activeSegmentIndex
+        let spacing = segmentSpacing
+        let totalSpacing = spacing * CGFloat(max(count - 1, 0))
+        let availableForSegments = usableWidth - totalSpacing
+        
+        var widths: [CGFloat] = []
+        let totalUnits = CGFloat(count == 3 ? 6 : 4)
+        
+        for i in 0..<count {
+            let units: CGFloat
+            if i == activeIdx {
+                units = count == 3 ? 4 : 3
+            } else {
+                units = 1
+            }
+            widths.append((availableForSegments * units) / totalUnits)
+        }
+        
+        var offset: CGFloat = 0
+        return widths.map { width in
+            let layout = SegmentLayout(width: width, offset: offset)
+            offset += width + spacing
+            return layout
+        }
     }
 
     private var currentValue: Double? {
         currentMetricValue(for: goal, manager: manager)
-    }
-
-    private var currentSegmentIndex: Int? {
-        guard let value = currentValue else { return nil }
-        return segments.firstIndex { $0.contains(value) }
-    }
-
-    private var arrowPositionInSegment: CGFloat? {
-        guard let value = currentValue, let idx = currentSegmentIndex else { return nil }
-        let segment = segments[idx]
-        let range = segment.maxValue - segment.minValue
-        guard range > 0 else { return 0.5 }
-        let normalized = (value - segment.minValue) / range
-        return CGFloat(max(0, min(1, normalized)))
     }
 
     private var targetRange: (min: Double, max: Double)? {
@@ -929,46 +968,54 @@ private struct TargetTrackerStrip: View {
         return .optimal
     }
 
+    private var arrowPositionInActiveSegment: CGFloat? {
+        guard let value = currentValue, let range = targetRange else { return nil }
+        let segmentRange: (min: Double, max: Double)
+        
+        switch role {
+        case .steady:
+            segmentRange = range
+        case .work:
+            guard let min = parseSingleValue(stage.targetValueText) else { return nil }
+            segmentRange = (min, min * 1.5)
+        case .recovery:
+            guard let max = parseSingleValue(stage.targetValueText) else { return nil }
+            segmentRange = (max * 0.5, max)
+        default:
+            return nil
+        }
+        
+        let rangeSpan = segmentRange.max - segmentRange.min
+        guard rangeSpan > 0 else { return 0.5 }
+        
+        let normalized = (value - segmentRange.min) / rangeSpan
+        return CGFloat(max(0, min(1, normalized)))
+    }
+
     var body: some View {
         VStack(spacing: 2) {
             HStack(spacing: 2) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { idx, segment in
-                    segmentBox(idx: idx, segment: segment)
+                ForEach(Array(segmentLayout.enumerated()), id: \.offset) { idx, layout in
+                    segmentBox(idx: idx, layout: layout)
                 }
             }
             
-            if let idx = currentSegmentIndex, let pos = arrowPositionInSegment {
-                arrowIndicator(totalSegments: segments.count, currentIndex: idx, positionInSegment: pos)
+            if let pos = arrowPositionInActiveSegment {
+                arrowIndicator(layout: segmentLayout[activeSegmentIndex], positionInSegment: pos)
             }
         }
     }
 
-    private func segmentBox(idx: Int, segment: TargetTrackerSegment) -> some View {
-        let isExpanded: Bool
-        switch currentPosition {
-        case .low:
-            isExpanded = idx == 0
-        case .optimal:
-            isExpanded = idx == 1
-        case .high:
-            isExpanded = idx == 2
-        }
-        let segmentWidth: CGFloat = isExpanded ? (isCompact ? 52 : 62) : (isCompact ? 13 : 16)
-        let segmentHeight: CGFloat = isExpanded ? (isCompact ? 22 : 26) : (isCompact ? 16 : 20)
+    private func segmentBox(idx: Int, layout: SegmentLayout) -> some View {
+        let isExpanded = idx == activeSegmentIndex
+        let segmentHeight: CGFloat = isExpanded ? (isCompact ? 20 : 24) : (isCompact ? 14 : 18)
 
-        return Group {
-        if isExpanded {
-            HStack(spacing: 2) {
-                if let firstLabel = segmentStartLabel(segment) {
-                    Text(firstLabel)
-                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(segment.color)
-                    .frame(width: segmentWidth, height: segmentHeight)
-                    .overlay {
+        return HStack(spacing: 2) {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(segmentColor(for: idx))
+                .frame(width: layout.width, height: segmentHeight)
+                .overlay {
+                    if isExpanded {
                         HStack(spacing: 2) {
                             Image(systemName: goalIcon(for: goal))
                                 .font(.system(size: isCompact ? 6 : 7, weight: .black))
@@ -978,33 +1025,42 @@ private struct TargetTrackerStrip: View {
                         }
                         .foregroundStyle(.black)
                     }
-                
-                if let lastLabel = segmentEndLabel(segment) {
-                    Text(lastLabel)
-                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.7))
                 }
-            }
+        }
+    }
+
+    private func segmentColor(for idx: Int) -> Color {
+        let position: TargetPosition
+        if idx == activeSegmentIndex {
+            position = currentPosition
+        } else if idx < activeSegmentIndex {
+            position = .low
         } else {
-            HStack(spacing: 2) {
-                if let label = segmentStartLabel(segment) {
-                    Text(label)
-                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-                
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(segment.color)
-                    .frame(width: segmentWidth, height: segmentHeight)
-                
-                if let label = segmentEndLabel(segment) {
-                    Text(label)
-                        .font(.system(size: isCompact ? 6 : 7, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-            }
+            position = .high
         }
+
+        let zoneIndex: Int
+        switch position {
+        case .low: zoneIndex = max(zoneForValue(targetRange?.min ?? 2, goal: goal) - 1, 0)
+        case .optimal: zoneIndex = zoneForValue(targetRange?.min ?? 2, goal: goal)
+        case .high: zoneIndex = min(zoneForValue(targetRange?.max ?? 2, goal: goal) + 1, 4)
         }
+        
+        let color = zoneColor(zoneIndex)
+        return idx == activeSegmentIndex ? color.opacity(0.98) : color.opacity(0.45)
+    }
+
+    @ViewBuilder
+    private func arrowIndicator(layout: SegmentLayout, positionInSegment: CGFloat) -> some View {
+        GeometryReader { _ in
+            let arrowX = layout.offset + (positionInSegment * layout.width)
+
+            Image(systemName: "chevron.up")
+                .font(.system(size: isCompact ? 6 : 7, weight: .bold))
+                .foregroundStyle(.white)
+                .offset(x: arrowX - (isCompact ? 3 : 4))
+        }
+        .frame(height: isCompact ? 8 : 10)
     }
 
     private var positionLabel: String {
@@ -1039,38 +1095,6 @@ private struct TargetTrackerStrip: View {
         }
     }
 
-    @ViewBuilder
-    private func arrowIndicator(totalSegments: Int, currentIndex: Int, positionInSegment: CGFloat) -> some View {
-        GeometryReader { geometry in
-            let totalWidth = geometry.size.width
-            let segmentWidth = totalWidth / CGFloat(totalSegments)
-            let currentSegmentStart = CGFloat(currentIndex) * segmentWidth
-            let arrowOffset = currentSegmentStart + (positionInSegment * segmentWidth)
-
-            Image(systemName: "chevron.up")
-                .font(.system(size: isCompact ? 6 : 7, weight: .bold))
-                .foregroundStyle(.white)
-                .offset(x: arrowOffset - (isCompact ? 3 : 4))
-        }
-        .frame(height: isCompact ? 8 : 10)
-    }
-
-    private func segmentStartLabel(_ segment: TargetTrackerSegment) -> String? {
-        guard let label = segment.label else { return nil }
-        if let dashIndex = label.firstIndex(of: "-") {
-            return String(label[..<dashIndex])
-        }
-        return nil
-    }
-
-    private func segmentEndLabel(_ segment: TargetTrackerSegment) -> String? {
-        guard let label = segment.label else { return nil }
-        if let dashIndex = label.firstIndex(of: "-") {
-            return String(label[label.index(after: dashIndex)...])
-        }
-        return label
-    }
-
     private func goalIcon(for goal: ProgramMicroStageGoal) -> String {
         switch goal {
         case .heartRateZone: return "heart.fill"
@@ -1082,62 +1106,6 @@ private struct TargetTrackerStrip: View {
         case .time: return "clock.fill"
         case .open: return "circle"
         }
-    }
-
-    private func buildSegments(for role: ProgramMicroStageRole, goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload, manager: WatchWorkoutManager) -> [TargetTrackerSegment] {
-        switch role {
-        case .steady: return buildSteadySegments(goal: goal, stage: stage)
-        case .work: return buildWorkSegments(goal: goal, stage: stage)
-        case .recovery: return buildRecoverySegments(goal: goal, stage: stage)
-        case .goal: return buildGoalSegments(goal: goal, stage: stage, manager: manager)
-        case .warmup, .cooldown: return buildDefaultSegments(goal: goal, stage: stage)
-        }
-    }
-
-    private func buildSteadySegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
-        guard let range = parseTargetRange(stage.targetValueText) else {
-            return buildDefaultThreeSegment(targetValue: 2, goal: goal, color: zoneColor(2))
-        }
-        return buildThreeSegmentForRange(range: range, goal: goal)
-    }
-
-    private func buildWorkSegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
-        guard let min = parseSingleValue(stage.targetValueText) else {
-            return buildDefaultThreeSegment(targetValue: 3, goal: goal, color: zoneColor(3))
-        }
-        return buildThreeSegmentForRange(range: (min, min * 1.5), goal: goal)
-    }
-
-    private func buildRecoverySegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
-        guard let max = parseSingleValue(stage.targetValueText) else {
-            return buildDefaultThreeSegment(targetValue: 2, goal: goal, color: zoneColor(2))
-        }
-        return buildThreeSegmentForRange(range: (max * 0.5, max), goal: goal)
-    }
-
-    private func buildGoalSegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload, manager: WatchWorkoutManager) -> [TargetTrackerSegment] {
-        let progress: Double
-        switch stage.objective.kind {
-        case .distance:
-            let target = Double(stage.plannedMinutes * 60 * 3)
-            progress = min(100, max(0, (manager.totalDistanceMeters / target) * 100))
-        case .energy:
-            let target = Double(stage.plannedMinutes * 10)
-            progress = min(100, max(0, (manager.currentEnergyKilocalories / target) * 100))
-        case .time:
-            let elapsed = manager.currentStageElapsedTime ?? 0
-            progress = min(100, max(0, (elapsed / Double(stage.plannedMinutes * 60)) * 100))
-        default:
-            progress = 0
-        }
-        return [
-            TargetTrackerSegment(label: nil, color: .purple.opacity(0.45), minValue: 0, maxValue: progress, isTarget: false),
-            TargetTrackerSegment(label: "GOAL", color: .green.opacity(0.98), minValue: progress, maxValue: 100, isTarget: true)
-        ]
-    }
-
-    private func buildDefaultSegments(goal: ProgramMicroStageGoal, stage: WatchProgramMicroStagePayload) -> [TargetTrackerSegment] {
-        [TargetTrackerSegment(label: goalNameForDisplay(goal), color: .blue.opacity(0.45), minValue: 0, maxValue: 100, isTarget: true)]
     }
 
     private func parseTargetRange(_ text: String?) -> (Double, Double)? {
@@ -1161,29 +1129,11 @@ private struct TargetTrackerStrip: View {
         let numericString = text.components(separatedBy: CharacterSet.decimalDigits.union(CharacterSet(charactersIn: ".-")).inverted).joined()
         return Double(numericString)
     }
+}
 
-    private func buildThreeSegmentForRange(range: (min: Double, max: Double), goal: ProgramMicroStageGoal) -> [TargetTrackerSegment] {
-        let lowerZone = zoneForValue(range.min, goal: goal)
-        let upperZone = zoneForValue(range.max, goal: goal)
-        let label = "\(Int(range.min))-\(Int(range.max))"
-        return [
-            TargetTrackerSegment(label: nil, color: zoneColor(lowerZone).opacity(0.45), minValue: 0, maxValue: range.min, isTarget: false),
-            TargetTrackerSegment(label: label, color: zoneColor(upperZone).opacity(0.98), minValue: range.min, maxValue: range.max, isTarget: true),
-            TargetTrackerSegment(label: nil, color: zoneColor(min(upperZone + 1, 4)).opacity(0.45), minValue: range.max, maxValue: range.max * 1.5, isTarget: false)
-        ]
-    }
-
-    private func buildDefaultThreeSegment(targetValue: Double, goal: ProgramMicroStageGoal, color: Color) -> [TargetTrackerSegment] {
-        let label = "\(Int(targetValue))"
-        let lowerZoneColor = zoneColor(max(Int(targetValue) - 1, 0))
-        let targetZoneColor = zoneColor(Int(targetValue))
-        let upperZoneColor = zoneColor(min(Int(targetValue) + 1, 4))
-        return [
-            TargetTrackerSegment(label: nil, color: lowerZoneColor.opacity(0.45), minValue: 0, maxValue: targetValue * 0.8, isTarget: false),
-            TargetTrackerSegment(label: label, color: targetZoneColor.opacity(0.98), minValue: targetValue * 0.8, maxValue: targetValue * 1.2, isTarget: true),
-            TargetTrackerSegment(label: nil, color: upperZoneColor.opacity(0.45), minValue: targetValue * 1.2, maxValue: targetValue * 1.6, isTarget: false)
-        ]
-    }
+private struct SegmentLayout {
+    let width: CGFloat
+    let offset: CGFloat
 }
 
 private struct TargetTrackerSegment: Identifiable {

@@ -1,9 +1,31 @@
 import SwiftUI
 import CoreLocation
 import HealthKit
+import ActivityKit
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 #endif
+
+struct WorkoutLiveActivityAttributes: ActivityAttributes {
+    
+    public struct ContentState: Codable, Hashable {
+        var elapsedSeconds: Int
+        var currentHeartRate: Int
+        var totalCalories: Double
+        var totalDistanceKilometers: Double
+        var currentPaceMinutesPerKm: Double?
+        var elevationGainMeters: Int
+        var currentHeartRateZone: Int?
+        var activePhaseTitle: String?
+    }
+
+    var workoutType: String
+    var activityIcon: String
+    var startTime: Date
+    var targetMinutes: Int?
+    var userInitials: String
+    var maxHeartRate: Int?
+}
 
 private enum WorkoutMetricsVariant {
     case primary
@@ -867,6 +889,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             isVisible = true
         }
         persistCurrentSession()
+
+        if normalizedState != "paused" && normalizedState != "preparing" {
+            if workoutLiveActivity == nil {
+                startLiveActivityIfNeeded()
+            } else {
+                updateLiveActivity()
+            }
+        }
     }
 
     private func handleWatchLifecycleState(_ state: String, reason: String?) {
@@ -911,6 +941,12 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             isVisible = true
         }
         persistCurrentSession()
+
+        if workoutLiveActivity == nil {
+            startLiveActivityIfNeeded()
+        } else {
+            updateLiveActivity()
+        }
     }
 
     func primePresentationFromWatchRequest() {
@@ -1639,11 +1675,137 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         shouldAutoPresentLiveView = true
     }
 
+    // MARK: - Live Activity Management
+
+    private var workoutLiveActivity: Activity<WorkoutLiveActivityAttributes>?
+
+    private func startLiveActivityIfNeeded() {
+        guard workoutLiveActivity == nil else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            print("[Companion] Live Activities are not enabled")
+            return
+        }
+
+        let attributes = WorkoutLiveActivityAttributes(
+            workoutType: title.isEmpty ? activityType.name.capitalized : title,
+            activityIcon: activityType.activityTypeSymbol,
+            startTime: Date(),
+            targetMinutes: phaseQueue.indices.contains(currentPhaseIndex) ? phaseQueue[currentPhaseIndex].plannedMinutes : nil,
+            userInitials: "NV",
+            maxHeartRate: nil
+        )
+
+        let initialState = buildWorkoutActivityState()
+
+        let content = ActivityContent(
+            state: initialState,
+            staleDate: Date(timeIntervalSinceNow: 30)
+        )
+
+        do {
+            workoutLiveActivity = try Activity.request(
+                attributes: attributes,
+                content: content,
+                pushType: .token
+            )
+            print("[Companion] Live Activity started: \(workoutLiveActivity?.id ?? "unknown")")
+        } catch {
+            print("[Companion] Failed to start Live Activity: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateLiveActivity() {
+        guard let activity = workoutLiveActivity else { return }
+
+        let state = buildWorkoutActivityState()
+        let content = ActivityContent(
+            state: state,
+            staleDate: Date(timeIntervalSinceNow: 30)
+        )
+
+        Task {
+            await activity.update(content)
+        }
+    }
+
+    private func endLiveActivity(showSummary: Bool = true) {
+        guard let activity = workoutLiveActivity else { return }
+
+        let finalState = buildWorkoutActivityState()
+        let finalContent = ActivityContent(
+            state: finalState,
+            staleDate: nil
+        )
+
+        Task {
+            await activity.end(
+                finalContent,
+                dismissalPolicy: showSummary
+                    ? ActivityUIDismissalPolicy.after(Date().addingTimeInterval(1800))
+                    : .immediate
+            )
+            print("[Companion] Live Activity ended")
+        }
+        workoutLiveActivity = nil
+    }
+
+    private func buildWorkoutActivityState() -> WorkoutLiveActivityAttributes.ContentState {
+        let paceMinutesPerKm: Double? = {
+            guard let speed = currentSpeedMetersPerSecond, speed > 0 else { return nil }
+            return 1000.0 / speed / 60.0
+        }()
+
+        let currentPhaseTitle: String? = {
+            if stepQueue.indices.contains(currentMicroStageIndex) {
+                return stepQueue[currentMicroStageIndex].title
+            }
+            if phaseQueue.indices.contains(currentPhaseIndex) {
+                return phaseQueue[currentPhaseIndex].title
+            }
+            return nil
+        }()
+
+        let heartRateZone: Int? = {
+            guard let hr = currentHeartRate else { return nil }
+            return heartRateZoneIndex(for: hr)
+        }()
+
+        return WorkoutLiveActivityAttributes.ContentState(
+            elapsedSeconds: Int(elapsedTime),
+            currentHeartRate: Int(currentHeartRate ?? 0),
+            totalCalories: calculateTotalCalories(),
+            totalDistanceKilometers: totalDistanceMeters / 1000.0,
+            currentPaceMinutesPerKm: paceMinutesPerKm,
+            elevationGainMeters: Int(elevationGainFeet / 3.28084),
+            currentHeartRateZone: heartRateZone,
+            activePhaseTitle: currentPhaseTitle
+        )
+    }
+
+    private func calculateTotalCalories() -> Double {
+        if let energyMetric = metrics.first(where: { $0.id == "energy" }),
+           let value = Double(energyMetric.value.components(separatedBy: " ").first ?? "") {
+            return value
+        }
+        return 0
+    }
+
+    private func heartRateZoneIndex(for hr: Double) -> Int {
+        let maxHR = 220.0
+        let percentage = hr / maxHR
+        if percentage < 0.6 { return 1 }
+        if percentage < 0.7 { return 2 }
+        if percentage < 0.8 { return 3 }
+        if percentage < 0.9 { return 4 }
+        return 5
+    }
+
     fileprivate func finishSession(immediate: Bool = false) {
         stopElapsedTimer()
         isWorkoutActive = false
         stateText = SessionStateText.ended
         clearPersistedSession()
+        endLiveActivity(showSummary: true)
         let cleanupDelay = immediate ? 0.0 : 6.0
         DispatchQueue.main.asyncAfter(deadline: .now() + cleanupDelay) { [weak self] in
             guard let self else { return }

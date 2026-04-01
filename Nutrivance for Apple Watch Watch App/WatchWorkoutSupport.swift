@@ -839,6 +839,24 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         return elapsedTime
     }
 
+    var currentStageInTargetTime: TimeInterval? {
+        guard let stage = currentMicroStage else { return nil }
+        return inTargetProgressTime(for: stage, at: Date())
+    }
+
+    private func inTargetProgressTime(for stage: WatchProgramMicroStagePayload, at date: Date) -> TimeInterval {
+        guard objectiveCountsOnlyQualifiedTime(stage.objective.kind) else {
+            return 0
+        }
+        var qualifiedTime = accumulatedQualifiedObjectiveTime
+        if displayState == .running,
+           let sampleDate = objectiveQualificationSampleDate,
+           metricObjectiveSatisfied(for: stage) {
+            qualifiedTime += max(0, min(date.timeIntervalSince(sampleDate), 15))
+        }
+        return qualifiedTime
+    }
+
     var compactCurrentStageTitle: String? {
         currentMicroStage?.title ?? currentPhase?.title
     }
