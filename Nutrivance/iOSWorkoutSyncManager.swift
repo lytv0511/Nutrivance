@@ -75,8 +75,12 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
     }
     
     // MARK: - Receiving Messages from Watch
+        /// Stores the last timer sync received from the watch
+    @Published var lastWorkoutTimerSync: WorkoutTimerSync?
     
-    func session(
+    /// Used to sync iPhone's local timer with watch
+    private var localTimerSyncPoint: Date = Date()
+        func session(
         _ session: WCSession,
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
@@ -123,6 +127,18 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
     // MARK: - Private Handling
     
     private func handleIncomingMessage(_ message: [String: Any]) {
+        // Handle timer sync from watch
+        if message[WorkoutTimerSyncKeys.messageKey] as? Bool == true {
+            handleTimerSync(message)
+            return
+        }
+
+        // Handle high-frequency workout snapshot stream from watch
+        if message["workoutMetricsSnapshot"] as? Bool == true {
+            handleRealtimeWorkoutSnapshot(message)
+            return
+        }
+        
         if let action = message["action"] as? String {
             switch action {
             case "workoutStarted":
@@ -134,6 +150,80 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
             default:
                 print("Unknown message action: \(action)")
             }
+        }
+    }
+
+    private func handleRealtimeWorkoutSnapshot(_ message: [String: Any]) {
+        guard let elapsedTime = message["elapsedTime"] as? TimeInterval,
+              let stateRaw = message["state"] as? String else {
+            return
+        }
+
+        let normalizedState = stateRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedState == "ended" || normalizedState == "failed" || normalizedState == "idle" {
+            Task { await WorkoutLiveActivityManager.shared.endActivity() }
+            return
+        }
+
+        var state = incomingWorkoutMetrics ?? WorkoutActivityState(
+            elapsedSeconds: Int(elapsedTime.rounded(.down)),
+            currentHeartRate: 0,
+            totalCalories: 0,
+            totalDistanceKilometers: 0,
+            currentPaceMinutesPerKm: nil,
+            elevationGainMeters: 0,
+            currentHeartRateZone: nil,
+            activePhaseTitle: nil
+        )
+
+        state.elapsedSeconds = Int(elapsedTime.rounded(.down))
+        if let heartRate = message["heartRate"] as? Int {
+            state.currentHeartRate = heartRate
+        }
+        if let calories = message["totalCalories"] as? Double {
+            state.totalCalories = calories
+        }
+        if let distanceMeters = message["totalDistance"] as? Double {
+            state.totalDistanceKilometers = distanceMeters / 1000.0
+        }
+        if let pace = message["currentPace"] as? Double {
+            state.currentPaceMinutesPerKm = pace
+        }
+        if let elevationGainMeters = message["elevationGain"] as? Double {
+            state.elevationGainMeters = Int(elevationGainMeters.rounded())
+        }
+        if let activePhase = message["activePhase"] as? String {
+            state.activePhaseTitle = activePhase
+        }
+
+        DispatchQueue.main.async {
+            self.incomingWorkoutMetrics = state
+            Task {
+                await self.updateLiveActivityIfActive(with: state)
+            }
+        }
+    }
+    
+    private func handleTimerSync(_ message: [String: Any]) {
+        guard let elapsedTime = message[WorkoutTimerSyncKeys.elapsedTimeKey] as? TimeInterval,
+              let syncTs = message[WorkoutTimerSyncKeys.syncTimestampKey] as? TimeInterval,
+              let state = message[WorkoutTimerSyncKeys.workoutStateKey] as? String,
+              let splitCount = message[WorkoutTimerSyncKeys.splitCountKey] as? Int else {
+            return
+        }
+        
+        let syncDate = Date(timeIntervalSince1970: syncTs)
+        let sync = WorkoutTimerSync(
+            elapsedTime: elapsedTime,
+            syncTimestamp: syncDate,
+            workoutState: state,
+            splitCount: splitCount
+        )
+        
+        DispatchQueue.main.async {
+            self.lastWorkoutTimerSync = sync
+            self.localTimerSyncPoint = Date()
+            print("[iPhone] Timer sync received: \(elapsedTime)s, state=\(state), splits=\(splitCount)")
         }
     }
     

@@ -1,5 +1,6 @@
 import Combine
 import CoreLocation
+import CoreMotion
 import Foundation
 import HealthKit
 import SwiftUI
@@ -914,6 +915,10 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private var workoutBuilder: HKLiveWorkoutBuilder?
     private var routeBuilder: HKWorkoutRouteBuilder?
     private var elapsedTimer: Timer?
+    private var metricsBroadcastTimer: Timer?
+    private var lastMetricsBroadcastTime: Date = Date()
+    private var lastCompanionSnapshotElapsedSent: TimeInterval = 0
+    private var lastCompanionSnapshotStateSent: SessionDisplayState = .idle
     private var estimatedMaxHeartRate: Double = 190
     private var lastZoneSampleDate: Date?
     private var accumulatedElapsedTime: TimeInterval = 0
@@ -937,6 +942,35 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     private var microStageStartZoneDurations: [TimeInterval] = []
     private var objectiveQualificationSampleDate: Date?
     private let persistenceKey = "watch.live.workout.session_v2"
+    
+    // GPS location collection for route and elevation data
+    private var collectedLocations: [CLLocation] = []
+    private var baselineElevation: Double?
+    private var currentGPSSpeed: Double?
+    private var recentSpeeds: [(date: Date, speed: Double)] = []
+    
+    // Pre-workout countdown state
+    @Published var preWorkoutCountdownState = PreWorkoutCountdownState.waitingForConnection
+    @Published var preWorkoutCountdownSeconds = 3
+    var showPreWorkoutCountdown = false
+    
+    // Barometric altitude tracking for elevation gain accuracy
+    private let altimeter = CMAltimeter()
+    private var baselineRelativeAltitude: Double = 0
+    private var accumulatedElevationGainMeters: Double = 0
+    private var accumulatedElevationLossMeters: Double = 0
+    private var maxRelativeAltitude: Double = 0
+    private var previousAltitude: Double = 0
+    private let companionSnapshotMinInterval: TimeInterval = 1.25
+    private let companionSnapshotHistoryLimit = 24
+    private let companionSnapshotSplitLimit = 20
+    private let companionSnapshotSoftSizeLimit = 24 * 1024
+
+    private var averagedGPSSpeed: Double? {
+        guard !recentSpeeds.isEmpty else { return nil }
+        let speeds = recentSpeeds.map(\.speed)
+        return speeds.reduce(0, +) / Double(speeds.count)
+    }
 
     private var sessionState: HKWorkoutSessionState? {
         workoutSession?.state
@@ -1137,7 +1171,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
         Task { @MainActor in
             self.isMirroringToPhone = await self.ensureCompanionMirroring()
-            self.broadcastCompanionSnapshot()
+            self.broadcastCompanionSnapshot(force: true)
             self.persistCurrentSession()
         }
     }
@@ -1270,6 +1304,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         displayState = .paused
         workoutSession.pause()
         broadcastCompanionSnapshot()
+        sendTimerSync()
+        broadcastMetricsToCompanion()
         sendCompanionLifecycleUpdate(state: "paused", reason: "Workout paused")
     }
 
@@ -1293,6 +1329,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         displayState = .running
         workoutSession.resume()
         broadcastCompanionSnapshot()
+        sendTimerSync()
+        broadcastMetricsToCompanion()
         sendCompanionLifecycleUpdate(state: "running", reason: "Workout resumed")
     }
 
@@ -1306,11 +1344,75 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         statusMessage = "Ending workout..."
         displayState = .ended
         stopElapsedTimer()
+        sendTimerSync()
+        broadcastMetricsToCompanion()
         pendingEndAction = .promptEffort
         lastCompletedWorkoutTitle = activeTitle
         lastCompletedWorkoutSubtitle = activeSubtitle
         postWorkoutDestination = .effortPrompt
         workoutSession.end()
+    }
+
+    func recordGPSLocation(_ location: CLLocation) {
+        guard isSessionActive else { return }
+        
+        if baselineElevation == nil, location.verticalAccuracy >= 0 {
+            baselineElevation = location.altitude
+        }
+        
+        if location.speed >= 0 {
+            currentGPSSpeed = location.speed
+            // Collect recent speeds for averaging
+            recentSpeeds.append((date: Date(), speed: location.speed))
+            // Keep only last 30 seconds
+            let cutoff = Date().addingTimeInterval(-30)
+            recentSpeeds = recentSpeeds.filter { $0.date >= cutoff }
+        }
+        
+        collectedLocations.append(location)
+        
+        if collectedLocations.count > 1000 {
+            collectedLocations.removeFirst(collectedLocations.count - 1000)
+        }
+        
+        // Add location to route builder for GPS tracking
+        if let routeBuilder {
+            routeBuilder.insertRouteData([location]) { success, error in
+                if let error {
+                    print("Failed to insert route data: \(error)")
+                }
+            }
+        }
+    }
+    
+    private func processAltitudeUpdate(_ data: CMAltitudeData) {
+        guard isSessionActive else { return }
+        
+        let relativeAltitude = data.relativeAltitude.doubleValue
+        
+        if baselineRelativeAltitude == 0 {
+            baselineRelativeAltitude = relativeAltitude
+            previousAltitude = 0
+            return
+        }
+        
+        let currentAltitude = relativeAltitude - baselineRelativeAltitude
+        
+        if currentAltitude > maxRelativeAltitude {
+            maxRelativeAltitude = currentAltitude
+        }
+        
+        // Calculate elevation gain and loss from altitude changes
+        if previousAltitude != 0 {
+            let delta = currentAltitude - previousAltitude
+            if delta > 0.1 {
+                accumulatedElevationGainMeters += delta
+            } else if delta < -0.1 {
+                accumulatedElevationLossMeters += abs(delta)
+            }
+        }
+        
+        previousAltitude = currentAltitude
     }
 
     func advanceToNextPhase() {
@@ -1384,6 +1486,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         appendSplitSnapshot(isAutomatic: false)
         statusMessage = "Split \(splitCount) at \(shortWorkoutElapsedString(elapsedTime))"
         broadcastCompanionSnapshot()
+        sendTimerSync()
     }
 
     func enableWaterLock() {
@@ -1643,6 +1746,26 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         verticalOscillationCentimeters = nil
         currentElevationFeet = 0
         elevationGainFeet = 0
+        collectedLocations = []
+        baselineElevation = nil
+        currentGPSSpeed = nil
+        recentSpeeds = []
+        baselineRelativeAltitude = 0
+        accumulatedElevationGainMeters = 0
+        accumulatedElevationLossMeters = 0
+        maxRelativeAltitude = 0
+        previousAltitude = 0
+        previousAltitude = 0
+        previousAltitude = 0
+        previousAltitude = 0
+        
+        // Start barometric altitude tracking for live elevation
+        if CMAltimeter.isRelativeAltitudeAvailable() {
+            altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, error in
+                guard let self, let data = data, error == nil else { return }
+                self.processAltitudeUpdate(data)
+            }
+        }
 
         session.delegate = self
         builder.delegate = self
@@ -1846,10 +1969,44 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             appendHistoryPoint(currentCadence, to: &cadenceHistory, elapsedTime: elapsed)
         }
 
-        let estimatedElevationFeet = max((flightsClimbed ?? 0) * 10, elevationGainFeet)
-        currentElevationFeet = estimatedElevationFeet
-        elevationGainFeet = max(elevationGainFeet, estimatedElevationFeet)
+        updateElevationFromGPSData()
         appendHistoryPoint(currentElevationFeet, to: &elevationHistory, elapsedTime: elapsed)
+    }
+
+    private func updateElevationFromGPSData() {
+        // Combine barometric (CMAltimeter) and GPS data for best accuracy
+        var totalElevationGain = 0.0
+        var currentAltitudeFeet = 0.0
+        
+        // Primary: Use barometric data if available
+        if accumulatedElevationGainMeters > 0 {
+            totalElevationGain = max(accumulatedElevationGainMeters, 0)
+            if let lastGPSAltitude = collectedLocations.last?.altitude {
+                currentAltitudeFeet = lastGPSAltitude / 0.3048
+            }
+        }
+        // Fallback: Use GPS altitude deltas
+        else if !collectedLocations.isEmpty {
+            var lastAltitude: Double? = baselineElevation
+            for location in collectedLocations {
+                guard location.verticalAccuracy >= 0 else { continue }
+                if let last = lastAltitude {
+                    let altitudeDelta = location.altitude - last
+                    if altitudeDelta > 0 {
+                        totalElevationGain += altitudeDelta
+                    }
+                }
+                lastAltitude = location.altitude
+            }
+            currentAltitudeFeet = (lastAltitude ?? baselineElevation ?? 0) / 0.3048
+        }
+        
+        let elevationGainFeet = totalElevationGain / 0.3048
+        let gpsElevationGain = max(elevationGainFeet, 0)
+        let flightsElevation = (flightsClimbed ?? 0) * 10
+        
+        self.elevationGainFeet = max(gpsElevationGain, flightsElevation)
+        self.currentElevationFeet = currentAltitudeFeet
     }
 
     private func appendSplitSnapshot(isAutomatic: Bool) {
@@ -1950,8 +2107,16 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     self.elapsedTime = self.accumulatedElapsedTime
                 }
                 
-                // Persist session every 5 seconds (500 ticks at 0.01 interval)
+                // Rebuild metrics every 1 second (100 ticks) to include GPS/barometric updates
                 self.persistenceTicks += 1
+                if self.persistenceTicks >= 100 {
+                    self.rebuildMetrics()
+                }
+                // Broadcast metrics to iPhone every 0.5 seconds (50 ticks at 0.01 interval, or ~500ms)
+                if self.persistenceTicks % 50 == 0 {
+                    self.broadcastMetricsToCompanion()
+                }
+                // Persist session every 5 seconds (500 ticks at 0.01 interval)
                 if self.persistenceTicks >= 500 {
                     self.persistenceTicks = 0
                     self.persistCurrentSession()
@@ -2317,6 +2482,17 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                     cards.append(.init(id: "speed-current", title: "Speed", valueText: String(format: "%.1f mph", speedMPH), symbol: "speedometer", tint: .cyan))
                 }
                 print("[Watch] Current speed: \(current) m/s (\(speedType.identifier))")
+            } else if let gpsSpeed = averagedGPSSpeed {
+                currentSpeedMetersPerSecond = gpsSpeed
+                let isMetric = Locale.current.usesMetricSystem
+                if isMetric {
+                    let speedKMH = gpsSpeed * 3.6
+                    cards.append(.init(id: "speed-current", title: "Speed (GPS)", valueText: String(format: "%.1f km/h", speedKMH), symbol: "speedometer", tint: .cyan))
+                } else {
+                    let speedMPH = gpsSpeed * 2.23694
+                    cards.append(.init(id: "speed-current", title: "Speed (GPS)", valueText: String(format: "%.1f mph", speedMPH), symbol: "speedometer", tint: .cyan))
+                }
+                print("[Watch] Current speed (GPS avg): \(gpsSpeed) m/s")
             }
             if let average = speedStats.averageQuantity()?.doubleValue(for: HKUnit.meter().unitDivided(by: .second())) {
                 let isMetric = Locale.current.usesMetricSystem
@@ -2494,11 +2670,26 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         broadcastCompanionSnapshot()
     }
 
-    private func broadcastCompanionSnapshot() {
+    private func broadcastCompanionSnapshot(force: Bool = false) {
         guard isMirroringToPhone, let workoutSession else { return }
         guard #available(watchOS 10.0, *) else { return }
+        let now = Date()
+        let elapsedDelta = abs(elapsedTime - lastCompanionSnapshotElapsedSent)
+        let stateChanged = displayState != lastCompanionSnapshotStateSent
+        if !force,
+           !stateChanged,
+           elapsedDelta < 0.8,
+           now.timeIntervalSince(lastMetricsBroadcastTime) < companionSnapshotMinInterval {
+            return
+        }
 
-        let payload = CompanionWorkoutSnapshotPayload(
+        func tail<T>(_ values: [T], limit: Int) -> [T] {
+            guard values.count > limit else { return values }
+            return Array(values.suffix(limit))
+        }
+
+        func makePayload(historyLimit: Int, splitLimit: Int) -> CompanionWorkoutSnapshotPayload {
+            CompanionWorkoutSnapshotPayload(
             title: activeTitle ?? watchWorkoutDisplayName(activeActivity ?? .running),
             stateText: displayState.rawValue.capitalized,
             activityRawValue: activeActivity?.rawValue ?? HKWorkoutActivityType.running.rawValue,
@@ -2513,13 +2704,13 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 )
             },
             pageKinds: orderedWorkoutPages.map(\.rawValue),
-            speedHistory: speedHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
-            paceHistory: paceHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
-            powerHistory: powerHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
-            elevationHistory: elevationHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
-            cadenceHistory: cadenceHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
-            heartRateHistory: heartRateHistory.map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
-            splits: splits.map {
+            speedHistory: tail(speedHistory, limit: historyLimit).map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            paceHistory: tail(paceHistory, limit: historyLimit).map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            powerHistory: tail(powerHistory, limit: historyLimit).map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            elevationHistory: tail(elevationHistory, limit: historyLimit).map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            cadenceHistory: tail(cadenceHistory, limit: historyLimit).map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            heartRateHistory: tail(heartRateHistory, limit: historyLimit).map { .init(elapsedTime: $0.elapsedTime, value: $0.value) },
+            splits: tail(splits, limit: splitLimit).map {
                 .init(
                     index: $0.index,
                     elapsedTime: $0.elapsedTime,
@@ -2578,14 +2769,39 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 )
             }
         )
+        }
 
         Task {
-            guard let data = try? JSONEncoder().encode(payload) else {
+            var data: Data?
+            let standardPayload = makePayload(
+                historyLimit: companionSnapshotHistoryLimit,
+                splitLimit: companionSnapshotSplitLimit
+            )
+            data = try? JSONEncoder().encode(standardPayload)
+
+            if let size = data?.count, size > companionSnapshotSoftSizeLimit {
+                let reducedPayload = makePayload(historyLimit: 8, splitLimit: 8)
+                data = try? JSONEncoder().encode(reducedPayload)
+                if let reducedSize = data?.count {
+                    print("[Watch] Companion snapshot reduced from \(size) to \(reducedSize) bytes")
+                }
+            }
+
+            guard let data else {
                 print("[Watch] Failed to encode snapshot payload")
                 return
             }
+
+            if data.count > 80 * 1024 {
+                print("[Watch] Snapshot still too large (\(data.count) bytes); skipping remote send")
+                return
+            }
+
             do {
                 try await workoutSession.sendToRemoteWorkoutSession(data: data)
+                lastMetricsBroadcastTime = Date()
+                lastCompanionSnapshotElapsedSent = elapsedTime
+                lastCompanionSnapshotStateSent = displayState
                 print("[Watch] Snapshot sent successfully (size: \(data.count) bytes)")
             } catch {
                 print("[Watch] Failed to send snapshot to iPhone: \(error.localizedDescription)")
@@ -2608,6 +2824,69 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 #endif
             }
         }
+    }
+
+    private func sendTimerSync() {
+        #if canImport(WatchConnectivity)
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated && session.isReachable else { return }
+
+        let sync = WorkoutTimerSync(
+            elapsedTime: currentElapsedTime(at: Date()),
+            syncTimestamp: Date(),
+            workoutState: displayState.rawValue,
+            splitCount: splitCount
+        )
+
+        var payload: [String: Any] = [
+            WorkoutTimerSyncKeys.messageKey: true,
+            WorkoutTimerSyncKeys.elapsedTimeKey: sync.elapsedTime,
+            WorkoutTimerSyncKeys.syncTimestampKey: sync.syncTimestamp.timeIntervalSince1970,
+            WorkoutTimerSyncKeys.workoutStateKey: sync.workoutState,
+            WorkoutTimerSyncKeys.splitCountKey: sync.splitCount
+        ]
+
+        session.sendMessage(payload) { response in
+            print("[Watch] Timer sync acknowledged by iPhone")
+        } errorHandler: { error in
+            print("[Watch] Timer sync failed: \(error.localizedDescription)")
+        }
+        #endif
+    }
+    
+    private func broadcastMetricsToCompanion() {
+        #if canImport(WatchConnectivity)
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated && session.isReachable else { return }
+        
+        // Collect current metrics
+        let snapshot = WorkoutMetricsSnapshot(
+            elapsedTime: currentElapsedTime(at: Date()),
+            state: displayState.rawValue,
+            heartRate: currentHeartRate.map { Int($0.rounded()) },
+            totalCalories: currentEnergyKilocalories,
+            totalDistance: totalDistanceMeters,
+            currentSpeed: currentSpeedMetersPerSecond,
+            currentPace: currentSpeedMetersPerSecond.map { speed in
+                speed > 0 ? 1000.0 / speed / 60.0 : 0
+            },
+            elevationGain: elevationGainFeet / 0.3048,
+            activePhase: activeTitle,
+            splitCount: splitCount,
+            timestamp: Date()
+        )
+        
+        let payload = snapshot.toDictionary()
+        
+        session.sendMessage(payload) { response in
+            // Silently acknowledge; metrics are sent frequently so we don't need logging
+        } errorHandler: { error in
+            // Metrics sends are frequent; don't log every error
+            print("[Watch] Metrics broadcast error (will retry): \(error.localizedDescription)")
+        }
+        #endif
     }
 
     func objectiveStatus(for phase: WatchProgramPhasePayload, at index: Int) -> (summaryText: String, isComplete: Bool) {
@@ -3615,10 +3894,34 @@ extension WatchWorkoutManager: HKWorkoutSessionDelegate {
                 broadcastCompanionSnapshot()
                 sendCompanionLifecycleUpdate(state: "ended", reason: "Apple Watch workout finished.")
                 stopElapsedTimer()
+                altimeter.stopRelativeAltitudeUpdates()
                 if let workoutBuilder {
                     try? await workoutBuilder.endCollection(at: date)
-                    try? await workoutBuilder.finishWorkout()
+                    
+                    // Finish the workout and get the HKWorkout
+                    let workout = try? await workoutBuilder.finishWorkout()
+                    
+                    // Finish the route if route builder exists
+                    if let routeBuilder, let workout {
+                        await withCheckedContinuation { continuation in
+                            routeBuilder.finishRoute(with: workout, metadata: nil) { route, error in
+                                if let error {
+                                    print("Failed to finish route: \(error)")
+                                }
+                                continuation.resume()
+                            }
+                        }
+                    }
                 }
+                collectedLocations = []
+                baselineElevation = nil
+                currentGPSSpeed = nil
+                recentSpeeds = []
+                baselineRelativeAltitude = 0
+                accumulatedElevationGainMeters = 0
+                accumulatedElevationLossMeters = 0
+                maxRelativeAltitude = 0
+                previousAltitude = 0
                 let completedTitle = self.activeTitle
                 let completedSubtitle = self.activeSubtitle
                 self.workoutSession = nil

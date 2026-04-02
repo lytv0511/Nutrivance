@@ -457,10 +457,10 @@ struct ProgramBuilderView: View {
                             .textInputAutocapitalization(.words)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
                             )
 
                         HStack(spacing: 10) {
@@ -468,7 +468,7 @@ struct ProgramBuilderView: View {
                                 .textInputAutocapitalization(.words)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 12)
-                                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
                             Button("Add") {
                                 addCustomActivity()
@@ -610,12 +610,12 @@ struct ProgramBuilderView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .background(
-                            (selectedStageActivityID == activity.id ? activity.tint.opacity(0.85) : Color.white.opacity(0.08)),
+                            (selectedStageActivityID == activity.id ? activity.tint.opacity(0.85) : Color.white.opacity(0.14)),
                             in: Capsule()
                         )
                         .overlay(
                             Capsule()
-                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                .stroke(Color.white.opacity(0.22), lineWidth: 1)
                         )
                     }
                     .buttonStyle(.plain)
@@ -643,7 +643,7 @@ struct ProgramBuilderView: View {
                 .textInputAutocapitalization(.sentences)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             HStack {
                 Button {
@@ -690,13 +690,13 @@ struct ProgramBuilderView: View {
                             .foregroundStyle(.white)
                         }
                         .padding(10)
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                 }
             }
         }
         .padding(12)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var stageManagerBanListSheet: some View {
@@ -1374,7 +1374,7 @@ struct ProgramBuilderView: View {
                 TextField("Name the route, trail, climb, or course", text: $routeObjectiveName)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
                 wheelMetricPicker(title: "Repeats", selection: routeRepeatsWheelBinding, options: (1...10).map(String.init))
             }
@@ -1536,7 +1536,7 @@ struct ProgramBuilderView: View {
                             }
                         }
                         .padding(14)
-                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .background(Color.white.opacity(0.13), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     }
                 }
             }
@@ -2163,7 +2163,7 @@ struct ProgramBuilderView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .background(
-                            (selectedStageActivityID == activity.id ? activity.tint.opacity(0.9) : Color.white.opacity(0.08)),
+                            (selectedStageActivityID == activity.id ? activity.tint.opacity(0.9) : Color.white.opacity(0.14)),
                             in: Capsule()
                         )
                     }
@@ -2189,7 +2189,7 @@ struct ProgramBuilderView: View {
                 .foregroundStyle(.white.opacity(0.62))
         }
         .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     @ViewBuilder
@@ -2342,7 +2342,7 @@ struct ProgramBuilderView: View {
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(Color.white.opacity(0.13), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     @ViewBuilder
@@ -2362,7 +2362,7 @@ struct ProgramBuilderView: View {
                     .textInputAutocapitalization(.words)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 Button(role: .destructive) {
                     removeMicroStage(for: activity, at: index)
@@ -2461,7 +2461,7 @@ struct ProgramBuilderView: View {
                     .textInputAutocapitalization(.sentences)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     Button {
                         applyNaturalLanguageStagePrompt(for: activity, stageID: stage.id)
@@ -2478,7 +2478,7 @@ struct ProgramBuilderView: View {
                     .textInputAutocapitalization(.sentences)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 HStack(alignment: .top, spacing: 10) {
                     Text(stageBinding.wrappedValue.displaySummary)
@@ -2495,7 +2495,7 @@ struct ProgramBuilderView: View {
         }
         .frame(minHeight: isCollapsed ? nil : stageCardHeightByActivityID[activity.id], alignment: .top)
         .padding(12)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .background(
             GeometryReader { geometry in
                 Color.clear
@@ -2615,7 +2615,7 @@ struct ProgramBuilderView: View {
             )
         }
         .padding(18)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .stroke(activity.tint.opacity(0.35), lineWidth: 1)
@@ -4656,7 +4656,7 @@ private struct ProgramEmptyState: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 

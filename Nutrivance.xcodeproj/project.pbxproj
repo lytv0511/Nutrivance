@@ -1013,7 +1013,9 @@
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "This app requires access to Health data to provide useful data in fitness, mental health, and nutrition";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "This app writes data to HealthKit to supplment the logging of health data and allows syncing between this app and Apple Health or other HealthKit enabled apps";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Nutrivance uses your location to track outdoor workouts in the background.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Nutrivance uses your location during outdoor workouts to show your live position, direction, and nearby map context on Apple Watch.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Nutrivance uses motion data to track your workouts and provide accurate activity metrics.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";
@@ -1054,7 +1056,9 @@
 				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "<key>NSHealthRecordsUsageDescription</key>\n<string>Your app needs access to Health data to track dietary information.</string>";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "This app requires access to Health data to provide useful data in fitness, mental health, and nutrition";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "This app writes data to HealthKit to supplment the logging of health data and allows syncing between this app and Apple Health or other HealthKit enabled apps";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Nutrivance uses your location to track outdoor workouts in the background.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Nutrivance uses your location during outdoor workouts to show your live position, direction, and nearby map context on Apple Watch.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Nutrivance uses motion data to track your workouts and provide accurate activity metrics.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "";

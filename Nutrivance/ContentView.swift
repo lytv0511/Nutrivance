@@ -6,6 +6,13 @@ import ActivityKit
 import WatchConnectivity
 #endif
 
+struct WorkoutTimerSync: Equatable {
+    let elapsedTime: TimeInterval
+    let syncTimestamp: Date
+    let workoutState: String
+    let splitCount: Int
+}
+
 struct WorkoutLiveActivityAttributes: ActivityAttributes {
     
     public struct ContentState: Codable, Hashable {
@@ -549,6 +556,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
+    private var lastWorkoutTimerSync: WorkoutTimerSync?
     private var mirroredSession: HKWorkoutSession?
     private var localSession: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
@@ -556,6 +564,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     private var pausedElapsedTime: TimeInterval = 0
     private var elapsedTimer: Timer?
     private var lastSnapshotElapsedTime: TimeInterval = 0
+    private var lastRealtimeMetricsTimestamp: Date?
     private var hasActivated = false
     private var persistedSource: CompanionWorkoutSource = .appleWatch
     private var authorizationRequestInFlight = false
@@ -580,6 +589,19 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         static let injectedActivityRawValue = "injectedActivityRawValue"
         static let injectedLocationRawValue = "injectedLocationRawValue"
         static let injectedPlannedMinutes = "injectedPlannedMinutes"
+    }
+
+    private enum WorkoutRealtimeSnapshotKeys {
+        static let messageKey = "workoutMetricsSnapshot"
+        static let elapsedTime = "elapsedTime"
+        static let state = "state"
+        static let heartRate = "heartRate"
+        static let totalCalories = "totalCalories"
+        static let totalDistance = "totalDistance"
+        static let currentSpeed = "currentSpeed"
+        static let elevationGain = "elevationGain"
+        static let activePhase = "activePhase"
+        static let timestamp = "timestamp"
     }
 
     static let injectableWorkouts: [InjectableWorkout] = [
@@ -704,22 +726,12 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     }
 
     private func startElapsedTimer() {
-        elapsedTimer?.invalidate()
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                if self.isPaused {
-                    self.elapsedTime = self.pausedElapsedTime
-                } else if let startedAt = self.startedAt {
-                    self.elapsedTime = self.pausedElapsedTime + Date().timeIntervalSince(startedAt)
-                }
-            }
-        }
+        // Don't update elapsedTime continuously - use watch's time directly from snapshots
+        // The watch sends the authoritative elapsed time, so we just use that
     }
 
     private func stopElapsedTimer() {
-        elapsedTimer?.invalidate()
-        elapsedTimer = nil
+        // Timer not used anymore - watch provides authoritative time
     }
 
     private func rebuildMetrics() {
@@ -802,18 +814,15 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         launchStatusMessage = nil
         activityType = HKWorkoutActivityType(rawValue: payload.activityRawValue) ?? .running
         
-        // Sync elapsed time and state with watch
-        lastSnapshotElapsedTime = payload.elapsedTime
-        elapsedTime = payload.elapsedTime
-        pausedElapsedTime = payload.elapsedTime
-        
-        if normalizedState == "paused" {
-            startedAt = nil
-            stopElapsedTimer()
-        } else {
-            startedAt = Date()
-            startElapsedTimer()
+        // Ignore stale packets that would move a running timer backward.
+        if normalizedState == "running", payload.elapsedTime + 0.35 < elapsedTime {
+            return
         }
+
+        // Sync elapsed time and state with watch - use watch's authoritative time
+        lastSnapshotElapsedTime = max(lastSnapshotElapsedTime, payload.elapsedTime)
+        elapsedTime = max(elapsedTime, payload.elapsedTime)
+        pausedElapsedTime = payload.elapsedTime
         metrics = payload.metrics.map {
             LiveMetric(
                 id: $0.id,
@@ -909,18 +918,12 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             stateText = SessionStateText.watchLive
             isWorkoutActive = true
             if shouldAutoPresentLiveView { isVisible = true }
-            if startedAt == nil {
-                startedAt = Date().addingTimeInterval(-elapsedTime)
-                startElapsedTimer()
-            }
             launchStatusMessage = reason?.isEmpty == false ? reason : "Workout running on Apple Watch."
             return
         case "paused":
             stateText = SessionStateText.phonePaused
             isWorkoutActive = true
             pausedElapsedTime = elapsedTime
-            startedAt = nil
-            stopElapsedTimer()
             launchStatusMessage = reason?.isEmpty == false ? reason : "Workout paused on Apple Watch."
             return
         case "failed":
@@ -929,6 +932,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout cleared."
         case "ended":
             launchStatusMessage = reason?.isEmpty == false ? reason : "Apple Watch workout finished."
+            endLiveActivity(showSummary: true)
         default:
             return
         }
@@ -947,20 +951,12 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
 
         if let elapsed = payload["elapsedTime"] as? Double {
-            elapsedTime = elapsed
+            elapsedTime = max(elapsedTime, elapsed)
             pausedElapsedTime = elapsed
-            lastSnapshotElapsedTime = elapsed
+            lastSnapshotElapsedTime = max(lastSnapshotElapsedTime, elapsed)
         }
         if let state = payload["stateText"] as? String, !state.isEmpty {
             stateText = state
-            let normalizedState = state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if normalizedState == "paused" {
-                startedAt = nil
-                stopElapsedTimer()
-            } else if normalizedState != "ended" && normalizedState != "failed" && normalizedState != "idle" {
-                startedAt = Date()
-                startElapsedTimer()
-            }
         }
 
         source = .appleWatch
@@ -975,6 +971,120 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         } else {
             updateLiveActivity()
         }
+
+        if let metricsData = payload["metrics"] as? [[String: Any]] {
+            var parsed: [LiveMetric] = []
+            for m in metricsData {
+                if let id = m["id"] as? String,
+                   let title = m["title"] as? String,
+                   let value = m["value"] as? String {
+                    parsed.append(.init(id: id, title: title, value: value, symbol: m["symbol"] as? String ?? "circle.fill", tint: companionTintColor(named: m["tint"] as? String ?? "blue")))
+                }
+            }
+            if !parsed.isEmpty {
+                metrics = parsed
+            }
+        }
+
+        if let pageKindsRaw = payload["pageKinds"] as? [String] {
+            pageKinds = pageKindsRaw.compactMap(CompanionWorkoutPageKind.init(rawValue:))
+        }
+
+        launchStatusMessage = nil
+        stateText = SessionStateText.watchLive
+    }
+
+    private func handleRealtimeWatchMetricsSnapshot(_ payload: [String: Any]) -> Bool {
+        guard (payload[WorkoutRealtimeSnapshotKeys.messageKey] as? Bool) == true,
+              let elapsed = payload[WorkoutRealtimeSnapshotKeys.elapsedTime] as? Double,
+              let rawState = payload[WorkoutRealtimeSnapshotKeys.state] as? String else {
+            return false
+        }
+
+        if let timestampValue = payload[WorkoutRealtimeSnapshotKeys.timestamp] as? TimeInterval {
+            let timestamp = Date(timeIntervalSince1970: timestampValue)
+            if let previousTimestamp = lastRealtimeMetricsTimestamp, timestamp < previousTimestamp {
+                return true
+            }
+            lastRealtimeMetricsTimestamp = timestamp
+        }
+
+        let normalizedState = rawState.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedState == "running" && elapsed + 0.35 < elapsedTime {
+            return true
+        }
+
+        source = .appleWatch
+        isWorkoutActive = true
+        if shouldAutoPresentLiveView {
+            isVisible = true
+        }
+        launchStatusMessage = nil
+
+        switch normalizedState {
+        case "paused":
+            stateText = "Paused"
+            pausedElapsedTime = elapsed
+            elapsedTime = elapsed
+        case "running":
+            stateText = SessionStateText.watchLive
+            elapsedTime = max(elapsedTime, elapsed)
+            pausedElapsedTime = elapsed
+        case "ended", "failed", "idle":
+            handleWatchLifecycleState(normalizedState, reason: nil)
+            return true
+        default:
+            stateText = rawState
+            elapsedTime = max(elapsedTime, elapsed)
+            pausedElapsedTime = elapsed
+        }
+        lastSnapshotElapsedTime = max(lastSnapshotElapsedTime, elapsed)
+
+        if let heartRate = payload[WorkoutRealtimeSnapshotKeys.heartRate] as? Int {
+            currentHeartRate = Double(heartRate)
+        }
+        if let calories = payload[WorkoutRealtimeSnapshotKeys.totalCalories] as? Double {
+            metrics.removeAll { $0.id == "energy" }
+            metrics.append(.init(id: "energy", title: "Energy", value: "\(Int(calories.rounded())) kcal", symbol: "flame.fill", tint: .orange))
+        }
+        if let totalDistance = payload[WorkoutRealtimeSnapshotKeys.totalDistance] as? Double {
+            totalDistanceMeters = max(totalDistanceMeters, totalDistance)
+        }
+        if let currentSpeed = payload[WorkoutRealtimeSnapshotKeys.currentSpeed] as? Double {
+            currentSpeedMetersPerSecond = currentSpeed
+        }
+        if let elevationGainMeters = payload[WorkoutRealtimeSnapshotKeys.elevationGain] as? Double {
+            elevationGainFeet = max(elevationGainFeet, elevationGainMeters * 3.28084)
+        }
+
+        var realtimeMetrics: [LiveMetric] = []
+        if let hr = currentHeartRate {
+            realtimeMetrics.append(.init(id: "hr", title: "Heart Rate", value: "\(Int(hr.rounded())) bpm", symbol: "heart.fill", tint: .red))
+        }
+        if let energy = payload[WorkoutRealtimeSnapshotKeys.totalCalories] as? Double {
+            realtimeMetrics.append(.init(id: "energy", title: "Energy", value: "\(Int(energy.rounded())) kcal", symbol: "flame.fill", tint: .orange))
+        }
+        let distanceText = totalDistanceMeters >= 1000
+            ? String(format: "%.2f km", totalDistanceMeters / 1000)
+            : "\(Int(totalDistanceMeters.rounded())) m"
+        realtimeMetrics.append(.init(id: "distance", title: "Distance", value: distanceText, symbol: "location.fill", tint: .green))
+        if let speed = currentSpeedMetersPerSecond, speed > 0 {
+            realtimeMetrics.append(.init(id: "speed", title: "Speed", value: String(format: "%.1f km/h", speed * 3.6), symbol: "speedometer", tint: .cyan))
+        }
+        metrics = realtimeMetrics
+
+        persistCurrentSession()
+        if normalizedState != "paused" && normalizedState != "preparing" {
+            if workoutLiveActivity == nil {
+                startLiveActivityIfNeeded()
+            } else {
+                updateLiveActivity()
+            }
+        } else if workoutLiveActivity != nil {
+            updateLiveActivity()
+        }
+
+        return true
     }
 
     func primePresentationFromWatchRequest() {
@@ -1797,6 +1907,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     }
 
     private func buildWorkoutActivityState() -> WorkoutLiveActivityAttributes.ContentState {
+        // Use elapsed time from watch snapshot directly - it's already accurate
+        let displayElapsedTime = elapsedTime
+        
         let paceMinutesPerKm: Double? = {
             guard let speed = currentSpeedMetersPerSecond, speed > 0 else { return nil }
             return 1000.0 / speed / 60.0
@@ -1818,7 +1931,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }()
 
         return WorkoutLiveActivityAttributes.ContentState(
-            elapsedSeconds: Int(elapsedTime),
+            elapsedSeconds: Int(displayElapsedTime),
             currentHeartRate: Int(currentHeartRate ?? 0),
             totalCalories: calculateTotalCalories(),
             totalDistanceKilometers: totalDistanceMeters / 1000.0,
@@ -2207,6 +2320,11 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
                 return
             }
 
+            if self.handleRealtimeWatchMetricsSnapshot(message) {
+                replyHandler(["accepted": true])
+                return
+            }
+
             guard WatchDashboardSyncBridge.shared.handleIncomingMessage(message, replyHandler: replyHandler) else {
                 replyHandler([:])
                 return
@@ -2224,6 +2342,10 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
 
             if (userInfo["snapshotUpdate"] as? Bool) == true {
                 self.handleFallbackSnapshotUpdate(userInfo)
+                return
+            }
+
+            if self.handleRealtimeWatchMetricsSnapshot(userInfo) {
                 return
             }
 

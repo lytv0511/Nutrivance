@@ -11,7 +11,6 @@ import Foundation
 import HealthKit
 import MapKit
 import SwiftUI
-import WatchKit
 import WorkoutKit
 
 private enum ProgramMicroStageRole: String, CaseIterable {
@@ -299,6 +298,13 @@ private struct ActiveWorkoutCardsView: View {
                 trailhead: manager.routeTrailhead,
                 routeCoordinates: manager.routeCoordinates
             )
+            // Connect location tracker to workout manager for GPS data
+            mapTracker.onLocationUpdate = { location in
+                manager.recordGPSLocation(location)
+            }
+            // Activate location tracking for GPS recording (even if map isn't visible)
+            mapTracker.activate()
+            mapTracker.setActive(true)
         }
         .onChange(of: manager.orderedWorkoutPages) { _, newPages in
             let contentPages = newPages.filter { $0 != .map }
@@ -2731,9 +2737,22 @@ private struct WorkoutMediaCard: View {
         GeometryReader { geometry in
             ZStack {
             Color.black.ignoresSafeArea()
-            NowPlayingView()
+            NowPlayingViewContent()
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
+}
+
+private struct NowPlayingViewContent: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "music.note")
+                .font(.system(size: 32))
+                .foregroundColor(.gray)
+            Text("No Media Playing")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
 }
@@ -3159,6 +3178,9 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
     private var lastCameraUpdate = Date.distantPast
     private var isPerformingProgrammaticCameraUpdate = false
     private var ignoreMapCameraChangesUntil = Date.distantPast
+    
+    // Callback for recording GPS locations during workout
+    var onLocationUpdate: ((CLLocation) -> Void)?
 
     var hasRenderableMap: Bool {
         userCoordinate != nil
@@ -3308,6 +3330,9 @@ private final class WatchWorkoutMapTracker: NSObject, ObservableObject, CLLocati
         updateTrailheadProgress(with: location)
         updateRouteProgress(with: location)
         updateCamera(previousLocation: previousLocation)
+        
+        // Forward location to workout manager for route and elevation tracking
+        onLocationUpdate?(location)
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
@@ -5230,14 +5255,29 @@ private struct WorkoutLauncherView: View {
     @ObservedObject var store: WatchDashboardStore
     @ObservedObject private var manager = WatchWorkoutManager.shared
     @State private var quickStartActivity: HKWorkoutActivityType = .running
+    @State private var showPreWorkoutCountdown = false
+    @State private var countdownSeconds: Int = 3
+    @State private var countdownState: PreWorkoutCountdownState = .waitingForConnection
 
     private var selectedQuickStartTemplate: WatchWorkoutTemplate {
         store.workoutTemplates.first(where: { $0.activity == quickStartActivity }) ?? store.workoutTemplates.first ?? .defaults[0]
     }
 
     private func startSelectedQuickStart() {
+        countdownSeconds = 3
+        countdownState = .waitingForConnection
         store.queuedWorkout = selectedQuickStartTemplate.title
+        showPreWorkoutCountdown = true
+    }
+
+    private func startWorkoutAfterCountdown() {
+        showPreWorkoutCountdown = false
         store.workoutManager.start(template: selectedQuickStartTemplate)
+    }
+
+    private func cancelCountdown() {
+        showPreWorkoutCountdown = false
+        countdownState = .cancelled
     }
 
     var body: some View {
@@ -5503,6 +5543,17 @@ private struct WorkoutLauncherView: View {
                     }
                     .ignoresSafeArea(.container, edges: .top)
                     .allowsHitTesting(false)
+                }
+
+                if showPreWorkoutCountdown {
+                    PreWorkoutCountdownView(
+                        workoutManager: store.workoutManager,
+                        countdownSeconds: $countdownSeconds,
+                        countdownState: $countdownState,
+                        onCountdownComplete: startWorkoutAfterCountdown,
+                        onCancel: cancelCountdown
+                    )
+                    .transition(.opacity)
                 }
             }
         }

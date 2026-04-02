@@ -84,5 +84,13 @@
 			<dict/>
 		</dict>
 	</array>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Nutrivance reads your HealthKit data including speed and elevation to track workouts, heart rate, and fitness metrics to provide personalized coaching and training plans.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Nutrivance saves your workout data including distance, duration, elevation gain/loss, speed, and heart rate metrics to HealthKit.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Nutrivance uses your location to track GPS-based workouts, calculate elevation gain, and map your routes during outdoor activities.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Nutrivance uses motion data to track elevation changes, altitude, and step count during workouts for accurate metrics.</string>
 </dict>
 </plist>
