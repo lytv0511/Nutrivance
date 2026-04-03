@@ -22,9 +22,14 @@ struct WorkoutLiveActivityAttributes: ActivityAttributes {
 
 struct WorkoutActivityState: Codable, Hashable {
     var elapsedSeconds: Int
+    var elapsedReferenceDate: Date
+    var isPaused: Bool
     var currentHeartRate: Int
+    var heartRateDisplay: String?
     var totalCalories: Double
+    var caloriesDisplay: String?
     var totalDistanceKilometers: Double
+    var distanceDisplay: String?
     var currentPaceMinutesPerKm: Double?
     var elevationGainMeters: Int
     var currentHeartRateZone: Int?
@@ -43,6 +48,9 @@ struct WorkoutActivityState: Codable, Hashable {
     }
     
     var formattedDistance: String {
+        if let distanceDisplay, !distanceDisplay.isEmpty {
+            return distanceDisplay
+        }
         String(format: "%.1f km", totalDistanceKilometers)
     }
     
@@ -51,5 +59,19 @@ struct WorkoutActivityState: Codable, Hashable {
         let minutes = Int(pace)
         let seconds = Int((pace.truncatingRemainder(dividingBy: 1)) * 60)
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    var formattedCalories: String {
+        if let caloriesDisplay, !caloriesDisplay.isEmpty {
+            return caloriesDisplay
+        }
+        return "\(Int(totalCalories.rounded())) CAL"
+    }
+
+    var formattedHeartRate: String {
+        if let heartRateDisplay, !heartRateDisplay.isEmpty {
+            return heartRateDisplay
+        }
+        return "\(currentHeartRate)"
     }
 }

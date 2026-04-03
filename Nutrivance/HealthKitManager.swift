@@ -479,6 +479,18 @@ extension HealthKitManager {
         let hrr1 = (peakHR != nil && hrAt(1) != nil) ? peakHR! - hrAt(1)! : nil
         let hrr2 = (peakHR != nil && hrAt(2) != nil) ? peakHR! - hrAt(2)! : nil
 
+        // HRR diagnostic logging
+        if let peak = peakHR {
+            let hr2Raw = hrAt(2)
+            let target2min = workout.endDate.addingTimeInterval(2 * 60)
+            let closest2 = postWorkoutHRSeries.min(by: { abs($0.0.timeIntervalSince(target2min)) < abs($1.0.timeIntervalSince(target2min)) })
+            let offsetSec = closest2.map { abs($0.0.timeIntervalSince(target2min)) }
+            print("[HRR-diag] workout=\(workout.workoutActivityType.name) date=\(workout.startDate.formatted(date: .abbreviated, time: .shortened))")
+            print("[HRR-diag]   peakHR=\(String(format: "%.1f", peak)) hrAt(2)=\(hr2Raw.map { String(format: "%.1f", $0) } ?? "nil") offsetFromTarget=\(offsetSec.map { String(format: "%.1f", $0) + "s" } ?? "nil")")
+            print("[HRR-diag]   hrr2=\(hrr2.map { String(format: "%.1f", $0) } ?? "nil") (peak - hrAt2)")
+            print("[HRR-diag]   postWorkoutSamples=\(postWorkoutHRSeries.count) firstSample=\(postWorkoutHRSeries.first.map { "\($0.0.formatted(date: .omitted, time: .standard)) \(String(format: "%.0f", $0.1))bpm" } ?? "none")")
+        }
+
         // --- HR Zone Profile & Breakdown ---
         let zoneProfile = await getOrCreateZoneProfile(for: workout.workoutActivityType)
         let zoneBreakdown = calculateZoneBreakdown(heartRates: hrSamples, zoneProfile: zoneProfile)

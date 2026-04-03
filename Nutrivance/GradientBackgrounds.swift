@@ -187,7 +187,40 @@ struct GradientBackgrounds {
             GradientFadeOverlay()
         }
     }
-    
+
+    func kineticPulseGradientFull(animationPhase: Binding<Double>) -> some View {
+        MeshGradientView(colors: kineticPulseColors, darkColors: darkKineticPulseColors, animationPhase: animationPhase)
+    }
+
+    func kineticPulseGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            kineticPulseGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+
+    func oxygenFlowGradientFull(animationPhase: Binding<Double>) -> some View {
+        MeshGradientView(colors: oxygenFlowColors, darkColors: darkOxygenFlowColors, animationPhase: animationPhase)
+    }
+
+    func oxygenFlowGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            oxygenFlowGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+
+    func solarFlareGradientFull(animationPhase: Binding<Double>) -> some View {
+        MeshGradientView(colors: solarFlareColors, darkColors: darkSolarFlareColors, animationPhase: animationPhase)
+    }
+
+    func solarFlareGradient(animationPhase: Binding<Double>) -> some View {
+        ZStack {
+            solarFlareGradientFull(animationPhase: animationPhase)
+            GradientFadeOverlay()
+        }
+    }
+
     private var lightWarmColors: [Color] {
         [
 //            Color(.systemBackground),
@@ -439,6 +472,91 @@ struct GradientBackgrounds {
             Color(red: 0.20, green: 0.09, blue: 0.04),
             Color(red: 0.06, green: 0.12, blue: 0.10),
             Color(red: 0.07, green: 0.06, blue: 0.05)
+        ]
+    }
+
+    /// 3×3 mesh — pads to nine stops (same hues as the seven-stop palette).
+    private var kineticPulseColors: [Color] {
+        [
+            Color(red: 0.1, green: 0.02, blue: 0.2),  // Deep Midnight Purple
+            Color(red: 0.5, green: 0.1, blue: 0.9),   // Electric Violet
+            Color(red: 0.9, green: 0.2, blue: 0.6),   // Neon Magenta
+            Color(.systemBackground),
+            Color(red: 0.2, green: 0.6, blue: 1.0),   // Oxygen Blue
+            Color(.systemBackground),
+            Color(red: 0.5, green: 0.1, blue: 0.9),    // Electric Violet
+            Color(red: 0.9, green: 0.2, blue: 0.6),   // Neon Magenta
+            Color(red: 0.2, green: 0.6, blue: 1.0)   // Oxygen Blue
+        ]
+    }
+
+    private var darkKineticPulseColors: [Color] {
+        [
+            Color(red: 0.05, green: 0.01, blue: 0.1),
+            Color(red: 0.25, green: 0.05, blue: 0.45),
+            Color(red: 0.45, green: 0.1, blue: 0.3),
+            Color(.systemBackground),
+            Color(red: 0.1, green: 0.3, blue: 0.5),
+            Color(.systemBackground),
+            Color(red: 0.25, green: 0.05, blue: 0.45),
+            Color(red: 0.45, green: 0.1, blue: 0.3),
+            Color(red: 0.1, green: 0.3, blue: 0.5)
+        ]
+    }
+
+    private var oxygenFlowColors: [Color] {
+        [
+            Color(red: 0.0, green: 0.15, blue: 0.15), // Deep Teal Abyss
+            Color(red: 0.0, green: 0.5, blue: 0.6),   // Oxidized Cyan
+            Color(red: 0.8, green: 0.1, blue: 0.2),   // Arterial Red
+            Color(.systemBackground),
+            Color(red: 0.4, green: 0.05, blue: 0.1),  // Deep Venous Maroon
+            Color(.systemBackground),
+            Color(red: 0.0, green: 0.5, blue: 0.6),    // Oxidized Cyan
+            Color(red: 0.8, green: 0.1, blue: 0.2),   // Arterial Red
+            Color(red: 0.0, green: 0.5, blue: 0.6)    // Oxidized Cyan
+        ]
+    }
+
+    private var darkOxygenFlowColors: [Color] {
+        [
+            Color(red: 0.0, green: 0.08, blue: 0.08),
+            Color(red: 0.0, green: 0.28, blue: 0.34),
+            Color(red: 0.45, green: 0.06, blue: 0.12),
+            Color(.systemBackground),
+            Color(red: 0.22, green: 0.03, blue: 0.06),
+            Color(.systemBackground),
+            Color(red: 0.0, green: 0.28, blue: 0.34),
+            Color(red: 0.45, green: 0.06, blue: 0.12),
+            Color(red: 0.0, green: 0.28, blue: 0.34)
+        ]
+    }
+
+    private var solarFlareColors: [Color] {
+        [
+            Color(red: 0.05, green: 0.02, blue: 0.1), // Deep Space Indigo (Contrast)
+            Color(red: 0.95, green: 0.2, blue: 0.1),  // Hyper-Red
+            Color(red: 1.0, green: 0.7, blue: 0.0),   // Vivid Amber
+            Color(.systemBackground),
+            Color(red: 1.0, green: 0.9, blue: 0.4),   // Solar White-Gold
+            Color(.systemBackground),
+            Color(red: 0.95, green: 0.2, blue: 0.1),   // Hyper-Red
+            Color(red: 1.0, green: 0.7, blue: 0.0),   // Vivid Amber
+            Color(red: 1.0, green: 0.9, blue: 0.4)   // Solar White-Gold
+        ]
+    }
+
+    private var darkSolarFlareColors: [Color] {
+        [
+            Color(red: 0.03, green: 0.01, blue: 0.05),
+            Color(red: 0.5, green: 0.1, blue: 0.05),
+            Color(red: 0.55, green: 0.38, blue: 0.0),
+            Color(.systemBackground),
+            Color(red: 0.55, green: 0.5, blue: 0.22),
+            Color(.systemBackground),
+            Color(red: 0.5, green: 0.1, blue: 0.05),
+            Color(red: 0.55, green: 0.38, blue: 0.0),
+            Color(red: 0.55, green: 0.5, blue: 0.22)
         ]
     }
 

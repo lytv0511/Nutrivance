@@ -114,7 +114,9 @@ struct ContentView_iPad_alt: View {
                 .customizationID("iPad.tab.pastQuests")
                 .defaultVisibility(.hidden, for: .tabBar)
                 Tab("Heart Zones", systemImage: "heart.circle.fill", value: RootTabSelection.heartZones) {
-                    HeartZonesView()
+                    NavigationStack {
+                        HeartZonesView()
+                    }
                 }
                 .customizationID("iPad.tab.heartZones")
                 .defaultVisibility(.hidden, for: .tabBar)

@@ -1150,6 +1150,8 @@ extension Notification.Name {
     static let nutrivanceViewControlArrangeDashboard = Notification.Name("nutrivance.viewControl.arrangeDashboard")
     static let nutrivanceViewControlWorkoutViews = Notification.Name("nutrivance.viewControl.workoutViews")
     static let nutrivanceViewControlWorkoutMetricLayout = Notification.Name("nutrivance.viewControl.workoutMetricLayout")
+    /// userInfo["slot"]: Int — 0 = all sports, 1 = first sorted sport name, …, 9 = ninth sport
+    static let nutrivanceViewControlHeartZonesSportSlot = Notification.Name("nutrivance.viewControl.heartZones.sportSlot")
 }
 
 func toggleSystemSidebar() {
@@ -1896,10 +1898,18 @@ struct NutrivanceApp: App {
     private func postViewControl(_ name: Notification.Name) {
         NotificationCenter.default.post(name: name, object: nil)
     }
+
+    private func postHeartZonesSportSlot(_ slot: Int) {
+        NotificationCenter.default.post(
+            name: .nutrivanceViewControlHeartZonesSportSlot,
+            object: nil,
+            userInfo: ["slot": slot]
+        )
+    }
     
     private func hasContextualControls(for tab: RootTabSelection) -> Bool {
         switch tab {
-        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder:
+        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder, .heartZones:
             return true
         default:
             return false
@@ -2328,6 +2338,92 @@ struct NutrivanceApp: App {
                             postViewControl(.nutrivanceViewControlWorkoutMetricLayout)
                         }
                         .keyboardShortcut("E", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .heartZones {
+                        Button("Today") {
+                            postViewControl(.nutrivanceViewControlToday)
+                        }
+                        .keyboardShortcut("T", modifiers: [.command])
+
+                        Button("Previous") {
+                            postViewControl(.nutrivanceViewControlPrevious)
+                        }
+                        .keyboardShortcut(.leftArrow, modifiers: [.command])
+
+                        Button("Next") {
+                            postViewControl(.nutrivanceViewControlNext)
+                        }
+                        .keyboardShortcut(.rightArrow, modifiers: [.command])
+
+                        Divider()
+
+                        Button("1D") {
+                            postViewControl(.nutrivanceViewControlFilter1)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("1W") {
+                            postViewControl(.nutrivanceViewControlFilter2)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Button("1M") {
+                            postViewControl(.nutrivanceViewControlFilter3)
+                        }
+                        .keyboardShortcut("3", modifiers: [.command])
+
+                        Divider()
+
+                        Button("All Sports") {
+                            postHeartZonesSportSlot(0)
+                        }
+                        .keyboardShortcut("1", modifiers: [.option])
+
+                        Button("Sport: 2nd in List") {
+                            postHeartZonesSportSlot(1)
+                        }
+                        .keyboardShortcut("2", modifiers: [.option])
+
+                        Button("Sport: 3rd in List") {
+                            postHeartZonesSportSlot(2)
+                        }
+                        .keyboardShortcut("3", modifiers: [.option])
+
+                        Button("Sport: 4th in List") {
+                            postHeartZonesSportSlot(3)
+                        }
+                        .keyboardShortcut("4", modifiers: [.option])
+
+                        Button("Sport: 5th in List") {
+                            postHeartZonesSportSlot(4)
+                        }
+                        .keyboardShortcut("5", modifiers: [.option])
+
+                        Button("Sport: 6th in List") {
+                            postHeartZonesSportSlot(5)
+                        }
+                        .keyboardShortcut("6", modifiers: [.option])
+
+                        Button("Sport: 7th in List") {
+                            postHeartZonesSportSlot(6)
+                        }
+                        .keyboardShortcut("7", modifiers: [.option])
+
+                        Button("Sport: 8th in List") {
+                            postHeartZonesSportSlot(7)
+                        }
+                        .keyboardShortcut("8", modifiers: [.option])
+
+                        Button("Sport: 9th in List") {
+                            postHeartZonesSportSlot(8)
+                        }
+                        .keyboardShortcut("9", modifiers: [.option])
+
+                        Button("Sport: 10th in List") {
+                            postHeartZonesSportSlot(9)
+                        }
+                        .keyboardShortcut("0", modifiers: [.option])
                     }
                 } else {
                     Button("No View Controls Available") {}

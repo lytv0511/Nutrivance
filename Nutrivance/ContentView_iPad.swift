@@ -209,8 +209,9 @@ struct ContentView_iPad: View {
                 }
                 .focused($sidebarFocused)
             } detail: {
-                Group {
-                    switch navigationState.selectedView {
+                NavigationStack {
+                    Group {
+                        switch navigationState.selectedView {
                     // Nutrition Focus
                     case "Home":
                         AnyView(HomeView())
@@ -341,6 +342,7 @@ struct ContentView_iPad: View {
                     
                     default:
                         AnyView(HomeView())
+                    }
                     }
                 }
                 .focused($contentFocused)

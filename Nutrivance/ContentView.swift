@@ -17,9 +17,14 @@ struct WorkoutLiveActivityAttributes: ActivityAttributes {
     
     public struct ContentState: Codable, Hashable {
         var elapsedSeconds: Int
+        var elapsedReferenceDate: Date
+        var isPaused: Bool
         var currentHeartRate: Int
+        var heartRateDisplay: String?
         var totalCalories: Double
+        var caloriesDisplay: String?
         var totalDistanceKilometers: Double
+        var distanceDisplay: String?
         var currentPaceMinutesPerKm: Double?
         var elevationGainMeters: Int
         var currentHeartRateZone: Int?
@@ -207,6 +212,7 @@ private struct StartupCurtainView: View {
 enum CompanionWorkoutPageKind: String, CaseIterable, Identifiable {
     case metricsPrimary
     case metricsSecondary
+    case planTracking
     case heartRateZones
     case segments
     case splits
@@ -215,6 +221,7 @@ enum CompanionWorkoutPageKind: String, CaseIterable, Identifiable {
     case powerZones
     case pacer
     case map
+    case targetTracker
 
     var id: String { rawValue }
 }
@@ -564,6 +571,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     private var pausedElapsedTime: TimeInterval = 0
     private var elapsedTimer: Timer?
     private var lastSnapshotElapsedTime: TimeInterval = 0
+    private var watchElapsedAnchor: TimeInterval = 0
+    private var watchElapsedAnchorDate: Date?
     private var lastRealtimeMetricsTimestamp: Date?
     private var hasActivated = false
     private var persistedSource: CompanionWorkoutSource = .appleWatch
@@ -575,6 +584,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     private var localWorkoutSubtitle = ""
     private var pendingLocalEndAction: WorkoutControlCommand?
     private let persistenceKey = "companion_live_workout_session_v2"
+    private let watchTimerDriftHardResetThreshold: TimeInterval = 1.2
+    private let watchTimerDriftSoftCorrectionFactor: TimeInterval = 0.25
 
     private enum CompanionLifecycleKeys {
         static let workoutLifecycle = "workoutLifecycle"
@@ -708,9 +719,13 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let normalizedState = stateText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalizedState == "paused" {
             startedAt = nil
+            watchElapsedAnchor = pausedElapsedTime
+            watchElapsedAnchorDate = nil
             stopElapsedTimer()
         } else {
             startedAt = Date().addingTimeInterval(-pausedElapsedTime)
+            watchElapsedAnchor = pausedElapsedTime
+            watchElapsedAnchorDate = Date()
             startElapsedTimer()
         }
 
@@ -726,12 +741,70 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     }
 
     private func startElapsedTimer() {
-        // Don't update elapsedTime continuously - use watch's time directly from snapshots
-        // The watch sends the authoritative elapsed time, so we just use that
+        elapsedTimer?.invalidate()
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isWorkoutActive else { return }
+
+                if self.source == .appleWatch {
+                    guard !self.isPaused else {
+                        self.elapsedTime = self.pausedElapsedTime
+                        return
+                    }
+                    guard let anchorDate = self.watchElapsedAnchorDate else { return }
+                    let projected = self.watchElapsedAnchor + Date().timeIntervalSince(anchorDate)
+                    if projected.isFinite {
+                        self.elapsedTime = max(self.elapsedTime, projected)
+                    }
+                    return
+                }
+
+                if self.isPaused {
+                    self.elapsedTime = self.pausedElapsedTime
+                } else if let startedAt = self.startedAt {
+                    self.elapsedTime = self.pausedElapsedTime + Date().timeIntervalSince(startedAt)
+                }
+            }
+        }
     }
 
     private func stopElapsedTimer() {
-        // Timer not used anymore - watch provides authoritative time
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+    }
+
+    private func syncWatchElapsedAnchor(elapsed watchElapsed: TimeInterval, normalizedState: String) {
+        switch normalizedState {
+        case "paused":
+            watchElapsedAnchor = watchElapsed
+            watchElapsedAnchorDate = nil
+            pausedElapsedTime = watchElapsed
+            elapsedTime = watchElapsed
+            stopElapsedTimer()
+        case "running":
+            let now = Date()
+            if let anchorDate = watchElapsedAnchorDate {
+                let projected = watchElapsedAnchor + now.timeIntervalSince(anchorDate)
+                let drift = watchElapsed - projected
+                if abs(drift) > watchTimerDriftHardResetThreshold {
+                    watchElapsedAnchor = max(watchElapsed, elapsedTime)
+                } else {
+                    watchElapsedAnchor = max(projected + (drift * watchTimerDriftSoftCorrectionFactor), watchElapsed)
+                }
+            } else {
+                watchElapsedAnchor = max(watchElapsed, elapsedTime)
+            }
+            watchElapsedAnchorDate = now
+            pausedElapsedTime = watchElapsed
+            elapsedTime = max(elapsedTime, watchElapsed)
+            if elapsedTimer == nil {
+                startElapsedTimer()
+            }
+        default:
+            watchElapsedAnchor = max(watchElapsedAnchor, watchElapsed)
+            pausedElapsedTime = watchElapsed
+            elapsedTime = max(elapsedTime, watchElapsed)
+        }
     }
 
     private func rebuildMetrics() {
@@ -814,15 +887,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         launchStatusMessage = nil
         activityType = HKWorkoutActivityType(rawValue: payload.activityRawValue) ?? .running
         
-        // Ignore stale packets that would move a running timer backward.
-        if normalizedState == "running", payload.elapsedTime + 0.35 < elapsedTime {
+        // Ignore only obviously stale snapshots; avoid freezing updates when iPhone projection drifts ahead.
+        if normalizedState == "running", payload.elapsedTime + 12.0 < elapsedTime {
             return
         }
 
-        // Sync elapsed time and state with watch - use watch's authoritative time
+        // Keep watch authoritative while rendering smoothly between packets.
+        syncWatchElapsedAnchor(elapsed: payload.elapsedTime, normalizedState: normalizedState)
         lastSnapshotElapsedTime = max(lastSnapshotElapsedTime, payload.elapsedTime)
-        elapsedTime = max(elapsedTime, payload.elapsedTime)
-        pausedElapsedTime = payload.elapsedTime
         metrics = payload.metrics.map {
             LiveMetric(
                 id: $0.id,
@@ -893,6 +965,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         pendingEffortPrompt = payload.effortPrompt.map {
             EffortPromptPhase(phaseID: $0.phaseID, title: $0.title, subtitle: $0.subtitle)
         }
+        refreshHeartRateFromMetricsIfNeeded()
         isWorkoutActive = true
         if shouldAutoPresentLiveView {
             isVisible = true
@@ -918,12 +991,22 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             stateText = SessionStateText.watchLive
             isWorkoutActive = true
             if shouldAutoPresentLiveView { isVisible = true }
+            if watchElapsedAnchorDate == nil {
+                watchElapsedAnchor = elapsedTime
+                watchElapsedAnchorDate = Date()
+            }
+            if elapsedTimer == nil {
+                startElapsedTimer()
+            }
             launchStatusMessage = reason?.isEmpty == false ? reason : "Workout running on Apple Watch."
             return
         case "paused":
             stateText = SessionStateText.phonePaused
             isWorkoutActive = true
             pausedElapsedTime = elapsedTime
+            watchElapsedAnchor = elapsedTime
+            watchElapsedAnchorDate = nil
+            stopElapsedTimer()
             launchStatusMessage = reason?.isEmpty == false ? reason : "Workout paused on Apple Watch."
             return
         case "failed":
@@ -951,8 +1034,10 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
 
         if let elapsed = payload["elapsedTime"] as? Double {
-            elapsedTime = max(elapsedTime, elapsed)
-            pausedElapsedTime = elapsed
+            let fallbackState = (payload["stateText"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() ?? "running"
+            syncWatchElapsedAnchor(elapsed: elapsed, normalizedState: fallbackState)
             lastSnapshotElapsedTime = max(lastSnapshotElapsedTime, elapsed)
         }
         if let state = payload["stateText"] as? String, !state.isEmpty {
@@ -983,6 +1068,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             }
             if !parsed.isEmpty {
                 metrics = parsed
+                refreshHeartRateFromMetricsIfNeeded()
             }
         }
 
@@ -996,7 +1082,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     private func handleRealtimeWatchMetricsSnapshot(_ payload: [String: Any]) -> Bool {
         guard (payload[WorkoutRealtimeSnapshotKeys.messageKey] as? Bool) == true,
-              let elapsed = payload[WorkoutRealtimeSnapshotKeys.elapsedTime] as? Double,
+              let elapsed = companionNumericValue(from: payload[WorkoutRealtimeSnapshotKeys.elapsedTime]),
               let rawState = payload[WorkoutRealtimeSnapshotKeys.state] as? String else {
             return false
         }
@@ -1010,9 +1096,6 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
 
         let normalizedState = rawState.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalizedState == "running" && elapsed + 0.35 < elapsedTime {
-            return true
-        }
 
         source = .appleWatch
         isWorkoutActive = true
@@ -1024,36 +1107,33 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         switch normalizedState {
         case "paused":
             stateText = "Paused"
-            pausedElapsedTime = elapsed
-            elapsedTime = elapsed
+            syncWatchElapsedAnchor(elapsed: elapsed, normalizedState: normalizedState)
         case "running":
             stateText = SessionStateText.watchLive
-            elapsedTime = max(elapsedTime, elapsed)
-            pausedElapsedTime = elapsed
+            syncWatchElapsedAnchor(elapsed: elapsed, normalizedState: normalizedState)
         case "ended", "failed", "idle":
             handleWatchLifecycleState(normalizedState, reason: nil)
             return true
         default:
             stateText = rawState
-            elapsedTime = max(elapsedTime, elapsed)
-            pausedElapsedTime = elapsed
+            syncWatchElapsedAnchor(elapsed: elapsed, normalizedState: normalizedState)
         }
         lastSnapshotElapsedTime = max(lastSnapshotElapsedTime, elapsed)
 
-        if let heartRate = payload[WorkoutRealtimeSnapshotKeys.heartRate] as? Int {
-            currentHeartRate = Double(heartRate)
+        if let heartRate = companionNumericValue(from: payload[WorkoutRealtimeSnapshotKeys.heartRate]) {
+            currentHeartRate = heartRate
         }
-        if let calories = payload[WorkoutRealtimeSnapshotKeys.totalCalories] as? Double {
+        if let calories = companionNumericValue(from: payload[WorkoutRealtimeSnapshotKeys.totalCalories]) {
             metrics.removeAll { $0.id == "energy" }
             metrics.append(.init(id: "energy", title: "Energy", value: "\(Int(calories.rounded())) kcal", symbol: "flame.fill", tint: .orange))
         }
-        if let totalDistance = payload[WorkoutRealtimeSnapshotKeys.totalDistance] as? Double {
+        if let totalDistance = companionNumericValue(from: payload[WorkoutRealtimeSnapshotKeys.totalDistance]) {
             totalDistanceMeters = max(totalDistanceMeters, totalDistance)
         }
-        if let currentSpeed = payload[WorkoutRealtimeSnapshotKeys.currentSpeed] as? Double {
+        if let currentSpeed = companionNumericValue(from: payload[WorkoutRealtimeSnapshotKeys.currentSpeed]) {
             currentSpeedMetersPerSecond = currentSpeed
         }
-        if let elevationGainMeters = payload[WorkoutRealtimeSnapshotKeys.elevationGain] as? Double {
+        if let elevationGainMeters = companionNumericValue(from: payload[WorkoutRealtimeSnapshotKeys.elevationGain]) {
             elevationGainFeet = max(elevationGainFeet, elevationGainMeters * 3.28084)
         }
 
@@ -1061,7 +1141,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         if let hr = currentHeartRate {
             realtimeMetrics.append(.init(id: "hr", title: "Heart Rate", value: "\(Int(hr.rounded())) bpm", symbol: "heart.fill", tint: .red))
         }
-        if let energy = payload[WorkoutRealtimeSnapshotKeys.totalCalories] as? Double {
+        if let energy = companionNumericValue(from: payload[WorkoutRealtimeSnapshotKeys.totalCalories]) {
             realtimeMetrics.append(.init(id: "energy", title: "Energy", value: "\(Int(energy.rounded())) kcal", symbol: "flame.fill", tint: .orange))
         }
         let distanceText = totalDistanceMeters >= 1000
@@ -1085,6 +1165,19 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
 
         return true
+    }
+
+    private func refreshHeartRateFromMetricsIfNeeded() {
+        guard currentHeartRate == nil || currentHeartRate == 0 else { return }
+        for metric in metrics {
+            let lowerTitle = metric.title.lowercased()
+            if metric.id == "hr" || lowerTitle.contains("heart") || lowerTitle == "hr" || metric.symbol.contains("heart") {
+                if let value = companionNumericValue(from: metric.value) {
+                    currentHeartRate = value
+                    return
+                }
+            }
+        }
     }
 
     func primePresentationFromWatchRequest() {
@@ -1827,6 +1920,11 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         lastLocation = nil
         locationManager.stopUpdatingLocation()
         elapsedTime = 0
+        pausedElapsedTime = 0
+        lastSnapshotElapsedTime = 0
+        watchElapsedAnchor = 0
+        watchElapsedAnchorDate = nil
+        lastRealtimeMetricsTimestamp = nil
         startedAt = nil
         pendingLocalEndAction = nil
         shouldAutoPresentLiveView = true
@@ -1907,8 +2005,10 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     }
 
     private func buildWorkoutActivityState() -> WorkoutLiveActivityAttributes.ContentState {
-        // Use elapsed time from watch snapshot directly - it's already accurate
         let displayElapsedTime = elapsedTime
+        let displayHeartRate = currentHeartRate ?? companionNumericValue(from: metrics.first(where: { $0.id == "hr" || $0.symbol.contains("heart") })?.value) ?? 0
+        let normalizedState = stateText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isPaused = normalizedState.contains("paused")
         
         let paceMinutesPerKm: Double? = {
             guard let speed = currentSpeedMetersPerSecond, speed > 0 else { return nil }
@@ -1932,14 +2032,23 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
         return WorkoutLiveActivityAttributes.ContentState(
             elapsedSeconds: Int(displayElapsedTime),
-            currentHeartRate: Int(currentHeartRate ?? 0),
+            elapsedReferenceDate: Date().addingTimeInterval(-displayElapsedTime),
+            isPaused: isPaused,
+            currentHeartRate: Int(displayHeartRate.rounded()),
+            heartRateDisplay: liveActivityMetricValue(forIDs: ["hr"]),
             totalCalories: calculateTotalCalories(),
+            caloriesDisplay: liveActivityMetricValue(forIDs: ["energy"]),
             totalDistanceKilometers: totalDistanceMeters / 1000.0,
+            distanceDisplay: liveActivityMetricValue(forIDs: ["distance"]),
             currentPaceMinutesPerKm: paceMinutesPerKm,
             elevationGainMeters: Int(elevationGainFeet / 3.28084),
             currentHeartRateZone: heartRateZone,
             activePhaseTitle: currentPhaseTitle
         )
+    }
+
+    private func liveActivityMetricValue(forIDs ids: [String]) -> String? {
+        metrics.first { ids.contains($0.id) }?.value
     }
 
     private func calculateTotalCalories() -> Double {
@@ -2075,6 +2184,14 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         isWorkoutActive = true
         shouldAutoPresentLiveView = false
         if source == .appleWatch {
+            watchElapsedAnchor = elapsedTime
+            if payload.isPaused == true {
+                watchElapsedAnchorDate = nil
+                stopElapsedTimer()
+            } else {
+                watchElapsedAnchorDate = Date()
+                startElapsedTimer()
+            }
             requestWatchSnapshotSync()
         }
     }
@@ -2865,6 +2982,8 @@ private struct CompanionWorkoutPageView: View {
             CompanionWorkoutMetricsPage(manager: manager, variant: .primary)
         case .metricsSecondary:
             CompanionWorkoutMetricsPage(manager: manager, variant: .secondary)
+        case .planTracking:
+            CompanionWorkoutPlanTrackingPage(manager: manager)
         case .heartRateZones:
             CompanionWorkoutZonesPage(manager: manager, power: false)
         case .segments:
@@ -2910,6 +3029,8 @@ private struct CompanionWorkoutPageView: View {
             CompanionWorkoutPacerPage(manager: manager)
         case .map:
             CompanionWorkoutMetricsPage(manager: manager, variant: .primary)
+        case .targetTracker:
+            CompanionWorkoutTargetTrackerPage(manager: manager)
         }
     }
 }
@@ -3147,6 +3268,94 @@ private struct CompanionWorkoutPacerPage: View {
     }
 }
 
+private struct CompanionWorkoutPlanTrackingPage: View {
+    @ObservedObject var manager: CompanionWorkoutLiveManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("GOALS & STAGES")
+                .font(.system(size: 18, weight: .black, design: .rounded))
+                .foregroundStyle(.mint)
+
+            Text("Block \(min(manager.currentPhaseIndex + 1, max(manager.phaseQueue.count, 1)))/\(max(manager.phaseQueue.count, 1))")
+                .font(.system(size: 28, weight: .black, design: .rounded).monospacedDigit())
+
+            if let currentPhase = manager.phaseQueue.indices.contains(manager.currentPhaseIndex) ? manager.phaseQueue[manager.currentPhaseIndex] : nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(currentPhase.title)
+                        .font(.system(size: 26, weight: .black, design: .rounded))
+                    Text(currentPhase.objectiveStatusText)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if !manager.stepQueue.isEmpty {
+                let currentStep = manager.stepQueue.indices.contains(manager.currentMicroStageIndex)
+                    ? manager.stepQueue[manager.currentMicroStageIndex]
+                    : manager.stepQueue[0]
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(currentStep.title)
+                        .font(.system(size: 22, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(currentStep.objectiveStatusText)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+        }
+    }
+}
+
+private struct CompanionWorkoutTargetTrackerPage: View {
+    @ObservedObject var manager: CompanionWorkoutLiveManager
+
+    private var activeTargetText: String {
+        if let currentStep = manager.stepQueue.indices.contains(manager.currentMicroStageIndex) ? manager.stepQueue[manager.currentMicroStageIndex] : nil {
+            return currentStep.objectiveStatusText
+        }
+        if let currentPhase = manager.phaseQueue.indices.contains(manager.currentPhaseIndex) ? manager.phaseQueue[manager.currentPhaseIndex] : nil {
+            return currentPhase.objectiveStatusText
+        }
+        return "No active target"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("TARGET TRACKER")
+                .font(.system(size: 18, weight: .black, design: .rounded))
+                .foregroundStyle(.orange)
+
+            Text(activeTargetText)
+                .font(.system(size: 28, weight: .black, design: .rounded))
+                .lineLimit(3)
+                .minimumScaleFactor(0.55)
+
+            HStack(spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(companionElapsedString(manager.elapsedTime))
+                        .font(.system(size: 28, weight: .black, design: .rounded).monospacedDigit())
+                    Text("ELAPSED")
+                        .font(.system(size: 12, weight: .black, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(manager.currentHeartRate.map { "\(Int($0.rounded())) BPM" } ?? "--")
+                        .font(.system(size: 28, weight: .black, design: .rounded).monospacedDigit())
+                    Text("HEART RATE")
+                        .font(.system(size: 12, weight: .black, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+        }
+    }
+}
+
 private struct CompanionWorkoutSparkline: View {
     let points: [CompanionWorkoutSeriesPoint]
     let accent: Color
@@ -3257,6 +3466,18 @@ private func companionTintColor(named name: String) -> Color {
     }
 }
 
+private func companionNumericValue(from raw: Any?) -> Double? {
+    guard let raw else { return nil }
+    if let value = raw as? Double { return value }
+    if let value = raw as? Int { return Double(value) }
+    if let value = raw as? NSNumber { return value.doubleValue }
+    if let value = raw as? String {
+        let filtered = value.filter { $0.isNumber || $0 == "." || $0 == "-" }
+        return Double(filtered)
+    }
+    return nil
+}
+
 private struct CompanionMetricLine: Identifiable {
     let id: String
     let value: String
@@ -3276,7 +3497,8 @@ private func companionMetricLines(for manager: CompanionWorkoutLiveManager, vari
             return [
                 .init(id: "speed", value: companionSpeedValue(metersPerSecond: avgSpeed), label: "AVERAGE SPEED", symbol: "speedometer", tint: .cyan),
                 .init(id: "elev", value: "\(Int(manager.elevationGainFeet.rounded()))FT", label: "ELEVATION GAINED", symbol: "mountain.2.fill", tint: .green),
-                .init(id: "distance", value: companionDistanceValue(distanceMeters: manager.totalDistanceMeters, activityType: manager.activityType), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .orange)
+                .init(id: "distance", value: companionDistanceValue(distanceMeters: manager.totalDistanceMeters, activityType: manager.activityType), label: "DISTANCE", symbol: "point.topleft.down.curvedto.point.bottomright.up.fill", tint: .orange),
+                .init(id: "hr", value: manager.currentHeartRate.map { "\(Int($0.rounded())) BPM" } ?? "--", label: "HEART RATE", symbol: "heart.fill", tint: .red)
             ]
         default:
             return [

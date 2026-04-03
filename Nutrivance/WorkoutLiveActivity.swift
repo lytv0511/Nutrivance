@@ -89,9 +89,14 @@ public class WorkoutLiveActivityManager {
         
         let initialState = WorkoutActivityState(
             elapsedSeconds: 0,
+            elapsedReferenceDate: Date(),
+            isPaused: false,
             currentHeartRate: 0,
+            heartRateDisplay: nil,
             totalCalories: 0,
+            caloriesDisplay: nil,
             totalDistanceKilometers: 0,
+            distanceDisplay: nil,
             currentPaceMinutesPerKm: nil,
             elevationGainMeters: 0,
             currentHeartRateZone: nil,
@@ -154,9 +159,14 @@ public class WorkoutLiveActivityManager {
         let finalContent = ActivityContent(
             state: finalState ?? WorkoutActivityState(
                 elapsedSeconds: 0,
+                elapsedReferenceDate: Date(),
+                isPaused: true,
                 currentHeartRate: 0,
+                heartRateDisplay: nil,
                 totalCalories: 0,
+                caloriesDisplay: nil,
                 totalDistanceKilometers: 0,
+                distanceDisplay: nil,
                 currentPaceMinutesPerKm: nil,
                 elevationGainMeters: 0,
                 currentHeartRateZone: nil,

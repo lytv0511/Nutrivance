@@ -54,7 +54,7 @@ struct HRZoneUserSettings {
     var customZoneUpperBounds: [Double]
 }
 
-private struct HRZonePersistedSettings: Codable, Equatable {
+struct HRZonePersistedSettings: Codable, Equatable {
     var modeRawValue: String
     var schemaRawValue: String
     var fixedMaxHR: Double?
@@ -63,7 +63,7 @@ private struct HRZonePersistedSettings: Codable, Equatable {
     var customZoneUpperBounds: [Double]
 }
 
-private enum HRZoneSettingsPersistence {
+enum HRZoneSettingsPersistence {
     static let storageKey = "hr_zone_user_settings_v1"
 
     static func load() -> HRZonePersistedSettings? {
@@ -90,7 +90,7 @@ private enum HRZoneSettingsPersistence {
     }
 }
 
-private extension HRZonePersistedSettings {
+extension HRZonePersistedSettings {
     static let fallback = HRZonePersistedSettings(
         modeRawValue: HRZoneConfigurationMode.intelligent.rawValue,
         schemaRawValue: HRZoneSchema.lactatThreshold.rawValue,

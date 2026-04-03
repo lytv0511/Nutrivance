@@ -167,9 +167,14 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
 
         var state = incomingWorkoutMetrics ?? WorkoutActivityState(
             elapsedSeconds: Int(elapsedTime.rounded(.down)),
+            elapsedReferenceDate: Date(),
+            isPaused: normalizedState == "paused",
             currentHeartRate: 0,
+            heartRateDisplay: nil,
             totalCalories: 0,
+            caloriesDisplay: nil,
             totalDistanceKilometers: 0,
+            distanceDisplay: nil,
             currentPaceMinutesPerKm: nil,
             elevationGainMeters: 0,
             currentHeartRateZone: nil,
@@ -177,14 +182,21 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
         )
 
         state.elapsedSeconds = Int(elapsedTime.rounded(.down))
-        if let heartRate = message["heartRate"] as? Int {
-            state.currentHeartRate = heartRate
+        state.elapsedReferenceDate = Date().addingTimeInterval(-elapsedTime)
+        state.isPaused = normalizedState == "paused"
+        if let heartRate = syncNumericValue(message["heartRate"]) {
+            state.currentHeartRate = Int(heartRate.rounded())
+            state.heartRateDisplay = "\(state.currentHeartRate)"
         }
         if let calories = message["totalCalories"] as? Double {
             state.totalCalories = calories
+            state.caloriesDisplay = "\(Int(calories.rounded())) CAL"
         }
         if let distanceMeters = message["totalDistance"] as? Double {
             state.totalDistanceKilometers = distanceMeters / 1000.0
+            state.distanceDisplay = distanceMeters >= 1000
+                ? String(format: "%.2f km", distanceMeters / 1000.0)
+                : "\(Int(distanceMeters.rounded())) m"
         }
         if let pace = message["currentPace"] as? Double {
             state.currentPaceMinutesPerKm = pace
@@ -202,6 +214,18 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
                 await self.updateLiveActivityIfActive(with: state)
             }
         }
+    }
+
+    private func syncNumericValue(_ raw: Any?) -> Double? {
+        guard let raw else { return nil }
+        if let value = raw as? Double { return value }
+        if let value = raw as? Int { return Double(value) }
+        if let value = raw as? NSNumber { return value.doubleValue }
+        if let value = raw as? String {
+            let filtered = value.filter { $0.isNumber || $0 == "." || $0 == "-" }
+            return Double(filtered)
+        }
+        return nil
     }
     
     private func handleTimerSync(_ message: [String: Any]) {
@@ -282,9 +306,14 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
         
         var state = incomingWorkoutMetrics ?? WorkoutActivityState(
             elapsedSeconds: elapsedSeconds,
+            elapsedReferenceDate: Date(),
+            isPaused: false,
             currentHeartRate: heartRate,
+            heartRateDisplay: nil,
             totalCalories: 0,
+            caloriesDisplay: nil,
             totalDistanceKilometers: 0,
+            distanceDisplay: nil,
             currentPaceMinutesPerKm: nil,
             elevationGainMeters: 0,
             currentHeartRateZone: nil,
@@ -293,13 +322,19 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
         
         // Update with incoming values
         state.elapsedSeconds = elapsedSeconds
+        state.elapsedReferenceDate = Date().addingTimeInterval(-Double(elapsedSeconds))
         state.currentHeartRate = heartRate
+        state.heartRateDisplay = "\(heartRate)"
         
         if let calories = message["totalCalories"] as? Double {
             state.totalCalories = calories
+            state.caloriesDisplay = "\(Int(calories.rounded())) CAL"
         }
         if let distance = message["totalDistanceKilometers"] as? Double {
             state.totalDistanceKilometers = distance
+            state.distanceDisplay = distance >= 1
+                ? String(format: "%.2f km", distance)
+                : "\(Int((distance * 1000).rounded())) m"
         }
         if let pace = message["currentPaceMinutesPerKm"] as? Double {
             state.currentPaceMinutesPerKm = pace

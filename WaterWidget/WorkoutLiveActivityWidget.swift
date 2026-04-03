@@ -14,15 +14,19 @@ struct WorkoutLiveActivityView: View {
                 
                 Spacer()
                 
-                Text(context.state.formattedElapsedTime)
+                WorkoutElapsedTimeText(state: context.state)
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .monospacedDigit()
             }
             
             HStack(spacing: 20) {
-                metricView(value: "\(context.state.currentHeartRate)", unit: "BPM", color: .red)
+                metricView(
+                    value: context.state.formattedHeartRate,
+                    unit: context.state.heartRateDisplay == nil ? "BPM" : "",
+                    color: .red
+                )
                 metricView(value: context.state.formattedDistance, unit: "", color: .green)
-                metricView(value: "\(Int(context.state.totalCalories))", unit: "CAL", color: .orange)
+                metricView(value: context.state.formattedCalories, unit: "", color: .orange)
             }
             
             if let phase = context.state.activePhaseTitle {
@@ -32,6 +36,18 @@ struct WorkoutLiveActivityView: View {
             }
         }
         .padding()
+    }
+}
+
+private struct WorkoutElapsedTimeText: View {
+    let state: WorkoutActivityState
+
+    var body: some View {
+        if state.isPaused {
+            Text(state.formattedElapsedTime)
+        } else {
+            Text(state.elapsedReferenceDate, style: .timer)
+        }
     }
 }
 
@@ -70,7 +86,7 @@ struct WorkoutActivityLiveActivity: Widget {
                     VStack(alignment: .trailing) {
                         Text("TIME")
                             .font(.caption2)
-                        Text(context.state.formattedElapsedTime)
+                        WorkoutElapsedTimeText(state: context.state)
                             .font(.headline.monospacedDigit())
                     }
                 }
@@ -79,7 +95,7 @@ struct WorkoutActivityLiveActivity: Widget {
                     HStack {
                         Text(context.state.formattedDistance)
                         Spacer()
-                        Text("\(Int(context.state.totalCalories)) CAL")
+                        Text(context.state.formattedCalories)
                     }
                     .font(.subheadline)
                 }
@@ -87,7 +103,7 @@ struct WorkoutActivityLiveActivity: Widget {
             } compactLeading: {
                 Text("❤️")
             } compactTrailing: {
-                Text("\(context.state.currentHeartRate)")
+                Text(context.state.formattedHeartRate)
                     .font(.caption2)
             } minimal: {
                 Text("🏃")

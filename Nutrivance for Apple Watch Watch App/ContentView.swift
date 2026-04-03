@@ -811,11 +811,7 @@ private struct WorkoutTargetTrackerCard: View {
             let screenClass = watchWorkoutScreenClass(for: geometry.size)
             let isCompactScreen = screenClass == .compact40
             let insets = watchDenseCardInsets(for: geometry.size)
-            let horizontalPadding: CGFloat = isCompactScreen ? 14 : 16
             let segmentSpacing: CGFloat = 2
-            let segmentCount = 3
-            let totalSpacing = segmentSpacing * CGFloat(segmentCount - 1)
-            let usableWidth = geometry.size.width - (horizontalPadding * 2) - totalSpacing
 
             VStack(alignment: .leading, spacing: isCompactScreen ? 3 : 4) {
                 if let stage = manager.currentMicroStage {
@@ -831,7 +827,6 @@ private struct WorkoutTargetTrackerCard: View {
                         stage: stage,
                         manager: manager,
                         isCompact: isCompactScreen,
-                        usableWidth: usableWidth,
                         segmentSpacing: segmentSpacing
                     )
 
@@ -890,7 +885,6 @@ private struct TargetTrackerStrip: View {
     let stage: WatchProgramMicroStagePayload
     let manager: WatchWorkoutManager
     let isCompact: Bool
-    let usableWidth: CGFloat
     let segmentSpacing: CGFloat
 
     private var role: ProgramMicroStageRole {
@@ -909,12 +903,12 @@ private struct TargetTrackerStrip: View {
         }
     }
 
-    private var segmentLayout: [SegmentLayout] {
+    private func segmentLayout(for totalWidth: CGFloat) -> [SegmentLayout] {
         let count = segmentCount
         let activeIdx: Int
         let spacing = segmentSpacing
         let totalSpacing = spacing * CGFloat(max(count - 1, 0))
-        let availableForSegments = usableWidth - totalSpacing
+        let availableForSegments = max(totalWidth - totalSpacing, 0)
         
         if role == .steady {
             switch currentPosition {
@@ -949,7 +943,7 @@ private struct TargetTrackerStrip: View {
                 ]
             }
         } else {
-            let totalUnits = CGFloat(count * 2 - 2)
+            let totalUnits = CGFloat(count + 2)
             for i in 0..<count {
                 let units: CGFloat = i == activeIdx ? 3 : 1
                 calculatedWidths.append(availableForSegments * units / totalUnits)
@@ -1037,23 +1031,28 @@ private struct TargetTrackerStrip: View {
     }
 
     var body: some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 2) {
-                ForEach(Array(segmentLayout.enumerated()), id: \.offset) { idx, layout in
-                    segmentBox(idx: idx, layout: layout)
+        GeometryReader { proxy in
+            let layouts = segmentLayout(for: proxy.size.width)
+            VStack(spacing: 2) {
+                HStack(spacing: segmentSpacing) {
+                    ForEach(Array(layouts.enumerated()), id: \.offset) { idx, layout in
+                        segmentBox(idx: idx, layout: layout)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let pos = arrowPositionInActiveSegment,
+                   layouts.indices.contains(activeSegmentIndex) {
+                    arrowIndicator(layout: layouts[activeSegmentIndex], positionInSegment: pos)
                 }
             }
-            .padding(.trailing, 4)
-            
-            if let pos = arrowPositionInActiveSegment {
-                arrowIndicator(layout: segmentLayout[activeSegmentIndex], positionInSegment: pos)
-            }
         }
+        .frame(height: isCompact ? 34 : 46)
     }
 
     private func segmentBox(idx: Int, layout: SegmentLayout) -> some View {
         let isExpanded = idx == activeSegmentIndex
-        let segmentHeight: CGFloat = isExpanded ? (isCompact ? 20 : 24) : (isCompact ? 14 : 18)
+        let segmentHeight: CGFloat = isExpanded ? (isCompact ? 20 : 28) : (isCompact ? 14 : 20)
 
         return HStack(spacing: 2) {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -1099,11 +1098,13 @@ private struct TargetTrackerStrip: View {
     private func arrowIndicator(layout: SegmentLayout, positionInSegment: CGFloat) -> some View {
         GeometryReader { _ in
             let arrowX = layout.offset + (positionInSegment * layout.width)
+            let iconHalfWidth: CGFloat = isCompact ? 3 : 4
+            let clampedArrowX = max(layout.offset, min(layout.offset + layout.width, arrowX))
 
             Image(systemName: "chevron.up")
                 .font(.system(size: isCompact ? 6 : 7, weight: .bold))
                 .foregroundStyle(.white)
-                .offset(x: arrowX - (isCompact ? 3 : 4))
+                .offset(x: clampedArrowX - iconHalfWidth)
         }
         .frame(height: isCompact ? 8 : 10)
     }

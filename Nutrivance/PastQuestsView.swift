@@ -163,6 +163,30 @@ final class StageQuestStore: ObservableObject {
         encode(recommendations, key: recommendationsKey)
     }
 
+    func quests(forSport sport: String, from startDate: Date, to endDate: Date) -> [StageQuestRecord] {
+        let normalizedSport = sport.lowercased().replacingOccurrences(of: " ", with: "-")
+        return records.filter { record in
+            let recordSport = record.workoutID.lowercased().replacingOccurrences(of: " ", with: "-")
+            return recordSport == normalizedSport
+                && record.completedAt >= startDate
+                && record.completedAt <= endDate
+        }
+    }
+
+    func questSummary(forSport sport: String, from startDate: Date, to endDate: Date) -> String {
+        let matching = quests(forSport: sport, from: startDate, to: endDate)
+        guard !matching.isEmpty else { return "" }
+
+        let grouped = Dictionary(grouping: matching, by: \.goalRawValue)
+        var parts: [String] = []
+        for (goal, recs) in grouped.sorted(by: { $0.value.count > $1.value.count }) {
+            let totalMin = recs.reduce(0) { $0 + $1.minutes }
+            let count = recs.count
+            parts.append("\(count)x \(goal) for \(totalMin)min")
+        }
+        return parts.joined(separator: ", ")
+    }
+
     func recommendation(key: String, role: ProgramMicroStageRole, goal: ProgramMicroStageGoal, values: [Double]) async -> StageRangeRecommendation {
         if let cached = recommendations[key] { return cached }
         let generated = await generateRecommendation(role: role, goal: goal, values: values)
