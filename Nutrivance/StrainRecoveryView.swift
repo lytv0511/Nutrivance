@@ -1323,30 +1323,57 @@ private func containsRepeatedPhrase(in text: String) -> Bool {
 
 private let strainRecoveryCoachInstructions = """
 You are an experienced athletic performance coach writing exactly one short paragraph in plain text.
+- Address the reader as \"you\" (second person). Do not refer to them as \"the athlete\" or other third-person labels for the person using the app.
+- Sound human, not templated: avoid repeating the same scaffold (e.g. \"Your [metric] is…\", \"Your [score] shows…\") sentence after sentence. Mix subject and lead-in—sometimes start with the situation, the comparison, the date, or a short clause about load or recovery, then tie it to \"you\" where it fits. Use connectors (notably, still, meanwhile, that said, overall) so rhythm varies.
+- Limit \"your\" to roughly once or twice in the paragraph unless grammar truly needs more; prefer varied phrasing like \"strain landed at…\", \"recovery reads…\", \"readiness sits…\", \"the window shows…\", \"that combination suggests…\".
+- Vary how sentences begin: avoid many consecutive sentences that all start with \"You.\" Use natural connectors and transitions (e.g. notably, however, in addition, meanwhile, still, overall, that said) and occasional observational openers so the paragraph flows; keep it clear you are still speaking to the same person.
 - Use actual numbers and dates from the prompt.
 - Stay inside the allowed scope for the selected report.
 - Treat secondary context as factual support, not the main topic.
 - If evidence is thin, say so briefly instead of guessing.
 - Do not invent trends, personal bests, warnings, or missing metrics.
+- When the prompt includes [7D] or multi-day series alongside anchor-day scores, use that recent data only to judge where today sits (load rhythm, recovery tilt, consistency). Keep the answer sounding like a same-day coaching read: do not open with a week recap or enumerate the trailing window unless one short clause is truly needed. Never call a rolling or weekly figure \"today\" unless the prompt labels it as that day only.
 - No bullets, numbering, headings, or line breaks.
 """
 
 private let strainRecoveryModelInstructions = strainRecoveryCoachInstructions
 private let strainRecoverySessionInstructions = strainRecoveryCoachInstructions
 
+/// Coach-facing label: value is peak HR minus HR ~2 min after workout end (bpm dropped). Larger = faster recovery.
+private let coachHRRMetricDisplayName = "HRR drop (peak − HR @2 min)"
+
 private struct CoachPromptFragments {
     static let noMarkdown = "- Output exactly one paragraph of plain text with no bullets, numbering, headings, or line breaks."
     static let noInvention = "- Every meaningful claim must be traceable to a number or label in the prompt. If the data is thin, say so briefly."
+    static let noRenamedCompositeScores = "- Do not invent or rename composite scores (for example \"performance score\"). Only use explicitly named metrics in the prompt: Strain /21, Recovery /100, Readiness /100, session load points, Window total training load points (sum of daily training load, same scale as [7D] Recent training load), internal effort-rating sum (only when printed), MET Minutes (cumulative), Refined HRR lines when printed, and other labels exactly as printed."
+    static let hrrDropSemantics = "- \(coachHRRMetricDisplayName) when printed as a bpm drop is peak heart rate during the workout minus the post-workout heart rate sample closest to two minutes after workout end; larger drop means faster recovery (more bpm fallen), not a higher exercising heart rate. When a line begins with \"Refined\", it uses static vs active anchor from late-peak vs end HR (see confidence and scenario). Lines that say \"HRR 2m delta omitted\" suppress primary 2m deltas because late peak was within 30 bpm of resting HR. \"Recovery power\" is the steepest mean HR fall over ~10 seconds within 5 minutes after the late peak (bpm/s). \"HRR recovery proxy\" is a comparable scalar derived from recovery power when 2m is not primary—not the same units as bpm drop. \"HRR steady-state\" means near equilibrium vs anchor/resting—do not treat small negative 2m noise as pathology."
+    static let metMinutesSemantics = "- MET Minutes are cumulative workload units from integrating MET over workout time, not a capped 0–100 score, percentage, or \"out of 1000\"; when a same-type prior-7d MET baseline line is present, use it for relative load, not an imaginary scale."
+    static let priorDayVersusSevenDayRule = "- Prior calendar day vs series: use the line starting with [PRIOR_DAY] for \"yesterday\" Recovery and Readiness. Do not treat any value in [7D] Recovery or [7D] Readiness as yesterday unless that series entry's date equals the [PRIOR_DAY] date."
+    static let citeOnlyPrintedMetricsReadiness = "- Anti-fabrication: Do not mention HRR, MET Minutes, session load points, Avg Power, or Avg Cadence unless this prompt prints that exact metric with a value (or an explicit \"unavailable\" line for it). Do not invent decimals such as \"11.5\" for load."
+    static let weekTrendNarrative = "- Filter 1W / 1M: Default to period trends across the window. Do not center the narrative on today versus yesterday unless those exact calendar dates appear in the prompt. Whenever you cite a number, tie it to the date(s) shown."
     static let todayActionable = "- The answer must help with today's decision, not drift into a generic recap."
     static let statementOfFactOnly = "- Keep this report factual and observational."
     static let noSuggestions = "- DO NOT give advice, prescriptions, recommendations, or next steps. Avoid phrases like you should, try to, consider, next time, or focus on next."
     static let noShaming = "- Do not shame missed sessions or missing metrics. Focus on completed work and neutral phrasing."
-    static let holdSteadyNotReduce = "- If caution is needed, prefer hold steady or stay controlled. Do not tell the athlete to reduce time or intensity unless the data explicitly demands it."
-    static let useUIMetricNames = "- Use the exact metric labels from the prompt such as MET Minutes, Recovery, Readiness, Time in Zone 4, Time in Zone 5, Avg HR, HRR, Avg Power, and Avg Cadence."
+    static let holdSteadyNotReduce = "- If caution is needed, prefer hold steady or stay controlled. Do not encourage cutting time or intensity unless the data explicitly demands it."
+    static let useUIMetricNames = "- Use the exact metric labels from the prompt such as MET Minutes, Recovery, Readiness, Time in Zone 4, Time in Zone 5, Avg HR, \(coachHRRMetricDisplayName), Avg Power (only when present in the prompt), and Avg Cadence (only when present in the prompt). For distance, speed, and elevation, use only the unit system stated in the Unit contract line of this prompt."
     static let missingDataBehavior = "- If a metric family is unavailable, say it is limited or unavailable and continue with the remaining evidence. Never fabricate a replacement trend."
     static let bridgeToOtherData = "- Only when the primary evidence is genuinely thin, you may add one brief adjacent-domain bridge sentence. Do not switch topics."
     static let atypicalSessionDetection = "- If sport label and physiological load look mismatched, call it atypical or uncertain rather than making a bold sport-specific claim."
     static let secondaryContextFacts = "- Secondary context is compact factual support only. Do not retell it as a separate narrative unless it directly explains the primary scope."
+    /// Sport-specific suggestion buttons: model must coach from evidence, not recite the metric bundle.
+    static let sportAnalysisContract = "- Deliver coaching synthesis, not a data readout: infer the dominant pattern (volume vs intensity, repeatability vs spikes, progression vs plateau, scatter or consistency) and what it implies for this discipline before naming next-session direction."
+    static let sportNoMetricInventory = "- Do not restate, enumerate, or summarize the evidence block line-by-line. Weave at most two quantitative anchors into prose; skip the rest unless essential for a single interpretive claim."
+    static let sportInterpretLoadSignals = "- Treat load profile, quest progress, trend lines, and standout sessions as clues to training adaptation, not as labels to repeat. Explain why they matter for performance or recovery in this sport."
+    /// 1D sport report: model must not treat day-scoped Training Focus metrics as weekly rolling averages.
+    static let sportOneDayWindowContract = "- 1D sport report: Training Focus metrics and session lines are for the selected calendar day only; do not describe them as past seven days, weekly averages, or multi-day rolls unless a line explicitly labels a longer window."
+    /// Global for Filter 1D prompts: keep [7D] in the prompt as silent context; answer should still read day-forward.
+    static let metricWindowDiscipline = "- Metric window discipline: \"Scores [ANCHOR_DAY]\" is only the selected calendar date. Lines tagged \"[7D]\" or listing multiple dates are recent background—use them to interpret today's position (not as today's raw totals). Forbidden: treating a [7D] aggregate as the anchor day's numbers or calling it \"today.\" Preferred voice: coach today directly; do not lead with \"this week\" / \"past seven days\" or narrate the weekly series unless one brief clause is needed for a single interpretive point."
+    /// 1W / 1M: any directional trend must cite dates from the prompt.
+    static let trendRequiresExplicitDates = "- Trend citation (1W/1M): If you describe direction or a comparison across time (rising, falling, higher, lower, improving, sliding, from one level to another, building, or fading) on any metric, you must name the calendar date(s) or period endpoints exactly as shown in the prompt for those values. Do not state an undated trend."
+    /// Sport (and similar) reports: reinforce second person + smooth prose (global instructions also cover this).
+    static let sportSecondPersonVoice = "- Sport-specific read: speak directly to the reader as \"you\" throughout. Never \"the athlete\" or third-person distance for them."
+    static let sportProseVariety = "- Sport-specific read: prioritize one or two strong \"you\" moments; otherwise link ideas with connectors (notably, however, in addition, meanwhile, still, overall) so the paragraph does not hammer \"You\" every sentence. Avoid chained \"Your [metric] is…\" / \"Your [x] shows…\" patterns; alternate sentence shapes and openings."
 }
 
 private struct FallbackPolicy {
@@ -1368,15 +1395,18 @@ private let strainRecoveryScorePromptReference = """
 Score construction reference for this app:
 - Recovery is an app-defined 0 to 100 coaching score, not a raw medical lab value.
 - Recovery formula in this app uses Effect HRV, a special sleep-anchored HRV signal from the main sleep block rather than raw daytime HRV. Effect HRV uses the sleep-window median and temporal momentum smoothing. Composite X = (Effect HRV z-score x 0.85) - (RHR penalty z-score x 0.25), then Recovery base = sigmoid(0.6 x (X + 1.6)) x 100.
-- Recovery is strongly baseline-aware. HRV and resting heart rate are judged against the athlete's own rolling 60-day baseline when available, with 7-day fallback logic if long baseline data is missing.
+- Recovery is strongly baseline-aware. HRV and resting heart rate are judged against your rolling 60-day baseline when available, with 7-day fallback logic if long baseline data is missing.
 - Effect HRV is anchored to the main sleep block and taken from the median of valid HRV samples in the final 3 hours of sleep when possible, with a full-sleep-window fallback if those samples are missing. Resting heart rate is estimated from the lowest 5-minute heart-rate average during sleep instead of a daytime average.
-- Resting heart rate only penalizes recovery when it is above the athlete's own baseline. A lower-than-baseline resting heart rate does not artificially inflate recovery by itself.
+- Resting heart rate only penalizes recovery when it is above your own baseline. A lower-than-baseline resting heart rate does not artificially inflate recovery by itself.
 - Recovery baseline stability is protected with log-normal HRV handling and a soft HRV SD floor of at least 12 percent of the 60-day mean, plus a resting-heart-rate SD floor of at least 3 bpm.
 - Final recovery uses a softened sleep scalar, a tapered circadian penalty only when bedtime variability exceeds 90 minutes, and an efficiency cap of 70 when sleep efficiency is below 85 percent.
 - Strain is an app-defined 0 to 21 load score. It is built from heart-rate-zone session load using weighted zone minutes plus a small base-load term, then log-scaled so the score rises quickly early and plateaus at higher loads.
 - Zone weighting in this app is exponential in feel: Zone 1 is 1x, Zone 2 is 2x, Zone 3 is 3.5x, Zone 4 is 5x, and Zone 5 is 6x.
 - Max heart rate is estimated as 211 minus 0.64 times age when a measured ceiling is unavailable, and the app updates upward if a workout exceeds that estimate.
 - A daily base load is added to strain at about 0.1 times active minutes, with a fallback baseline when dedicated active-minute data is not available.
+- \(coachHRRMetricDisplayName) is computed as peak heart rate during the workout minus the post-workout heart rate sample whose timestamp is closest to two minutes after workout end (bpm drop). The prompt repeats that computed drop; larger drop means faster recovery; do not confuse it with post-workout absolute heart rate alone.
+- MET Minutes in this app are cumulative workload units integrated over workout time, not a normalized 0 to 100 score; compare same-sport MET to the prior-7d same-type baseline when the prompt includes it.
+- Window total training load points (when mentioned) is the sum of daily training load across the report window, aligned with [7D] Recent training load, not a 0 to 100 score. Internal effort-rating sum (when mentioned) is a separate internal scale.
 - Practical strain reading guide for this app: 0 to 5 low, 6 to 10 building, 11 to 14 productive, 15 to 17 high, and 18 to 21 overreaching territory. Recovery 90 to 100 is Full Send, 70 to 89 is Perform, 40 to 69 is Adapt, and 0 to 39 is Recover.
 - Scenario labels you may use (coach-friendly shorthand):
   - Low Day: acute load ~8, chronic ~12 (low strain / light recent load).
@@ -1384,7 +1414,7 @@ Score construction reference for this app:
   - Productive: acute ~60, chronic ~50 (trainable, strong work day).
   - Spike: acute ~120, chronic ~60 (unusually high acute load vs baseline; extra strain, not automatic overtraining).
 - Interpret the scores as coaching signals, not diagnoses or disease severity scales.
-- Low strain plus high recovery usually means the athlete is fresh, recovered, or under-loaded, not automatically a problem.
+- Low strain plus high recovery usually means you are fresh, recovered, or under-loaded, not automatically a problem.
 - High strain plus high recovery can be a positive match when recovery is keeping pace with load.
 - High strain plus low recovery is the clearest mismatch or overreach pattern.
 - Treat match versus mismatch as central. Either score by itself is incomplete. The main question is whether recovery is supporting the current level of strain, lagging behind it, or comfortably exceeding it.
@@ -1435,7 +1465,8 @@ private func coachPromptLinePriority(_ line: String) -> Int {
         || line.hasPrefix("Filter:")
         || line.hasPrefix("Focus:")
         || line.hasPrefix("Suggestion ID:")
-        || line.hasPrefix("Scores:") {
+        || line.hasPrefix("Scores:") || line.hasPrefix("Scores [ANCHOR_DAY]:")
+        || line.hasPrefix("Metric window guide:") {
         return 0
     }
 
@@ -1455,6 +1486,7 @@ private func coachPromptLinePriority(_ line: String) -> Int {
         || line.hasPrefix("- If a topic appears on the ignore list")
         || line.hasPrefix("- Pick a reasoning frame")
         || line.hasPrefix("- Do not use bullet points")
+        || line.hasPrefix("- Metric window discipline:")
         || line.hasPrefix("Primary scope:")
         || line.hasPrefix("Fallback contract:")
         || line.hasPrefix("- When the prompt includes a date")
@@ -1502,6 +1534,11 @@ private func coachPromptLinePriority(_ line: String) -> Int {
         || line.hasPrefix("Training load:")
         || line.hasPrefix("Recent training load:")
         || line.hasPrefix("Recent load context:")
+        || line.hasPrefix("[7D]")
+        || line.hasPrefix("[ANCHOR_DAY]")
+        || line.hasPrefix("[7D prior window]")
+        || line.hasPrefix("Zone data contract:")
+        || line.hasPrefix("Vitals [selected day")
         || line.hasPrefix("Secondary context:")
         || line.hasPrefix("Bridge if needed:")
         || line.hasPrefix("Recovery:")
@@ -1704,7 +1741,8 @@ private func enforceCoachPromptBudget(
 
 private let coachSeriesPrefixes = [
     "Training load:", "Recovery:", "Readiness:", "HRV:", "RHR:", "HRR:",
-    "Sleep:", "Efficiency ratio (restoration/strain):"
+    "Sleep:", "Efficiency ratio (restoration/strain):",
+    "[7D] Recovery:", "[7D] Readiness:", "[7D] Sleep:", "[7D] RHR:", "[7D] HRV:", "[7D] Sleep HR:"
 ]
 
 private func abstractPromptToLevel(_ prompt: String, level: Int) -> String {
@@ -1729,7 +1767,7 @@ private func abstractPromptToLevel(_ prompt: String, level: Int) -> String {
     if level >= 2 {
         let essentialPrefixes = [
             "Coach me", "Coach prompt for ", "Filter:", "Focus:", "Suggestion ID:", "Sport filter:", "Scores:",
-            "Primary scope:", "Fallback contract:", "Secondary context:", "Strain 7d avg:", "Strain consistency:", "Vitals:", "MET:"
+            "Scores [ANCHOR_DAY]:", "Metric window guide:", "Primary scope:", "Fallback contract:", "Secondary context:", "Strain 7d avg:", "Strain consistency:", "Vitals:", "MET:"
         ]
         let dropPrefixes = [
             "Score table", "Focus on consistent", "Zones[", "Zone[", "Zones 7d[", "Zones window[",
@@ -2066,7 +2104,8 @@ private func coachScopeContract(
     default:
         if focusMode == .sportDeepDive || focusMode == .latestWorkout || focusMode == .toughestWorkout {
             return """
-            - Allowed topics: \(sportLabel) workouts, \(sportLabel.lowercased())-specific baselines, zones, power, pace, cadence, VO2, HRR, and session-to-session performance markers.
+            - Allowed topics: \(sportLabel) training interpretation—how volume, intensity, and session quality combine; progression, plateau, scatter, or overload risk; and the implied next-step emphasis for this discipline.
+            - Use \(sportLabel.lowercased()) workouts, zones, power, pace, cadence, VO2, HRR, and session-to-session markers only as support for that interpretation, not as a metric inventory.
             - Banned topics: other sports, sleep, recovery metrics, vitals, and general wellness commentary unless one is directly limiting \(sportLabel.lowercased()) output.
             - If the selected window has little sport-specific signal, say there is nothing especially notable in the \(sportLabel.lowercased()) data for this period.
             """
@@ -2087,8 +2126,8 @@ private func coachScopeContract(
             """
         case .sportSpecific:
             return """
-            - Allowed topics: sport-specific evidence only.
-            - Banned topics: unrelated sports and broad wellness commentary.
+            - Allowed topics: sport-specific coaching synthesis (patterns, adaptation, sustainability) grounded in that sport's evidence.
+            - Banned topics: unrelated sports, broad wellness commentary, and readouts that only restate metrics without interpretation.
             - If there is no strong sport-specific pattern, say that clearly.
             """
         case .general, .trendPB:
@@ -2617,11 +2656,19 @@ private struct StrainRecoveryAISummarySection: View {
         }
         let sportName = scopedSport ?? sportWorkouts.first?.workout.workoutActivityType.name ?? ""
         let questSummary = StageQuestStore.shared.questSummary(forSport: sportName, from: window.start, to: window.end)
+        let calendar = Calendar.current
+        let metBaselineStart = calendar.date(byAdding: .day, value: -7, to: window.start) ?? window.start
+        let priorSameTypeMET = engine.workoutAnalytics.filter { w, _ in
+            !sportName.isEmpty &&
+                w.startDate >= metBaselineStart && w.startDate < window.start &&
+                w.workoutActivityType.name == sportName
+        }
         return buildTrainingFocusReportPayload(
             sport: sportName,
             reportPeriod: reportPeriod,
             workouts: sportWorkouts,
-            questSummary: questSummary
+            questSummary: questSummary,
+            prior7dSameSportWorkouts: priorSameTypeMET
         )
     }
 
@@ -3980,9 +4027,11 @@ private struct StrainRecoveryAISummarySection: View {
             let hasRepeated = containsRepeatedPhrase(in: cleaned)
             let hasDisallowed = containsDisallowedCoachFormatting(cleaned)
             let hasAdviceLeak = combinedPrompt.contains(CoachPromptFragments.noSuggestions) && containsDisallowedAdvice(cleaned)
-            print("[CoachAI][gen] attempt=\(attempt) validation: empty=\(cleaned.isEmpty) repeated=\(hasRepeated) disallowedFormat=\(hasDisallowed) adviceLeak=\(hasAdviceLeak)")
+            let citesHRRWithoutPrompt = !coachPromptAllowsHRRCitation(effectivePrompt) && coachResponseMentionsHRR(cleaned)
+            let citesMETWithoutPrompt = !coachPromptAllowsMETCitation(effectivePrompt) && coachResponseMentionsMET(cleaned)
+            print("[CoachAI][gen] attempt=\(attempt) validation: empty=\(cleaned.isEmpty) repeated=\(hasRepeated) disallowedFormat=\(hasDisallowed) adviceLeak=\(hasAdviceLeak) hrrLeak=\(citesHRRWithoutPrompt) metLeak=\(citesMETWithoutPrompt)")
 
-            if !cleaned.isEmpty, !hasRepeated, !hasDisallowed, !hasAdviceLeak {
+            if !cleaned.isEmpty, !hasRepeated, !hasDisallowed, !hasAdviceLeak, !citesHRRWithoutPrompt, !citesMETWithoutPrompt {
                 print("[CoachAI][gen] ACCEPTED on attempt=\(attempt)")
                 return cleaned
             }
@@ -4287,6 +4336,12 @@ private struct TrainingFocusReportView: View {
                     .foregroundColor(.secondary)
             }
 
+            if let metBase = report.sameSportMetBaselineLine {
+                Text(metBase)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
             if !report.trendLines.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Trend lines")
@@ -4309,6 +4364,34 @@ private struct TrainingFocusReportView: View {
                         Text("\(session.date): \(session.summary)")
                             .font(.caption)
                             .foregroundColor(.primary)
+                    }
+                }
+            }
+
+            if !report.coachValidationRows.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Dated metrics (verify coach)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    Text("Each row is the date, metric name, and value sent to the coach for this sport window—use it to check trend claims.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(report.coachValidationRows) { row in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(row.dateLabel)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.orange.opacity(0.95))
+                                    .frame(minWidth: 108, alignment: .leading)
+                                Text(row.dataType)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .frame(minWidth: 118, alignment: .leading)
+                                Text(row.value)
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundColor(.primary)
+                            }
+                        }
                     }
                 }
             }
@@ -4409,15 +4492,9 @@ private struct StrainRecoverySummaryRequest {
             vo2Data: vo2Data
         )
 
-        let prompt = insufficiencyReason == nil ? buildCompactPrompt(from: payload, suggestion: effectiveSuggestion) : ""
-        print("[CoachAI][build] rawPrompt chars=\(prompt.count) tokens~\(approximateTokenCount(prompt)) insufficiency=\(insufficiencyReason ?? "none")")
-        if !prompt.isEmpty { print("[CoachAI][build] PROMPT START\n\(prompt)\n[CoachAI][build] PROMPT END") }
-        if !payload.hrrSeries.isEmpty {
-            print("[CoachAI][hrr-diag] HRR series: \(payload.hrrSeries.map { "\($0.date):\($0.value)bpm" }.joined(separator: " "))")
-        }
-
         let displayedStrain = payload.strainScore ?? engine.strainScore
         let selectedRecoveryScore = payload.recoveryScore ?? engine.recoveryScore
+        let selectedReadinessScore = payload.readinessScore ?? engine.readinessScore
 
         let midpointSeries = filteredWindowSeries(values: engine.sleepMidpointHours, in: window)
         let effortData = filteredWindowSeries(values: engine.effortRating, in: window)
@@ -4428,14 +4505,28 @@ private struct StrainRecoverySummaryRequest {
         let consistencyScore = sleepConsistencyScore(midpointSeries: midpointSeries, fallback: engine.sleepConsistency ?? 0)
         let sleepDebtHours = sleepDebt(sleepData: sleepData)
         let activityRecoveryGap = activityRecoverySleepGap(engine: engine, midpointSeries: midpointSeries)
-        let selectedReadinessScore = payload.readinessScore ?? engine.readinessScore
         let totalLoad = effortData.map(\.1).reduce(0, +)
         let scoreContext = periodScoreContext(
             timeFilter: timeFilter, reportPeriod: reportPeriod, loadSnapshots: loadSnapshots,
             engine: engine, displayWorkouts: displayWorkouts,
             anchorStrain: displayedStrain, anchorRecovery: selectedRecoveryScore,
-            anchorReadiness: selectedReadinessScore, windowTotalEffortLoad: totalLoad
+            anchorReadiness: selectedReadinessScore, internalEffortRatingSum: totalLoad
         )
+
+        let prompt: String
+        if insufficiencyReason == nil {
+            prompt = buildCompactPrompt(from: payload, suggestion: effectiveSuggestion)
+                + "\n\nNamed period scores and load (use these labels verbatim; do not invent a separate \"performance score\"):\n"
+                + scoreContext.promptBlock
+        } else {
+            prompt = ""
+        }
+        print("[CoachAI][build] rawPrompt chars=\(prompt.count) tokens~\(approximateTokenCount(prompt)) insufficiency=\(insufficiencyReason ?? "none")")
+        if !prompt.isEmpty { print("[CoachAI][build] PROMPT START\n\(prompt)\n[CoachAI][build] PROMPT END") }
+        if !payload.hrrSeries.isEmpty {
+            print("[CoachAI][hrr-diag] HRR series: \(payload.hrrSeries.map { "\($0.date):\($0.value)bpm" }.joined(separator: " "))")
+        }
+
         let selectedDayWorkouts = displayWorkouts.filter { calendar.isDate($0.workout.startDate, inSameDayAs: reportPeriod.canonicalAnchorDate) }
         let scenario = dayScenario(timeFilter: timeFilter, selectedDayWorkouts: selectedDayWorkouts)
 
@@ -5094,11 +5185,11 @@ private enum SummaryIntent: String, Codable {
         case .trendPB:
             return "Prioritize long-term trajectory, standout improvements, and personal-best style efforts."
         case .sportSpecific:
-            return "Coach through the lens of the selected discipline and the demands of that sport."
+            return "Turn sport-specific metrics into a short coaching narrative: what the block of training is actually doing for fitness, where overload or under-stimulus shows up, and how to steer the next one to three sessions—without sounding like a metrics export."
         case .intensityLoad:
             return "Prioritize VO2 max, load optimality, acute versus chronic balance, and whether to push or pull back."
         case .recoveryVitals:
-            return "Prioritize sleep architecture, biometric recovery, and whether the athlete is absorbing training well."
+            return "Prioritize sleep architecture, biometric recovery, and whether you are absorbing training well."
         }
     }
 }
@@ -5253,7 +5344,11 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
             primaryScope: "Primary scope: yesterday Recovery and Readiness labels and scores, recent load and strain, and whether today looks ready to push, hold steady, or stay controlled.",
             secondaryContextPolicy: "Secondary context: compact sleep facts and last-workout facts for causality only.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough readiness context to make a strong today call.", allowBridge: true),
-            negativeConstraints: ["- Do not turn this into a sleep deep dive.", "- Do not drift into a week trend report."],
+            negativeConstraints: [
+                "- Do not turn this into a sleep deep dive.",
+                "- Do not drift into a week trend report.",
+                "- Do not describe [7D] averages or multi-day series values as if they were the anchor-day Strain/Recovery/Readiness in Scores."
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
             requiredFragments: baseFragments + [CoachPromptFragments.todayActionable, CoachPromptFragments.secondaryContextFacts],
             allowsSuggestions: true
@@ -5263,32 +5358,56 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
             primaryScope: "Primary scope: last night's sleep hours, detailed stages, sleep consistency, Sleep HR, vitals, and sleep-linked reasons for today's Recovery and Readiness.",
             secondaryContextPolicy: "Secondary context: compact load or workout facts only when they explain the sleep-first story.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "Sleep-focused analysis is limited for this report.", allowBridge: true),
-            negativeConstraints: ["- Sleep must remain the main lens.", "- Do not write a workout recap.", "- Mention RHR or HRV only as supporting sleep-related evidence."],
+            negativeConstraints: [
+                "- Sleep must remain the main lens.",
+                "- Do not write a workout recap.",
+                "- Mention RHR or HRV only as supporting sleep-related evidence.",
+                "- Multi-day vitals series are [7D] context; last night is the primary sleep story—do not collapse series into \"last night\" unless dates match."
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
             requiredFragments: baseFragments + [CoachPromptFragments.todayActionable, CoachPromptFragments.secondaryContextFacts],
             allowsSuggestions: true
         )
-    case "1d-zones", "1w-zones":
-        let primary = suggestion.id == "1d-zones"
-            ? "Primary scope: sport-separated high-zone capacity using Time in Zone 4 and Time in Zone 5 across the past 7 days, with 28d non-zero context only as support, to decide what is realistic today."
-            : "Primary scope: weekly Time in Zone 4 and Time in Zone 5 totals, averages, standout days, and sport-separated high-zone patterns."
+    case "1d-zones":
         return CoachPromptSpec(
-            primaryScope: primary,
-            secondaryContextPolicy: suggestion.id == "1d-zones"
-                ? "Secondary context: compact Recovery and Readiness facts only if they materially change the today recommendation."
-                : "Secondary context: compact 28d non-zero cardio context only.",
+            primaryScope: "Primary scope: (1) Anchor-day high zones: Time in Zone 4 and Time in Zone 5 **only for workouts on the selected calendar day** (see \"Today zone sessions\" lines). (2) Rolling 7d sport-separated totals are **separate**—they summarize the Heart Zones–style 7-day window ending on the selected day, **not** the same thing as \"today\" minutes. Use (1) for what actually happened that day; use (2) for recent high-zone load pattern. Optional 28d context only as support.",
+            secondaryContextPolicy: "Secondary context: compact Recovery and Readiness facts only if they materially change the today recommendation.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough meaningful high-zone evidence to call a clear zone trend.", allowBridge: false),
-            negativeConstraints: ["- Do not turn this into a generic strain versus recovery report.", "- Separate sports rather than blending unlike modalities.", "- Ignore weak or irrelevant high-zone contributors when the evidence says they are not meaningful drivers."],
+            negativeConstraints: [
+                "- Do not turn this into a generic strain versus recovery report.",
+                "- Separate sports rather than blending unlike modalities.",
+                "- Ignore weak or irrelevant high-zone contributors when the evidence says they are not meaningful drivers.",
+                "- Do not describe rolling 7d Z4/Z5 totals as the selected day's Z4/Z5; keep labels and numbers distinct."
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
-            requiredFragments: baseFragments + [CoachPromptFragments.atypicalSessionDetection, CoachPromptFragments.secondaryContextFacts] + (suggestion.id == "1d-zones" ? [CoachPromptFragments.todayActionable] : []),
-            allowsSuggestions: suggestion.id == "1d-zones"
+            requiredFragments: baseFragments + [CoachPromptFragments.atypicalSessionDetection, CoachPromptFragments.secondaryContextFacts, CoachPromptFragments.todayActionable],
+            allowsSuggestions: true
+        )
+    case "1w-zones":
+        return CoachPromptSpec(
+            primaryScope: "Primary scope: weekly Time in Zone 4 and Time in Zone 5 totals, averages, standout days, and sport-separated high-zone patterns.",
+            secondaryContextPolicy: "Secondary context: compact 28d non-zero cardio context only.",
+            fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough meaningful high-zone evidence to call a clear zone trend.", allowBridge: false),
+            negativeConstraints: [
+                "- Do not turn this into a generic strain versus recovery report.",
+                "- Separate sports rather than blending unlike modalities.",
+                "- Ignore weak or irrelevant high-zone contributors when the evidence says they are not meaningful drivers.",
+                "- Do not frame the week as today versus yesterday; describe dated trends across the selected window."
+            ],
+            uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
+            requiredFragments: baseFragments + [CoachPromptFragments.atypicalSessionDetection, CoachPromptFragments.secondaryContextFacts],
+            allowsSuggestions: false
         )
     case "1d-consistency":
         return CoachPromptSpec(
-            primaryScope: "Primary scope: the past 7 days of training schedule, completed volume, average training time, and standout completed sessions, framed around what the athlete did.",
+            primaryScope: "Primary scope: the past 7 days of training schedule, completed volume, average training time, and standout completed sessions, framed around what you actually completed.",
             secondaryContextPolicy: "Secondary context: compact Recovery and Readiness facts only for today's suggestion.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "Consistency analysis is unavailable because there is too little completed training in the past 7 days.", allowBridge: false),
-            negativeConstraints: ["- Do not shame missed sessions.", "- Do not center the report on what was not done."],
+            negativeConstraints: [
+                "- Do not shame missed sessions.",
+                "- Do not center the report on what was not done.",
+                "- \"Scores [ANCHOR_DAY]\" is not a 7-day total; schedule and load lines are [7D] background—do not merge them into today's score line or call weekly volume \"today.\""
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
             requiredFragments: baseFragments + [CoachPromptFragments.todayActionable, CoachPromptFragments.noShaming, CoachPromptFragments.holdSteadyNotReduce, CoachPromptFragments.secondaryContextFacts],
             allowsSuggestions: true
@@ -5298,7 +5417,11 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
             primaryScope: "Primary scope: the 7-day Strain, Recovery, and Readiness series plus the derivative table. Only sustained patterns count as trends.",
             secondaryContextPolicy: "Secondary context: compact 28d baseline facts only.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough strain and recovery history in this week to call a reliable trend.", allowBridge: false),
-            negativeConstraints: ["- Do not call one-off spikes a trend.", "- Do not drift into an advice-heavy daily recommendation."],
+            negativeConstraints: [
+                "- Do not call one-off spikes a trend.",
+                "- Do not drift into an advice-heavy daily recommendation.",
+                "- Do not frame the narrative as today versus yesterday; anchor claims to dated series rows in the prompt."
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
             requiredFragments: baseFragments + [CoachPromptFragments.secondaryContextFacts],
             allowsSuggestions: true
@@ -5308,7 +5431,11 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
             primaryScope: "Primary scope: this week's sleep stages, sleep consistency, Sleep HR, vitals, and how those sleep-related patterns shaped weekly Recovery and Readiness.",
             secondaryContextPolicy: "Secondary context: compact load facts only when they explain the sleep-related trend.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "Sleep and biometrics trend analysis is limited for this week.", allowBridge: true),
-            negativeConstraints: ["- Sleep-related evidence must remain primary.", "- Do not turn this into a workout summary."],
+            negativeConstraints: [
+                "- Sleep-related evidence must remain primary.",
+                "- Do not turn this into a workout summary.",
+                "- Do not default to today versus yesterday; cite dated sleep and vitals rows from the prompt."
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
             requiredFragments: baseFragments + [CoachPromptFragments.secondaryContextFacts],
             allowsSuggestions: true
@@ -5318,7 +5445,11 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
             primaryScope: "Primary scope: weekly personal-best candidates from workout types with enough frequency signal, validated against 28d context.",
             secondaryContextPolicy: "Secondary context: compact 28d comparison facts only.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough repeated workout signal this week to call a meaningful personal best.", allowBridge: false),
-            negativeConstraints: ["- Do not promote one-off low-frequency sessions as a meaningful best.", "- Keep praise grounded in the actual metrics."],
+            negativeConstraints: [
+                "- Do not promote one-off low-frequency sessions as a meaningful best.",
+                "- Keep praise grounded in the actual metrics.",
+                "- Tie highlights to explicit workout dates from the prompt, not an undated today versus yesterday story."
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
             requiredFragments: baseFragments + [CoachPromptFragments.secondaryContextFacts],
             allowsSuggestions: true
@@ -5330,7 +5461,11 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
                 : "Primary scope: the past 28 days of schedule pattern, average volume, and the specific sports that show commitment.",
             secondaryContextPolicy: "Secondary context: none unless needed for one short bridge when the primary evidence is too thin.",
             fallbackPolicy: FallbackPolicy(unavailableLead: "Consistency analysis is limited for this period.", allowBridge: true),
-            negativeConstraints: ["- This report is statement of fact only.", "- No advice, no prescriptions, and no coaching next steps."],
+            negativeConstraints: [
+                "- This report is statement of fact only.",
+                "- No advice, no prescriptions, and no coaching next steps.",
+                "- Do not frame the period as today versus yesterday; cite dated schedule lines from the prompt."
+            ],
             uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
             requiredFragments: baseFragments + [CoachPromptFragments.statementOfFactOnly, CoachPromptFragments.noSuggestions, CoachPromptFragments.noShaming, CoachPromptFragments.bridgeToOtherData],
             allowsSuggestions: false
@@ -5347,16 +5482,71 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
         )
     default:
         if suggestion.id.contains("sport-") {
-            let timeHint = suggestion.id.hasPrefix("1m-")
-                ? "across the past 28 days"
-                : suggestion.id.hasPrefix("1w-") ? "across the past 7 days" : "using the past 7 days as context for today"
+            let sportLabel = suggestion.scopedSport ?? "this sport"
+            let (timeHint, primaryLead): (String, String) = {
+                if suggestion.id.hasPrefix("1m-sport-") {
+                    return ("across the past 28 days", "Use \(sportLabel) evidence from the selected month to explain trends, durability, and what deserves emphasis next.")
+                }
+                if suggestion.id.hasPrefix("1w-sport-") {
+                    return ("across the past 7 days", "Use \(sportLabel) evidence from the selected week to explain how the block is landing and what to emphasize next.")
+                }
+                if suggestion.id.hasPrefix("1d-sport-") {
+                    return (
+                        "for the selected calendar day only (Filter 1D)",
+                        "Interpret **that day's** \(sportLabel) sessions and Training Focus metrics only—session quality, intensity bias versus easy volume, and how it fits recovery today. Do not narrate multi-day or weekly load unless you clearly separate it as optional context and the prompt supplies it."
+                    )
+                }
+                return ("for the selected period", "Use \(sportLabel) evidence in the prompt to explain how training is landing and what matters next.")
+            }()
+
+            var negatives = [
+                "- Do not recite the Training Focus evidence as your answer; interpret it.",
+                "- Do not lead with or mirror labels such as Load profile, Data confidence, Quest summary, Metrics, or Trend lines unless you immediately explain what they imply for training.",
+                "- Do not write about sleep or general wellness unless the fallback bridge is triggered.",
+                "- Stay inside \(sportLabel) only."
+            ]
+            if suggestion.id.hasPrefix("1d-sport-") {
+                negatives.append("- Forbidden: calling MET minutes, Time in Zone 4 or 5, or workload “the past seven days,” “weekly,” or “on average this week” when Filter is 1D and the Training Focus block is day-scoped.")
+            }
+            if suggestion.id.hasPrefix("1w-sport-") {
+                negatives.append("- Forbidden: centering the narrative on today versus yesterday for a 1W sport report; describe week-level patterns with explicit session or series dates from the prompt.")
+            }
+
+            var fragments = baseFragments + [
+                CoachPromptFragments.sportSecondPersonVoice,
+                CoachPromptFragments.sportProseVariety,
+                CoachPromptFragments.sportAnalysisContract,
+                CoachPromptFragments.sportNoMetricInventory,
+                CoachPromptFragments.sportInterpretLoadSignals,
+                CoachPromptFragments.bridgeToOtherData,
+                CoachPromptFragments.secondaryContextFacts,
+                CoachPromptFragments.atypicalSessionDetection
+            ]
+            if suggestion.id.hasPrefix("1d-sport-") {
+                fragments.append(CoachPromptFragments.sportOneDayWindowContract)
+                fragments.append(CoachPromptFragments.todayActionable)
+            }
+
+            let sportSecondaryContext: String = {
+                if suggestion.id.hasPrefix("1d-sport-") {
+                    return "Secondary context: at most one compact Recovery, Readiness, or strain fact only if it clearly constrains or unlocks \(sportLabel) for the selected day; otherwise omit."
+                }
+                if suggestion.id.hasPrefix("1w-sport-") {
+                    return "Secondary context: at most one compact Recovery, Readiness, or strain fact only if it clearly constrains how to read the \(sportLabel) week pattern; use dated facts from the prompt—omit yesterday-style framing unless those dates appear."
+                }
+                if suggestion.id.hasPrefix("1m-sport-") {
+                    return "Secondary context: at most one compact Recovery, Readiness, or strain fact only if it clearly constrains how to read the \(sportLabel) month pattern; use dated facts from the prompt."
+                }
+                return "Secondary context: at most one compact Recovery, Readiness, or strain fact only if it clearly constrains \(sportLabel) training interpretation; otherwise omit."
+            }()
+
             return CoachPromptSpec(
-                primaryScope: "Primary scope: this is a pure \(suggestion.scopedSport ?? "sport") report \(timeHint), using only that sport's metrics, quests, trends, and sport-native evidence.",
-                secondaryContextPolicy: "Secondary context: only one compact readiness or load fact if it is needed to frame today's training or to bridge thin sport evidence.",
-                fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough \(suggestion.scopedSport ?? "sport") signal in this period to call a strong sport-specific trend.", allowBridge: true),
-                negativeConstraints: ["- Do not write about sleep or general wellness unless the fallback bridge is triggered.", "- Stay inside this sport only."],
+                primaryScope: "Primary scope: \(sportLabel) coaching \(timeHint). \(primaryLead)",
+                secondaryContextPolicy: sportSecondaryContext,
+                fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough \(sportLabel) signal in this period for a confident sport-specific coaching read.", allowBridge: true),
+                negativeConstraints: negatives,
                 uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
-                requiredFragments: baseFragments + [CoachPromptFragments.bridgeToOtherData, CoachPromptFragments.secondaryContextFacts, CoachPromptFragments.atypicalSessionDetection] + (suggestion.id.hasPrefix("1d-") ? [CoachPromptFragments.todayActionable] : []),
+                requiredFragments: fragments,
                 allowsSuggestions: true
             )
         }
@@ -5365,7 +5555,10 @@ private func promptSpec(for suggestion: SummarySuggestion) -> CoachPromptSpec {
                 primaryScope: "Primary scope: all-sport context from the past 7 days, but the answer must still be about what makes sense today.",
                 secondaryContextPolicy: "Secondary context: compact Recovery, Readiness, and last-workout facts only.",
                 fallbackPolicy: FallbackPolicy(unavailableLead: "There is not enough cross-sport activity in the past week to build an all-sports read.", allowBridge: false),
-                negativeConstraints: ["- Do not turn this into a weekly trend report."],
+                negativeConstraints: [
+                    "- Do not turn this into a weekly trend report.",
+                    "- \"Scores [ANCHOR_DAY]\" is only the selected date; 7-day schedule and load lines are [7D]—never describe weekly volume as the anchor day's totals."
+                ],
                 uiTerminologyContract: CoachPromptFragments.useUIMetricNames,
                 requiredFragments: baseFragments + [CoachPromptFragments.todayActionable, CoachPromptFragments.secondaryContextFacts],
                 allowsSuggestions: true
@@ -5448,12 +5641,12 @@ private func focusedEvidenceBlock(
         """
     case .sportDeepDive:
         return """
-        - Treat this as a pure \(scopedSport?.capitalized ?? "sport") report, written by a dedicated coach for that discipline.
+        - Treat this as \(scopedSport?.capitalized ?? "sport") coaching: synthesize patterns; do not read metrics back as a list.
         - Use only \(scopedSport ?? "sport") workouts as evidence.
-        - Prioritize sport-native evidence such as power, cadence, HR zones, VO2, HRR, and session-to-session progression when available.
+        - Prioritize sport-native signals (power, cadence, HR zones, VO2, HRR, session-to-session shape) to infer adaptation, not to inventory numbers.
         - Do not mention other sports, all-sport frequency, or generic wellness framing.
-        - Strongest \(scopedSport ?? "sport") markers: longest session \(workoutHighlights.longestWorkout), highest load \(workoutHighlights.highestLoadWorkout), highest power \(workoutHighlights.highestPowerWorkout), highest peak HR \(workoutHighlights.highestPeakHRWorkout).
-        - \(scopedSport?.capitalized ?? "Sport") load context: \(workoutLoadStatus(for: selectedSnapshot).detail)
+        - Anchor points for interpretation (cite sparingly in the answer): longest \(workoutHighlights.longestWorkout), heaviest load \(workoutHighlights.highestLoadWorkout), best power \(workoutHighlights.highestPowerWorkout), peak HR highlight \(workoutHighlights.highestPeakHRWorkout).
+        - Load context to interpret: \(workoutLoadStatus(for: selectedSnapshot).detail)
         """
     case .general:
         return """
@@ -5480,8 +5673,8 @@ private func toughestWorkoutEvidence(
     let duration = toughest.workout.duration / 60.0
     let zone4 = zoneMinutes(for: toughest.analytics, zoneNumber: 4)
     let zone5 = zoneMinutes(for: toughest.analytics, zoneNumber: 5)
-    let power = toughest.analytics.powerSeries.map(\.1).average
-    let cadence = toughest.analytics.cadenceSeries.map(\.1).average
+    let power = coachSessionAvgPowerWatts(toughest.analytics)
+    let cadence = coachSessionAvgCadenceRpm(toughest.analytics)
 
     return """
     - Toughest workout date: \(dateText)
@@ -5490,10 +5683,10 @@ private func toughestWorkoutEvidence(
     - Duration: \(formatted(duration, digits: 0)) min
     - Zone 4 time: \(formatted(zone4, digits: 0)) min
     - Zone 5 time: \(formatted(zone5, digits: 0)) min
-    - Average power: \(power.map { formatted($0, digits: 0) + " W" } ?? "Unavailable")
-    - Average cadence: \(cadence.map { formatted($0, digits: 0) + " rpm" } ?? "Unavailable")
+    - Average power: \(power.map { formatted($0, digits: 0) + " W" } ?? "Unavailable (no power samples in Health data for this session)")
+    - Average cadence: \(cadence.map { formatted($0, digits: 0) + " rpm" } ?? "Unavailable (no cadence samples in Health data for this session)")
     - Peak HR: \(toughest.analytics.peakHR.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
-    - HRR (2 min): \(toughest.analytics.hrr2.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
+    - \(coachHRRPromptSnippet(workout: toughest.workout, analytics: toughest.analytics)) (larger drop = faster recovery)
     - Only mention broader strain if you connect it directly back to this workout's impact.
     - Current load context: \(workoutLoadStatus(for: selectedSnapshot).detail)
     """
@@ -5515,7 +5708,7 @@ private func latestWorkoutEvidence(
     - Latest workout sport: \(sport)
     - Session load: \(formatted(load, digits: 0)) pts
     - Peak HR: \(latest.analytics.peakHR.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
-    - HRR (2 min): \(latest.analytics.hrr2.map { formatted($0, digits: 0) + " bpm" } ?? "Unavailable")
+    - \(coachHRRPromptSnippet(workout: latest.workout, analytics: latest.analytics)) (larger drop = faster recovery)
     - Explain what changed versus the recent baseline.
     - Current load context: \(workoutLoadStatus(for: selectedSnapshot).detail)
     """
@@ -5881,10 +6074,10 @@ private func workoutHighlights(
     } ?? "Unavailable"
 
     let highestPowerWorkout = displayWorkouts.compactMap { pair -> (String, Double)? in
-        guard let avgPower = pair.analytics.powerSeries.map(\.1).average else { return nil }
+        guard let avgPower = coachSessionAvgPowerWatts(pair.analytics) else { return nil }
         let description = "\(pair.workout.workoutActivityType.name.capitalized) at \(formatted(avgPower, digits: 0)) W average on \(pair.workout.startDate.formatted(date: .abbreviated, time: .omitted))"
         return (description, avgPower)
-    }.max { $0.1 < $1.1 }?.0 ?? "Unavailable"
+    }.max { $0.1 < $1.1 }?.0 ?? "Unavailable (no power samples in window)"
 
     let highestPeakHRWorkout = displayWorkouts.compactMap { pair -> (String, Double)? in
         guard let peakHR = pair.analytics.peakHR else { return nil }
@@ -6108,9 +6301,13 @@ private func periodScoreContext(
     anchorStrain: Double,
     anchorRecovery: Double,
     anchorReadiness: Double,
-    windowTotalEffortLoad: Double
+    internalEffortRatingSum: Double
 ) -> (promptBlock: String, fallbackLead: String) {
     let calendar = Calendar.current
+    let windowTrainingLoadPoints = loadSnapshots
+        .filter { $0.date >= reportPeriod.start && $0.date <= reportPeriod.end }
+        .map(\.totalDailyLoad)
+        .reduce(0, +)
     let strainSeries = loadSnapshots.map { ($0.date, $0.strainScore) }
     let recoverySeries = dateSequence(from: reportPeriod.start, to: reportPeriod.end).compactMap { day -> (Date, Double)? in
         recoveryScore(for: day, engine: engine).map { (day, $0) }
@@ -6156,13 +6353,17 @@ private func periodScoreContext(
     let promptBlock: String
     let fallbackLead: String
 
+    let effortLine: String = internalEffortRatingSum > 0.05
+        ? "\n        - Internal effort-rating sum (separate internal scale, not training load points): \(formatted(internalEffortRatingSum, digits: 1))"
+        : ""
+
     switch timeFilter {
     case .day:
         promptBlock = """
         - Selected day strain score: \(formatted(anchorStrain, digits: 0))/21
         - Recovery score for the selected day: \(formatted(anchorRecovery, digits: 0))/100
         - Readiness score for the selected day: \(formatted(anchorReadiness, digits: 0))/100
-        - Window total effort load: \(formatted(windowTotalEffortLoad, digits: 1))
+        - Window total training load points (sum of daily training load for the report window, same scale as [7D] Recent training load; not a 0–100 score): \(formatted(windowTrainingLoadPoints, digits: 1))\(effortLine)
         """
         fallbackLead = "Your current strain is \(formatted(anchorStrain, digits: 0))/21, recovery is \(formatted(anchorRecovery, digits: 0))/100, and readiness is \(formatted(anchorReadiness, digits: 0))/100."
     case .week, .month:
@@ -6173,7 +6374,7 @@ private func periodScoreContext(
         - Average readiness across the full \(timeFilter.summaryPeriodTitle): \(formatted(averageReadiness, digits: 0))/100
         - Total workouts in the full \(timeFilter.summaryPeriodTitle): \(workoutCount)
         - Training days in the full \(timeFilter.summaryPeriodTitle): \(trainingDays)
-        - Window total effort load: \(formatted(windowTotalEffortLoad, digits: 1))
+        - Window total training load points (sum of daily training load across the report window, same scale as training load series; not a 0–100 score): \(formatted(windowTrainingLoadPoints, digits: 1))\(effortLine)
         - End-of-period daily check-in on \(reportPeriod.end.formatted(date: .abbreviated, time: .omitted)): strain \(formatted(anchorStrain, digits: 0))/21, recovery \(formatted(anchorRecovery, digits: 0))/100, readiness \(formatted(anchorReadiness, digits: 0))/100
         - Internal \(timeFilter.summaryPeriodTitle) shape:
         \(segmentLines.isEmpty ? "- No subrange score breakdown is available." : segmentLines.joined(separator: "\n"))
@@ -6234,6 +6435,8 @@ private struct CoachMetricPayload {
     var recoveryLabel: String?
     var recoverySeries: [(date: String, score: Double)] = []
     var readinessSeries: [(date: String, score: Double)] = []
+    /// Explicit yesterday line for 1D prompts so the model does not mine [7D] series for "yesterday."
+    var priorDayScoresLine: String?
 
     var hrvSeries: [(date: String, value: Double)] = []
     var rhrSeries: [(date: String, value: Double)] = []
@@ -6288,6 +6491,14 @@ private struct TrainingFocusSessionDigest: Identifiable {
     let summary: String
 }
 
+/// Dated metric rows aligned with sport coach evidence (same workout window as Training Focus).
+private struct TrainingFocusCoachValidationRow: Identifiable {
+    let id: String
+    let dateLabel: String
+    let dataType: String
+    let value: String
+}
+
 private struct TrainingFocusReportPayload {
     let sportLabel: String
     let physiologicalLoadProfile: String
@@ -6298,6 +6509,10 @@ private struct TrainingFocusReportPayload {
     let metrics: [TrainingFocusMetric]
     let trendLines: [String]
     let standoutSessions: [TrainingFocusSessionDigest]
+    /// MET from same activity type in the 7 calendar days immediately before the report window (for relative load, not a score scale).
+    let sameSportMetBaselineLine: String?
+    /// Per-session dated facts for validating coach trend claims (chronological within the report window).
+    let coachValidationRows: [TrainingFocusCoachValidationRow]
 }
 
 private func computeEfficiencyRatio(
@@ -6500,23 +6715,34 @@ private func zoneMinutes(for analytics: WorkoutAnalytics, zoneNumber: Int) -> Do
     return seconds / 60.0
 }
 
+/// Same resolution path as `HeartZoneEngine.resolveProfile` in `HeartZonesView` so coach Z4/Z5 minutes match the Heart Zones screen.
 private func resolveZoneProfile(
     for workout: HKWorkout,
     analytics: WorkoutAnalytics,
     settings: HRZoneUserSettings,
     healthKitManager: HealthKitManager
-) async -> HRZoneProfile? {
+) async -> HRZoneProfile {
     switch settings.mode {
     case .customZones:
         let bounds = settings.customZoneUpperBounds
-        guard bounds.count == 5 else { return nil }
-        guard zip(bounds, bounds.dropFirst()).allSatisfy({ $0.0 < $0.1 }) else { return nil }
+        guard bounds.count == 5, zip(bounds, bounds.dropFirst()).allSatisfy({ $0.0 < $0.1 }) else {
+            return await healthKitManager.createHRZoneProfile(for: workout.workoutActivityType)
+        }
         let lowerBounds = [0.0] + Array(bounds.dropLast())
         let colors = ["0099FF", "00CC00", "FFCC00", "FF6600", "FF0000"]
         let zones = zip(Array(1...5), zip(lowerBounds, bounds)).map { zoneNumber, pair in
             HeartRateZone(name: "Zone \(zoneNumber)", range: pair.0...pair.1, color: colors[zoneNumber - 1], zoneNumber: zoneNumber)
         }
-        return HRZoneProfile(sport: workout.workoutActivityType.rawValue, schema: settings.customSchema, maxHR: bounds.last, restingHR: nil, lactateThresholdHR: nil, zones: zones, lastUpdated: Date(), adaptive: false)
+        return HRZoneProfile(
+            sport: workout.workoutActivityType.rawValue,
+            schema: settings.customSchema,
+            maxHR: bounds.last,
+            restingHR: nil,
+            lactateThresholdHR: nil,
+            zones: zones,
+            lastUpdated: Date(),
+            adaptive: false
+        )
 
     case .customSchema:
         return await healthKitManager.createHRZoneProfile(
@@ -6581,9 +6807,7 @@ private func bulkResolveZoneProfiles(
     let hkm = HealthKitManager()
     var profiles: [UUID: HRZoneProfile] = [:]
     for (workout, analytics) in workouts {
-        if let profile = await resolveZoneProfile(for: workout, analytics: analytics, settings: settings, healthKitManager: hkm) {
-            profiles[workout.uuid] = profile
-        }
+        profiles[workout.uuid] = await resolveZoneProfile(for: workout, analytics: analytics, settings: settings, healthKitManager: hkm)
     }
     return profiles
 }
@@ -6612,8 +6836,8 @@ private func computePersonalBests(
         }
 
         if let highestPower = pairs.compactMap({ p -> (HKWorkout, Double)? in
-            let avg = p.analytics.powerSeries.map(\.1).average
-            return avg.map { (p.workout, $0) }
+            guard let avg = coachSessionAvgPowerWatts(p.analytics) else { return nil }
+            return (p.workout, avg)
         }).max(by: { $0.1 < $1.1 }) {
             let date = highestPower.0.startDate.formatted(date: .abbreviated, time: .omitted)
             bests.append("\(sport) avg power: \(formatted(highestPower.1, digits: 0))W on \(date)")
@@ -6633,15 +6857,16 @@ private func computePersonalBests(
     return (bests + contextLines).joined(separator: "; ")
 }
 
-private func statsLine(label: String, values: [Double], digits: Int = 1) -> String? {
+private func statsLine(label: String, values: [Double], digits: Int = 1, singleCalendarDay: Bool = false) -> String? {
     let nonZero = values.filter { $0 > 0 }
     guard !nonZero.isEmpty else { return nil }
     let avg = average(nonZero) ?? 0
     let lo = nonZero.min() ?? avg
     let hi = nonZero.max() ?? avg
     let trend: String
-    if nonZero.count < 4 {
-        trend = "limited"
+    // Same calendar day: ordering is not a week-long trend—avoid "rising/falling" misreads.
+    if singleCalendarDay || nonZero.count < 4 {
+        trend = singleCalendarDay ? "mixed (same calendar day)" : "limited"
     } else {
         let chunk = max(1, nonZero.count / 3)
         let first = nonZero.prefix(chunk).reduce(0, +) / Double(chunk)
@@ -6692,34 +6917,211 @@ private func sportPhysiologicalLoadProfile(
     return (profile, confidence, notes)
 }
 
+// MARK: - Coach HRR (explicit peak − HR @~2 min post-end)
+
+private func coachHRRPeakBpm(analytics: WorkoutAnalytics) -> Double? {
+    analytics.peakHR ?? analytics.heartRates.map(\.1).max()
+}
+
+private func coachHRRClosestPostWorkoutBpm(minutesAfterEnd: Double, analytics: WorkoutAnalytics) -> Double? {
+    let end = analytics.workout.endDate
+    let target = end.addingTimeInterval(minutesAfterEnd * 60)
+    guard !analytics.postWorkoutHRSeries.isEmpty else { return nil }
+    let closest = analytics.postWorkoutHRSeries.min(by: { abs($0.0.timeIntervalSince(target)) < abs($1.0.timeIntervalSince(target)) })
+    return closest?.1
+}
+
+/// Peak HR during workout minus post-workout HR nearest **2 minutes after workout end** (same construction as analytics pipeline); falls back to `hrr2` only if post-workout series is empty.
+private func coachHRR2MinuteDropBpm(analytics: WorkoutAnalytics) -> Double? {
+    guard let peak = coachHRRPeakBpm(analytics: analytics) else { return nil }
+    guard let hr2 = coachHRRClosestPostWorkoutBpm(minutesAfterEnd: 2, analytics: analytics) else { return analytics.hrr2 }
+    return peak - hr2
+}
+
+private func coachHRRPromptSnippet(analytics: WorkoutAnalytics) -> String {
+    guard let drop = coachHRR2MinuteDropBpm(analytics: analytics) else {
+        return "\(coachHRRMetricDisplayName) unavailable (need peak HR and post-workout HR near 2 min after end)"
+    }
+    let peakStr = coachHRRPeakBpm(analytics: analytics).map { formatted($0, digits: 0) } ?? "—"
+    let hr2Str = coachHRRClosestPostWorkoutBpm(minutesAfterEnd: 2, analytics: analytics).map { formatted($0, digits: 0) } ?? "—"
+    return "\(coachHRRMetricDisplayName) \(formatted(drop, digits: 0)) bpm drop (= peak \(peakStr) bpm - HR ~2m post-end \(hr2Str) bpm)"
+}
+
+private func coachCachedOrAnalyzedHRR(workout: HKWorkout, analytics: WorkoutAnalytics) -> HeartRateRecoveryResult {
+    let rhr = CoachHRRRestingGate.shared.current()
+    let rhrKey = Int(rhr.rounded())
+    if let c = HRRAnalysisCache.shared.result(for: workout.uuid),
+       c.restingHRUsed.map({ Int($0.rounded()) }) == Optional(rhrKey) {
+        return c
+    }
+    let r = HeartRateRecoveryAnalysis.analyze(workout: workout, analytics: analytics, restingHRBpm: rhr)
+    HRRAnalysisCache.shared.store(r, workoutUUID: workout.uuid)
+    return r
+}
+
+private func coachEffectiveHRRDropBpm(workout: HKWorkout, analytics: WorkoutAnalytics) -> Double? {
+    let r = coachCachedOrAnalyzedHRR(workout: workout, analytics: analytics)
+    if let d = HeartRateRecoveryAnalysis.coachPreferredDropBpm(result: r) { return d }
+    if let s = HeartRateRecoveryAnalysis.coachComparableRecoveryScore(result: r) { return s }
+    return coachHRR2MinuteDropBpm(analytics: analytics)
+}
+
+private func coachHRRPromptSnippet(workout: HKWorkout, analytics: WorkoutAnalytics) -> String {
+    let r = coachCachedOrAnalyzedHRR(workout: workout, analytics: analytics)
+    if let d = HeartRateRecoveryAnalysis.coachPreferredDropBpm(result: r) {
+        return "Refined \(coachHRRMetricDisplayName) \(formatted(d, digits: 0)) bpm drop (2m after workout end; \(r.isStaticRecovery ? "static peak anchor" : "active end-HR anchor"); confidence \(Int(r.confidence * 100))%; \(r.scenario.rawValue))"
+    }
+    if r.excludeTwoMinuteFromPrimaryMetrics {
+        var s = "HRR 2m delta omitted (late peak within 30 bpm of resting; RHR \(r.restingHRUsed.map { String(format: "%.0f bpm", $0) } ?? "unknown"))."
+        if let rp = r.recoveryPowerBpmPerSec { s += " Recovery power (10s max slope after late peak): \(formatted(rp, digits: 2)) bpm/s." }
+        if let tt = r.secondsToDrop20Bpm { s += " Time to −20 bpm post-end: \(formatted(tt, digits: 0)) s." }
+        return s
+    }
+    if r.scenario == .steadyStateMaintained {
+        var s = "HRR steady-state (\(r.scenario.rawValue), confidence \(Int(r.confidence * 100))%): near equilibrium vs anchor vs resting—avoid over-reading small 2m changes."
+        if let rp = r.recoveryPowerBpmPerSec { s += " Recovery power: \(formatted(rp, digits: 2)) bpm/s." }
+        if let tt = r.secondsToDrop20Bpm { s += " Time to −20 bpm: \(formatted(tt, digits: 0)) s." }
+        if let d2 = r.dropBpm2m { s += " Internal 2m signed drop: \(formatted(d2, digits: 0)) bpm (not primary)." }
+        return s
+    }
+    if let proxy = HeartRateRecoveryAnalysis.coachComparableRecoveryScore(result: r) {
+        return "HRR recovery proxy \(formatted(proxy, digits: 0)) (from recovery power; refined 2m drop unavailable). Scenario: \(r.scenario.rawValue)."
+    }
+    return coachHRRPromptSnippet(analytics: analytics)
+}
+
+@MainActor
+private func coachUnitContractLine(store: UnitPreferencesStore) -> String {
+    let d = store.resolvedDistanceUnit == .miles ? "miles (mi)" : "kilometers (km)"
+    let s = store.resolvedSpeedUnit == .milesPerHour ? "mph" : "km/h"
+    let e = store.resolvedElevationUnit == .feet ? "feet (ft)" : "meters (m)"
+    return "Unit contract: Quote distances in \(d), speeds in \(s), and elevation gain in \(e) exactly as shown in this prompt—do not convert to other unit systems in your answer."
+}
+
+/// Avg power for coach payloads only when discrete power samples exist and average is meaningful.
+private func coachSessionAvgPowerWatts(_ analytics: WorkoutAnalytics) -> Double? {
+    guard !analytics.powerSeries.isEmpty,
+          let v = average(analytics.powerSeries.map(\.1)),
+          v > 0 else { return nil }
+    return v
+}
+
+/// Avg cadence for coach payloads only when cadence samples exist and average is meaningful.
+private func coachSessionAvgCadenceRpm(_ analytics: WorkoutAnalytics) -> Double? {
+    guard !analytics.cadenceSeries.isEmpty,
+          let v = average(analytics.cadenceSeries.map(\.1)),
+          v > 0 else { return nil }
+    return v
+}
+
+private func sameSportMetBaselineCoachLine(
+    prior7dSameSportWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    reportWindowStart: Date,
+    calendar: Calendar = .current
+) -> String? {
+    guard !prior7dSameSportWorkouts.isEmpty else { return nil }
+    let endExclusive = reportWindowStart
+    let rangeStart = calendar.date(byAdding: .day, value: -7, to: endExclusive) ?? endExclusive
+    let lastDay = calendar.date(byAdding: .day, value: -1, to: endExclusive) ?? endExclusive
+    let label = "\(rangeStart.formatted(date: .abbreviated, time: .omitted))–\(lastDay.formatted(date: .abbreviated, time: .omitted))"
+    let sessionCount = prior7dSameSportWorkouts.count
+    let mets = prior7dSameSportWorkouts.compactMap { $0.analytics.metTotal }.filter { $0 > 0 }
+    if mets.isEmpty {
+        return "Same-type MET baseline (7d before report window, \(label)): \(sessionCount) session(s); MET Minutes missing—treat MET in the report window as cumulative load only, not a normalized score."
+    }
+    let sum = mets.reduce(0, +)
+    let avgAmongSessionsWithMET = sum / Double(mets.count)
+    return "Same-type MET baseline (7d before report window, \(label)): \(sessionCount) session(s), \(formatted(sum, digits: 0)) MET Minutes total, ~\(formatted(avgAmongSessionsWithMET, digits: 0)) MET Minutes avg among sessions with MET data (cumulative workload units, not 0–100 or “out of 1000”)."
+}
+
+/// Chronological, dated facts per workout—matches Training Focus / sport coach session evidence so users can check trend claims.
+private func coachValidationRowsForSportTrainingFocus(
+    sport: String,
+    workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    zoneProfiles: [UUID: HRZoneProfile],
+    maxRows: Int = 56
+) -> [TrainingFocusCoachValidationRow] {
+    let sorted = workouts.sorted { $0.workout.startDate < $1.workout.startDate }
+    var rows: [TrainingFocusCoachValidationRow] = []
+    func push(date: Date, dataType: String, value: String) {
+        guard rows.count < maxRows else { return }
+        let dateLabel = date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
+        let id = "\(sport)-\(dataType)-\(date.timeIntervalSince1970)-\(rows.count)"
+        rows.append(TrainingFocusCoachValidationRow(id: id, dateLabel: dateLabel, dataType: dataType, value: value))
+    }
+    for pair in sorted {
+        let d = pair.workout.startDate
+        let w = pair.workout
+        let a = pair.analytics
+        let profile = zoneProfiles[w.uuid]
+        push(date: d, dataType: "Session duration", value: "\(Int((w.duration / 60.0).rounded())) min")
+        if let met = a.metTotal, met > 0 { push(date: d, dataType: "MET Minutes", value: formatted(met, digits: 0)) }
+        if let hr = average(a.heartRates.map(\.1)), hr > 0 { push(date: d, dataType: "Avg HR", value: "\(formatted(hr, digits: 0)) bpm") }
+        let z4 = zoneMinutesAsync(for: a, zoneNumber: 4, profile: profile)
+        let z5 = zoneMinutesAsync(for: a, zoneNumber: 5, profile: profile)
+        if z4 > 0.05 { push(date: d, dataType: "Time in Zone 4", value: "\(formatted(z4, digits: 1)) min") }
+        if z5 > 0.05 { push(date: d, dataType: "Time in Zone 5", value: "\(formatted(z5, digits: 1)) min") }
+        let hrrLine = coachHRRPromptSnippet(workout: w, analytics: a)
+        if !hrrLine.contains("unavailable") {
+            push(date: d, dataType: coachHRRMetricDisplayName, value: hrrLine)
+        }
+        if let pwr = coachSessionAvgPowerWatts(a) {
+            push(date: d, dataType: "Avg Power", value: "\(formatted(pwr, digits: 0)) W")
+        }
+        if let cad = coachSessionAvgCadenceRpm(a) {
+            push(date: d, dataType: "Avg Cadence", value: "\(formatted(cad, digits: 0)) rpm")
+        }
+    }
+    return rows
+}
+
+@MainActor
 private func buildTrainingFocusReportPayload(
     sport: String,
     reportPeriod: SummaryReportPeriod,
     workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
     questSummary: String,
-    zoneProfiles: [UUID: HRZoneProfile] = [:]
+    zoneProfiles: [UUID: HRZoneProfile] = [:],
+    prior7dSameSportWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
 ) -> TrainingFocusReportPayload? {
     guard !workouts.isEmpty else { return nil }
+    let units = UnitPreferencesStore()
+    let calendar = Calendar.current
+    let singleCalendarDayWindow = calendar.isDate(reportPeriod.start, inSameDayAs: reportPeriod.end)
     let durations = workouts.map { $0.workout.duration / 60.0 }
-    let distanceValues = workouts.compactMap { pair -> Double? in
-        guard let meters = pair.workout.totalDistance?.doubleValue(for: .meter()) else { return nil }
-        return meters / 1000.0
+    let distanceMetersValues = workouts.compactMap { pair -> Double? in
+        pair.workout.totalDistance?.doubleValue(for: .meter())
     }
+    let distanceDisplayValues = distanceMetersValues.map { meters in
+        units.resolvedDistanceUnit == .miles ? meters / 1609.344 : meters / 1000.0
+    }
+    let distanceSuffix = units.resolvedDistanceUnit == .miles ? " mi" : " km"
+    let distanceTrendLabel = units.resolvedDistanceUnit == .miles ? "Distance (mi)" : "Distance (km)"
     let energyValues = workouts.compactMap { $0.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) }
     let avgHRValues = workouts.map { average($0.analytics.heartRates.map(\.1)) ?? 0 }.filter { $0 > 0 }
     let metValues = workouts.compactMap { $0.analytics.metTotal }
     let z4Values = workouts.map { zoneMinutesAsync(for: $0.analytics, zoneNumber: 4, profile: zoneProfiles[$0.workout.uuid]) }
     let z5Values = workouts.map { zoneMinutesAsync(for: $0.analytics, zoneNumber: 5, profile: zoneProfiles[$0.workout.uuid]) }
-    let hrrValues = workouts.compactMap { $0.analytics.hrr2 }
-    let powerValues = workouts.compactMap { average($0.analytics.powerSeries.map(\.1)) }
-    let cadenceValues = workouts.compactMap { average($0.analytics.cadenceSeries.map(\.1)) }
-    let elevationValues = workouts.compactMap { $0.analytics.elevationGain }
-    let speedValues = workouts.compactMap { pair -> Double? in
+    let hrrValues = workouts.compactMap { coachEffectiveHRRDropBpm(workout: $0.workout, analytics: $0.analytics) }
+    let powerValues = workouts.compactMap { coachSessionAvgPowerWatts($0.analytics) }
+    let cadenceValues = workouts.compactMap { coachSessionAvgCadenceRpm($0.analytics) }
+    let elevationMetersValues = workouts.compactMap { $0.analytics.elevationGain }
+    let elevationDisplayValues = elevationMetersValues.map { meters in
+        units.resolvedElevationUnit == .feet ? meters * 3.28084 : meters
+    }
+    let elevationSuffix = units.resolvedElevationUnit == .feet ? " ft" : " m"
+    let elevationTrendLabel = units.resolvedElevationUnit == .feet ? "Elevation gain (ft)" : "Elevation gain (m)"
+    let speedKphValues = workouts.compactMap { pair -> Double? in
         guard let meters = pair.workout.totalDistance?.doubleValue(for: .meter()),
               pair.workout.duration > 0 else { return nil }
         let kph = (meters / 1000.0) / (pair.workout.duration / 3600.0)
         return kph > 0 ? kph : nil
     }
+    let speedDisplayValues = speedKphValues.map { kph in
+        units.resolvedSpeedUnit == .milesPerHour ? kph / 1.609344 : kph
+    }
+    let speedSuffix = units.resolvedSpeedUnit == .milesPerHour ? " mph" : " km/h"
+    let speedTrendLabel = units.resolvedSpeedUnit == .milesPerHour ? "Avg speed (mph)" : "Avg speed (km/h)"
 
     let profile = sportPhysiologicalLoadProfile(sport: sport, workouts: workouts)
     var metrics: [TrainingFocusMetric] = [
@@ -6732,26 +7134,35 @@ private func buildTrainingFocusReportPayload(
         metrics.append(.init(id: id, label: label, value: "\(formatted(avg, digits: digits))\(suffix)"))
     }
 
-    appendMetric(id: "distance", label: "Distance", values: distanceValues, digits: 1, suffix: " km")
-    appendMetric(id: "speed", label: "Avg Speed", values: speedValues, digits: 1, suffix: " km/h")
-    appendMetric(id: "energy", label: "Active kcal", values: energyValues, digits: 0)
-    appendMetric(id: "elevation", label: "Elevation Gain", values: elevationValues, digits: 0, suffix: " m")
+    func appendSumMetric(id: String, label: String, values: [Double], digits: Int = 0, suffix: String = "") {
+        let sum = values.filter { $0 > 0 }.reduce(0, +)
+        guard sum > 0 else { return }
+        metrics.append(.init(id: id, label: label, value: "\(formatted(sum, digits: digits))\(suffix)"))
+    }
+
+    appendSumMetric(id: "distance", label: "Distance", values: distanceDisplayValues, digits: 1, suffix: distanceSuffix)
+    appendMetric(id: "speed", label: "Avg Speed", values: speedDisplayValues, digits: 1, suffix: speedSuffix)
+    appendSumMetric(id: "energy", label: "Active kcal", values: energyValues, digits: 0)
+    appendSumMetric(id: "elevation", label: "Elevation Gain", values: elevationDisplayValues, digits: 0, suffix: elevationSuffix)
     appendMetric(id: "hr", label: "Avg HR", values: avgHRValues, digits: 0, suffix: " bpm")
-    appendMetric(id: "met", label: "MET Minutes", values: metValues, digits: 0)
-    appendMetric(id: "z4", label: "Time in Zone 4", values: z4Values, digits: 1, suffix: " min")
-    appendMetric(id: "z5", label: "Time in Zone 5", values: z5Values, digits: 1, suffix: " min")
-    appendMetric(id: "hrr", label: "HRR (2 min)", values: hrrValues, digits: 0, suffix: " bpm")
+    appendSumMetric(id: "met", label: "MET Minutes", values: metValues, digits: 0)
+    appendSumMetric(id: "z4", label: "Time in Zone 4", values: z4Values, digits: 1, suffix: " min")
+    appendSumMetric(id: "z5", label: "Time in Zone 5", values: z5Values, digits: 1, suffix: " min")
+    appendMetric(id: "hrr", label: "HRR (2m drop or recovery-power proxy)", values: hrrValues, digits: 0, suffix: "")
     appendMetric(id: "power", label: "Avg Power", values: powerValues, digits: 0, suffix: " W")
     appendMetric(id: "cadence", label: "Avg Cadence", values: cadenceValues, digits: 0, suffix: " rpm")
 
     let trendLines = [
-        statsLine(label: "Duration", values: durations, digits: 0).map { "Training Focus report view | \($0)" },
-        statsLine(label: "MET Minutes", values: metValues, digits: 0),
-        statsLine(label: "Avg HR", values: avgHRValues, digits: 0),
-        statsLine(label: "Time in Zone 4", values: z4Values, digits: 1),
-        statsLine(label: "Time in Zone 5", values: z5Values, digits: 1),
-        statsLine(label: "Avg Power", values: powerValues, digits: 0),
-        statsLine(label: "Avg Cadence", values: cadenceValues, digits: 0)
+        statsLine(label: "Duration", values: durations, digits: 0, singleCalendarDay: singleCalendarDayWindow).map { "Training Focus report view | \($0)" },
+        statsLine(label: distanceTrendLabel, values: distanceDisplayValues, digits: 1, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: "MET Minutes", values: metValues, digits: 0, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: "Avg HR", values: avgHRValues, digits: 0, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: "Time in Zone 4", values: z4Values, digits: 1, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: "Time in Zone 5", values: z5Values, digits: 1, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: speedTrendLabel, values: speedDisplayValues, digits: 1, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: elevationTrendLabel, values: elevationDisplayValues, digits: 0, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: "Avg Power", values: powerValues, digits: 0, singleCalendarDay: singleCalendarDayWindow),
+        statsLine(label: "Avg Cadence", values: cadenceValues, digits: 0, singleCalendarDay: singleCalendarDayWindow)
     ].compactMap { $0 }
 
     let standoutSessions = workouts
@@ -6763,14 +7174,25 @@ private func buildTrainingFocusReportPayload(
             let profile = zoneProfiles[pair.workout.uuid]
             let z4 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 4, profile: profile)
             let z5 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 5, profile: profile)
-            let power = average(pair.analytics.powerSeries.map(\.1)).map { " | Avg Power \(formatted($0, digits: 0)) W" } ?? ""
-            let cadence = average(pair.analytics.cadenceSeries.map(\.1)).map { " | Avg Cadence \(formatted($0, digits: 0)) rpm" } ?? ""
+            let power = coachSessionAvgPowerWatts(pair.analytics).map { " | Avg Power \(formatted($0, digits: 0)) W" } ?? ""
+            let cadence = coachSessionAvgCadenceRpm(pair.analytics).map { " | Avg Cadence \(formatted($0, digits: 0)) rpm" } ?? ""
             return TrainingFocusSessionDigest(
                 id: "\(sport)-\(pair.workout.startDate.timeIntervalSince1970)",
                 date: date,
-                summary: "\(duration) min | Time in Zone 4 \(formatted(z4, digits: 1)) min | Time in Zone 5 \(formatted(z5, digits: 1)) min | HRR (2 min) \(pair.analytics.hrr2.map { formatted($0, digits: 0) } ?? "Unavailable") bpm\(power)\(cadence)"
+                summary: "\(duration) min | Time in Zone 4 \(formatted(z4, digits: 1)) min | Time in Zone 5 \(formatted(z5, digits: 1)) min | \(coachHRRPromptSnippet(workout: pair.workout, analytics: pair.analytics))\(power)\(cadence)"
             )
         }
+
+    let metBaselineLine = sameSportMetBaselineCoachLine(
+        prior7dSameSportWorkouts: prior7dSameSportWorkouts,
+        reportWindowStart: reportPeriod.start
+    )
+
+    let coachValidationRows = coachValidationRowsForSportTrainingFocus(
+        sport: sport,
+        workouts: workouts,
+        zoneProfiles: zoneProfiles
+    )
 
     return TrainingFocusReportPayload(
         sportLabel: sport,
@@ -6781,7 +7203,9 @@ private func buildTrainingFocusReportPayload(
         questSummary: questSummary,
         metrics: metrics,
         trendLines: trendLines + profile.atypicalNotes,
-        standoutSessions: standoutSessions
+        standoutSessions: standoutSessions,
+        sameSportMetBaselineLine: metBaselineLine,
+        coachValidationRows: coachValidationRows
     )
 }
 
@@ -6793,6 +7217,9 @@ private func precomputeCoachPayload(
     suggestionID: String,
     sportFilter: String?
 ) async -> CoachMetricPayload {
+    let coachRHR = await HealthKitManager().fetchRestingHeartRateLatest()
+    CoachHRRRestingGate.shared.update(coachRHR)
+
     let calendar = Calendar.current
     let requestedDay = calendar.startOfDay(for: anchorDate)
     let reportPeriod = summaryReportPeriod(for: timeFilter, requestedDate: requestedDay)
@@ -6844,12 +7271,37 @@ private func precomputeCoachPayload(
     payload.readinessScore = selectedReadinessScore
     payload.recoveryLabel = recoveryClassification(for: selectedRecoveryScore).title
 
-    if let yesterdayRecovery = recoveryScore(for: yesterday, engine: engine) {
-        payload.secondaryContext.facts.append(("YesterdayRecovery", "\(recoveryClassification(for: yesterdayRecovery).title) (\(formatted(yesterdayRecovery, digits: 0)))"))
-    }
-    if let yesterdayStrain = loadSnapshots.first(where: { calendar.isDate($0.date, inSameDayAs: yesterday) })?.strainScore {
-        let label = workoutLoadStatus(for: loadSnapshots.first(where: { calendar.isDate($0.date, inSameDayAs: yesterday) })).title
-        payload.secondaryContext.facts.append(("YesterdayStrain", "\(label) (\(formatted(yesterdayStrain, digits: 1)))"))
+    // Yesterday vs today framing is for 1D coach reads only; week/month prompts should stay trend- and date-grounded.
+    if timeFilter == .day {
+        let priorDayWindow = (
+            start: yesterday,
+            end: yesterday,
+            endExclusive: calendar.date(byAdding: .day, value: 1, to: yesterday) ?? yesterday.addingTimeInterval(86400)
+        )
+        let workoutsForPriorSnapshots = engine.workoutAnalytics.filter { w, _ in
+            w.startDate >= historicalWindowStart && w.startDate < window.endExclusive
+        }
+        let priorDaySnapshots = dailyLoadSnapshots(
+            workouts: workoutsForPriorSnapshots,
+            estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+            displayWindow: priorDayWindow
+        )
+        let yesterdayStrainForReadiness = priorDaySnapshots.first?.strainScore
+
+        if let yesterdayRecovery = recoveryScore(for: yesterday, engine: engine) {
+            let yClass = recoveryClassification(for: yesterdayRecovery).title
+            payload.secondaryContext.facts.append(("YesterdayRecovery", "\(yClass) (\(formatted(yesterdayRecovery, digits: 0)))"))
+            if let yStrain = yesterdayStrainForReadiness,
+               let yReadiness = readinessScore(for: yesterday, recoveryScore: yesterdayRecovery, strainScore: yStrain, engine: engine) {
+                payload.secondaryContext.facts.append(("YesterdayReadiness", "\(formatted(yReadiness, digits: 0))/100"))
+                let yLabel = yesterday.formatted(date: .abbreviated, time: .omitted)
+                payload.priorDayScoresLine = "[PRIOR_DAY] \(yLabel) Recovery: \(formatted(yesterdayRecovery, digits: 0))/100 \(yClass), Readiness: \(formatted(yReadiness, digits: 0))/100"
+            }
+        }
+        if let yesterdayStrain = yesterdayStrainForReadiness, let snap = priorDaySnapshots.first {
+            let label = workoutLoadStatus(for: snap).title
+            payload.secondaryContext.facts.append(("YesterdayStrain", "\(label) (\(formatted(yesterdayStrain, digits: 1)))"))
+        }
     }
 
     let strainSeries = loadSnapshots.map { ($0.date, $0.strainScore) }
@@ -6867,6 +7319,11 @@ private func precomputeCoachPayload(
 
     switch timeFilter {
     case .day:
+        /// Matches `HeartZonesView` 1W window (`windowStart` = anchor−6) and baseline (`baselineStart` = windowStart−7).
+        let heartZonesRolling7Start = calendar.date(byAdding: .day, value: -6, to: requestedDay) ?? requestedDay
+        let heartZonesPriorStart = calendar.date(byAdding: .day, value: -7, to: requestedDay) ?? requestedDay
+        let heartZonesEndExclusive = window.endExclusive
+
         let past7dStrainScores = loadSnapshots.filter { $0.date >= past7dStart && $0.date < requestedDay }.map(\.strainScore)
         payload.strainWeekAvg = average(past7dStrainScores)
         payload.strainConsistencyLabel = strainConsistencyClassification(for: past7dStrainScores + [displayedStrain]).title
@@ -6913,7 +7370,8 @@ private func precomputeCoachPayload(
 
         payload.vitalsStatus = computeVitalsStatus(engine: engine, selectedDay: requestedDay, window28dStart: past28dStart)
 
-        if let lastWorkout = engine.workoutAnalytics
+        if timeFilter == .day,
+           let lastWorkout = engine.workoutAnalytics
             .filter({ $0.workout.startDate < window.endExclusive })
             .max(by: { $0.workout.startDate < $1.workout.startDate }) {
             payload.secondaryContext.facts.append(("LastWorkoutType", lastWorkout.workout.workoutActivityType.name))
@@ -6931,17 +7389,35 @@ private func precomputeCoachPayload(
         }
         payload.trainingSchedule = scheduleEntries.joined(separator: "; ")
 
+        // 1D sport / all-sports: zone totals must be anchor-day only. Never substitute rolling 7d here—
+        // that made the coach treat weekly aggregates as "today's session."
         if suggestionID.hasPrefix("1d-sport-") || suggestionID == "1d-all-sports" {
-            let sportW = displayWorkouts.isEmpty ? allWorkouts.filter { $0.workout.startDate >= past7dStart } : displayWorkouts
-            payload.zoneDataBySport = computeZoneDataBySport(workouts: sportW, zoneProfiles: zoneProfiles)
+            let sportW: [(workout: HKWorkout, analytics: WorkoutAnalytics)]
+            if suggestionID.hasPrefix("1d-sport-"), let sportID = extractSportFromSuggestionID(suggestionID) {
+                sportW = displayWorkouts.filter {
+                    $0.workout.workoutActivityType.name.lowercased().replacingOccurrences(of: " ", with: "-") == sportID
+                }
+            } else {
+                sportW = displayWorkouts
+            }
+            if !sportW.isEmpty {
+                payload.zoneDataBySport = computeZoneDataBySport(workouts: sportW, zoneProfiles: zoneProfiles)
+            }
         }
         if suggestionID == "1d-zones" {
-            let todayW = past7dAllWorkouts.filter { calendar.isDate($0.workout.startDate, inSameDayAs: requestedDay) }
-            let priorW = past7dAllWorkouts.filter { !calendar.isDate($0.workout.startDate, inSameDayAs: requestedDay) }
+            let rolling7ZoneWorkouts = engine.workoutAnalytics.filter { w, _ in
+                w.startDate >= heartZonesRolling7Start && w.startDate < heartZonesEndExclusive &&
+                    (scopedSport == nil || w.workoutActivityType.name == scopedSport)
+            }
+            let todayW = rolling7ZoneWorkouts.filter { calendar.isDate($0.workout.startDate, inSameDayAs: requestedDay) }
+            let priorW = engine.workoutAnalytics.filter { w, _ in
+                w.startDate >= heartZonesPriorStart && w.startDate < requestedDay &&
+                    (scopedSport == nil || w.workoutActivityType.name == scopedSport)
+            }
             payload.zoneTodaySessions = computeZoneSessionEntries(workouts: todayW, zoneProfiles: zoneProfiles)
             payload.zonePriorWindowSessions = computeZoneSessionEntries(workouts: priorW, zoneProfiles: zoneProfiles)
-            payload.zoneDataBySport = computeZoneDataBySport(workouts: past7dAllWorkouts, zoneProfiles: zoneProfiles)
-            payload.zoneConfidenceNotes = Dictionary(grouping: past7dAllWorkouts, by: { $0.workout.workoutActivityType.name }).compactMap { sport, pairs in
+            payload.zoneDataBySport = computeZoneDataBySport(workouts: rolling7ZoneWorkouts, zoneProfiles: zoneProfiles)
+            payload.zoneConfidenceNotes = Dictionary(grouping: rolling7ZoneWorkouts, by: { $0.workout.workoutActivityType.name }).compactMap { sport, pairs in
                 let profile = sportPhysiologicalLoadProfile(sport: sport, workouts: pairs)
                 return profile.confidence == "low" ? "\(sport): atypical high-HR pattern, treat literal sport-specific zone claims cautiously." : nil
             }
@@ -7064,28 +7540,45 @@ private func precomputeCoachPayload(
         let totalMin = sportWorkouts.reduce(0.0) { $0 + $1.workout.duration / 60.0 }
         lines.append("total min: \(formatted(totalMin, digits: 0))")
 
+        // Zone minutes must match `StrainRecoveryView.trainingFocusReport` / the on-screen Training Focus card.
+        // Do not pass HeartZones-resolved profiles here—they can massively reclassify minutes vs analytics breakdown.
         for pair in sportWorkouts.prefix(10) {
             let date = fmtDate(pair.workout.startDate)
             let dur = formatted(pair.workout.duration / 60.0, digits: 0)
-            let profile = zoneProfiles[pair.workout.uuid]
-            let z4 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 4, profile: profile)
-            let z5 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 5, profile: profile)
+            let z4 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 4, profile: nil)
+            let z5 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 5, profile: nil)
             let peakHR = pair.analytics.peakHR.map { formatted($0, digits: 0) + "bpm" } ?? "-"
-            let hrr = pair.analytics.hrr2.map { formatted($0, digits: 0) + "bpm" } ?? "-"
-            let power = pair.analytics.powerSeries.map(\.1).average.map { formatted($0, digits: 0) + "W" } ?? ""
-            let cadence = pair.analytics.cadenceSeries.map(\.1).average.map { formatted($0, digits: 0) + "rpm" } ?? ""
-            lines.append("\(date) \(dur)min z4:\(formatted(z4, digits: 1)) z5:\(formatted(z5, digits: 1)) pk:\(peakHR) hrr:\(hrr) \(power) \(cadence)".trimmingCharacters(in: .whitespaces))
+            let hrrR = coachCachedOrAnalyzedHRR(workout: pair.workout, analytics: pair.analytics)
+            let hrrDrop: String
+            if let ref = HeartRateRecoveryAnalysis.coachPreferredDropBpm(result: hrrR) {
+                hrrDrop = "\(formatted(ref, digits: 0))bpmDropRefined2m"
+            } else if let proxy = HeartRateRecoveryAnalysis.coachComparableRecoveryScore(result: hrrR) {
+                hrrDrop = "\(formatted(proxy, digits: 0))hrrProxy"
+            } else if let leg = coachHRR2MinuteDropBpm(analytics: pair.analytics) {
+                hrrDrop = "\(formatted(leg, digits: 0))bpmDrop"
+            } else {
+                hrrDrop = "-"
+            }
+            let power = coachSessionAvgPowerWatts(pair.analytics).map { formatted($0, digits: 0) + "W" } ?? ""
+            let cadence = coachSessionAvgCadenceRpm(pair.analytics).map { formatted($0, digits: 0) + "rpm" } ?? ""
+            lines.append("\(date) \(dur)min z4:\(formatted(z4, digits: 1)) z5:\(formatted(z5, digits: 1)) pk:\(peakHR) hrrDrop:\(hrrDrop) \(power) \(cadence)".trimmingCharacters(in: .whitespaces))
         }
         payload.workoutSummary = lines.joined(separator: "\n")
 
         if let sportName = resolvedSportName {
             payload.questSummary = StageQuestStore.shared.questSummary(forSport: sportName, from: window.start, to: window.end)
+            let metBaselineStart = calendar.date(byAdding: .day, value: -7, to: window.start) ?? window.start
+            let priorSameTypeMET = engine.workoutAnalytics.filter { w, _ in
+                w.startDate >= metBaselineStart && w.startDate < window.start &&
+                    w.workoutActivityType.name == sportName
+            }
             payload.trainingFocusReport = buildTrainingFocusReportPayload(
                 sport: sportName,
                 reportPeriod: reportPeriod,
                 workouts: sportWorkouts,
                 questSummary: payload.questSummary,
-                zoneProfiles: zoneProfiles
+                zoneProfiles: [:],
+                prior7dSameSportWorkouts: priorSameTypeMET
             )
         }
         payload.fallbackBridge = "Not enough \(resolvedSportName?.lowercased() ?? "sport-specific") signal here to call a clear trend, but overall consistency across other activities can still provide context."
@@ -7136,6 +7629,7 @@ private func filteredPayload(for suggestion: SummarySuggestion, base: CoachMetri
         payload.recoverySeries = []
         payload.readinessSeries = []
         payload.vitalsStatus = ""
+        payload.zoneDataBySport = []
     }
 
     if id == "1m-overall" {
@@ -7156,7 +7650,8 @@ private func filteredPayload(for suggestion: SummarySuggestion, base: CoachMetri
 }
 
 private func secondaryContext(for suggestion: SummarySuggestion, payload: CoachMetricPayload) -> String? {
-    let facts = Array(payload.secondaryContext.facts.prefix(4))
+    let limit = suggestion.id.hasPrefix("1d-") ? 6 : 4
+    let facts = Array(payload.secondaryContext.facts.prefix(limit))
     guard !facts.isEmpty else { return nil }
     switch suggestion.id {
     case "1d-readiness", "1d-sleep-bio", "1d-zones", "1d-consistency", "1d-all-sports":
@@ -7183,7 +7678,8 @@ private func promptDataLines(for suggestion: SummarySuggestion, payload: CoachMe
     }
 
     if let strain = payload.strainScore {
-        var scoreLine = "Scores: Strain \(formatted(strain, digits: 1))/21"
+        let scorePrefix = id.hasPrefix("1d-") ? "Scores [ANCHOR_DAY]:" : "Scores:"
+        var scoreLine = "\(scorePrefix) Strain \(formatted(strain, digits: 1))/21"
         if let recovery = payload.recoveryScore {
             scoreLine += ", Recovery \(formatted(recovery, digits: 0))/100 \(payload.recoveryLabel ?? "")"
         }
@@ -7193,18 +7689,34 @@ private func promptDataLines(for suggestion: SummarySuggestion, payload: CoachMe
         lines.append(scoreLine)
     }
 
+    let priorDaySuggestionIDs: Set<String> = [
+        "1d-readiness", "1d-sleep-bio", "1d-zones", "1d-consistency", "1d-all-sports"
+    ]
+    if priorDaySuggestionIDs.contains(id), let prior = payload.priorDayScoresLine {
+        lines.append(prior)
+        lines.append(CoachPromptFragments.priorDayVersusSevenDayRule)
+    }
+
     switch id {
     case "1d-readiness":
         if let avg = payload.strainWeekAvg {
-            lines.append("Recent load context: 7d Strain avg \(formatted(avg, digits: 1)); consistency \(payload.strainConsistencyLabel ?? "N/A")")
+            lines.append("[7D] Recent load context: 7d Strain avg \(formatted(avg, digits: 1)); consistency \(payload.strainConsistencyLabel ?? "N/A")")
         }
-        appendSeries("Recent Recovery", payload.recoverySeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
-        appendSeries("Recent Readiness", payload.readinessSeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
+        appendSeries("[7D] Recovery", payload.recoverySeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
+        appendSeries("[7D] Readiness", payload.readinessSeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
         if !payload.trainingLoadSeries.isEmpty {
             let lastLoads = payload.trainingLoadSeries.suffix(4).map { "\($0.date):\(formatted($0.load, digits: 1)) \($0.label ?? "")".trimmingCharacters(in: .whitespaces) }
-            lines.append("Recent training load: \(lastLoads.joined(separator: " | "))")
+            lines.append("[7D] Recent training load (multi-day): \(lastLoads.joined(separator: " | "))")
         }
-    case "1d-sleep-bio", "1w-sleep-bio":
+    case "1d-sleep-bio":
+        appendSeries("[7D] Sleep", payload.sleepSeries) { "\($0.date):\($0.hours)h(core \($0.core) deep \($0.deep) rem \($0.rem))" }
+        appendSeries("[7D] Recovery", payload.recoverySeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
+        appendSeries("[7D] Readiness", payload.readinessSeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
+        appendSeries("[7D] RHR", payload.rhrSeries) { "\($0.date):\($0.value)bpm" }
+        appendSeries("[7D] HRV", payload.hrvSeries) { "\($0.date):\($0.value)ms" }
+        appendSeries("[7D] Sleep HR", payload.sleepHeartRateSeries) { "\($0.date):\($0.value)bpm" }
+        if !payload.vitalsStatus.isEmpty { lines.append("Vitals [selected day / anchor context]: \(payload.vitalsStatus)") }
+    case "1w-sleep-bio":
         appendSeries("Sleep", payload.sleepSeries) { "\($0.date):\($0.hours)h(core \($0.core) deep \($0.deep) rem \($0.rem))" }
         appendSeries("Recovery", payload.recoverySeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
         appendSeries("Readiness", payload.readinessSeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
@@ -7213,26 +7725,30 @@ private func promptDataLines(for suggestion: SummarySuggestion, payload: CoachMe
         appendSeries("Sleep HR", payload.sleepHeartRateSeries) { "\($0.date):\($0.value)bpm" }
         if !payload.vitalsStatus.isEmpty { lines.append("Vitals: \(payload.vitalsStatus)") }
     case "1d-zones":
+        lines.append("Zone data contract: [ANCHOR_DAY] \"Today zone sessions\" = selected day only. [7D] \"Rolling 7d sport totals\" = sum across 7 calendar days ending on the selected day (not the same as today-only minutes).")
+        if !payload.zoneTodaySessions.isEmpty {
+            lines.append("[ANCHOR_DAY] Today zone sessions: \(payload.zoneTodaySessions.map { "\($0.sport) \($0.date): Z4 \(formatted($0.z4min, digits: 1)) min, Z5 \(formatted($0.z5min, digits: 1)) min" }.joined(separator: " | "))")
+        } else {
+            lines.append("[ANCHOR_DAY] Today zone sessions: unavailable")
+        }
         if !payload.zoneConfidenceNotes.isEmpty {
             lines.append("Zone confidence: \(payload.zoneConfidenceNotes.joined(separator: " | "))")
         }
         if !payload.zoneDataBySport.isEmpty {
-            lines.append("7d sport-separated zone totals: \(payload.zoneDataBySport.map { "\($0.sport): Z4 \(formatted($0.z4min, digits: 1)) min, Z5 \(formatted($0.z5min, digits: 1)) min, Avg HR \($0.avgHR.map { formatted($0, digits: 0) } ?? "-") bpm" }.joined(separator: " | "))")
+            lines.append("[7D] Rolling sport-separated zone totals (7 days ending selected day; not anchor-day minutes): \(payload.zoneDataBySport.map { "\($0.sport): Z4 \(formatted($0.z4min, digits: 1)) min, Z5 \(formatted($0.z5min, digits: 1)) min, Avg HR \($0.avgHR.map { formatted($0, digits: 0) } ?? "-") bpm" }.joined(separator: " | "))")
         }
-        if !payload.zoneTodaySessions.isEmpty {
-            lines.append("Today zone sessions: \(payload.zoneTodaySessions.map { "\($0.sport) \($0.date): Z4 \(formatted($0.z4min, digits: 1)) min, Z5 \(formatted($0.z5min, digits: 1)) min" }.joined(separator: " | "))")
-        } else {
-            lines.append("Today zone sessions: unavailable")
+        if !payload.zonePriorWindowSessions.isEmpty {
+            lines.append("[7D prior window] High-zone sessions (7 days before selected day): \(payload.zonePriorWindowSessions.prefix(8).map { "\($0.sport) \($0.date): Z4 \(formatted($0.z4min, digits: 1)) min, Z5 \(formatted($0.z5min, digits: 1)) min" }.joined(separator: " | "))")
         }
     case "1d-consistency":
-        if let schedule = payload.trainingSchedule { lines.append("Schedule: \(schedule)") }
+        if let schedule = payload.trainingSchedule { lines.append("[7D] Schedule: \(schedule)") }
         if !payload.trainingLoadSeries.isEmpty {
-            lines.append("Completed load: \(payload.trainingLoadSeries.map { "\($0.date):\(formatted($0.load, digits: 1))" }.joined(separator: " | "))")
+            lines.append("[7D] Completed load: \(payload.trainingLoadSeries.map { "\($0.date):\(formatted($0.load, digits: 1))" }.joined(separator: " | "))")
         }
     case "1d-all-sports":
-        if let schedule = payload.trainingSchedule { lines.append("7d all-sport schedule: \(schedule)") }
+        if let schedule = payload.trainingSchedule { lines.append("[7D] All-sport schedule: \(schedule)") }
         if !payload.trainingLoadSeries.isEmpty {
-            lines.append("7d all-sport load: \(payload.trainingLoadSeries.map { "\($0.date):\(formatted($0.load, digits: 1))" }.joined(separator: " | "))")
+            lines.append("[7D] All-sport load: \(payload.trainingLoadSeries.map { "\($0.date):\(formatted($0.load, digits: 1))" }.joined(separator: " | "))")
         }
     case "1w-svr":
         appendSeries("Recovery", payload.recoverySeries) { "\($0.date):\(formatted($0.score, digits: 0))" }
@@ -7270,24 +7786,54 @@ private func promptDataLines(for suggestion: SummarySuggestion, payload: CoachMe
         if let schedule = payload.trainingSchedule { lines.append("Weekly schedule totals: \(schedule)") }
     default:
         if id.contains("sport-"), let report = payload.trainingFocusReport {
-            lines.append("Training Focus report view")
-            lines.append("Sport: \(report.sportLabel) | Load profile: \(report.physiologicalLoadProfile) | Data confidence: \(report.dataConfidence)")
+            if payload.timeFilter == .day && id.hasPrefix("1d-sport-") {
+                lines.append("Window: 1D only — Training Focus metrics and sessions below are \(report.sportLabel) totals for \(report.periodLabel) (selected day), not 7-day rolling averages unless a line explicitly says so.")
+            }
+            lines.append("Authoritative Time in Zone 4 and Time in Zone 5: cite only Metric anchors, Trend hints, and session lines below—the same analytics breakdown as the Training Focus card.")
+            lines.append("Integrated \(report.sportLabel) evidence (for coaching synthesis only—do not recite as a report):")
+            lines.append("Load story: \(report.physiologicalLoadProfile); evidence strength: \(report.dataConfidence)")
             if !report.questSummary.isEmpty {
-                lines.append("Quest summary: \(report.questSummary)")
+                lines.append("Quest arc: \(report.questSummary)")
             }
             if !report.metrics.isEmpty {
-                lines.append("Metrics: \(report.metrics.map { "\($0.label) \($0.value)" }.joined(separator: " | "))")
+                lines.append("Metric anchors: \(report.metrics.map { "\($0.label) \($0.value)" }.joined(separator: " | "))")
+            }
+            if let metBase = report.sameSportMetBaselineLine {
+                lines.append(metBase)
             }
             if !report.trendLines.isEmpty {
-                lines.append("Trend lines: \(report.trendLines.joined(separator: " | "))")
+                lines.append("Trend hints: \(report.trendLines.joined(separator: " | "))")
             }
             if !report.standoutSessions.isEmpty {
-                lines.append("Sessions: \(report.standoutSessions.map { "\($0.date) \($0.summary)" }.joined(separator: " | "))")
+                lines.append("Notable sessions: \(report.standoutSessions.map { "\($0.date) \($0.summary)" }.joined(separator: " | "))")
+            }
+            if !payload.workoutSummary.isEmpty {
+                lines.append("Session detail lines (same sport and calendar window as Training Focus; use for coaching, not as a list to read aloud):\n\(payload.workoutSummary)")
             }
         } else {
-            if let schedule = payload.trainingSchedule { lines.append("Schedule: \(schedule)") }
+            let isSport = id.contains("sport-")
+            if isSport, id.hasPrefix("1d-sport-"), payload.timeFilter == .day {
+                lines.append("[7D] No integrated Training Focus block for this sport on the anchor day (no sessions or build failed). Schedule and load below are the trailing 7-day window ending on the anchor date—not that day's session totals.")
+            } else if isSport, id.hasPrefix("1w-sport-") {
+                lines.append("[1W] No integrated Training Focus block for this sport in the selected week. Schedule/load below are week-scoped.")
+            } else if isSport, id.hasPrefix("1m-sport-") {
+                lines.append("[1M] No integrated Training Focus block for this sport in the selected month. Schedule/load below are month-scoped.")
+            }
+            let schedulePrefix: String = {
+                if isSport, id.hasPrefix("1d-sport-"), payload.timeFilter == .day { return "[7D] Schedule" }
+                if isSport, id.hasPrefix("1w-sport-") { return "[1W] Schedule" }
+                if isSport, id.hasPrefix("1m-sport-") { return "[1M] Schedule" }
+                return "Schedule"
+            }()
+            let loadPrefix: String = {
+                if isSport, id.hasPrefix("1d-sport-"), payload.timeFilter == .day { return "[7D] Training load" }
+                if isSport, id.hasPrefix("1w-sport-") { return "[1W] Training load" }
+                if isSport, id.hasPrefix("1m-sport-") { return "[1M] Training load" }
+                return "Training load"
+            }()
+            if let schedule = payload.trainingSchedule { lines.append("\(schedulePrefix): \(schedule)") }
             if !payload.trainingLoadSeries.isEmpty {
-                lines.append("Training load: \(payload.trainingLoadSeries.map { "\($0.date):\(formatted($0.load, digits: 1))" }.joined(separator: " | "))")
+                lines.append("\(loadPrefix): \(payload.trainingLoadSeries.map { "\($0.date):\(formatted($0.load, digits: 1))" }.joined(separator: " | "))")
             }
         }
     }
@@ -7295,16 +7841,89 @@ private func promptDataLines(for suggestion: SummarySuggestion, payload: CoachMe
     return lines
 }
 
+private func metricWindowGuide(for suggestion: SummarySuggestion) -> String {
+        switch suggestion.id {
+        case "1d-consistency", "1d-all-sports":
+            return """
+            Metric window guide: \"Scores [ANCHOR_DAY]\" is only Strain/Recovery/Readiness for the selected calendar date. Primary training tables here are [7D] (schedule, load, volume)—use them to infer consistency and how today fits the pattern; do not equate those weekly totals with today's score line. You may still sound day-forward for what to do next.
+            """
+        default:
+            return """
+            Metric window guide: \"Scores [ANCHOR_DAY]\" is only the selected calendar date. \"[7D]\" and multi-date lines are recent context so you can place today in its load-and-recovery lane—they are not the same numbers as today's session totals. Use them for judgment; default answer stays anchored on today without a weekly recap opener.
+            """
+        }
+}
+
+private func coachPromptEvidenceContainsHRR(dataLines: [String], contextLine: String?, payload: CoachMetricPayload) -> Bool {
+    let blob = (dataLines + [contextLine ?? ""]).joined(separator: "\n")
+    if blob.contains(coachHRRMetricDisplayName) { return true }
+    if blob.contains("hrrDrop:") || blob.contains("bpmDrop") { return true }
+    if blob.contains("Refined HRR") || blob.contains("Refined \(coachHRRMetricDisplayName)") { return true }
+    return false
+}
+
+private func coachPromptEvidenceContainsMET(dataLines: [String], payload: CoachMetricPayload) -> Bool {
+    let blob = dataLines.joined(separator: "\n")
+    if blob.contains("MET Minutes") { return true }
+    if let report = payload.trainingFocusReport, report.sameSportMetBaselineLine != nil { return true }
+    return false
+}
+
+private func coachPromptAllowsHRRCitation(_ prompt: String) -> Bool {
+    prompt.contains(coachHRRMetricDisplayName)
+        || prompt.contains("hrrDrop:")
+        || prompt.contains("bpmDrop")
+        || prompt.contains("bpmDropRefined2m")
+        || prompt.contains("hrrProxy")
+        || prompt.contains("Refined HRR")
+        || prompt.contains("Recovery power")
+        || prompt.contains("HRR 2m delta omitted")
+        || prompt.contains("HRR steady-state")
+        || prompt.contains("HRR recovery proxy")
+}
+
+private func coachResponseMentionsHRR(_ text: String) -> Bool {
+    text.range(of: "HRR", options: .caseInsensitive) != nil
+        || text.localizedCaseInsensitiveContains("heart rate recovery")
+}
+
+private func coachPromptAllowsMETCitation(_ prompt: String) -> Bool {
+    prompt.contains("MET Minutes")
+}
+
+private func coachResponseMentionsMET(_ text: String) -> Bool {
+    text.localizedCaseInsensitiveContains("MET Minutes")
+}
+
+@MainActor
 private func buildCompactPrompt(from payload: CoachMetricPayload, suggestion: SummarySuggestion) -> String {
     let spec = suggestion.coachPromptSpec
     let filtered = filteredPayload(for: suggestion, base: payload)
+    let dataLines = promptDataLines(for: suggestion, payload: filtered)
+    let contextLine = secondaryContext(for: suggestion, payload: filtered)
     var lines: [String] = []
 
     lines.append("Coach prompt for \(suggestion.title).")
     lines.append("Filter: \(filtered.timeFilter.rawValue), Date: \(filtered.dateLabel), Period: \(filtered.periodLabel)")
+    lines.append(coachUnitContractLine(store: UnitPreferencesStore()))
     lines.append("Suggestion ID: \(filtered.suggestionID)")
     if let sport = filtered.sportFilter {
         lines.append("Sport filter: \(sport)")
+    }
+    if suggestion.id.hasPrefix("1d-") {
+        lines.append(metricWindowGuide(for: suggestion))
+        lines.append(CoachPromptFragments.metricWindowDiscipline)
+    }
+    if suggestion.id.hasPrefix("1w-") || suggestion.id.hasPrefix("1m-") {
+        lines.append(CoachPromptFragments.trendRequiresExplicitDates)
+        lines.append(CoachPromptFragments.weekTrendNarrative)
+    }
+    lines.append(CoachPromptFragments.noRenamedCompositeScores)
+    if coachPromptEvidenceContainsHRR(dataLines: dataLines, contextLine: contextLine, payload: filtered) {
+        lines.append(CoachPromptFragments.hrrDropSemantics)
+    }
+    if coachPromptEvidenceContainsMET(dataLines: dataLines, payload: filtered) {
+        lines.append(CoachPromptFragments.metMinutesSemantics)
     }
     lines.append(spec.primaryScope)
     lines.append(spec.secondaryContextPolicy)
@@ -7312,13 +7931,16 @@ private func buildCompactPrompt(from payload: CoachMetricPayload, suggestion: Su
     lines.append(spec.uiTerminologyContract)
     lines.append(contentsOf: spec.requiredFragments)
     lines.append(contentsOf: spec.negativeConstraints)
-    if let contextLine = secondaryContext(for: suggestion, payload: filtered) {
+    if suggestion.id == "1d-readiness" {
+        lines.append(CoachPromptFragments.citeOnlyPrintedMetricsReadiness)
+    }
+    if let contextLine {
         lines.append(contextLine)
     }
     if let bridge = fallbackBridge(for: suggestion, payload: filtered) {
         lines.append("Bridge if needed: \(bridge)")
     }
-    lines.append(contentsOf: promptDataLines(for: suggestion, payload: filtered))
+    lines.append(contentsOf: dataLines)
     return lines.joined(separator: "\n")
 }
 
@@ -9837,9 +10459,20 @@ struct HRRAggregatesSection: View {
             let filteredWorkouts = engine.workoutAnalytics.filter { $0.workout.workoutActivityType.name == sport }
             var aggregates: [Date: Double] = [:]
             let calendar = Calendar.current
+            let resting = CoachHRRRestingGate.shared.current()
+            let restingKey = Int(resting.rounded())
             for (workout, analytics) in filteredWorkouts {
                 let day = calendar.startOfDay(for: workout.startDate)
-                if let hrr2 = analytics.hrr2 {
+                let result: HeartRateRecoveryResult
+                if let cached = HRRAnalysisCache.shared.result(for: workout.uuid),
+                   cached.restingHRUsed.map({ Int($0.rounded()) }) == Optional(restingKey) {
+                    result = cached
+                } else {
+                    let analyzed = HeartRateRecoveryAnalysis.analyze(workout: workout, analytics: analytics, restingHRBpm: resting)
+                    HRRAnalysisCache.shared.store(analyzed, workoutUUID: workout.uuid)
+                    result = analyzed
+                }
+                if let hrr2 = HeartRateRecoveryAnalysis.trendPreferredDropBpm(result: result) {
                     aggregates[day] = max(aggregates[day] ?? 0, hrr2)
                 }
             }
@@ -9886,7 +10519,7 @@ struct HRRAggregatesSection: View {
                         Text("Max day in window: " + String(format: "%.0f", maxValue) + " bpm")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Text("HRR (2 min) is Peak HR minus HR measured ~2 minutes after workout end.")
+                        Text("HRR (2 min) uses the refined stop anchor: smoothed peak in the final minute before the detected end of effort minus smoothed HR about 2 minutes later.")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                         if let sportFilter {

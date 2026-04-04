@@ -221,16 +221,25 @@ struct GradientBackgrounds {
         }
     }
 
+    /// Light-mode mesh stops: scaled ~14%; “rest” cells use faint theme tints — no flat white / paper gray blow-outs.
+    private enum LightMesh {
+        static let scale: Double = 0.86
+
+        static func rgb(_ r: Double, _ g: Double, _ b: Double) -> Color {
+            Color(red: r * scale, green: g * scale, blue: b * scale)
+        }
+    }
+
     private var lightWarmColors: [Color] {
         [
 //            Color(.systemBackground),
-            Color(red: 1.0, green: 0.4, blue: 0.0),  // Vibrant orange
-            Color(red: 0.9, green: 0.3, blue: 0.0),  // Deep orange
-            Color(red: 0.8, green: 0.2, blue: 0.0),  // Orange-red
+            LightMesh.rgb(1.0, 0.4, 0.0),  // Vibrant orange
+            LightMesh.rgb(0.9, 0.3, 0.0),  // Deep orange
+            LightMesh.rgb(0.8, 0.2, 0.0),  // Orange-red
 //            Color(.systemBackground),
-            Color(red: 1.0, green: 0.5, blue: 0.1),  // Bright orange
-            Color(red: 0.95, green: 0.6, blue: 0.2), // Golden orange
-            Color(red: 0.85, green: 0.25, blue: 0.0), // Rich orange-red
+            LightMesh.rgb(1.0, 0.5, 0.1),  // Bright orange
+            LightMesh.rgb(0.95, 0.6, 0.2), // Golden orange
+            LightMesh.rgb(0.85, 0.25, 0.0), // Rich orange-red
 //            Color(.systemBackground)
         ]
     }
@@ -251,15 +260,15 @@ struct GradientBackgrounds {
     
     private var lightNaturalColors: [Color] {
         [
-            .white,
-            Color(red: 0.2, green: 0.8, blue: 0.2),
-            Color(red: 0.0, green: 0.0, blue: 0.8),
-            Color(red: 0.1, green: 0.7, blue: 0.3),
-            .white,
-            Color(red: 0.0, green: 0.6, blue: 0.9),
-            Color(red: 0.0, green: 0.8, blue: 0.4),
-            Color(red: 0.1, green: 0.9, blue: 0.2),
-            .white
+            LightMesh.rgb(0.86, 0.92, 0.90),  // faint sky / leaf mist
+            LightMesh.rgb(0.2, 0.8, 0.2),
+            LightMesh.rgb(0.0, 0.0, 0.8),
+            LightMesh.rgb(0.1, 0.7, 0.3),
+            LightMesh.rgb(0.84, 0.90, 0.93),  // faint blue-green haze
+            LightMesh.rgb(0.0, 0.6, 0.9),
+            LightMesh.rgb(0.0, 0.8, 0.4),
+            LightMesh.rgb(0.1, 0.9, 0.2),
+            LightMesh.rgb(0.86, 0.92, 0.90)
         ]
     }
     
@@ -279,15 +288,15 @@ struct GradientBackgrounds {
     
     private var lightBoldColors: [Color] {
         [
-            Color(red: 0.2, green: 0.0, blue: 0.45),
-            Color(red: 0.4, green: 0.0, blue: 0.0),
-            .white,
-            Color(red: 0.25, green: 0.0, blue: 0.5),
-            .white,
-            Color(red: 0.5, green: 0.0, blue: 0.0),
-            .white,
-            Color(red: 0.3, green: 0.0, blue: 0.4),
-            Color(red: 0.45, green: 0.0, blue: 0.0)
+            LightMesh.rgb(0.2, 0.0, 0.45),
+            LightMesh.rgb(0.4, 0.0, 0.0),
+            LightMesh.rgb(0.88, 0.82, 0.90),  // faint plum / wine mist
+            LightMesh.rgb(0.25, 0.0, 0.5),
+            LightMesh.rgb(0.90, 0.84, 0.88),  // faint mauve
+            LightMesh.rgb(0.5, 0.0, 0.0),
+            LightMesh.rgb(0.86, 0.80, 0.90),
+            LightMesh.rgb(0.3, 0.0, 0.4),
+            LightMesh.rgb(0.45, 0.0, 0.0)
         ]
     }
 
@@ -307,15 +316,15 @@ struct GradientBackgrounds {
     
     private var lightSpiritColors: [Color] {
         [
-            Color(red: 0.66, green: 0.86, blue: 0.86),  // Soft Sky Blue
-            Color(red: 1.0, green: 0.78, blue: 0.64),   // Warm Peach
-            Color(red: 0.80, green: 0.91, blue: 0.85),  // Pastel Mint Green
-            Color(.systemBackground),
-            Color(red: 0.84, green: 0.76, blue: 0.88),  // Muted Lavender
-            Color(.systemBackground),
-            Color(red: 0.66, green: 0.86, blue: 0.86),  // Soft Sky Blue
-            Color(red: 1.0, green: 0.78, blue: 0.64),   // Warm Peach
-            Color(red: 0.80, green: 0.91, blue: 0.85)   // Pastel Mint Green
+            LightMesh.rgb(0.66, 0.86, 0.86),  // Soft Sky Blue
+            LightMesh.rgb(0.94, 0.76, 0.62),   // Warm Peach (softer peak)
+            LightMesh.rgb(0.80, 0.91, 0.85),  // Pastel Mint Green
+            LightMesh.rgb(0.82, 0.78, 0.88),   // faint lavender haze
+            LightMesh.rgb(0.84, 0.76, 0.88),  // Muted Lavender
+            LightMesh.rgb(0.80, 0.84, 0.90),   // faint sky–lavender
+            LightMesh.rgb(0.66, 0.86, 0.86),  // Soft Sky Blue
+            LightMesh.rgb(0.94, 0.76, 0.62),   // Warm Peach
+            LightMesh.rgb(0.80, 0.91, 0.85)   // Pastel Mint Green
         ]
     }
 
@@ -335,15 +344,15 @@ struct GradientBackgrounds {
     
     private var lightBurningColors: [Color] {
         [
-            Color(red: 1.0, green: 0.55, blue: 0.0),   // Fiery Orange
-            Color(red: 1.0, green: 0.27, blue: 0.0),   // Intense Red
-            Color(red: 1.0, green: 0.75, blue: 0.2),   // Bright Gold
-            Color(.systemBackground),
-            Color(red: 0.96, green: 0.43, blue: 0.26), // Ember Coral
-            Color(.systemBackground),
-            Color(red: 1.0, green: 0.55, blue: 0.0),   // Fiery Orange
-            Color(red: 1.0, green: 0.27, blue: 0.0),   // Intense Red
-            Color(red: 1.0, green: 0.75, blue: 0.2)    // Bright Gold
+            LightMesh.rgb(1.0, 0.55, 0.0),   // Fiery Orange
+            LightMesh.rgb(1.0, 0.27, 0.0),   // Intense Red
+            LightMesh.rgb(1.0, 0.75, 0.2),   // Bright Gold
+            LightMesh.rgb(0.92, 0.82, 0.76),   // faint ember / sand
+            LightMesh.rgb(0.96, 0.43, 0.26), // Ember Coral
+            LightMesh.rgb(0.90, 0.78, 0.72),   // faint coral wash
+            LightMesh.rgb(1.0, 0.55, 0.0),   // Fiery Orange
+            LightMesh.rgb(1.0, 0.27, 0.0),   // Intense Red
+            LightMesh.rgb(1.0, 0.75, 0.2)    // Bright Gold
         ]
     }
 
@@ -363,15 +372,15 @@ struct GradientBackgrounds {
     
     private var lightNatureColors: [Color] {
         [
-            Color(red: 0.18, green: 0.72, blue: 0.40),  // Rich Leaf Green
-            Color(red: 0.30, green: 0.85, blue: 0.65),  // Vibrant Mint Green
-            Color(red: 0.20, green: 0.68, blue: 0.78),  // Soft Ocean Teal
-            Color(.systemBackground),
-            Color(red: 0.12, green: 0.50, blue: 0.72),  // Deep Aqua Blue
-            Color(.systemBackground),
-            Color(red: 0.22, green: 0.75, blue: 0.38),  // Fresh Spinach Green
-            Color(red: 0.20, green: 0.68, blue: 0.78),  // Soft Ocean Teal
-            Color(red: 0.30, green: 0.85, blue: 0.65)   // Vibrant Mint Green
+            LightMesh.rgb(0.18, 0.72, 0.40),  // Rich Leaf Green
+            LightMesh.rgb(0.30, 0.85, 0.65),  // Vibrant Mint Green
+            LightMesh.rgb(0.20, 0.68, 0.78),  // Soft Ocean Teal
+            LightMesh.rgb(0.80, 0.90, 0.86),   // faint sage / sea glass
+            LightMesh.rgb(0.12, 0.50, 0.72),  // Deep Aqua Blue
+            LightMesh.rgb(0.78, 0.88, 0.90),   // faint teal mist
+            LightMesh.rgb(0.22, 0.75, 0.38),  // Fresh Spinach Green
+            LightMesh.rgb(0.20, 0.68, 0.78),  // Soft Ocean Teal
+            LightMesh.rgb(0.30, 0.85, 0.65)   // Vibrant Mint Green
         ]
     }
 
@@ -391,15 +400,15 @@ struct GradientBackgrounds {
 
     private var lightForestColors: [Color] {
         [
-            Color(red: 0.22, green: 0.75, blue: 0.38),  // Fresh Spinach Green
-            Color(red: 0.36, green: 0.88, blue: 0.62),  // Soft Lime Green
-            Color(red: 0.92, green: 0.72, blue: 0.28),  // Gentle Golden Yellow
-            Color(.systemBackground),
-            Color(red: 0.16, green: 0.55, blue: 0.65),  // Muted Aqua Teal
-            Color(.systemBackground),
-            Color(red: 0.36, green: 0.88, blue: 0.62),  // Soft Lime Green
-            Color(red: 0.92, green: 0.72, blue: 0.28),  // Gentle Golden Yellow
-            Color(red: 0.16, green: 0.55, blue: 0.65)   // Muted Aqua Teal
+            LightMesh.rgb(0.22, 0.75, 0.38),  // Fresh Spinach Green
+            LightMesh.rgb(0.36, 0.88, 0.62),  // Soft Lime Green
+            LightMesh.rgb(0.92, 0.72, 0.28),  // Gentle Golden Yellow
+            LightMesh.rgb(0.86, 0.90, 0.80),   // faint spring canopy
+            LightMesh.rgb(0.16, 0.55, 0.65),  // Muted Aqua Teal
+            LightMesh.rgb(0.84, 0.88, 0.82),   // faint lime–gold haze
+            LightMesh.rgb(0.36, 0.88, 0.62),  // Soft Lime Green
+            LightMesh.rgb(0.92, 0.72, 0.28),  // Gentle Golden Yellow
+            LightMesh.rgb(0.16, 0.55, 0.65)   // Muted Aqua Teal
         ]
     }
 
@@ -419,14 +428,15 @@ struct GradientBackgrounds {
 
     private var lightSleepColors: [Color] {
         [
-            Color(red: 0.25, green: 0.12, blue: 0.40),  // Deep Purple
-            Color(red: 0.15, green: 0.08, blue: 0.25),  // Very Dark Purple
-            Color(red: 0.05, green: 0.03, blue: 0.15),  // Lighter Dark Blue
-            Color(.systemBackground),
-            Color(red: 0.25, green: 0.12, blue: 0.40),  // Deep Purple
-            Color(red: 0.15, green: 0.08, blue: 0.25),  // Very Dark Purple
-            Color(red: 0.05, green: 0.03, blue: 0.15),  // Lighter Dark Blue
-            Color(.systemBackground),
+            LightMesh.rgb(0.25, 0.12, 0.40),  // Deep Purple
+            LightMesh.rgb(0.15, 0.08, 0.25),  // Very Dark Purple
+            LightMesh.rgb(0.05, 0.03, 0.15),  // Lighter Dark Blue
+            LightMesh.rgb(0.72, 0.68, 0.82),   // faint dusk violet (not paper)
+            LightMesh.rgb(0.25, 0.12, 0.40),  // Deep Purple
+            LightMesh.rgb(0.15, 0.08, 0.25),  // Very Dark Purple
+            LightMesh.rgb(0.05, 0.03, 0.15),  // Lighter Dark Blue
+            LightMesh.rgb(0.70, 0.66, 0.80),   // faint indigo veil
+            LightMesh.rgb(0.25, 0.12, 0.40),  // Deep Purple (3×3 mesh)
         ]
     }
 
@@ -449,15 +459,15 @@ struct GradientBackgrounds {
     // Light mode: softly lifted versions of the same hues.
     private var lightProgramBuilderColors: [Color] {
         [
-            Color(red: 0.96, green: 0.95, blue: 0.94),
-            Color(red: 0.98, green: 0.92, blue: 0.88),
-            Color(red: 0.90, green: 0.95, blue: 0.93),
-            Color(.systemBackground),
-            Color(red: 0.95, green: 0.93, blue: 0.92),
-            Color(.systemBackground),
-            Color(red: 0.98, green: 0.92, blue: 0.88),
-            Color(red: 0.90, green: 0.95, blue: 0.93),
-            Color(red: 0.96, green: 0.95, blue: 0.94)
+            LightMesh.rgb(0.90, 0.88, 0.86),
+            LightMesh.rgb(0.92, 0.86, 0.82),
+            LightMesh.rgb(0.84, 0.90, 0.88),
+            LightMesh.rgb(0.82, 0.80, 0.78),   // faint warm stone (wood/tea hint)
+            LightMesh.rgb(0.88, 0.86, 0.84),
+            LightMesh.rgb(0.80, 0.82, 0.80),   // faint sage stone
+            LightMesh.rgb(0.92, 0.86, 0.82),
+            LightMesh.rgb(0.84, 0.90, 0.88),
+            LightMesh.rgb(0.90, 0.88, 0.86)
         ]
     }
 
@@ -478,15 +488,15 @@ struct GradientBackgrounds {
     /// 3×3 mesh — pads to nine stops (same hues as the seven-stop palette).
     private var kineticPulseColors: [Color] {
         [
-            Color(red: 0.1, green: 0.02, blue: 0.2),  // Deep Midnight Purple
-            Color(red: 0.5, green: 0.1, blue: 0.9),   // Electric Violet
-            Color(red: 0.9, green: 0.2, blue: 0.6),   // Neon Magenta
-            Color(.systemBackground),
-            Color(red: 0.2, green: 0.6, blue: 1.0),   // Oxygen Blue
-            Color(.systemBackground),
-            Color(red: 0.5, green: 0.1, blue: 0.9),    // Electric Violet
-            Color(red: 0.9, green: 0.2, blue: 0.6),   // Neon Magenta
-            Color(red: 0.2, green: 0.6, blue: 1.0)   // Oxygen Blue
+            LightMesh.rgb(0.1, 0.02, 0.2),  // Deep Midnight Purple
+            LightMesh.rgb(0.5, 0.1, 0.9),   // Electric Violet
+            LightMesh.rgb(0.9, 0.2, 0.6),   // Neon Magenta
+            LightMesh.rgb(0.78, 0.74, 0.90),   // faint violet–magenta mist
+            LightMesh.rgb(0.2, 0.6, 1.0),   // Oxygen Blue
+            LightMesh.rgb(0.76, 0.82, 0.94),   // faint periwinkle
+            LightMesh.rgb(0.5, 0.1, 0.9),    // Electric Violet
+            LightMesh.rgb(0.9, 0.2, 0.6),   // Neon Magenta
+            LightMesh.rgb(0.2, 0.6, 1.0)   // Oxygen Blue
         ]
     }
 
@@ -506,15 +516,15 @@ struct GradientBackgrounds {
 
     private var oxygenFlowColors: [Color] {
         [
-            Color(red: 0.0, green: 0.15, blue: 0.15), // Deep Teal Abyss
-            Color(red: 0.0, green: 0.5, blue: 0.6),   // Oxidized Cyan
-            Color(red: 0.8, green: 0.1, blue: 0.2),   // Arterial Red
-            Color(.systemBackground),
-            Color(red: 0.4, green: 0.05, blue: 0.1),  // Deep Venous Maroon
-            Color(.systemBackground),
-            Color(red: 0.0, green: 0.5, blue: 0.6),    // Oxidized Cyan
-            Color(red: 0.8, green: 0.1, blue: 0.2),   // Arterial Red
-            Color(red: 0.0, green: 0.5, blue: 0.6)    // Oxidized Cyan
+            LightMesh.rgb(0.0, 0.15, 0.15), // Deep Teal Abyss
+            LightMesh.rgb(0.0, 0.5, 0.6),   // Oxidized Cyan
+            LightMesh.rgb(0.8, 0.1, 0.2),   // Arterial Red
+            LightMesh.rgb(0.76, 0.86, 0.88),   // faint teal pool
+            LightMesh.rgb(0.4, 0.05, 0.1),  // Deep Venous Maroon
+            LightMesh.rgb(0.82, 0.78, 0.80),   // faint maroon–teal haze
+            LightMesh.rgb(0.0, 0.5, 0.6),    // Oxidized Cyan
+            LightMesh.rgb(0.8, 0.1, 0.2),   // Arterial Red
+            LightMesh.rgb(0.0, 0.5, 0.6)    // Oxidized Cyan
         ]
     }
 
@@ -534,15 +544,15 @@ struct GradientBackgrounds {
 
     private var solarFlareColors: [Color] {
         [
-            Color(red: 0.05, green: 0.02, blue: 0.1), // Deep Space Indigo (Contrast)
-            Color(red: 0.95, green: 0.2, blue: 0.1),  // Hyper-Red
-            Color(red: 1.0, green: 0.7, blue: 0.0),   // Vivid Amber
-            Color(.systemBackground),
-            Color(red: 1.0, green: 0.9, blue: 0.4),   // Solar White-Gold
-            Color(.systemBackground),
-            Color(red: 0.95, green: 0.2, blue: 0.1),   // Hyper-Red
-            Color(red: 1.0, green: 0.7, blue: 0.0),   // Vivid Amber
-            Color(red: 1.0, green: 0.9, blue: 0.4)   // Solar White-Gold
+            LightMesh.rgb(0.05, 0.02, 0.1), // Deep Space Indigo (Contrast)
+            LightMesh.rgb(0.95, 0.2, 0.1),  // Hyper-Red
+            LightMesh.rgb(1.0, 0.7, 0.0),   // Vivid Amber
+            LightMesh.rgb(0.88, 0.82, 0.76),   // faint warm ash (ember)
+            LightMesh.rgb(0.88, 0.78, 0.42),   // solar gold (softer than paper-white)
+            LightMesh.rgb(0.90, 0.84, 0.78),   // faint amber cream
+            LightMesh.rgb(0.95, 0.2, 0.1),   // Hyper-Red
+            LightMesh.rgb(1.0, 0.7, 0.0),   // Vivid Amber
+            LightMesh.rgb(0.88, 0.78, 0.42)   // Solar gold
         ]
     }
 
@@ -562,15 +572,15 @@ struct GradientBackgrounds {
 
     private var lightHealingColors: [Color] {
         [
-            Color(red: 0.85, green: 0.95, blue: 0.90),  // Soft Mint
-            Color(red: 0.75, green: 0.92, blue: 0.88),  // Light Teal
-            Color(red: 0.90, green: 0.98, blue: 0.95),  // Very Light Cyan
-            Color(.systemBackground),
-            Color(red: 0.80, green: 0.94, blue: 0.92),  // Pale Blue-Green
-            Color(.systemBackground),
-            Color(red: 0.85, green: 0.95, blue: 0.90),  // Soft Mint
-            Color(red: 0.75, green: 0.92, blue: 0.88),  // Light Teal
-            Color(red: 0.90, green: 0.98, blue: 0.95)   // Very Light Cyan
+            LightMesh.rgb(0.78, 0.90, 0.86),  // Soft Mint (no chalk white)
+            LightMesh.rgb(0.70, 0.86, 0.82),  // Light Teal
+            LightMesh.rgb(0.80, 0.90, 0.88),  // muted spa cyan
+            LightMesh.rgb(0.76, 0.86, 0.84),   // faint eucalyptus haze
+            LightMesh.rgb(0.72, 0.88, 0.86),  // Pale Blue-Green
+            LightMesh.rgb(0.74, 0.84, 0.82),   // faint sea-mint veil
+            LightMesh.rgb(0.78, 0.90, 0.86),  // Soft Mint
+            LightMesh.rgb(0.70, 0.86, 0.82),  // Light Teal
+            LightMesh.rgb(0.80, 0.90, 0.88)   // muted spa cyan
         ]
     }
 

@@ -3423,3 +3423,555 @@ extension HealthKitManager {
         return fallback
     }
 }
+
+// MARK: - Heart rate recovery analysis (coach + Heart Zones)
+
+enum HRRRecoveryScenario: String, Codable, Sendable {
+    /// Abrupt stop: late peak ≈ HR at end; classic peak − HR@2m applies.
+    case staticHRR
+    /// Cooled down before end; HRR anchored on HR at workout end.
+    case activeRecovery
+    /// Session peak far from end-of-work window; sustained intensity — interpret zones, not HRR.
+    case falsePeakSustained
+    /// Low headroom vs resting or flat post-end HR—equilibrium, not “failed” recovery.
+    case steadyStateMaintained
+    /// Borderline / noisy signal; use caution.
+    case lowConfidence
+    case insufficientData
+}
+
+/// Heart-rate recovery: static vs end-anchored 2m drop, late-peak–anchored 10s sliding recovery power (v4).
+struct HeartRateRecoveryResult: Codable, Equatable, Sendable {
+    /// Detected end of the final high-intensity segment, used as the recovery anchor when available.
+    var endOfEffortDate: Date?
+    /// Latest time at max HR within the final 30s before workout end.
+    var effectivePeakDate: Date?
+    var recoveryStartDate: Date?
+    var recoveryWindowEnd: Date?
+    /// Max HR in [end−30s, end] (drop-off peak near stop).
+    var windowedPeakBpm: Double
+    var sessionPeakBpm: Double
+    /// HR at workout end (sample closest to `endDate`).
+    var hrAtWorkoutEndBpm: Double?
+    var hrAtStopBpm: Double?
+    var hrAt60sBpm: Double?
+    var hrAt120sBpm: Double?
+    /// Signed: anchor − HR @ 60s after **workout end** (positive = HR fell).
+    var dropBpm1m: Double?
+    /// Signed: anchor − HR @ 120s after **workout end** (positive = HR fell; primary HRR).
+    var dropBpm2m: Double?
+    /// True → anchor = late peak; false → anchor = HR at end (active cooldown).
+    var isStaticRecovery: Bool
+    /// Steepest mean drop rate (bpm/s) over ~10s in [latePeak, latePeak+5m]; positive magnitude.
+    var recoveryPowerBpmPerSec: Double?
+    /// End time of the segment that defined `recoveryPowerBpmPerSec` (second endpoint of the 8–12s window).
+    var derivativeSteepestDropDate: Date?
+    /// Resting HR supplied to analysis (nil if not passed).
+    var restingHRUsed: Double?
+    /// `windowedPeakBpm − resting` when resting was provided.
+    var headroomBpm: Double?
+    /// When true, omit 1m/2m deltas from primary UI (late peak within 30 bpm of resting).
+    var excludeTwoMinuteFromPrimaryMetrics: Bool
+    /// Merged-series window used for recovery power (late-peak anchor).
+    var recoveryPowerWindowStart: Date?
+    var recoveryPowerWindowEnd: Date?
+    /// First post–workout-end time HR ≤ anchor − 20 bpm (seconds after `end`); capped search window.
+    var secondsToDrop20Bpm: Double?
+    /// `dropBpm1m / headroomBpm` when headroom ≥ 5 and primary 2m metrics are shown.
+    var recoveryIndex60s: Double?
+    /// `dropBpm2m / headroomBpm` when headroom is available.
+    var recoveryIndex120s: Double?
+    /// Exponential-decay recovery constant from the fitted post-stop curve; larger = faster recovery.
+    var recoveryRateConstantK: Double?
+    var scenario: HRRRecoveryScenario
+    var confidence: Double
+    var debugNotes: String
+}
+
+enum HeartRateRecoveryAnalysis {
+    /// Bump invalidates UserDefaults cache entries keyed with prior version.
+    static let algorithmVersion = 5
+
+    static func mergedSamples(analytics: WorkoutAnalytics) -> [(Date, Double)] {
+        var combined = analytics.heartRates + analytics.postWorkoutHRSeries
+        combined.sort { $0.0 < $1.0 }
+        var out: [(Date, Double)] = []
+        for (d, v) in combined where v > 30 && v < 250 {
+            if let last = out.last, abs(last.0.timeIntervalSince(d)) < 0.01 {
+                out[out.count - 1] = (d, v)
+            } else {
+                out.append((d, v))
+            }
+        }
+        return out
+    }
+
+    private static func rollingAverageSamples(
+        _ samples: [(Date, Double)],
+        windowSeconds: TimeInterval
+    ) -> [(Date, Double)] {
+        guard !samples.isEmpty else { return [] }
+        let radius = windowSeconds / 2
+        return samples.map { sample in
+            let neighbors = samples.filter { abs($0.0.timeIntervalSince(sample.0)) <= radius }
+            let avg = neighbors.map(\.1).reduce(0, +) / Double(neighbors.count)
+            return (sample.0, avg)
+        }
+    }
+
+    private static func averageHR(
+        near target: Date,
+        in samples: [(Date, Double)],
+        windowSeconds: TimeInterval
+    ) -> Double? {
+        let radius = windowSeconds / 2
+        let window = samples.filter { abs($0.0.timeIntervalSince(target)) <= radius }
+        guard !window.isEmpty else { return nil }
+        return window.map(\.1).reduce(0, +) / Double(window.count)
+    }
+
+    private static func detectEndOfEffort(
+        inWorkout: [(Date, Double)],
+        workout: HKWorkout
+    ) -> Date? {
+        guard let last = inWorkout.last else { return nil }
+        let searchStart = max(workout.startDate, workout.endDate.addingTimeInterval(-180))
+        let recent = inWorkout.filter { $0.0 >= searchStart && $0.0 <= last.0 }
+        guard recent.count >= 3 else { return nil }
+
+        let recentPeak = recent.map(\.1).max() ?? 0
+        guard recentPeak > 0 else { return nil }
+        let sorted = recent.map(\.1).sorted()
+        let percentile80 = sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.8))]
+        let threshold = max(recentPeak - 6, percentile80)
+        let candidates = recent.filter { $0.1 >= threshold }
+        guard let candidate = candidates.last?.0 else { return nil }
+        return min(candidate, workout.endDate)
+    }
+
+    private static func isHeavyMovement(
+        around target: Date,
+        analytics: WorkoutAnalytics
+    ) -> Bool {
+        let speedWindow = analytics.speedSeries.filter { abs($0.0.timeIntervalSince(target)) <= 15 }
+        let cadenceWindow = analytics.cadenceSeries.filter { abs($0.0.timeIntervalSince(target)) <= 15 }
+        let avgSpeed = speedWindow.isEmpty ? nil : speedWindow.map(\.1).reduce(0, +) / Double(speedWindow.count)
+        let avgCadence = cadenceWindow.isEmpty ? nil : cadenceWindow.map(\.1).reduce(0, +) / Double(cadenceWindow.count)
+
+        switch analytics.workout.workoutActivityType {
+        case .running:
+            return (avgSpeed ?? 0) > 2.5 || (avgCadence ?? 0) > 130
+        case .walking, .hiking:
+            return (avgSpeed ?? 0) > 1.9 || (avgCadence ?? 0) > 120
+        case .cycling:
+            return (avgSpeed ?? 0) > 6.0 || (avgCadence ?? 0) > 65
+        default:
+            return (avgSpeed ?? 0) > 2.2 || (avgCadence ?? 0) > 125
+        }
+    }
+
+    private static func fitRecoveryRateConstant(
+        anchorHR: Double,
+        anchorDate: Date,
+        asymptoteHR: Double,
+        samples: [(Date, Double)]
+    ) -> Double? {
+        let eligible = samples.compactMap { sample -> (Double, Double)? in
+            let dt = sample.0.timeIntervalSince(anchorDate)
+            guard dt >= 0, dt <= 300 else { return nil }
+            let excess = sample.1 - asymptoteHR
+            guard excess > 1, anchorHR > asymptoteHR + 1 else { return nil }
+            let normalized = excess / (anchorHR - asymptoteHR)
+            guard normalized > 0, normalized < 1 else { return nil }
+            return (dt, log(normalized))
+        }
+        guard eligible.count >= 3 else { return nil }
+
+        let n = Double(eligible.count)
+        let sumX = eligible.map(\.0).reduce(0, +)
+        let sumY = eligible.map(\.1).reduce(0, +)
+        let sumXY = eligible.reduce(0) { $0 + ($1.0 * $1.1) }
+        let sumXX = eligible.reduce(0) { $0 + ($1.0 * $1.0) }
+        let denom = (n * sumXX) - (sumX * sumX)
+        guard abs(denom) > 0.0001 else { return nil }
+        let slope = ((n * sumXY) - (sumX * sumY)) / denom
+        guard slope < 0 else { return nil }
+        return -slope
+    }
+
+    /// Steepest mean downward slope (positive bpm/s) using pairs with Δt in [8, 12]s inside `[windowStart, windowEnd]`.
+    private static func recoveryPowerSliding10s(
+        samples: [(Date, Double)],
+        windowStart: Date,
+        windowEnd: Date
+    ) -> (bpmPerSec: Double, segmentEnd: Date)? {
+        let win = samples.filter { $0.0 >= windowStart && $0.0 <= windowEnd }
+        guard win.count >= 2 else { return nil }
+        var bestDropRate = 0.0
+        var bestEnd: Date?
+        for i in win.indices {
+            for j in win.indices where j > i {
+                let (t1, h1) = win[i]
+                let (t2, h2) = win[j]
+                let dt = t2.timeIntervalSince(t1)
+                guard dt >= 8, dt <= 12 else { continue }
+                let slope = (h2 - h1) / dt
+                guard slope < 0 else { continue }
+                let dropRate = -slope
+                if dropRate > bestDropRate {
+                    bestDropRate = dropRate
+                    bestEnd = t2
+                }
+            }
+        }
+        guard bestDropRate > 0, let bestEnd else { return nil }
+        return (bestDropRate, bestEnd)
+    }
+
+    static func analyze(workout: HKWorkout, analytics: WorkoutAnalytics, restingHRBpm: Double? = nil) -> HeartRateRecoveryResult {
+        let start = workout.startDate
+        let end = workout.endDate
+        let samples = mergedSamples(analytics: analytics)
+        // Strictly at or before official end — never treat post-workout HR as “in workout” (avoids peak dot after end).
+        let inWorkout = samples.filter { $0.0 >= start && $0.0 <= end }
+        // Prefer strictly post-end; fall back to ≥ end if HK only tags samples on the boundary.
+        let postStrict = samples.filter { $0.0 > end }
+        let postAfterEnd = postStrict.isEmpty ? samples.filter { $0.0 >= end } : postStrict
+
+        guard inWorkout.count >= 3 else {
+            return HeartRateRecoveryResult(
+                endOfEffortDate: nil,
+                effectivePeakDate: nil,
+                recoveryStartDate: nil,
+                recoveryWindowEnd: nil,
+                windowedPeakBpm: 0,
+                sessionPeakBpm: 0,
+                hrAtWorkoutEndBpm: nil,
+                hrAtStopBpm: nil,
+                hrAt60sBpm: nil,
+                hrAt120sBpm: nil,
+                dropBpm1m: nil,
+                dropBpm2m: nil,
+                isStaticRecovery: true,
+                recoveryPowerBpmPerSec: nil,
+                derivativeSteepestDropDate: nil,
+                restingHRUsed: restingHRBpm,
+                headroomBpm: nil,
+                excludeTwoMinuteFromPrimaryMetrics: false,
+                recoveryPowerWindowStart: nil,
+                recoveryPowerWindowEnd: nil,
+                secondsToDrop20Bpm: nil,
+                recoveryIndex60s: nil,
+                recoveryIndex120s: nil,
+                recoveryRateConstantK: nil,
+                scenario: .insufficientData,
+                confidence: 0,
+                debugNotes: "Too few in-workout HR samples."
+            )
+        }
+
+        let smoothedInWorkout = rollingAverageSamples(inWorkout, windowSeconds: 10)
+        let smoothedMerged = rollingAverageSamples(samples, windowSeconds: 10)
+        let endOfEffort = detectEndOfEffort(inWorkout: smoothedInWorkout, workout: workout) ?? end
+
+        let sessionPeak = smoothedInWorkout.map(\.1).max() ?? 0
+        let sessionPeakTime = smoothedInWorkout.max(by: { $0.1 < $1.1 })?.0
+
+        let peakWindowStart = max(start, endOfEffort.addingTimeInterval(-60))
+        let peakWindow = smoothedInWorkout.filter { $0.0 >= peakWindowStart && $0.0 <= endOfEffort }
+        let recentPeakBpm: Double
+        let recentPeakTimeRaw: Date?
+        if peakWindow.isEmpty {
+            recentPeakBpm = smoothedInWorkout.map(\.1).max() ?? 0
+            recentPeakTimeRaw = smoothedInWorkout.max(by: { $0.1 < $1.1 })?.0
+        } else {
+            let m = peakWindow.map(\.1).max() ?? 0
+            recentPeakBpm = m
+            let atMax = peakWindow.filter { abs($0.1 - m) < 0.51 }
+            recentPeakTimeRaw = atMax.map(\.0).max()
+        }
+        let recentPeakTime = recentPeakTimeRaw.map { min($0, endOfEffort) }
+
+        let hrAtEnd = averageHR(near: end, in: smoothedMerged, windowSeconds: 10)
+            ?? sampleClosest(to: end, in: smoothedInWorkout)?.1
+            ?? smoothedInWorkout.last?.1
+            ?? recentPeakBpm
+        let hrAtStop = averageHR(near: endOfEffort, in: smoothedMerged, windowSeconds: 10)
+            ?? sampleClosest(to: endOfEffort, in: smoothedInWorkout)?.1
+            ?? recentPeakBpm
+
+        let peakMinusEnd = recentPeakBpm - hrAtStop
+        let absTol = max(6.0, recentPeakBpm * 0.04)
+        let activeTol = max(10.0, recentPeakBpm * 0.07)
+        let isStatic = peakMinusEnd <= absTol
+        let isActiveCooldown = peakMinusEnd >= activeTol
+
+        let anchorHR: Double
+        let isStaticRecovery: Bool
+        if isStatic {
+            anchorHR = recentPeakBpm
+            isStaticRecovery = true
+        } else if isActiveCooldown {
+            anchorHR = hrAtStop
+            isStaticRecovery = false
+        } else {
+            anchorHR = peakMinusEnd > absTol * 0.65 ? hrAtStop : recentPeakBpm
+            isStaticRecovery = peakMinusEnd <= absTol * 1.25
+        }
+
+        let t1m = endOfEffort.addingTimeInterval(60)
+        let t2m = endOfEffort.addingTimeInterval(120)
+        let hr60 = isHeavyMovement(around: t1m, analytics: analytics)
+            ? nil
+            : averageHR(near: t1m, in: smoothedMerged, windowSeconds: 10)
+        let hr120 = isHeavyMovement(around: t2m, analytics: analytics)
+            ? nil
+            : averageHR(near: t2m, in: smoothedMerged, windowSeconds: 10)
+        let drop1Raw = hr60.map { anchorHR - $0 }
+        let drop2Raw = hr120.map { anchorHR - $0 }
+
+        let headroom: Double? = restingHRBpm.map { recentPeakBpm - $0 }
+        let exclude2m = headroom.map { $0 < 30 } ?? false
+        let drop1 = exclude2m ? nil : drop1Raw
+        let drop2 = exclude2m ? nil : drop2Raw
+        let recoveryIndex120: Double? = {
+            guard let h = headroom, h >= 5, let d2 = drop2Raw else { return nil }
+            return d2 / h
+        }()
+
+        let t0Power = recentPeakTime ?? endOfEffort
+        let powerWindowStart = max(start, t0Power)
+        let powerWindowEnd = t0Power.addingTimeInterval(300)
+        let powerPair = recoveryPowerSliding10s(samples: smoothedMerged, windowStart: powerWindowStart, windowEnd: powerWindowEnd)
+        let recoveryPower = powerPair?.bpmPerSec
+        let derivativeEnd = powerPair?.segmentEnd
+
+        let searchUntil = endOfEffort.addingTimeInterval(600)
+        let secondsToDrop20: Double? = {
+            let threshold = anchorHR - 20
+            let post = smoothedMerged.filter { $0.0 > endOfEffort && $0.0 <= searchUntil }.sorted { $0.0 < $1.0 }
+            for (t, hr) in post where hr <= threshold {
+                return t.timeIntervalSince(endOfEffort)
+            }
+            return nil
+        }()
+
+        let recoveryIndex: Double? = {
+            guard !exclude2m, let h = headroom, h >= 5, let d1 = drop1Raw else { return nil }
+            return d1 / h
+        }()
+
+        let asymptoteHR = restingHRBpm ?? smoothedMerged
+            .filter { $0.0 >= endOfEffort.addingTimeInterval(120) && $0.0 <= endOfEffort.addingTimeInterval(300) }
+            .map(\.1)
+            .min()
+            ?? min(hr120 ?? anchorHR, anchorHR)
+        let recoveryK = fitRecoveryRateConstant(
+            anchorHR: anchorHR,
+            anchorDate: endOfEffort,
+            asymptoteHR: asymptoteHR,
+            samples: smoothedMerged
+        )
+
+        // UI band: workout end → ~2.5 min after (1m/2m sample semantics).
+        let recoveryStart = endOfEffort
+        let recoveryWindowEnd = endOfEffort.addingTimeInterval(150)
+
+        var scenario: HRRRecoveryScenario = .lowConfidence
+        var confidence = 0.5
+        var notes = String(format: "%@ HRR anchor %.0f bpm (%@). End of effort %@. Smoothed peak in final 60s before stop %.0f bpm; HR @ stop %.0f bpm; HR @ workout end %.0f bpm.",
+                           isStaticRecovery ? "Static" : "Active",
+                           anchorHR,
+                           isStaticRecovery ? "peak−HR@2m post-stop" : "stop-HR−HR@2m post-stop",
+                           endOfEffort.formatted(date: .omitted, time: .standard),
+                           recentPeakBpm,
+                           hrAtStop,
+                           hrAtEnd)
+        if let rhr = restingHRBpm {
+            notes += String(format: " Resting HR (for headroom): %.0f bpm; headroom %.0f bpm.", rhr, recentPeakBpm - rhr)
+        }
+        if hr60 == nil || hr120 == nil {
+            notes += " One or more recovery checkpoints were dropped because the athlete still appeared to be moving heavily or the HR window was too sparse."
+        }
+        if exclude2m {
+            notes += " Primary 1m/2m HRR deltas omitted (late peak within 30 bpm of resting—noisy)."
+        }
+        if let rp = recoveryPower {
+            notes += String(format: " Recovery power (10s max slope in 5m after late peak): %.2f bpm/s.", rp)
+        }
+        if let tt = secondsToDrop20 {
+            notes += String(format: " Time to drop 20 bpm post-end: %.0f s.", tt)
+        }
+        if let ri = recoveryIndex {
+            notes += String(format: " Recovery index (60s drop / headroom): %.0f%%.", ri * 100)
+        }
+        if let ri120 = recoveryIndex120 {
+            notes += String(format: " Normalized 2m HRR: %.0f%% of headroom.", ri120 * 100)
+        }
+        if let k = recoveryK {
+            notes += String(format: " Decay-fit k: %.4f s^-1.", k)
+        }
+        if let d2r = drop2Raw {
+            notes += String(format: " Signed 2m drop (internal): %.0f (positive = HR fell).", d2r)
+        }
+
+        let falsePeak = sessionPeakTime.map { st in
+            st < end.addingTimeInterval(-90) && recentPeakBpm < sessionPeak - 12 && sessionPeak > 80
+        } ?? false
+
+        let d2ForRules = drop2Raw
+        let staticThreshold: Double = (headroom.map { $0 >= 30 } ?? false) ? 7 : 8
+
+        if falsePeak && (d2ForRules ?? 0) < 6 {
+            scenario = .falsePeakSustained
+            confidence = 0.28
+            notes += " Session peak far from end window—HRR may misrepresent effort."
+        } else if exclude2m {
+            scenario = .steadyStateMaintained
+            confidence = 0.5
+        } else if let h = headroom, h < 50, let d2r = d2ForRules, abs(d2r) <= 4 {
+            scenario = .steadyStateMaintained
+            confidence = 0.48
+        } else if isStaticRecovery, let d2r = d2ForRules, d2r >= staticThreshold {
+            scenario = .staticHRR
+            confidence = min(0.92, 0.55 + d2r / 80.0)
+        } else if !isStaticRecovery, let d2r = d2ForRules, d2r >= 5 {
+            scenario = .activeRecovery
+            confidence = 0.52 + min(0.25, d2r / 100.0)
+        } else if let d2r = d2ForRules, d2r < 0 {
+            let lowHead = headroom.map { $0 < 50 } ?? false
+            if lowHead {
+                scenario = .steadyStateMaintained
+                confidence = 0.46
+                notes += " Near-flat 2m change with limited headroom vs resting—treat as steady state, not pathology."
+            } else {
+                scenario = .lowConfidence
+                confidence = 0.35
+                notes += " HR rose after end—no clear recovery drop."
+            }
+        } else {
+            scenario = .lowConfidence
+            confidence = 0.4
+        }
+
+        return HeartRateRecoveryResult(
+            endOfEffortDate: endOfEffort,
+            effectivePeakDate: recentPeakTime,
+            recoveryStartDate: recoveryStart,
+            recoveryWindowEnd: recoveryWindowEnd,
+            windowedPeakBpm: recentPeakBpm,
+            sessionPeakBpm: sessionPeak,
+            hrAtWorkoutEndBpm: hrAtEnd,
+            hrAtStopBpm: hrAtStop,
+            hrAt60sBpm: hr60,
+            hrAt120sBpm: hr120,
+            dropBpm1m: drop1,
+            dropBpm2m: drop2,
+            isStaticRecovery: isStaticRecovery,
+            recoveryPowerBpmPerSec: recoveryPower,
+            derivativeSteepestDropDate: derivativeEnd,
+            restingHRUsed: restingHRBpm,
+            headroomBpm: headroom,
+            excludeTwoMinuteFromPrimaryMetrics: exclude2m,
+            recoveryPowerWindowStart: powerWindowStart,
+            recoveryPowerWindowEnd: powerWindowEnd,
+            secondsToDrop20Bpm: secondsToDrop20,
+            recoveryIndex60s: recoveryIndex,
+            recoveryIndex120s: recoveryIndex120,
+            recoveryRateConstantK: recoveryK,
+            scenario: scenario,
+            confidence: confidence,
+            debugNotes: notes
+        )
+    }
+
+    private static func sampleClosest(to target: Date, in series: [(Date, Double)]) -> (Date, Double)? {
+        guard !series.isEmpty else { return nil }
+        return series.min(by: { abs($0.0.timeIntervalSince(target)) < abs($1.0.timeIntervalSince(target)) })
+    }
+
+    /// Prefer signed **2m** drop when it indicates real recovery (positive); omit false-peak garbage and headroom-gated rows.
+    static func coachPreferredDropBpm(result: HeartRateRecoveryResult) -> Double? {
+        guard result.scenario != .insufficientData else { return nil }
+        guard result.scenario != .falsePeakSustained else { return nil }
+        guard result.scenario != .steadyStateMaintained else { return nil }
+        guard !result.excludeTwoMinuteFromPrimaryMetrics else { return nil }
+        guard let d2 = result.dropBpm2m, d2 > 0, d2 < 100 else { return nil }
+        guard result.confidence >= 0.35 else { return nil }
+        return d2
+    }
+
+    /// Daily chart/trend-safe HRR value. Keeps the graph on refined 2m drop values only.
+    static func trendPreferredDropBpm(result: HeartRateRecoveryResult) -> Double? {
+        if let preferred = coachPreferredDropBpm(result: result) {
+            return preferred
+        }
+        guard result.scenario != .insufficientData else { return nil }
+        guard result.scenario != .falsePeakSustained else { return nil }
+        guard result.scenario != .steadyStateMaintained else { return nil }
+        guard !result.excludeTwoMinuteFromPrimaryMetrics else { return nil }
+        guard let d2 = result.dropBpm2m, d2 > 0, d2 < 100 else { return nil }
+        return d2
+    }
+
+    /// When 2m delta is omitted, coarse scalar for trends (not a literal bpm drop).
+    static func coachComparableRecoveryScore(result: HeartRateRecoveryResult) -> Double? {
+        if let d = coachPreferredDropBpm(result: result) { return d }
+        guard result.scenario != .insufficientData, result.scenario != .falsePeakSustained else { return nil }
+        if let p = result.recoveryPowerBpmPerSec, p > 0 {
+            return min(95, p * 45)
+        }
+        return nil
+    }
+}
+
+/// Latest resting HR for HRR headroom (coach + Heart Zones agree on the same value).
+final class CoachHRRRestingGate: @unchecked Sendable {
+    static let shared = CoachHRRRestingGate()
+    private let lock = NSLock()
+    private var resting = 60.0
+    func update(_ value: Double) {
+        lock.lock()
+        resting = value
+        lock.unlock()
+    }
+    func current() -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return resting
+    }
+}
+
+final class HRRAnalysisCache: @unchecked Sendable {
+    static let shared = HRRAnalysisCache()
+    private let defaults = UserDefaults.standard
+    private let prefix = "nutrivance.hrr.v\(HeartRateRecoveryAnalysis.algorithmVersion)."
+    private var memory: [UUID: HeartRateRecoveryResult] = [:]
+    private let lock = NSLock()
+
+    func result(for workoutUUID: UUID) -> HeartRateRecoveryResult? {
+        lock.lock()
+        if let m = memory[workoutUUID] {
+            lock.unlock()
+            return m
+        }
+        lock.unlock()
+        guard let data = defaults.data(forKey: prefix + workoutUUID.uuidString),
+              let decoded = try? JSONDecoder().decode(HeartRateRecoveryResult.self, from: data) else {
+            return nil
+        }
+        lock.lock()
+        memory[workoutUUID] = decoded
+        lock.unlock()
+        return decoded
+    }
+
+    func store(_ result: HeartRateRecoveryResult, workoutUUID: UUID) {
+        lock.lock()
+        memory[workoutUUID] = result
+        lock.unlock()
+        if let data = try? JSONEncoder().encode(result) {
+            defaults.set(data, forKey: prefix + workoutUUID.uuidString)
+        }
+    }
+}

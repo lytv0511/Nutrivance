@@ -256,7 +256,7 @@ struct WorkoutHistoryView: View {
                                                     if expandedWorkoutIDs.contains(workoutID) {
                                                         expandedWorkoutIDs.remove(workoutID)
                                                     } else {
-                                                        expandedWorkoutIDs.insert(workoutID)
+                                                        expandedWorkoutIDs = [workoutID]
                                                     }
                                                 }
                                                 let impact = UIImpactFeedbackGenerator(style: .medium)
@@ -823,6 +823,7 @@ struct WorkoutDetailView: View {
     @State private var hasResolvedZoneProfile = false
     @State private var localSelectedScrubbedDate: Date? = nil
     @State private var showMapDetail = false
+    @State private var showExpandedMap = false
 
     private var activeDuration: TimeInterval {
         analytics.workout.duration
@@ -830,6 +831,10 @@ struct WorkoutDetailView: View {
 
     private var selectedScrubbedDate: Date? {
         scrubbedDate?.wrappedValue ?? localSelectedScrubbedDate
+    }
+
+    private var usesLinkedChartScrubbing: Bool {
+        scrubbedDate != nil
     }
 
     private func updateSelectedScrubbedDate(_ date: Date?) {
@@ -1077,29 +1082,33 @@ struct WorkoutDetailView: View {
         geometry: GeometryProxy,
         data: [(Date, Double)]
     ) -> some View {
-        HorizontalChartScrubOverlay(
-            onChanged: { location in
-                updateSelection(
-                    from: location,
-                    proxy: proxy,
-                    geometry: geometry,
-                    data: data
-                )
-            }
-        )
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let location):
+        if usesLinkedChartScrubbing {
+            HorizontalChartScrubOverlay(
+                onChanged: { location in
                     updateSelection(
                         from: location,
                         proxy: proxy,
                         geometry: geometry,
                         data: data
                     )
-                case .ended:
-                    break
                 }
-            }
+            )
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        updateSelection(
+                            from: location,
+                            proxy: proxy,
+                            geometry: geometry,
+                            data: data
+                        )
+                    case .ended:
+                        break
+                    }
+                }
+        } else {
+            Color.clear.allowsHitTesting(false)
+        }
     }
 
     @ChartContentBuilder
@@ -1309,7 +1318,8 @@ struct WorkoutDetailView: View {
                     segments: coloredSegments,
                     startCoordinate: routeLocations.first?.coordinate,
                     endCoordinate: routeLocations.last?.coordinate,
-                    highlightedCoordinate: selectedRouteLocation?.coordinate
+                    highlightedCoordinate: selectedRouteLocation?.coordinate,
+                    isInteractive: false
                 )
                     .frame(height: 300)
                     .cornerRadius(16)
@@ -1335,26 +1345,49 @@ struct WorkoutDetailView: View {
                 }
 
                 if allowsMapExpansion {
-                    Button {
-                        showMapDetail = true
-                    } label: {
-                        HStack {
-                            Text("View More")
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    VStack(spacing: 10) {
+                        Button {
+                            showMapDetail = true
+                        } label: {
+                            HStack {
+                                Text("View Details")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Image(systemName: "slider.horizontal.3")
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.orange.opacity(0.15))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+                            )
+                            .cornerRadius(12)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .frame(maxWidth: .infinity)
-                        .background(Color.orange.opacity(0.15))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.orange.opacity(0.28), lineWidth: 1)
-                        )
-                        .cornerRadius(12)
+                        .buttonStyle(.plain)
+
+                        Button {
+                            showExpandedMap = true
+                        } label: {
+                            HStack {
+                                Text("Open Map")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.blue.opacity(0.12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.blue.opacity(0.22), lineWidth: 1)
+                            )
+                            .cornerRadius(12)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
 
@@ -2192,6 +2225,14 @@ struct WorkoutDetailView: View {
                 hrZoneSettings: hrZoneSettings
             )
         }
+        .fullScreenCover(isPresented: $showExpandedMap) {
+            RouteMapFullscreenView(
+                segments: coloredSegments,
+                startCoordinate: routeLocations.first?.coordinate,
+                endCoordinate: routeLocations.last?.coordinate,
+                highlightedCoordinate: selectedRouteLocation?.coordinate
+            )
+        }
     }
 
     private func loadHistoricalZoneProfile() async {
@@ -2405,7 +2446,7 @@ private struct VerticalResizeHandleOverlay: UIViewRepresentable {
     }
 }
 
-private struct MapDetailView: View {
+struct MapDetailView: View {
     let analytics: WorkoutAnalytics
     let hrZoneSettings: HRZoneUserSettings
     @Environment(\.dismiss) private var dismiss
@@ -2414,7 +2455,6 @@ private struct MapDetailView: View {
     @State private var routeLookupLocations: [CLLocation] = []
     @State private var coloredSegments: [ColoredRouteSegment] = []
     @State private var isLoadingRoute = false
-    @State private var showExpandedMap = false
     @State private var preferredMapSectionHeight: CGFloat = 374
     @State private var liveMapSectionDragTranslation: CGFloat = 0
 
@@ -2491,14 +2531,6 @@ private struct MapDetailView: View {
                 liveMapSectionDragTranslation = 0
                 await loadRoute()
             }
-            .fullScreenCover(isPresented: $showExpandedMap) {
-                RouteMapFullscreenView(
-                    segments: coloredSegments,
-                    startCoordinate: routeLocations.first?.coordinate,
-                    endCoordinate: routeLocations.last?.coordinate,
-                    highlightedCoordinate: selectedRouteLocation?.coordinate
-                )
-            }
         }
     }
 
@@ -2547,50 +2579,31 @@ private struct MapDetailView: View {
     @ViewBuilder
     private var pinnedMapSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button {
-                showExpandedMap = true
-            } label: {
-                ZStack {
-                    if !coloredSegments.isEmpty {
-                        RouteMapView(
-                            segments: coloredSegments,
-                            startCoordinate: routeLocations.first?.coordinate,
-                            endCoordinate: routeLocations.last?.coordinate,
-                            highlightedCoordinate: selectedRouteLocation?.coordinate,
-                            isInteractive: false
-                        )
-                    } else if isLoadingRoute {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color(.secondarySystemBackground))
-                    } else {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
-                            .overlay {
-                                Label("No route available", systemImage: "map")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                    }
-
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Label("Open Map", systemImage: "arrow.up.left.and.arrow.down.right")
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(.ultraThinMaterial, in: Capsule())
+            ZStack {
+                if !coloredSegments.isEmpty {
+                    RouteMapView(
+                        segments: coloredSegments,
+                        startCoordinate: routeLocations.first?.coordinate,
+                        endCoordinate: routeLocations.last?.coordinate,
+                        highlightedCoordinate: selectedRouteLocation?.coordinate,
+                        isInteractive: true
+                    )
+                } else if isLoadingRoute {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(.secondarySystemBackground))
+                } else {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                        .overlay {
+                            Label("No route available", systemImage: "map")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        .padding(12)
-                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .buttonStyle(.plain)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 
             if let coordinateText = selectedRouteCoordinateText {
                 HStack(spacing: 12) {

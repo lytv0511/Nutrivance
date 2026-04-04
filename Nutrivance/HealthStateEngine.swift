@@ -1004,9 +1004,20 @@ final class HealthStateEngine: ObservableObject {
     public var dailyHRRAggregates: [Date: Double] {
         var aggregates: [Date: Double] = [:]
         let calendar = Calendar.current
+        let resting = CoachHRRRestingGate.shared.current()
+        let restingKey = Int(resting.rounded())
         for (workout, analytics) in workoutAnalytics {
             let day = calendar.startOfDay(for: workout.startDate)
-            if let hrr2 = analytics.hrr2 {
+            let result: HeartRateRecoveryResult
+            if let cached = HRRAnalysisCache.shared.result(for: workout.uuid),
+               cached.restingHRUsed.map({ Int($0.rounded()) }) == Optional(restingKey) {
+                result = cached
+            } else {
+                let analyzed = HeartRateRecoveryAnalysis.analyze(workout: workout, analytics: analytics, restingHRBpm: resting)
+                HRRAnalysisCache.shared.store(analyzed, workoutUUID: workout.uuid)
+                result = analyzed
+            }
+            if let hrr2 = HeartRateRecoveryAnalysis.trendPreferredDropBpm(result: result) {
                 aggregates[day] = max(aggregates[day] ?? 0, hrr2)
             }
         }
