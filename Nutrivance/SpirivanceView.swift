@@ -45,13 +45,12 @@ struct SpirivanceView: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     var filteredItems: [String] {
-           let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Resources",
-                                 "Meditation", "Breathing", "Sleep", "Stress"]
-        
+        let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress"]
+
         if searchState.searchText.isEmpty {
             return mentalHealthItems
         }
-        
+
         return mentalHealthItems.filter { item in
             let lowercasedItem = item.lowercased()
             if let keywords = searchKeywords[lowercasedItem] {
@@ -111,96 +110,18 @@ struct SpirivanceView: View {
                             ForEach(filteredItems, id: \.self) { item in
                                 NavigationLink(tag: item, selection: $selectedItem) {
                                     switch item {
-                                    case "Home":
-                                        HomeView()
-                                    case "Insights":
-                                        HealthInsightsView()
-                                    case "Labels":
-                                        NutritionScannerView()
-                                    case "Log":
-                                        LogView()
-                                    case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                        NutrientDetailView(nutrientName: item)
-                                    case "Dashboard":
-                                        DashboardView()
-                                    case "Today's Plan":
-                                        TodaysPlanView(planType: .all)
-                                    case "Workout History":
-                                        WorkoutHistoryView()
-                                    case "Training Calendar":
-                                        TrainingCalendarView()
-                                    case "Coach":
-                                        CoachView()
-                                    case "Movement Analysis":
-                                        MovementAnalysisView()
-                                    case "Exercise Library":
-                                        ExerciseLibraryView()
-                                    case "Program Builder":
-                                        ProgramBuilderView()
-                                    case "Workout Generator":
-                                        WorkoutGeneratorView()
-                                    case "Recovery Score":
-                                        RecoveryScoreView()
-                                    case "Sleep Analysis":
-                                        SleepAnalysisView()
-                                    case "Mobility Test":
-                                        MobilityTestView()
-                                    case "Readiness Check":
-                                        ReadinessCheckView()
-                                    case "Strain vs Recovery":
-                                        StrainRecoveryView()
-                                    case "Activity Rings":
-                                        ActivityRingsView()
-                                    case "Heart Zones":
-                                        HeartZonesView()
-                                    case "Step Count":
-                                        StepCountView()
-                                    case "Distance":
-                                        DistanceView()
-                                    case "Calories Burned":
-                                        CaloriesBurnedView()
-                                    case "Past Quests":
-                                        PastQuestsView()
-                                    case "Pre-Workout Timing":
-                                        PreWorkoutTimingView()
-                                    case "Post-Workout Window":
-                                        PostWorkoutWindowView()
-                                    case "Performance Foods":
-                                        PerformanceFoodsView()
-                                    case "Hydration Status":
-                                        HydrationStatusView()
-                                    case "Macro Balance":
-                                        MacroBalanceView()
-                                    case "Live Challenges":
-                                        LiveChallengesView()
-                                    case "Friend Activity":
-                                        FriendActivityView()
-                                    case "Achievements":
-                                        AchievementsView()
-                                    case "Share Workouts":
-                                        ShareWorkoutsView()
-                                    case "Leaderboards":
-                                        LeaderboardsView()
-                                    case "Fuel Check":
-                                        FuelCheckView()
                                     case "Mindfulness Realm":
                                         MindfulnessRealmView()
                                     case "Mood Tracker":
                                         MoodTrackerView()
                                     case "Journal":
                                         JournalView()
-                                    case "Resources":
-                                        ResourcesView()
-                                    case "Meditation":
-                                        MeditationView()
-                                    case "Breathing":
-                                        BreathingView()
                                     case "Sleep":
                                         SleepView()
                                     case "Stress":
                                         StressView()
                                     default:
-                                        HomeView()
+                                        EmptyView()
                                     }
                                 } label: {
                                     VStack {

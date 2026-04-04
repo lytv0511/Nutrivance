@@ -286,12 +286,25 @@ struct PastQuestsView: View {
         Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: anchorDate)) ?? anchorDate
     }
 
+    /// Single pass over quest records for the selected sport and date window; cards read by O(1) key instead of filtering each time.
+    private var indexedQuestRecordsInPeriod: [String: [StageQuestRecord]] {
+        Dictionary(
+            grouping: store.records.filter { record in
+                record.workoutID == selectedWorkoutID
+                    && record.completedAt >= periodStart
+                    && record.completedAt < periodEnd
+            },
+            by: { "\($0.goal.rawValue)|\($0.role.rawValue)" }
+        )
+    }
+
     var body: some View {
         ZStack {
             MovingProgramBuilderBackground()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                let questIndex = indexedQuestRecordsInPeriod
+                LazyVStack(alignment: .leading, spacing: 16) {
                     Menu {
                         ForEach(availableWorkouts, id: \.self) { workout in
                             Button(workout.capitalized) { selectedWorkoutID = workout }
@@ -317,7 +330,7 @@ struct PastQuestsView: View {
                                         workoutID: selectedWorkoutID,
                                         goal: goal,
                                         role: role,
-                                        records: filteredRecords(workoutID: selectedWorkoutID, goal: goal, role: role)
+                                        records: questRecordsForCard(in: questIndex, goal: goal, role: role)
                                     )
                                     .environmentObject(store)
                                 }
@@ -387,10 +400,8 @@ struct PastQuestsView: View {
         anchorDate = Date()
     }
 
-    private func filteredRecords(workoutID: String, goal: ProgramMicroStageGoal, role: ProgramMicroStageRole) -> [StageQuestRecord] {
-        store.records.filter {
-            $0.workoutID == workoutID && $0.goal == goal && $0.role == role && $0.completedAt >= periodStart && $0.completedAt < periodEnd
-        }
+    private func questRecordsForCard(in index: [String: [StageQuestRecord]], goal: ProgramMicroStageGoal, role: ProgramMicroStageRole) -> [StageQuestRecord] {
+        index["\(goal.rawValue)|\(role.rawValue)"] ?? []
     }
 
     private func supportedGoals(for workoutID: String) -> [ProgramMicroStageGoal] {
@@ -445,24 +456,39 @@ private struct StageQuestCard: View {
     @State private var highlightedDay: Date?
     @State private var recommendationText = "Calculating suggested ranges..."
 
-        private var availableDays: [Date] {
-            let days = groupedPoints.map { Calendar.current.startOfDay(for: $0.date) }
-            return Array(Set(days)).sorted()
+    /// Stable, order-independent fingerprint so `.task` does not rebuild huge UUID arrays on every layout.
+    private var recommendationTaskIdentity: String {
+        let prefix = "\(workoutID)|\(goal.rawValue)|\(role.rawValue)"
+        guard !records.isEmpty else { return "\(prefix)|0" }
+        var h = Hasher()
+        h.combine(records.count)
+        for id in records.map(\.id).sorted(by: { $0.uuidString < $1.uuidString }) {
+            h.combine(id)
         }
+        return "\(prefix)|\(h.finalize())"
+    }
+
+    private func chartAvailableDays(from points: [StageQuestChartPoint]) -> [Date] {
+        let cal = Calendar.current
+        let days = points.map { cal.startOfDay(for: $0.date) }
+        return Array(Set(days)).sorted()
+    }
 
     var body: some View {
+        let points = groupedPoints
+        let availableDays = chartAvailableDays(from: points)
         VStack(alignment: .leading, spacing: 8) {
             Label(role.title, systemImage: symbol).font(.headline).foregroundStyle(themeColor)
             Text("\(records.count)").font(.system(size: 34, weight: .bold, design: .rounded)).foregroundStyle(themeColor)
-            chart.frame(height: 180)
-            Text(statsSummary).font(.caption).foregroundStyle(.secondary)
+            chartView(points: points, availableDays: availableDays).frame(height: 180)
+            Text(statsSummary(for: points)).font(.caption).foregroundStyle(.secondary)
             Text(recommendationText).font(.caption).foregroundStyle(themeColor)
         }
         .padding(12)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .task(id: records.map(\.id)) {
+        .task(id: recommendationTaskIdentity) {
             let key = "\(workoutID)|\(goal.rawValue)|\(role.rawValue)"
-            let recommendation = await store.recommendation(key: key, role: role, goal: goal, values: groupedPoints.map(\.valueMax))
+            let recommendation = await store.recommendation(key: key, role: role, goal: goal, values: points.map(\.valueMax))
             recommendationText = "Comfortable: \(recommendation.comfortableRange) | Pushing: \(recommendation.pushingRange)"
         }
     }
@@ -517,8 +543,8 @@ private struct StageQuestCard: View {
         return minSize + CGFloat(ratio) * (maxSize - minSize)
     }
 
-    private var chart: some View {
-        Chart(groupedPoints) { point in
+    private func chartView(points: [StageQuestChartPoint], availableDays: [Date]) -> some View {
+        Chart(points) { point in
             if role == .steady {
                 BarMark(
                     x: .value("Date", point.date),
@@ -545,7 +571,7 @@ private struct StageQuestCard: View {
                     .foregroundStyle(themeColor.opacity(0.9))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     .annotation(position: .top, alignment: .center) {
-                        indicatorPane(for: highlightedDay)
+                        indicatorPane(for: highlightedDay, points: points)
                     }
             }
         }
@@ -578,8 +604,8 @@ private struct StageQuestCard: View {
         return days.min(by: { abs($0.timeIntervalSinceReferenceDate - target.timeIntervalSinceReferenceDate) < abs($1.timeIntervalSinceReferenceDate - target.timeIntervalSinceReferenceDate) })
     }
 
-    private func indicatorPane(for day: Date) -> some View {
-        let dayPoints = groupedPoints.filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
+    private func indicatorPane(for day: Date, points: [StageQuestChartPoint]) -> some View {
+        let dayPoints = points.filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
 
         let low = dayPoints.map(\.valueMin).min() ?? 0
         let high = dayPoints.map(\.valueMax).max() ?? 0
@@ -721,8 +747,8 @@ private struct StageQuestCard: View {
         return "\(minutes):" + String(format: "%02d", secs)
     }
 
-    private var statsSummary: String {
-        let values = groupedPoints.map { ($0.valueMin + $0.valueMax) / 2 }.sorted()
+    private func statsSummary(for points: [StageQuestChartPoint]) -> String {
+        let values = points.map { ($0.valueMin + $0.valueMax) / 2 }.sorted()
         guard !values.isEmpty else { return "No completed quests in this period." }
         let mean = values.reduce(0, +) / Double(values.count)
         let median = values[values.count / 2]

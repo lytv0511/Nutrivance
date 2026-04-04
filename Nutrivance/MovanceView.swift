@@ -45,17 +45,14 @@ struct MovanceView: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     var filteredItems: [String] {
-            let fitnessItems = ["Dashboard", "Today's Plan", "Workout History", "Training Calendar",
-                             "Coach", "Movement Analysis", "Exercise Library", "Program Builder",
-                             "Workout Generator", "Recovery Score", "Sleep Analysis", "Mobility Test",
-                             "Readiness Check", "Strain vs Recovery", "Activity Rings", "Heart Zones",
-                             "Step Count", "Distance", "Calories Burned", "Past Quests",
-                             "Pre-Workout Timing", "Post-Workout Window", "Performance Foods",
-                             "Hydration Status", "Macro Balance"]
+        let fitnessItems = [
+            "Program Builder", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
+            "Recovery Score", "Readiness", "Strain vs Recovery", "Past Quests", "Heart Zones"
+        ]
         if searchState.searchText.isEmpty {
             return fitnessItems
         }
-        
+
         return fitnessItems.filter { item in
             let lowercasedItem = item.lowercased()
             if let keywords = searchKeywords[lowercasedItem] {
@@ -115,80 +112,28 @@ struct MovanceView: View {
                                 ForEach(filteredItems, id: \.self) { item in
                                     NavigationLink(tag: item, selection: $selectedItem) {
                                         switch item {
-                                        case "Home":
-                                            HomeView()
-                                        case "Insights":
-                                            HealthInsightsView()
-                                        case "Labels":
-                                            NutritionScannerView()
-                                        case "Log":
-                                            LogView()
-                                        case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                            NutrientDetailView(nutrientName: item)
+                                        case "Program Builder":
+                                            ProgramBuilderView()
                                         case "Dashboard":
                                             DashboardView()
                                         case "Today's Plan":
                                             TodaysPlanView(planType: .all)
-                                        case "Workout History":
-                                            WorkoutHistoryView()
                                         case "Training Calendar":
                                             TrainingCalendarView()
-                                        case "Coach":
-                                            CoachView()
-                                        case "Movement Analysis":
-                                            MovementAnalysisView()
-                                        case "Exercise Library":
-                                            ExerciseLibraryView()
-                                        case "Program Builder":
-                                            ProgramBuilderView()
-                                        case "Workout Generator":
-                                            WorkoutGeneratorView()
+                                        case "Workout History":
+                                            WorkoutHistoryView()
                                         case "Recovery Score":
                                             RecoveryScoreView()
-                                        case "Sleep Analysis":
-                                            SleepAnalysisView()
-                                        case "Mobility Test":
-                                            MobilityTestView()
-                                        case "Readiness Check":
+                                        case "Readiness", "Readiness Check":
                                             ReadinessCheckView()
                                         case "Strain vs Recovery":
                                             StrainRecoveryView()
-                                        case "Activity Rings":
-                                            ActivityRingsView()
-                                        case "Heart Zones":
-                                            HeartZonesView()
-                                        case "Step Count":
-                                            StepCountView()
-                                        case "Distance":
-                                            DistanceView()
-                                        case "Calories Burned":
-                                            CaloriesBurnedView()
                                         case "Past Quests":
                                             PastQuestsView()
-                                        case "Pre-Workout Timing":
-                                            PreWorkoutTimingView()
-                                        case "Post-Workout Window":
-                                            PostWorkoutWindowView()
-                                        case "Performance Foods":
-                                            PerformanceFoodsView()
-                                        case "Hydration Status":
-                                            HydrationStatusView()
-                                        case "Macro Balance":
-                                            MacroBalanceView()
-                                        case "Live Challenges":
-                                            LiveChallengesView()
-                                        case "Friend Activity":
-                                            FriendActivityView()
-                                        case "Achievements":
-                                            AchievementsView()
-                                        case "Share Workouts":
-                                            ShareWorkoutsView()
-                                        case "Leaderboards":
-                                            LeaderboardsView()
-                                        case "Fuel Check":
-                                            FuelCheckView()
+                                        case "Heart Zones":
+                                            HeartZonesView()
                                         default:
-                                            HomeView()
+                                            EmptyView()
                                         }
                                     } label: {
                                         VStack {
@@ -275,7 +220,7 @@ struct MovanceView: View {
             return AnyView(SleepAnalysisView())
         case "Mobility Test":
             return AnyView(MobilityTestView())
-        case "Readiness Check":
+        case "Readiness", "Readiness Check":
             return AnyView(ReadinessCheckView())
         case "Strain vs Recovery":
             return AnyView(StrainRecoveryView())
@@ -513,7 +458,7 @@ private func getIconName(for item: String) -> String {
     case "Recovery Score": return "heart.text.square.fill"
     case "Sleep Analysis": return "moon.zzz.fill"
     case "Mobility Test": return "figure.walk.arrival"
-    case "Readiness Check": return "checkmark.seal.fill"
+    case "Readiness", "Readiness Check": return "checkmark.seal.fill"
     case "Strain vs Recovery": return "arrow.left.arrow.right"
     
     // Metrics

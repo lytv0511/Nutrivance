@@ -43,17 +43,13 @@ struct NutrivanceView: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"],
         "barcode": ["barcode", "code 128", "upc", "ean"]
     ]
+    /// Nutrition hub entries disabled; use Movance / Spirivance or Search for active surfaces.
     var filteredItems: [String] {
-           let nutritionItems = ["Insights", "Labels", "Log",
-                                 "Calories", "Carbs", "Protein", "Fats", "Water", "Barcode",
-                              "Fiber", "Vitamins", "Minerals", "Phytochemicals",
-                              "Antioxidants", "Electrolytes"]
-        
+        let enabledItems: [String] = []
         if searchState.searchText.isEmpty {
-            return nutritionItems
+            return enabledItems
         }
-        
-        return nutritionItems.filter { item in
+        return enabledItems.filter { item in
             let lowercasedItem = item.lowercased()
             if let keywords = searchKeywords[lowercasedItem] {
                 return keywords.contains { keyword in
@@ -108,108 +104,42 @@ struct NutrivanceView: View {
                             onSubmitSearch: openFirstResult
                         )
                         ScrollView {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
-                                ForEach(filteredItems, id: \.self) { item in
-                                    NavigationLink(tag: item, selection: $selectedItem) {
-                                        switch item {
-                                        case "Insights":
-                                            HealthInsightsView()
-                                        case "Labels":
-                                            NutritionScannerView()
-                                        case "Log":
-                                            UnifiedLogView()
-//                                        case "Barcode":
-//                                            BarcodeScannerView()
-                                        case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-                                            NutrientDetailView(nutrientName: item)
-                                        case "Dashboard":
-                                            DashboardView()
-                                        case "Today's Plan":
-                                            TodaysPlanView(planType: .all)
-                                        case "Workout History":
-                                            WorkoutHistoryView()
-                                        case "Training Calendar":
-                                            TrainingCalendarView()
-                                        case "Coach":
-                                            CoachView()
-                                        case "Movement Analysis":
-                                            MovementAnalysisView()
-                                        case "Exercise Library":
-                                            ExerciseLibraryView()
-                                        case "Program Builder":
-                                            ProgramBuilderView()
-                                        case "Workout Generator":
-                                            WorkoutGeneratorView()
-                                        case "Recovery Score":
-                                            RecoveryScoreView()
-                                        case "Sleep Analysis":
-                                            SleepAnalysisView()
-                                        case "Mobility Test":
-                                            MobilityTestView()
-                                        case "Readiness Check":
-                                            ReadinessCheckView()
-                                        case "Strain vs Recovery":
-                                            StrainRecoveryView()
-                                        case "Activity Rings":
-                                            ActivityRingsView()
-                                        case "Heart Zones":
-                                            HeartZonesView()
-                                        case "Step Count":
-                                            StepCountView()
-                                        case "Distance":
-                                            DistanceView()
-                                        case "Calories Burned":
-                                            CaloriesBurnedView()
-                                        case "Past Quests":
-                                            PastQuestsView()
-                                        case "Pre-Workout Timing":
-                                            PreWorkoutTimingView()
-                                        case "Post-Workout Window":
-                                            PostWorkoutWindowView()
-                                        case "Performance Foods":
-                                            PerformanceFoodsView()
-                                        case "Hydration Status":
-                                            HydrationStatusView()
-                                        case "Macro Balance":
-                                            MacroBalanceView()
-                                        case "Live Challenges":
-                                            LiveChallengesView()
-                                        case "Friend Activity":
-                                            FriendActivityView()
-                                        case "Achievements":
-                                            AchievementsView()
-                                        case "Share Workouts":
-                                            ShareWorkoutsView()
-                                        case "Leaderboards":
-                                            LeaderboardsView()
-                                        case "Fuel Check":
-                                            FuelCheckView()
-                                        default:
-                                            HealthInsightsView()
+                            if filteredItems.isEmpty {
+                                Text("Nutrition shortcuts are off right now. Use Movance or Spirivance above, Search, or the sidebar on iPad for training and wellness.")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.horizontal, 24)
+                                    .padding(.top, 32)
+                            } else {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: UIDevice.current.userInterfaceIdiom == .pad ? 200 : 140))], spacing: 40) {
+                                    ForEach(filteredItems, id: \.self) { item in
+                                        NavigationLink(tag: item, selection: $selectedItem) {
+                                            destinationView(for: item)
+                                        } label: {
+                                            VStack {
+                                                Image(systemName: getIconName(for: item))
+                                                    .font(.system(size: 40))
+                                                    .foregroundColor(.primary)
+                                                    .frame(width: 80, height: 80)
+                                                    .background(.ultraThinMaterial)
+                                                    .clipShape(Circle())
+
+                                                Text(item)
+                                                    .font(.caption)
+                                                    .multilineTextAlignment(.center)
+                                                    .frame(width: 80, height: 40)
+                                            }
+                                            .frame(width: 120, height: 120)
+                                            .padding()
+                                            .background(.ultraThinMaterial)
+                                            .cornerRadius(12)
                                         }
-                                    } label: {
-                                        VStack {
-                                            Image(systemName: getIconName(for: item))
-                                                .font(.system(size: 40))
-                                                .foregroundColor(.primary)
-                                                .frame(width: 80, height: 80)
-                                                .background(.ultraThinMaterial)
-                                                .clipShape(Circle())
-                                            
-                                            Text(item)
-                                                .font(.caption)
-                                                .multilineTextAlignment(.center)
-                                                .frame(width: 80, height: 40)
-                                        }
-                                        .frame(width: 120, height: 120) // Makes container square
-                                        .padding()
-                                        .background(.ultraThinMaterial)
-                                        .cornerRadius(12)
                                     }
                                 }
-                                
+                                .padding()
                             }
-                            .padding()
                         }
                         .navigationTitle("Nutrivance")
                         .navigationBarTitleDisplayMode(.large)

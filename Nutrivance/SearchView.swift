@@ -138,14 +138,18 @@ struct SearchView: View {
     @State private var animationPhase: Double = 0
     private let gradients = GradientBackgrounds()
     
-    // Update items when needed
-    private let nutritionItems = ["Insights", "Labels", "Log",
-                                  "Calories", "Carbs", "Protein", "Fats", "Water",
-                                  "Fiber", "Vitamins", "Minerals", "Phytochemicals",
-                                  "Antioxidants", "Electrolytes"]
-    
-    private let fitnessItems = ["Dashboard", "Program Builder", "Readiness Check", "Strain vs Recovery"]
-    
+    // Disabled nutrition shortcuts (keep for reference; `nutritionItems` left empty so search/gradients skip them).
+    // private let nutritionItems = ["Insights", "Labels", "Log",
+    //                               "Calories", "Carbs", "Protein", "Fats", "Water",
+    //                               "Fiber", "Vitamins", "Minerals", "Phytochemicals",
+    //                               "Antioxidants", "Electrolytes"]
+    private let nutritionItems: [String] = []
+
+    private let fitnessItems = [
+        "Program Builder", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
+        "Recovery Score", "Readiness", "Strain vs Recovery", "Past Quests", "Heart Zones"
+    ]
+
     let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress"]
 
     private var usesLegacyNavigation: Bool {
@@ -169,30 +173,30 @@ struct SearchView: View {
     
     private let searchKeywords = [
         "home": ["home", "main", "start", "welcome", "homepage"],
-        "insights": ["insights", "health insights", "analysis", "trends", "statistics", "data", "reports", "overview"],
-        "labels": ["labels", "scan", "camera", "photo", "nutrition facts", "food label", "scanner", "capture"],
+        // "insights": ["insights", "health insights", "analysis", "trends", "statistics", "data", "reports", "overview"],
+        // "labels": ["labels", "scan", "camera", "photo", "nutrition facts", "food label", "scanner", "capture"],
 //        "barcode": ["barcode", "scan", "upc", "product lookup", "food scan", "scanner"],
         "search": ["search", "find", "lookup", "nutrients", "add nutrients", "input", "track"],
-        "calories": ["calories", "calorie", "kcal", "cal", "energy", "dietary energy"],
-        "protein": ["protein", "proteins", "whey", "casein", "amino acid", "amino acids"],
-        "carbs": ["carbs", "carbohydrates", "carbohydrate", "sugars", "starches", "glucose"],
-        "fats": ["fat", "fats", "lipids", "oil", "oils", "triglycerides"],
-        "water": ["water", "h2o", "fluid", "hydration"],
-        "fiber": ["fiber", "fibre", "dietary fiber", "roughage", "cellulose", "pectin"],
-        "vitamins": ["vitamin", "vitamins", "vitamin a", "vitamin c", "vitamin d", "vitamin e", "vitamin k"],
-        "minerals": ["minerals", "calcium", "iron", "magnesium", "zinc", "selenium"],
-        "phytochemicals": ["phytochemicals", "plant compounds", "bioactive compounds"],
-        "antioxidants": ["antioxidants", "antioxidant", "free radicals"],
-        "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"],
+        // "calories": ["calories", "calorie", "kcal", "cal", "energy", "dietary energy"],
+        // "protein": ["protein", "proteins", "whey", "casein", "amino acid", "amino acids"],
+        // "carbs": ["carbs", "carbohydrates", "carbohydrate", "sugars", "starches", "glucose"],
+        // "fats": ["fat", "fats", "lipids", "oil", "oils", "triglycerides"],
+        // "water": ["water", "h2o", "fluid", "hydration"],
+        // "fiber": ["fiber", "fibre", "dietary fiber", "roughage", "cellulose", "pectin"],
+        // "vitamins": ["vitamin", "vitamins", "vitamin a", "vitamin c", "vitamin d", "vitamin e", "vitamin k"],
+        // "minerals": ["minerals", "calcium", "iron", "magnesium", "zinc", "selenium"],
+        // "phytochemicals": ["phytochemicals", "plant compounds", "bioactive compounds"],
+        // "antioxidants": ["antioxidants", "antioxidant", "free radicals"],
+        // "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"],
         "dashboard": ["dashboard", "metrics", "fitness"],
         "program builder": ["program builder", "workout builder", "builder", "plan workout", "workout planner"],
         "journal": ["journal", "write"],
         "mood": ["mood tracker", "emotion tracker", "mental health", "feeling"],
         "sleep": ["sleep", "rest", "resting", "recovery"],
         "stress": ["hrv", "stress", "anxiety", "mental health", "energy", "nervous balance"],
-        "log": ["log", "record", "entry", "history"],
+        // "log": ["log", "record", "entry", "history"],
         "recovery score": ["recovery score", "recovery", "score"],
-        "fuel": ["fuel check", "energy levels", "energy", "stamina", "food"],
+        // "fuel": ["fuel check", "energy levels", "energy", "stamina", "food"],
         "strain": ["strain vs recovery", "strain", "hrv"],
         "readiness": ["readiness check", "readiness", "assessment", "hrv"],
         "mindfulness": ["mindfulness realm", "mindfulness", "meditation", "breathing exercises", "stress reduction", "mental health"],
@@ -200,7 +204,7 @@ struct SearchView: View {
     ]
     
     var filteredItems: [String] {
-        let allItems = ["Dashboard", "Program Builder", "Today's Plan", "Training Calendar", "Coach", "Recovery Score", "Readiness Check", "Strain vs Recovery", "Fuel Check", "Workout History", "Activity Rings", "Heart Zones", "Past Quests", "Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress", "Insights", "Labels", "Log", "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes"]
+        let allItems = fitnessItems + mentalHealthItems
 
         let query = searchState.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
@@ -281,34 +285,34 @@ struct SearchView: View {
 
     private func target(for item: String) -> (focus: AppFocus, view: String, tab: RootTabSelection)? {
         switch item {
-        case "Insights":
-            return (.nutrition, "Insights", .insights)
-        case "Labels":
-            return (.nutrition, "Labels", .labels)
-        case "Log":
-            return (.nutrition, "Log", .log)
-        case "Calories":
-            return (.nutrition, "Calories", .calories)
-        case "Carbs":
-            return (.nutrition, "Carbs", .carbs)
-        case "Protein":
-            return (.nutrition, "Protein", .protein)
-        case "Fats":
-            return (.nutrition, "Fats", .fats)
-        case "Water":
-            return (.nutrition, "Water", .water)
-        case "Fiber":
-            return (.nutrition, "Fiber", .fiber)
-        case "Vitamins":
-            return (.nutrition, "Vitamins", .vitamins)
-        case "Minerals":
-            return (.nutrition, "Minerals", .minerals)
-        case "Phytochemicals":
-            return (.nutrition, "Phytochemicals", .phytochemicals)
-        case "Antioxidants":
-            return (.nutrition, "Antioxidants", .antioxidants)
-        case "Electrolytes":
-            return (.nutrition, "Electrolytes", .electrolytes)
+        // case "Insights":
+        //     return (.nutrition, "Insights", .insights)
+        // case "Labels":
+        //     return (.nutrition, "Labels", .labels)
+        // case "Log":
+        //     return (.nutrition, "Log", .log)
+        // case "Calories":
+        //     return (.nutrition, "Calories", .calories)
+        // case "Carbs":
+        //     return (.nutrition, "Carbs", .carbs)
+        // case "Protein":
+        //     return (.nutrition, "Protein", .protein)
+        // case "Fats":
+        //     return (.nutrition, "Fats", .fats)
+        // case "Water":
+        //     return (.nutrition, "Water", .water)
+        // case "Fiber":
+        //     return (.nutrition, "Fiber", .fiber)
+        // case "Vitamins":
+        //     return (.nutrition, "Vitamins", .vitamins)
+        // case "Minerals":
+        //     return (.nutrition, "Minerals", .minerals)
+        // case "Phytochemicals":
+        //     return (.nutrition, "Phytochemicals", .phytochemicals)
+        // case "Antioxidants":
+        //     return (.nutrition, "Antioxidants", .antioxidants)
+        // case "Electrolytes":
+        //     return (.nutrition, "Electrolytes", .electrolytes)
         case "Dashboard":
             return (.fitness, "Dashboard", .dashboard)
         case "Program Builder":
@@ -317,18 +321,18 @@ struct SearchView: View {
             return (.fitness, "Today's Plan", .todaysPlan)
         case "Training Calendar":
             return (.fitness, "Training Calendar", .trainingCalendar)
-        case "Coach":
-            return (.fitness, "Coach", .coach)
+        // case "Coach":
+        //     return (.fitness, "Coach", .coach)
         case "Recovery Score":
             return (.fitness, "Recovery Score", .recoveryScore)
-        case "Readiness Check":
+        case "Readiness", "Readiness Check":
             return (.fitness, "Readiness", .readiness)
         case "Strain vs Recovery":
             return (.fitness, "Strain vs Recovery", .strainRecovery)
         case "Workout History":
             return (.fitness, "Workout History", .workoutHistory)
-        case "Activity Rings":
-            return (.fitness, "Activity Rings", .activityRings)
+        // case "Activity Rings":
+        //     return (.fitness, "Activity Rings", .activityRings)
         case "Heart Zones":
             return (.fitness, "Heart Zones", .heartZones)
         case "Past Quests":
@@ -547,14 +551,14 @@ struct SearchView: View {
         switch item {
         case "Home":
             return AnyView(HomeView())
-        case "Insights":
-            return AnyView(HealthInsightsView())
-        case "Labels":
-            return AnyView(NutritionScannerView())
-        case "Log":
-            return AnyView(UnifiedLogView())
-        case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
-            return AnyView(NutrientDetailView(nutrientName: item))
+        // case "Insights":
+        //     return AnyView(HealthInsightsView())
+        // case "Labels":
+        //     return AnyView(NutritionScannerView())
+        // case "Log":
+        //     return AnyView(UnifiedLogView())
+        // case "Calories", "Carbs", "Protein", "Fats", "Water", "Fiber", "Vitamins", "Minerals", "Phytochemicals", "Antioxidants", "Electrolytes":
+        //     return AnyView(NutrientDetailView(nutrientName: item))
 //        case "Barcode":
 //            return AnyView(BarcodeScannerView())
         case "Dashboard":
@@ -565,8 +569,8 @@ struct SearchView: View {
             return AnyView(WorkoutHistoryView())
         case "Training Calendar":
             return AnyView(TrainingCalendarView())
-        case "Coach":
-            return AnyView(CoachView())
+        // case "Coach":
+        //     return AnyView(CoachView())
         case "Movement Analysis":
             return AnyView(MovementAnalysisView())
         case "Exercise Library":
@@ -581,12 +585,12 @@ struct SearchView: View {
             return AnyView(SleepAnalysisView())
         case "Mobility Test":
             return AnyView(MobilityTestView())
-        case "Readiness Check":
+        case "Readiness", "Readiness Check":
             return AnyView(ReadinessCheckView())
         case "Strain vs Recovery":
             return AnyView(StrainRecoveryView())
-        case "Activity Rings":
-            return AnyView(ActivityRingsView())
+        // case "Activity Rings":
+        //     return AnyView(ActivityRingsView())
         case "Heart Zones":
             return AnyView(HeartZonesView())
         case "Step Count":
@@ -857,7 +861,7 @@ private func getIconName(for item: String) -> String {
     case "Recovery Score": return "heart.text.square.fill"
     case "Sleep Analysis": return "moon.zzz.fill"
     case "Mobility Test": return "figure.walk.arrival"
-    case "Readiness Check": return "checkmark.seal.fill"
+    case "Readiness", "Readiness Check": return "checkmark.seal.fill"
     case "Strain vs Recovery": return "arrow.left.arrow.right"
     
     // Metrics

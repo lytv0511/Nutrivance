@@ -91,9 +91,16 @@ struct TrainingCalendarView: View {
     }
 
     private var workoutsByDay: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] {
-        Dictionary(grouping: filteredWorkouts) { pair in
+        let grouped = Dictionary(grouping: filteredWorkouts) { pair in
             calendar.startOfDay(for: pair.workout.startDate)
         }
+        return grouped.mapValues { pairs in
+            pairs.sorted(by: { $0.workout.startDate < $1.workout.startDate })
+        }
+    }
+
+    private var workoutDaySet: Set<Date> {
+        Set(workoutsByDay.keys)
     }
 
     private var selectedMonthStart: Date {
@@ -120,7 +127,7 @@ struct TrainingCalendarView: View {
                 CalendarDaySlot(
                     date: normalized,
                     isInDisplayedMonth: calendar.isDate(normalized, equalTo: selectedMonthStart, toGranularity: .month),
-                    workouts: (workoutsByDay[normalized] ?? []).sorted(by: { $0.workout.startDate < $1.workout.startDate })
+                    workouts: workoutsByDay[normalized] ?? []
                 )
             )
             guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
@@ -131,22 +138,29 @@ struct TrainingCalendarView: View {
     }
 
     private var selectedDayWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
-        (workoutsByDay[selectedDay] ?? []).sorted(by: { $0.workout.startDate < $1.workout.startDate })
+        workoutsByDay[selectedDay] ?? []
     }
 
-    private var activeWorkoutDays: [Date] {
-        workoutsByDay.keys.sorted()
+    private var activeWorkoutDaysSorted: [Date] {
+        workoutDaySet.sorted()
     }
 
-    private var currentStreak: Int {
-        streakLength(anchoredAtToday: true)
+    /// Bundled so hero, summary, and grid share one streak walk per layout pass.
+    private var activeStreakState: (length: Int, highlight: (lower: Date, upper: Date)?) {
+        let daySet = workoutDaySet
+        let length = streakLength(anchoredAtToday: true, daySet: daySet)
+        guard length > 0 else { return (0, nil) }
+        let today = calendar.startOfDay(for: Date())
+        let anchor = workoutsByDay[today] != nil ? today : (calendar.date(byAdding: .day, value: -1, to: today) ?? today)
+        guard let lowerBound = calendar.date(byAdding: .day, value: -(length - 1), to: anchor) else { return (length, nil) }
+        return (length, (lowerBound, anchor))
     }
 
     private var longestStreak: Int {
-        let daySet = Set(activeWorkoutDays)
+        let daySet = workoutDaySet
         var best = 0
 
-        for day in activeWorkoutDays {
+        for day in activeWorkoutDaysSorted {
             let previous = calendar.date(byAdding: .day, value: -1, to: day) ?? day
             guard !daySet.contains(previous) else { continue }
 
@@ -185,10 +199,11 @@ struct TrainingCalendarView: View {
         NavigationStack {
             ZStack {
                 ScrollView {
+                    let streakState = activeStreakState
                     VStack(alignment: .leading, spacing: 22) {
                         calendarHero
-                        streakSummary
-                        calendarGrid
+                        streakSummaryView(currentStreak: streakState.length)
+                        calendarGridView(streakHighlight: streakState.highlight)
                         selectedDayTimeline
                     }
                     .padding(.horizontal)
@@ -396,15 +411,15 @@ struct TrainingCalendarView: View {
         )
     }
 
-    private var streakSummary: some View {
+    private func streakSummaryView(currentStreak streakLen: Int) -> some View {
         HStack(spacing: 12) {
-            CalendarStatCard(title: "Current Streak", value: "\(currentStreak)", subtitle: currentStreak == 1 ? "day" : "days", tint: .orange)
+            CalendarStatCard(title: "Current Streak", value: "\(streakLen)", subtitle: streakLen == 1 ? "day" : "days", tint: .orange)
             CalendarStatCard(title: "Best Streak", value: "\(longestStreak)", subtitle: longestStreak == 1 ? "day" : "days", tint: .yellow)
             CalendarStatCard(title: "Active Days", value: "\(monthCompletionCount)", subtitle: "this month", tint: .red)
         }
     }
 
-    private var calendarGrid: some View {
+    private func calendarGridView(streakHighlight: (lower: Date, upper: Date)?) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Training Month")
@@ -419,7 +434,7 @@ struct TrainingCalendarView: View {
                 }
             }
 
-            let columns = Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 7)
+            let columns = Self.weekdayGridColumns
 
             LazyVGrid(columns: columns, spacing: 10) {
                 ForEach(orderedWeekdaySymbols, id: \.self) { symbol in
@@ -434,7 +449,7 @@ struct TrainingCalendarView: View {
                         slot: slot,
                         isToday: calendar.isDateInToday(slot.date),
                         isSelected: calendar.isDate(slot.date, inSameDayAs: selectedDay),
-                        isPartOfCurrentStreak: isPartOfCurrentStreak(slot.date),
+                        isPartOfCurrentStreak: isStreakHighlightDay(slot.date, window: streakHighlight),
                         onSelectDay: {
                             selectedDay = slot.date
                         },
@@ -543,6 +558,14 @@ struct TrainingCalendarView: View {
         )
     }
 
+    private static let weekdayGridColumns = Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 7)
+
+    private func isStreakHighlightDay(_ date: Date, window: (lower: Date, upper: Date)?) -> Bool {
+        guard let window else { return false }
+        let day = calendar.startOfDay(for: date)
+        return day >= window.lower && day <= window.upper && workoutsByDay[day] != nil
+    }
+
     private func stepMonth(by value: Int) {
         guard let updated = calendar.date(byAdding: .month, value: value, to: selectedMonthStart) else { return }
         selectedMonth = updated
@@ -587,12 +610,11 @@ struct TrainingCalendarView: View {
         }
     }
 
-    private func streakLength(anchoredAtToday: Bool) -> Int {
-        let daySet = Set(activeWorkoutDays)
+    private func streakLength(anchoredAtToday: Bool, daySet: Set<Date>) -> Int {
         guard !daySet.isEmpty else { return 0 }
 
         var cursor = calendar.startOfDay(for: Date())
-        if anchoredAtToday == false, let last = activeWorkoutDays.last {
+        if anchoredAtToday == false, let last = activeWorkoutDaysSorted.last {
             cursor = last
         } else if !daySet.contains(cursor),
                   let previous = calendar.date(byAdding: .day, value: -1, to: cursor),
@@ -609,16 +631,6 @@ struct TrainingCalendarView: View {
             cursor = previous
         }
         return count
-    }
-
-    private func isPartOfCurrentStreak(_ date: Date) -> Bool {
-        let streak = currentStreak
-        guard streak > 0 else { return false }
-
-        let today = calendar.startOfDay(for: Date())
-        let anchor = workoutsByDay[today] != nil ? today : (calendar.date(byAdding: .day, value: -1, to: today) ?? today)
-        guard let lowerBound = calendar.date(byAdding: .day, value: -(streak - 1), to: anchor) else { return false }
-        return date >= lowerBound && date <= anchor && workoutsByDay[date] != nil
     }
 
     private func isFutureMonth(_ date: Date) -> Bool {

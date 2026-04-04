@@ -185,23 +185,37 @@ private struct WorkoutReportMetricsWall: View {
 
     var body: some View {
         if !metrics.isEmpty {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
+            let columns = [
+                GridItem(.flexible(), spacing: 12),
+                GridItem(.flexible(), spacing: 12)
+            ]
+
+            LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(metrics) { metric in
-                    VStack(spacing: 8) {
-                        Image(systemName: metric.icon)
-                            .font(.title3.bold())
-                            .foregroundColor(.orange)
-                        Text(metric.title)
-                            .font(.caption.weight(.semibold))
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top) {
+                            Image(systemName: metric.icon)
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.orange)
+                                .frame(width: 34, height: 34)
+                                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            Spacer()
+                        }
+
                         Text(metric.value)
-                            .font(.headline)
+                            .font(.system(.title3, design: .rounded, weight: .bold))
+                            .foregroundStyle(.primary)
+
+                        Text(metric.title.uppercased())
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(12)
+                    .padding(14)
                     .frame(maxWidth: .infinity)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.orange.opacity(0.22), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Color.orange.opacity(0.14), lineWidth: 1)
                     )
                 }
             }
@@ -262,86 +276,124 @@ private struct InspirationImageStrip: View {
 
 private struct InspirationCardView: View {
     let card: InspirationCardContent
-    
+
     private var accent: Color {
         switch card.title.lowercased() {
         case "workout", "workout group":
             return .orange
         case "motion activity":
-            return .mint
+            return .cyan
         case "location", "location group":
             return .blue
         case "state of mind", "reflection":
             return .pink
-        case "podcast", "song", "generic media":
-            return .purple
-        case "photo", "live photo", "video", "event poster":
+        case "podcast", "song", "media":
+            return .indigo
+        case "photo", "live photo", "video", "event":
             return .teal
         case "contact":
-            return .indigo
+            return .mint
         default:
-            return .green
+            return .secondary
+        }
+    }
+    
+    private var accentIcon: String {
+        switch card.title.lowercased() {
+        case "workout", "workout group":
+            return "figure.run"
+        case "motion activity":
+            return "figure.walk"
+        case "location", "location group":
+            return "location.fill"
+        case "state of mind", "reflection":
+            return "brain.head.profile"
+        case "podcast":
+            return "waveform"
+        case "song":
+            return "music.note"
+        case "media":
+            return "play.rectangle.fill"
+        case "photo":
+            return "photo.fill"
+        case "live photo":
+            return "livephoto"
+        case "video":
+            return "video.fill"
+        case "event":
+            return "calendar"
+        case "contact":
+            return "person.fill"
+        default:
+            return "sparkles"
         }
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(accent.gradient)
-                    .frame(width: 10, height: 10)
+                Image(systemName: accentIcon)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                
                 Text(card.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(accent)
+                    .textCase(.uppercase)
+                
+                Spacer()
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
             
-            ForEach(card.lines, id: \.self) { line in
-                if line.hasSuffix(":") {
-                    Text(line)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.top, 2)
-                } else if let separatorIndex = line.firstIndex(of: ":") {
-                    let label = String(line[..<separatorIndex])
-                    let valueStart = line.index(after: separatorIndex)
-                    let value = String(line[valueStart...]).trimmingCharacters(in: .whitespaces)
-                    
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(label)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                        Text(value)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(card.lines, id: \.self) { line in
+                    if line.hasSuffix(":") {
+                        Text(line.dropLast())
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    } else if let separatorIndex = line.firstIndex(of: ":") {
+                        let label = String(line[..<separatorIndex])
+                        let valueStart = line.index(after: separatorIndex)
+                        let value = String(line[valueStart...]).trimmingCharacters(in: .whitespaces)
+                        
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(label)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 90, alignment: .leading)
+                            
+                            Text(value)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        Text(line)
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                } else {
-                    Text(line)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 18)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            accent.opacity(0.18),
-                            Color(uiColor: .secondarySystemBackground)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(accent.opacity(0.18), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [accent.opacity(0.35), accent.opacity(0.08)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
         )
     }
 }
@@ -358,22 +410,30 @@ private struct InspirationSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if !imageData.isEmpty {
-                InspirationImageStrip(
-                    imageData: imageData,
-                    thumbnailSize: compact ? 72 : 100
-                )
-                .frame(height: compact ? 78 : 110)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(Array(imageData.enumerated()), id: \.offset) { _, data in
+                            if let uiImage = UIImage(data: data) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: compact ? 148 : 188, height: compact ? 108 : 148)
+                                    .clipped()
+                                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                            .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                                    )
+                            }
+                        }
+                    }
+                }
+                .frame(height: compact ? 112 : 152)
             }
             
-            if compact {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(cards) { card in
                     InspirationCardView(card: card)
-                }
-            } else {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(cards) { card in
-                        InspirationCardView(card: card)
-                    }
                 }
             }
         }
@@ -381,83 +441,73 @@ private struct InspirationSectionView: View {
 }
 
 struct JournalView: View {
-    
     @State private var animationPhase: Double = 0
     @State private var entries: [JournalEntry] = []
     @State private var showingEditor = false
     @State private var currentEntry = JournalEntry()
+    @State private var filter: JournalFeedFilter = .all
+    @State private var searchText = ""
 
-    private var fitnessReportEntries: [JournalEntry] {
-        entries.filter(isFitnessReportEntry)
+    private var filteredEntries: [JournalEntry] {
+        entries
+            .filter { filter.matches($0) }
+            .filter { matchesSearch($0) }
+            .sorted { lhs, rhs in
+                if lhs.date == rhs.date {
+                    return lhs.id.uuidString > rhs.id.uuidString
+                }
+                return lhs.date > rhs.date
+            }
     }
 
-    private var standardEntries: [JournalEntry] {
-        entries.filter { !isFitnessReportEntry($0) }
+    private var groupedEntries: [JournalTimelineGroup] {
+        let grouped = Dictionary(grouping: filteredEntries) { entry in
+            Calendar.current.startOfDay(for: entry.date)
+        }
+
+        return grouped.keys.sorted(by: >).map { date in
+            JournalTimelineGroup(
+                date: date,
+                entries: grouped[date]?.sorted(by: { $0.date > $1.date }) ?? []
+            )
+        }
     }
-    
 
     var body: some View {
         NavigationStack {
-            
             ZStack {
-                
-                GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
-                    .ignoresSafeArea()
-                    .onAppear {
-                        loadEntries()
-                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                            animationPhase = 20
-                        }
-                    }
-                
-                if entries.isEmpty {
-                    
-                    VStack(spacing: 12) {
-                        Image(systemName: "book.closed")
-                            .font(.largeTitle)
-                        Text("No Journal Entries Yet")
-                            .font(.headline)
-                        Text("Tap + to start writing")
-                            .foregroundColor(.secondary)
-                    }
-                    
-                } else {
-                    
-                    List {
-                        if !fitnessReportEntries.isEmpty {
-                            Section("Fitness Reports") {
-                                ForEach(fitnessReportEntries) { entry in
-                                    JournalEntryRow(entry: entry) {
-                                        currentEntry = entry
-                                        showingEditor = true
-                                    }
-                                }
-                                .onDelete { offsets in
-                                    deleteEntries(from: fitnessReportEntries, at: offsets)
-                                }
-                            }
-                        }
+                backgroundView
 
-                        if !standardEntries.isEmpty {
-                            Section("Entries") {
-                                ForEach(standardEntries) { entry in
-                                    JournalEntryRow(entry: entry) {
+                if filteredEntries.isEmpty {
+                    JournalEmptyState(filter: filter, searchText: searchText)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 22) {
+                            JournalSearchBar(searchText: $searchText)
+                                .padding(.top, 8)
+
+                            JournalFilterBar(filter: $filter)
+                                .padding(.top, 8)
+
+                            ForEach(groupedEntries) { group in
+                                JournalTimelineSection(
+                                    group: group,
+                                    onTap: { entry in
                                         currentEntry = entry
                                         showingEditor = true
+                                    },
+                                    onDelete: { entry in
+                                        deleteEntry(entry)
                                     }
-                                }
-                                .onDelete { offsets in
-                                    deleteEntries(from: standardEntries, at: offsets)
-                                }
+                                )
                             }
                         }
+                        .padding(.horizontal)
+                        .padding(.bottom, 32)
                     }
-                    .scrollContentBackground(.hidden)
                 }
             }
-            
             .navigationTitle("Journal")
-            
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -468,8 +518,13 @@ struct JournalView: View {
                     }
                 }
             }
-            
-            .sheet(isPresented: $showingEditor) {
+            .onAppear {
+                loadEntries()
+                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                    animationPhase = 20
+                }
+            }
+            .fullScreenCover(isPresented: $showingEditor) {
                 JournalEditorView(
                     entry: $currentEntry,
                     onSave: { entry in
@@ -495,9 +550,22 @@ struct JournalView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var backgroundView: some View {
+        if filter == .reports {
+            ZStack {
+                GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
+                Color.black.opacity(0.22)
+            }
+            .ignoresSafeArea()
+        } else {
+            GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
+                .ignoresSafeArea()
+        }
+    }
     
     func saveEntry(_ entry: JournalEntry) {
-        
         if let index = entries.firstIndex(where: {$0.id == entry.id}) {
             entries[index] = entry
         } else {
@@ -509,6 +577,11 @@ struct JournalView: View {
     
     func deleteEntry(at offsets: IndexSet) {
         entries.remove(atOffsets: offsets)
+        persistEntries()
+    }
+
+    func deleteEntry(_ entry: JournalEntry) {
+        entries.removeAll { $0.id == entry.id }
         persistEntries()
     }
 
@@ -525,6 +598,195 @@ struct JournalView: View {
     func loadEntries() {
         entries = JournalPersistence.loadEntries()
     }
+
+    private func matchesSearch(_ entry: JournalEntry) -> Bool {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+
+        let metricText = entry.reportMetrics
+            .map { "\($0.title) \($0.value)" }
+            .joined(separator: " ")
+
+        let imageHintText = entry.imageData.isEmpty ? "" : "photo image inspiration memory picture"
+        let haystack = [
+            entry.title,
+            entry.content,
+            entry.inspiration,
+            entry.kind,
+            metricText,
+            imageHintText
+        ]
+        .joined(separator: "\n")
+
+        return haystack.localizedCaseInsensitiveContains(query)
+    }
+}
+
+private enum JournalFeedFilter: String, CaseIterable, Identifiable {
+    case all
+    case entries
+    case reports
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .entries: return "Entries"
+        case .reports: return "Fitness Reports"
+        }
+    }
+
+    func matches(_ entry: JournalEntry) -> Bool {
+        switch self {
+        case .all: return true
+        case .entries: return !isFitnessReportEntry(entry)
+        case .reports: return isFitnessReportEntry(entry)
+        }
+    }
+}
+
+private struct JournalTimelineGroup: Identifiable {
+    let date: Date
+    let entries: [JournalEntry]
+
+    var id: Date { date }
+}
+
+private struct JournalFilterBar: View {
+    @Binding var filter: JournalFeedFilter
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(JournalFeedFilter.allCases) { option in
+                Button {
+                    filter = option
+                } label: {
+                    Text(option.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(filter == option ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background((filter == option ? Color.white.opacity(0.2) : Color.white.opacity(0.08)), in: Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(filter == option ? 0.18 : 0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(8)
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+}
+
+private struct JournalEmptyState: View {
+    let filter: JournalFeedFilter
+    let searchText: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "book.closed")
+                .font(.largeTitle)
+            Text(emptyTitle)
+                .font(.headline)
+            Text(emptyMessage)
+                .foregroundColor(.secondary)
+        }
+        .padding(28)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var emptyTitle: String {
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No Matching Entries"
+        }
+        return filter == .all ? "No Journal Entries Yet" : "Nothing In This Filter"
+    }
+
+    private var emptyMessage: String {
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Try another word, title, metric, or inspiration detail."
+        }
+        return filter == .all ? "Tap + to start writing" : "Try another filter or add a new entry."
+    }
+}
+
+private struct JournalSearchBar: View {
+    @Binding var searchText: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField("Search titles, keywords, inspiration, reports, images...", text: $searchText)
+                .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled(false)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct JournalTimelineSection: View {
+    let group: JournalTimelineGroup
+    let onTap: (JournalEntry) -> Void
+    let onDelete: (JournalEntry) -> Void
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("EEEE, MMM d")
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(Self.dayFormatter.string(from: group.date))
+                    .font(.title3.weight(.bold))
+                Spacer()
+                Text("\(group.entries.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.08), in: Capsule())
+            }
+
+            LazyVStack(spacing: 16) {
+                ForEach(group.entries) { entry in
+                    JournalEntryRow(entry: entry) {
+                        onTap(entry)
+                    }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            onDelete(entry)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private struct JournalEntryRow: View {
@@ -533,29 +795,50 @@ private struct JournalEntryRow: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading) {
-                Text(entry.title.isEmpty ? "Untitled Entry" : entry.title)
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(entry.title.isEmpty ? "Untitled Entry" : entry.title)
+                            .font(.system(.title3, design: .rounded, weight: .bold))
+                            .foregroundStyle(.primary)
 
-                Text(entry.date, style: .date)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Text(entry.date.formatted(.dateTime.hour().minute()))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
 
-                if isFitnessReportEntry(entry) {
-                    Text("Fitness Report")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.orange)
+                            Text(isFitnessReportEntry(entry) ? "Fitness Report" : "Entry")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(isFitnessReportEntry(entry) ? Color.orange : Color.white.opacity(0.8))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    (isFitnessReportEntry(entry) ? Color.orange.opacity(0.16) : Color.white.opacity(0.08)),
+                                    in: Capsule()
+                                )
+                        }
+                    }
+
+                    Spacer()
+
+                    Image(systemName: isFitnessReportEntry(entry) ? "figure.run" : "book.pages")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(isFitnessReportEntry(entry) ? Color.orange : Color.white.opacity(0.82))
+                        .frame(width: 42, height: 42)
+                        .background(
+                            (isFitnessReportEntry(entry) ? Color.orange.opacity(0.14) : Color.white.opacity(0.08)),
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        )
                 }
 
                 if !entry.content.isEmpty {
                     Text(entry.content)
-                        .lineLimit(10)
-                        .foregroundColor(.secondary)
+                        .lineLimit(8)
+                        .foregroundStyle(.secondary)
                 }
 
                 if isFitnessReportEntry(entry) {
                     WorkoutReportMetricsWall(metrics: entry.reportMetrics)
-                        .padding(.top, 6)
                 }
 
                 if !entry.inspiration.isEmpty || !entry.imageData.isEmpty {
@@ -569,22 +852,54 @@ private struct JournalEntryRow: View {
                             compact: true
                         )
                     }
-                    .padding(.top, 6)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(cardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(cardBorderColor, lineWidth: 1)
+            )
         }
+        .buttonStyle(.plain)
+    }
+
+    private var cardBackground: LinearGradient {
+        if isFitnessReportEntry(entry) {
+            return LinearGradient(
+                colors: [
+                    Color.orange.opacity(0.18),
+                    Color.red.opacity(0.08),
+                    Color.black.opacity(0.16)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+
+        return LinearGradient(
+            colors: [
+                Color.white.opacity(0.1),
+                Color.teal.opacity(0.05),
+                Color.indigo.opacity(0.08)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var cardBorderColor: Color {
+        isFitnessReportEntry(entry) ? Color.orange.opacity(0.16) : Color.white.opacity(0.08)
     }
 }
 
 struct JournalEditorView: View {
-    
     @Environment(\.dismiss) var dismiss
-    
     @Binding var entry: JournalEntry
-    
     var onSave: (JournalEntry) -> Void
-    
+    @State private var editorAnimationPhase: Double = 0
+
     #if canImport(JournalingSuggestions)
     @State private var showingSuggestions = false
     #endif
@@ -843,25 +1158,17 @@ struct JournalEditorView: View {
     }
     
     private func format(motionActivity: JournalingSuggestion.MotionActivity) -> String {
-        var lines: [String?] = [
+        return section(title: "Motion Activity", lines: [
             detailLine("Steps", value: "\(motionActivity.steps)"),
-            detailLine("Date", value: motionActivity.date.map(format(dateInterval:))),
-            detailLine("Icon", value: motionActivity.icon?.lastPathComponent)
-        ]
-        
-        if #available(iOS 18.0, *) {
-            lines.append(detailLine("Movement Type", value: motionActivity.movementType.map { String(describing: $0) }))
-        }
-        
-        return section(title: "Motion Activity", lines: lines)
+            detailLine("Date", value: motionActivity.date.map(format(dateInterval:)))
+        ])
     }
     
     private func format(podcast: JournalingSuggestion.Podcast) -> String {
         section(title: "Podcast", lines: [
             detailLine("Episode", value: podcast.episode),
             detailLine("Show", value: podcast.show),
-            detailLine("Date", value: podcast.date.map(format(date:))),
-            detailLine("Artwork", value: podcast.artwork?.lastPathComponent)
+            detailLine("Date", value: podcast.date.map(format(date:)))
         ])
     }
     
@@ -877,21 +1184,18 @@ struct JournalEditorView: View {
             detailLine("Song", value: song.song),
             detailLine("Artist", value: song.artist),
             detailLine("Album", value: song.album),
-            detailLine("Date", value: song.date.map(format(date:))),
-            detailLine("Artwork", value: song.artwork?.lastPathComponent)
+            detailLine("Date", value: song.date.map(format(date:)))
         ])
     }
     
     private func format(workout: JournalingSuggestion.Workout) -> String {
         let route = workout.route ?? []
         return section(title: "Workout", lines: [
-            detailLine("Activity Type", value: String(describing: workout.details?.activityType ?? .other)),
-            detailLine("Localized Name", value: workout.details?.localizedName),
+            detailLine("Name", value: workout.details?.localizedName),
             detailLine("Date", value: workout.details?.date.map(format(dateInterval:))),
-            detailLine("Active Energy", value: format(energy: workout.details?.activeEnergyBurned)),
+            detailLine("Calories", value: format(energy: workout.details?.activeEnergyBurned)),
             detailLine("Distance", value: format(distance: workout.details?.distance)),
-            detailLine("Average Heart Rate", value: format(heartRate: workout.details?.averageHeartRate)),
-            detailLine("Icon", value: workout.icon?.lastPathComponent),
+            detailLine("Avg Heart Rate", value: format(heartRate: workout.details?.averageHeartRate)),
             detailLine("Route Points", value: route.isEmpty ? nil : "\(route.count)"),
             detailLine("Route Distance", value: route.isEmpty ? nil : format(distanceMeters: routeDistance(route))),
             detailLine("Route Start", value: route.first.flatMap { format(coordinate: $0.coordinate) }),
@@ -901,17 +1205,16 @@ struct JournalEditorView: View {
     
     private func format(workoutGroup: JournalingSuggestion.WorkoutGroup) -> String {
         let workoutSummaries = workoutGroup.workouts.enumerated().map { index, workout in
-            let title = workout.details?.localizedName ?? String(describing: workout.details?.activityType ?? .other)
+            let title = workout.details?.localizedName ?? "Workout"
             let date = workout.details?.date.map(format(dateInterval:)) ?? "Unknown date"
             return "\(index + 1). \(title) | \(date)"
         }
         
         return section(title: "Workout Group", lines: [
-            detailLine("Workout Count", value: "\(workoutGroup.workouts.count)"),
+            detailLine("Sessions", value: "\(workoutGroup.workouts.count)"),
             detailLine("Duration", value: workoutGroup.duration.flatMap(format(duration:))),
-            detailLine("Active Energy", value: format(energy: workoutGroup.activeEnergyBurned)),
-            detailLine("Average Heart Rate", value: format(heartRate: workoutGroup.averageHeartRate)),
-            detailLine("Icon", value: workoutGroup.icon?.lastPathComponent),
+            detailLine("Calories", value: format(energy: workoutGroup.activeEnergyBurned)),
+            detailLine("Avg Heart Rate", value: format(heartRate: workoutGroup.averageHeartRate)),
             workoutSummaries.isEmpty ? nil : "Workouts:",
             workoutSummaries.isEmpty ? nil : workoutSummaries.joined(separator: "\n")
         ])
@@ -924,35 +1227,30 @@ struct JournalEditorView: View {
             detailLine("Date", value: format(date: state.startDate)),
             detailLine("Kind", value: String(describing: state.kind)),
             detailLine("Valence", value: String(format: "%.2f", state.valence)),
-            detailLine("Valence Classification", value: String(describing: state.valenceClassification)),
+            detailLine("Classification", value: String(describing: state.valenceClassification)),
             detailLine("Labels", value: state.labels.isEmpty ? nil : state.labels.map { String(describing: $0) }.joined(separator: ", ")),
-            detailLine("Associations", value: state.associations.isEmpty ? nil : state.associations.map { String(describing: $0) }.joined(separator: ", ")),
-            detailLine("Icon", value: stateOfMind.icon?.lastPathComponent),
-            detailLine("Light Background", value: stateOfMind.lightBackground.map { String(describing: $0) }),
-            detailLine("Dark Background", value: stateOfMind.darkBackground.map { String(describing: $0) })
+            detailLine("Associations", value: state.associations.isEmpty ? nil : state.associations.map { String(describing: $0) }.joined(separator: ", "))
         ])
     }
     
     @available(iOS 18.0, *)
     private func format(genericMedia: JournalingSuggestion.GenericMedia) -> String {
-        section(title: "Generic Media", lines: [
+        section(title: "Media", lines: [
             detailLine("Title", value: genericMedia.title),
             detailLine("Artist", value: genericMedia.artist),
             detailLine("Album", value: genericMedia.album),
-            detailLine("Date", value: genericMedia.date.map(format(date:))),
-            detailLine("App Icon", value: genericMedia.appIcon?.lastPathComponent)
+            detailLine("Date", value: genericMedia.date.map(format(date:)))
         ])
     }
     
     @available(iOS 26.0, *)
     private func format(eventPoster: JournalingSuggestion.EventPoster) -> String {
-        section(title: "Event Poster", lines: [
+        section(title: "Event", lines: [
             detailLine("Title", value: String(eventPoster.title.characters)),
             detailLine("Place", value: eventPoster.placeName),
-            detailLine("Event Start", value: eventPoster.eventStart.map(format(date:))),
-            detailLine("Event End", value: eventPoster.eventEnd.map(format(date:))),
-            detailLine("Is Host", value: eventPoster.isHost.map(boolLabel)),
-            detailLine("Image", value: eventPoster.image?.lastPathComponent)
+            detailLine("Start", value: eventPoster.eventStart.map(format(date:))),
+            detailLine("End", value: eventPoster.eventEnd.map(format(date:))),
+            detailLine("Host", value: eventPoster.isHost.map(boolLabel))
         ])
     }
     
@@ -1011,78 +1309,92 @@ struct JournalEditorView: View {
     #endif
     
     var body: some View {
-        
         NavigationStack {
-            
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    
-                    TextField("Title", text: $entry.title)
-                        .font(.title2.bold())
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Entry")
-                            .font(.headline)
-                        TextEditor(text: $entry.content)
-                            .frame(minHeight: 220)
-                            .padding(8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(Color(uiColor: .secondarySystemBackground))
-                            )
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Inspiration")
-                                .font(.headline)
-                            Spacer()
-                            Text("Imported from Suggestions")
+            ZStack {
+                GradientBackgrounds().spiritGradient(animationPhase: $editorAnimationPhase)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            TextField("Untitled entry", text: $entry.title)
+                                .font(.system(.largeTitle, design: .serif, weight: .bold))
+                                .foregroundStyle(.primary)
+
+                            Text(entry.date.formatted(.dateTime.weekday(.wide).month().day().hour().minute()))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        journalEditorSection(
+                            title: "Reflection",
+                            subtitle: "Write like you're speaking to yourself, not filling out a form."
+                        ) {
+                            TextEditor(text: $entry.content)
+                                .scrollContentBackground(.hidden)
+                                .frame(minHeight: 260)
+                                .font(.body)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 6)
+                        }
+
+                        journalEditorSection(
+                            title: "Inspiration",
+                            subtitle: "Imported prompts, places, workouts, and memories live here."
+                        ) {
+                            HStack {
+                                Text("Suggestions layer")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("Imported from Suggestions")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if !entry.inspiration.isEmpty || !entry.imageData.isEmpty {
+                                InspirationSectionView(
+                                    inspiration: entry.inspiration,
+                                    imageData: entry.imageData
+                                )
+                            }
+
+                            TextEditor(text: $entry.inspiration)
+                                .scrollContentBackground(.hidden)
+                                .frame(minHeight: 220)
+                                .font(.body)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 6)
+
+                            Text("You can refine imported inspiration here. New inspiration is still added through Journaling Suggestions.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                        
-                        if !entry.inspiration.isEmpty || !entry.imageData.isEmpty {
-                            InspirationSectionView(
-                                inspiration: entry.inspiration,
-                                imageData: entry.imageData
-                            )
-                        }
-                        
-                        TextEditor(text: $entry.inspiration)
-                            .frame(minHeight: 220)
-                            .padding(8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(Color(uiColor: .secondarySystemBackground))
-                            )
-                        
-                        Text("You can edit imported inspiration text here, but new inspiration is added only through Journaling Suggestions.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
+                    .padding(.horizontal)
+                    .padding(.top, 18)
+                    .padding(.bottom, 120)
                 }
-                .padding()
             }
-            
-            .navigationTitle("Entry")
-            
+            .navigationTitle("Journal Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
-                
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {
                         dismiss()
                     }
                 }
-                
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
                         entry.date = Date()
                         onSave(entry)
                         dismiss()
                     }
+                    .fontWeight(.semibold)
                 }
-                
+
                 ToolbarItemGroup(placement: .bottomBar) {
                     #if canImport(JournalingSuggestions)
                     Button {
@@ -1095,34 +1407,41 @@ struct JournalEditorView: View {
                     Spacer()
 
                     Button {
-                        entry.content += generateHealthSnapshot()
+                        if entry.content.isEmpty {
+                            entry.content = generateHealthSnapshot()
+                        } else {
+                            entry.content += "\n" + generateHealthSnapshot()
+                        }
                     } label: {
                         Label("Health Snapshot", systemImage: "heart.text.square")
                     }
-
                 }
             }
-            
+            .onAppear {
+                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                    editorAnimationPhase = 20
+                }
+            }
             #if canImport(JournalingSuggestions)
             .sheet(isPresented: $showingSuggestions) {
                 JournalingSuggestionsPicker("What's on your mind?") { suggestion in
                     Task {
                         let importedSuggestion = await importSuggestion(suggestion)
-                        
+
                         await MainActor.run {
                             if entry.title.isEmpty {
                                 entry.title = suggestion.title
                             }
-                            
+
                             entry.inspiration = mergeInspiration(
                                 existing: entry.inspiration,
                                 imported: importedSuggestion.text
                             )
-                            
+
                             for image in importedSuggestion.imageData where !entry.imageData.contains(image) {
                                 entry.imageData.append(image)
                             }
-                            
+
                             showingSuggestions = false
                         }
                     }
@@ -1130,5 +1449,30 @@ struct JournalEditorView: View {
             }
             #endif
         }
+    }
+
+    @ViewBuilder
+    private func journalEditorSection<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            content()
+        }
+        .padding(18)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
     }
 }

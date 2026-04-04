@@ -1408,7 +1408,7 @@ class NavigationState: ObservableObject {
         }
 
         switch focus {
-        case .nutrition: return .insights
+        case .nutrition: return .search
         case .fitness: return .dashboard
         case .mentalHealth: return .mindfulnessRealm
         }
@@ -1417,15 +1417,17 @@ class NavigationState: ObservableObject {
     static func tab(_ tab: RootTabSelection, belongsTo focus: AppFocus) -> Bool {
         switch focus {
         case .nutrition:
+            // Sidebar nutrition tabs commented out in ContentView_iPad_alt; only search scope remains.
             switch tab {
-            case .insights, .labels, .log, .calories, .carbs, .protein, .fats, .water, .fiber, .vitamins, .minerals, .phytochemicals, .antioxidants, .electrolytes, .search:
+            case .search:
                 return true
             default:
                 return false
             }
         case .fitness:
+            // Coach + Activity Rings tabs commented out in ContentView_iPad_alt.
             switch tab {
-            case .dashboard, .programBuilder, .todaysPlan, .trainingCalendar, .coach, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .activityRings, .heartZones, .pastQuests:
+            case .dashboard, .programBuilder, .todaysPlan, .trainingCalendar, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .heartZones, .pastQuests:
                 return true
             default:
                 return false

@@ -2910,14 +2910,6 @@ private struct StrainRecoveryAISummarySection: View {
         return "Preparing the \(selectedSuggestion?.title ?? detectedIntent.displayName) AI summary for this date and filter."
     }
 
-    private var comparisonInsights: [CoachSummaryInsight] {
-        CoachSummaryNLP.detectInsights(
-            in: displayedSummaryBody,
-            anchorDate: anchorDate,
-            timeFilter: timeFilter
-        )
-    }
-
     private var shouldShowRefresh: Bool {
         !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -3342,6 +3334,13 @@ private struct StrainRecoveryAISummarySection: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                let coachMarkdown = CoachResponseMarkdown.parse(displayedSummaryBody)
+                let coachInsights = CoachSummaryNLP.detectInsights(
+                    in: coachMarkdown.plain,
+                    anchorDate: anchorDate,
+                    timeFilter: timeFilter
+                )
+
                 if summaryText.isEmpty && isLoading {
                     SummaryPreparationAnimationView(
                         title: "Generating \(selectedSuggestion?.title ?? detectedIntent.displayName)",
@@ -3349,8 +3348,8 @@ private struct StrainRecoveryAISummarySection: View {
                     )
                 } else {
                     CoachSummaryInteractiveText(
-                        text: displayedSummaryBody,
-                        insights: comparisonInsights
+                        parsed: coachMarkdown,
+                        insights: coachInsights
                     ) { insight in
                         selectedComparisonInsight = insight
                     }
@@ -3364,7 +3363,7 @@ private struct StrainRecoveryAISummarySection: View {
                         .foregroundColor(.secondary)
                 }
 
-                if !comparisonInsights.isEmpty {
+                if !coachInsights.isEmpty {
                     Text("Tap the highlighted coach cues to compare the linked metrics on a shared whiteboard.")
                         .font(.caption)
                         .foregroundColor(.orange)

@@ -679,15 +679,111 @@ enum CoachSummaryNLP {
     }
 }
 
+/// Strips lightweight coach-facing markdown (`**bold**`, `__bold__`, `` `code` ``) so tap-to-compare ranges match visible text.
+enum CoachResponseMarkdown {
+    struct Parsed {
+        let plain: String
+        let attributed: AttributedString
+    }
+
+    private enum ChunkStyle {
+        case plain
+        case bold
+        case code
+    }
+
+    static func parse(_ raw: String) -> Parsed {
+        var s = raw
+        var i = s.startIndex
+        var plainRun = ""
+        var chunks: [(String, ChunkStyle)] = []
+
+        func flushPlainRun() {
+            guard !plainRun.isEmpty else { return }
+            chunks.append((plainRun, .plain))
+            plainRun = ""
+        }
+
+        while i < s.endIndex {
+            let tail = s[i...]
+            if tail.hasPrefix("**") {
+                flushPlainRun()
+                let afterOpen = s.index(i, offsetBy: 2)
+                if let close = s.range(of: "**", range: afterOpen..<s.endIndex) {
+                    let inner = String(s[afterOpen..<close.lowerBound])
+                    if !inner.isEmpty {
+                        chunks.append((inner, .bold))
+                    }
+                    i = close.upperBound
+                    continue
+                }
+                plainRun.append("**")
+                i = afterOpen
+                continue
+            }
+            if tail.hasPrefix("__") {
+                flushPlainRun()
+                let afterOpen = s.index(i, offsetBy: 2)
+                if let close = s.range(of: "__", range: afterOpen..<s.endIndex) {
+                    let inner = String(s[afterOpen..<close.lowerBound])
+                    if !inner.isEmpty {
+                        chunks.append((inner, .bold))
+                    }
+                    i = close.upperBound
+                    continue
+                }
+                plainRun.append("__")
+                i = afterOpen
+                continue
+            }
+            if s[i] == "`" {
+                flushPlainRun()
+                let afterOpen = s.index(after: i)
+                if let close = s[afterOpen...].firstIndex(of: "`") {
+                    let inner = String(s[afterOpen..<close])
+                    if !inner.isEmpty {
+                        chunks.append((inner, .code))
+                    }
+                    i = s.index(after: close)
+                    continue
+                }
+                plainRun.append("`")
+                i = afterOpen
+                continue
+            }
+            plainRun.append(s[i])
+            i = s.index(after: i)
+        }
+        flushPlainRun()
+
+        let plain = chunks.map(\.0).joined()
+        var attributed = AttributedString()
+        for (text, style) in chunks where !text.isEmpty {
+            var piece = AttributedString(text)
+            switch style {
+            case .plain:
+                break
+            case .bold:
+                piece.inlinePresentationIntent = .stronglyEmphasized
+            case .code:
+                piece.font = .system(.body, design: .monospaced)
+            }
+            attributed.append(piece)
+        }
+        return Parsed(plain: plain, attributed: attributed)
+    }
+}
+
 struct CoachSummaryInteractiveText: View {
-    let text: String
+    let parsed: CoachResponseMarkdown.Parsed
     let insights: [CoachSummaryInsight]
     let onSelect: (CoachSummaryInsight) -> Void
 
     private var attributedText: AttributedString {
-        var attributed = AttributedString(text)
+        var attributed = parsed.attributed
+        let plain = parsed.plain
         for insight in insights {
-            if let stringRange = Range(insight.range, in: text),
+            if let stringRange = Range(insight.range, in: plain),
                let attributedRange = Range(stringRange, in: attributed) {
                 attributed[attributedRange].foregroundColor = .orange
                 attributed[attributedRange].backgroundColor = Color.orange.opacity(0.12)
