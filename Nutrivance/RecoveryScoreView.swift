@@ -1,64 +1,57 @@
 import SwiftUI
 
 struct RecoveryScoreView: View {
-    @ObservedObject private var engine = HealthStateEngine.shared
-
     @State private var animationPhase: Double = 0
     @State private var isLoading = false
     @State private var timeFilter: RecoveryFocusTimeFilter = .day
+    @State private var snapshotsByFilter: [RecoveryFocusTimeFilter: RecoverySnapshot] = [:]
 
     private var today: Date {
         Calendar.current.startOfDay(for: Date())
     }
 
+    private var refreshTaskID: String {
+        let cal = Calendar.current
+        let c = cal.dateComponents([.year, .month, .day], from: today)
+        return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
+    }
+
+    private var healthEngine: HealthStateEngine { HealthStateEngine.shared }
+
     private var selectedWindow: [Date] {
-        recoveryDateSequence(from: timeFilter.windowStart(anchor: today), to: today)
+        snapshot.selectedWindow
     }
 
     private var recoverySeries: [(Date, Double)] {
-        selectedWindow.map { day in
-            (day, recoveryScoreForDay(day))
-        }
+        snapshot.recoverySeries
     }
 
     private var effectHRVSeries: [(Date, Double)] {
-        selectedWindow.compactMap { day in
-            effectHRV(on: day).map { (day, $0) }
-        }
+        snapshot.effectHRVSeries
     }
 
     private var basalRhrSeries: [(Date, Double)] {
-        selectedWindow.compactMap { day in
-            basalRhr(on: day).map { (day, $0) }
-        }
+        snapshot.basalRhrSeries
     }
 
     private var sleepSeries: [(Date, Double)] {
-        selectedWindow.compactMap { day in
-            sleepDuration(on: day).map { (day, $0) }
-        }
+        snapshot.sleepSeries
     }
 
     private var respiratorySeries: [(Date, Double)] {
-        selectedWindow.compactMap { day in
-            engine.respiratoryRate[day].map { (day, $0) }
-        }
+        snapshot.respiratorySeries
     }
 
     private var spO2Series: [(Date, Double)] {
-        selectedWindow.compactMap { day in
-            engine.spO2[day].map { (day, $0) }
-        }
+        snapshot.spO2Series
     }
 
     private var wristTemperatureSeries: [(Date, Double)] {
-        selectedWindow.compactMap { day in
-            engine.wristTemperature[day].map { (day, $0) }
-        }
+        snapshot.wristTemperatureSeries
     }
 
     private var recoveryValue: Double {
-        recoveryScoreForDay(today)
+        snapshot.recoveryValue
     }
 
     private var recoveryState: RecoveryFocusState {
@@ -66,89 +59,43 @@ struct RecoveryScoreView: View {
     }
 
     private var effectHRVToday: Double? {
-        effectHRV(on: today)
+        snapshot.effectHRVToday
     }
 
     private var basalRhrToday: Double? {
-        basalRhr(on: today)
+        snapshot.basalRhrToday
     }
 
     private var sleepToday: Double? {
-        sleepDuration(on: today)
+        snapshot.sleepToday
     }
 
     private var sleepEfficiencyToday: Double? {
-        sleepEfficiency(on: today)
+        snapshot.sleepEfficiencyToday
     }
 
     private var respiratoryToday: Double? {
-        engine.respiratoryRate[today]
+        snapshot.respiratoryToday
     }
 
     private var spO2Today: Double? {
-        engine.spO2[today]
+        snapshot.spO2Today
     }
 
     private var wristTemperatureToday: Double? {
-        engine.wristTemperature[today]
+        snapshot.wristTemperatureToday
     }
 
     private var recoveryInputsToday: HealthStateEngine.ProRecoveryInputs {
-        recoveryInputs(for: today)
+        snapshot.recoveryInputsToday
     }
 
     private var recoverySignals: [RecoverySignalCardModel] {
-        [
-            RecoverySignalCardModel(
-                title: "Effect HRV",
-                value: effectHRVToday.map { String(format: "%.0f", $0) } ?? "–",
-                unit: "ms",
-                detail: "Sleep-anchored HRV is the lead signal in your recovery model.",
-                tint: .mint
-            ),
-            RecoverySignalCardModel(
-                title: "Basal Sleeping HR",
-                value: basalRhrToday.map { String(format: "%.0f", $0) } ?? "–",
-                unit: "bpm",
-                detail: "The lowest stable overnight heart rate helps estimate cardiovascular cost.",
-                tint: .blue
-            ),
-            RecoverySignalCardModel(
-                title: "Sleep Duration",
-                value: sleepToday.map { String(format: "%.1f", $0) } ?? "–",
-                unit: "h",
-                detail: "Recovery still gets sleep-gated. A weak night caps the upside even with decent physiology.",
-                tint: .indigo
-            ),
-            RecoverySignalCardModel(
-                title: "Sleep Efficiency",
-                value: sleepEfficiencyToday.map { String(format: "%.0f", $0 * 100) } ?? "–",
-                unit: "%",
-                detail: "Cleaner sleep generally preserves more of your base recovery score.",
-                tint: .cyan
-            ),
-            RecoverySignalCardModel(
-                title: "Respiratory Rate",
-                value: respiratoryToday.map { String(format: "%.1f", $0) } ?? "–",
-                unit: "/min",
-                detail: "Breathing rate can help catch systemic stress before it shows up in performance.",
-                tint: .teal
-            ),
-            RecoverySignalCardModel(
-                title: "SpO2",
-                value: spO2Today.map { String(format: "%.0f", $0) } ?? "–",
-                unit: "%",
-                detail: "Blood oxygen doesn’t drive the score directly, but it’s useful recovery-side context.",
-                tint: .green
-            ),
-            RecoverySignalCardModel(
-                title: "Wrist Temp",
-                value: wristTemperatureToday.map { String(format: "%.2f", $0) } ?? "–",
-                unit: "°C",
-                detail: "Temperature shifts can flag hidden stress, travel, illness, or poor overnight recovery.",
-                tint: .orange
-            )
-        ]
+        snapshot.recoverySignals
+    }
+
+    private var snapshot: RecoverySnapshot {
+        snapshotsByFilter[timeFilter] ?? RecoverySnapshot.empty(for: timeFilter, anchor: today)
     }
 
     var body: some View {
@@ -344,7 +291,7 @@ struct RecoveryScoreView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         Task {
-                            await refreshCoverage()
+                            await refreshCoverage(forceNetwork: true)
                         }
                     } label: {
                         Image(systemName: "arrow.clockwise")
@@ -352,11 +299,11 @@ struct RecoveryScoreView: View {
                     }
                 }
             }
-            .task {
+            .task(id: refreshTaskID) {
                 withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                     animationPhase = 20
                 }
-                await refreshCoverage()
+                await refreshCoverage(forceNetwork: false)
             }
         }
     }
@@ -403,56 +350,256 @@ struct RecoveryScoreView: View {
     }
 
     @MainActor
-    private func refreshCoverage() async {
+    private func refreshCoverage(forceNetwork: Bool) async {
         let calendar = Calendar.current
         let start = calendar.date(byAdding: .day, value: -35, to: today) ?? today
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today
+
+        snapshotsByFilter = buildSnapshots()
+
+        guard forceNetwork || healthEngine.needsRecoveryMetricsCoverage(from: start, to: end) else { return }
+
         isLoading = true
-        await engine.ensureRecoveryMetricsCoverage(from: start, to: end)
+        await healthEngine.ensureRecoveryMetricsCoverage(from: start, to: end)
+        snapshotsByFilter = buildSnapshots()
         isLoading = false
     }
 
-    private func recoveryScoreForDay(_ day: Date) -> Double {
-        let inputs = recoveryInputs(for: day)
-        guard !inputs.isInconclusive else { return engine.recoveryScore }
+    private func buildSnapshots() -> [RecoveryFocusTimeFilter: RecoverySnapshot] {
+        let hrvLookup = Dictionary(uniqueKeysWithValues: healthEngine.dailyHRV.map { ($0.date, $0.average) })
+        var snapshots: [RecoveryFocusTimeFilter: RecoverySnapshot] = [:]
+
+        for filter in RecoveryFocusTimeFilter.allCases {
+            let selectedWindow = recoveryDateSequence(from: filter.windowStart(anchor: today), to: today)
+            let recoverySeries = selectedWindow.map { day in
+                (day, recoveryScoreForDay(day, hrvLookup: hrvLookup))
+            }
+            let effectHRVSeries = selectedWindow.compactMap { day in
+                effectHRV(on: day, hrvLookup: hrvLookup).map { (day, $0) }
+            }
+            let basalRhrSeries = selectedWindow.compactMap { day in
+                basalRhr(on: day).map { (day, $0) }
+            }
+            let sleepSeries = selectedWindow.compactMap { day in
+                sleepDuration(on: day).map { (day, $0) }
+            }
+            let respiratorySeries = selectedWindow.compactMap { day in
+                healthEngine.respiratoryRate[day].map { (day, $0) }
+            }
+            let spO2Series = selectedWindow.compactMap { day in
+                healthEngine.spO2[day].map { (day, $0) }
+            }
+            let wristTemperatureSeries = selectedWindow.compactMap { day in
+                healthEngine.wristTemperature[day].map { (day, $0) }
+            }
+
+            let effectHRVToday = effectHRV(on: today, hrvLookup: hrvLookup)
+            let basalRhrToday = basalRhr(on: today)
+            let sleepToday = sleepDuration(on: today)
+            let sleepEfficiencyToday = sleepEfficiency(on: today, sleepDuration: sleepToday)
+            let respiratoryToday = healthEngine.respiratoryRate[today]
+            let spO2Today = healthEngine.spO2[today]
+            let wristTemperatureToday = healthEngine.wristTemperature[today]
+            let recoveryInputsToday = recoveryInputs(for: today, hrvLookup: hrvLookup)
+            let recoveryValue = recoverySeries.last?.1 ?? healthEngine.recoveryScore
+
+            snapshots[filter] = RecoverySnapshot(
+                selectedWindow: selectedWindow,
+                recoverySeries: recoverySeries,
+                effectHRVSeries: effectHRVSeries,
+                basalRhrSeries: basalRhrSeries,
+                sleepSeries: sleepSeries,
+                respiratorySeries: respiratorySeries,
+                spO2Series: spO2Series,
+                wristTemperatureSeries: wristTemperatureSeries,
+                recoveryValue: recoveryValue,
+                effectHRVToday: effectHRVToday,
+                basalRhrToday: basalRhrToday,
+                sleepToday: sleepToday,
+                sleepEfficiencyToday: sleepEfficiencyToday,
+                respiratoryToday: respiratoryToday,
+                spO2Today: spO2Today,
+                wristTemperatureToday: wristTemperatureToday,
+                recoveryInputsToday: recoveryInputsToday,
+                recoverySignals: makeRecoverySignals(
+                    effectHRVToday: effectHRVToday,
+                    basalRhrToday: basalRhrToday,
+                    sleepToday: sleepToday,
+                    sleepEfficiencyToday: sleepEfficiencyToday,
+                    respiratoryToday: respiratoryToday,
+                    spO2Today: spO2Today,
+                    wristTemperatureToday: wristTemperatureToday
+                )
+            )
+        }
+
+        return snapshots
+    }
+
+    private func makeRecoverySignals(
+        effectHRVToday: Double?,
+        basalRhrToday: Double?,
+        sleepToday: Double?,
+        sleepEfficiencyToday: Double?,
+        respiratoryToday: Double?,
+        spO2Today: Double?,
+        wristTemperatureToday: Double?
+    ) -> [RecoverySignalCardModel] {
+        [
+            RecoverySignalCardModel(
+                title: "Effect HRV",
+                value: effectHRVToday.map { String(format: "%.0f", $0) } ?? "–",
+                unit: "ms",
+                detail: "Sleep-anchored HRV is the lead signal in your recovery model.",
+                tint: .mint
+            ),
+            RecoverySignalCardModel(
+                title: "Basal Sleeping HR",
+                value: basalRhrToday.map { String(format: "%.0f", $0) } ?? "–",
+                unit: "bpm",
+                detail: "The lowest stable overnight heart rate helps estimate cardiovascular cost.",
+                tint: .blue
+            ),
+            RecoverySignalCardModel(
+                title: "Sleep Duration",
+                value: sleepToday.map { String(format: "%.1f", $0) } ?? "–",
+                unit: "h",
+                detail: "Recovery still gets sleep-gated. A weak night caps the upside even with decent physiology.",
+                tint: .indigo
+            ),
+            RecoverySignalCardModel(
+                title: "Sleep Efficiency",
+                value: sleepEfficiencyToday.map { String(format: "%.0f", $0 * 100) } ?? "–",
+                unit: "%",
+                detail: "Cleaner sleep generally preserves more of your base recovery score.",
+                tint: .cyan
+            ),
+            RecoverySignalCardModel(
+                title: "Respiratory Rate",
+                value: respiratoryToday.map { String(format: "%.1f", $0) } ?? "–",
+                unit: "/min",
+                detail: "Breathing rate can help catch systemic stress before it shows up in performance.",
+                tint: .teal
+            ),
+            RecoverySignalCardModel(
+                title: "SpO2",
+                value: spO2Today.map { String(format: "%.0f", $0) } ?? "–",
+                unit: "%",
+                detail: "Blood oxygen doesn’t drive the score directly, but it’s useful recovery-side context.",
+                tint: .green
+            ),
+            RecoverySignalCardModel(
+                title: "Wrist Temp",
+                value: wristTemperatureToday.map { String(format: "%.2f", $0) } ?? "–",
+                unit: "°C",
+                detail: "Temperature shifts can flag hidden stress, travel, illness, or poor overnight recovery.",
+                tint: .orange
+            )
+        ]
+    }
+
+    private func recoveryScoreForDay(_ day: Date, hrvLookup: [Date: Double]) -> Double {
+        let inputs = recoveryInputs(for: day, hrvLookup: hrvLookup)
+        guard !inputs.isInconclusive else { return healthEngine.recoveryScore }
         return HealthStateEngine.proRecoveryScore(from: inputs)
     }
 
-    private func recoveryInputs(for day: Date) -> HealthStateEngine.ProRecoveryInputs {
+    private func recoveryInputs(for day: Date, hrvLookup: [Date: Double]) -> HealthStateEngine.ProRecoveryInputs {
         let normalizedDay = Calendar.current.startOfDay(for: day)
-        let hrvLookup = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
         return HealthStateEngine.proRecoveryInputs(
-            latestHRV: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.effectHRV) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: hrvLookup),
-            restingHeartRate: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailyRestingHeartRate),
-            sleepDurationHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration),
-            timeInBedHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration),
-            hrvBaseline60Day: engine.hrvBaseline60Day,
-            rhrBaseline60Day: engine.rhrBaseline60Day,
-            sleepBaseline60Day: engine.sleepBaseline60Day,
-            hrvBaseline7Day: engine.hrvBaseline7Day,
-            rhrBaseline7Day: engine.rhrBaseline7Day,
-            sleepBaseline7Day: engine.sleepBaseline7Day,
-            bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: engine.sleepStartHours, around: normalizedDay)
+            latestHRV: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.effectHRV) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: hrvLookup),
+            restingHeartRate: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.dailyRestingHeartRate),
+            sleepDurationHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.dailySleepDuration),
+            timeInBedHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.dailySleepDuration),
+            hrvBaseline60Day: healthEngine.hrvBaseline60Day,
+            rhrBaseline60Day: healthEngine.rhrBaseline60Day,
+            sleepBaseline60Day: healthEngine.sleepBaseline60Day,
+            hrvBaseline7Day: healthEngine.hrvBaseline7Day,
+            rhrBaseline7Day: healthEngine.rhrBaseline7Day,
+            sleepBaseline7Day: healthEngine.sleepBaseline7Day,
+            bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: healthEngine.sleepStartHours, around: normalizedDay)
         )
     }
 
-    private func effectHRV(on day: Date) -> Double? {
-        engine.effectHRV[day] ?? Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })[day]
+    private func effectHRV(on day: Date, hrvLookup: [Date: Double]) -> Double? {
+        healthEngine.effectHRV[day] ?? hrvLookup[day]
     }
 
     private func basalRhr(on day: Date) -> Double? {
-        engine.basalSleepingHeartRate[day] ?? engine.dailyRestingHeartRate[day]
+        healthEngine.basalSleepingHeartRate[day] ?? healthEngine.dailyRestingHeartRate[day]
     }
 
     private func sleepDuration(on day: Date) -> Double? {
-        engine.anchoredSleepDuration[day] ?? engine.dailySleepDuration[day]
+        healthEngine.anchoredSleepDuration[day] ?? healthEngine.dailySleepDuration[day]
     }
 
-    private func sleepEfficiency(on day: Date) -> Double? {
-        guard let sleep = sleepDuration(on: day),
-              let timeInBed = engine.anchoredTimeInBed[day] ?? sleepDuration(on: day),
-              timeInBed > 0 else { return nil }
-        return sleep / timeInBed
+    private func sleepEfficiency(on day: Date, sleepDuration: Double?) -> Double? {
+        guard let sleepDuration else { return nil }
+        let timeInBed = healthEngine.anchoredTimeInBed[day] ?? sleepDuration
+        guard timeInBed > 0 else { return nil }
+        return sleepDuration / timeInBed
+    }
+}
+
+private struct RecoverySnapshot {
+    let selectedWindow: [Date]
+    let recoverySeries: [(Date, Double)]
+    let effectHRVSeries: [(Date, Double)]
+    let basalRhrSeries: [(Date, Double)]
+    let sleepSeries: [(Date, Double)]
+    let respiratorySeries: [(Date, Double)]
+    let spO2Series: [(Date, Double)]
+    let wristTemperatureSeries: [(Date, Double)]
+    let recoveryValue: Double
+    let effectHRVToday: Double?
+    let basalRhrToday: Double?
+    let sleepToday: Double?
+    let sleepEfficiencyToday: Double?
+    let respiratoryToday: Double?
+    let spO2Today: Double?
+    let wristTemperatureToday: Double?
+    let recoveryInputsToday: HealthStateEngine.ProRecoveryInputs
+    let recoverySignals: [RecoverySignalCardModel]
+
+    static func empty(for filter: RecoveryFocusTimeFilter, anchor: Date) -> RecoverySnapshot {
+        RecoverySnapshot(
+            selectedWindow: recoveryDateSequence(from: filter.windowStart(anchor: anchor), to: anchor),
+            recoverySeries: [],
+            effectHRVSeries: [],
+            basalRhrSeries: [],
+            sleepSeries: [],
+            respiratorySeries: [],
+            spO2Series: [],
+            wristTemperatureSeries: [],
+            recoveryValue: 0,
+            effectHRVToday: nil,
+            basalRhrToday: nil,
+            sleepToday: nil,
+            sleepEfficiencyToday: nil,
+            respiratoryToday: nil,
+            spO2Today: nil,
+            wristTemperatureToday: nil,
+            recoveryInputsToday: HealthStateEngine.ProRecoveryInputs(
+                hrvZScore: nil,
+                restingHeartRateZScore: nil,
+                restingHeartRatePenaltyZScore: nil,
+                sleepRatio: nil,
+                sleepScalar: nil,
+                sleepGoalHours: 8,
+                sleepDurationHours: nil,
+                timeInBedHours: nil,
+                sleepEfficiency: nil,
+                composite: 0,
+                baseRecoveryScore: 0,
+                finalRecoveryScore: 0,
+                sleepDebtPenalty: 0,
+                circadianPenalty: 0,
+                efficiencyCap: nil,
+                bedtimeVarianceMinutes: nil,
+                isInconclusive: true
+            ),
+            recoverySignals: []
+        )
     }
 }
 

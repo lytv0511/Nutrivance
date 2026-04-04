@@ -123,10 +123,10 @@ struct ContentView_iPad_alt: View {
             }
             .defaultVisibility(.hidden, for: .tabBar)
             TabSection("Mental Health") {
-                Tab("Mood Tracker", systemImage: "sun.max", value: RootTabSelection.moodTracker) {
-                    MoodTrackerView()
+                Tab("Pathfinder", systemImage: "compass.drawing", value: RootTabSelection.pathfinder) {
+                    PathfinderView()
                 }
-                .customizationID("iPad.tab.moodTracker")
+                .customizationID("iPad.tab.pathfinder")
                 .defaultVisibility(.hidden, for: .tabBar)
                 Tab("Journal", systemImage: "book.fill", value: RootTabSelection.journal) {
                     JournalView()

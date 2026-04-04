@@ -150,7 +150,7 @@ struct SearchView: View {
         "Recovery Score", "Readiness", "Strain vs Recovery", "Past Quests", "Heart Zones"
     ]
 
-    let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress"]
+    let mentalHealthItems = ["Mindfulness Realm", "Pathfinder", "Journal", "Sleep", "Stress"]
 
     private var usesLegacyNavigation: Bool {
         UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
@@ -339,8 +339,8 @@ struct SearchView: View {
             return (.fitness, "Past Quests", .pastQuests)
         case "Mindfulness Realm":
             return (.mentalHealth, "Mindfulness Realm", .mindfulnessRealm)
-        case "Mood Tracker":
-            return (.mentalHealth, "Mood Tracker", .moodTracker)
+        case "Pathfinder":
+            return (.mentalHealth, "Pathfinder", .pathfinder)
         case "Journal":
             return (.mentalHealth, "Journal", .journal)
         case "Sleep":
@@ -625,8 +625,8 @@ struct SearchView: View {
             return AnyView(FuelCheckView())
         case "Mindfulness Realm":
             return AnyView(MindfulnessRealmView())
-        case "Mood Tracker":
-            return AnyView(MoodTrackerView())
+        case "Pathfinder":
+            return AnyView(PathfinderView())
         case "Journal":
             return AnyView(JournalView())
         case "Resources":
@@ -756,7 +756,7 @@ struct SearchView: View {
     private var mentalHealthSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Dashboard", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
+                ForEach(["Dashboard", "Pathfinder", "Journal", "Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -887,7 +887,7 @@ private func getIconName(for item: String) -> String {
     case "Leaderboards": return "list.number"
         
     case "Mindfulness Realm": return "eye.fill"
-    case "Mood Tracker": return "sun.max"
+    case "Pathfinder": return "compass.drawing"
     case "Journal": return "book.fill"
     case "Resources": return "folder.fill"
     case "Meditation": return "sparkles"

@@ -300,7 +300,7 @@ struct PastQuestsView: View {
 
     var body: some View {
         ZStack {
-            MovingProgramBuilderBackground()
+            GradientBackgrounds().programBuilderMeshBackground()
 
             ScrollView {
                 let questIndex = indexedQuestRecordsInPeriod

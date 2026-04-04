@@ -3189,7 +3189,7 @@ private struct StrainRecoveryAISummarySection: View {
             name: .saveWorkoutReportToJournal,
             object: SavedWorkoutReportPayload(
                 title: selectedSuggestion?.title ?? "Workout Report",
-                content: summaryText,
+                content: JournalDisplaySanitizer.endUserText(summaryText),
                 date: anchorDate
             )
         )

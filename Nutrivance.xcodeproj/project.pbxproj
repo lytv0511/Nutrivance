@@ -67,6 +67,7 @@
 		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		157C20AA2D6E6D6800D1FA9A /* MindfulnessRealmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */; };
 		157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */; };
+		15AAEE012F00A10000PATHFV /* PathfinderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15AAEE002F00A10000PATHFV /* PathfinderView.swift */; };
 		157C20AE2D6E6DDA00D1FA9A /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */; };
 		157C20B02D6E6E1A00D1FA9A /* ResourcesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AF2D6E6E1A00D1FA9A /* ResourcesView.swift */; };
 		157C20B22D6E6E5900D1FA9A /* MeditationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20B12D6E6E5900D1FA9A /* MeditationView.swift */; };
@@ -221,6 +222,7 @@
 		15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nutrivance for Apple Watch.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindfulnessRealmView.swift; sourceTree = "<group>"; };
 		157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodTrackerView.swift; sourceTree = "<group>"; };
+		15AAEE002F00A10000PATHFV /* PathfinderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathfinderView.swift; sourceTree = "<group>"; };
 		157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalView.swift; sourceTree = "<group>"; };
 		157C20AF2D6E6E1A00D1FA9A /* ResourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcesView.swift; sourceTree = "<group>"; };
 		157C20B12D6E6E5900D1FA9A /* MeditationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeditationView.swift; sourceTree = "<group>"; };
@@ -608,6 +610,7 @@
 				157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */,
 				156814292D5C0F2D003C861E /* MobilityTestView.swift */,
 				157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */,
+				15AAEE002F00A10000PATHFV /* PathfinderView.swift */,
 				15561A622D6B7580006B8741 /* MovanceView.swift */,
 				1568142A2D5C0F2D003C861E /* MovementAnalysisView.swift */,
 				159F517D2CD7C8FB001F5FFC /* NutrientCardView.swift */,
@@ -919,6 +922,7 @@
 				153DD1902D7FC3C0007CBEF5 /* ContentView_iPad_compact.swift in Sources */,
 				1568143A2D5C0F2D003C861E /* ProgramBuilderView.swift in Sources */,
 				157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */,
+				15AAEE012F00A10000PATHFV /* PathfinderView.swift in Sources */,
 				1568143B2D5C0F2D003C861E /* LiveChallengesView.swift in Sources */,
 				1568143C2D5C0F2D003C861E /* LeaderboardsView.swift in Sources */,
 				1525B1472F6495DA00E85899 /* HealthCard.swift in Sources */,

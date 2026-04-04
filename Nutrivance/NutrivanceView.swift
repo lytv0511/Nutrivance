@@ -337,7 +337,7 @@ struct NutrivanceView: View {
     private var mentalHealthSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Dashboard", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
+                ForEach(["Dashboard", "Pathfinder", "Journal", "Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)

@@ -45,7 +45,7 @@ struct SpirivanceView: View {
         "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"]
     ]
     var filteredItems: [String] {
-        let mentalHealthItems = ["Mindfulness Realm", "Mood Tracker", "Journal", "Sleep", "Stress"]
+        let mentalHealthItems = ["Mindfulness Realm", "Pathfinder", "Journal", "Sleep", "Stress"]
 
         if searchState.searchText.isEmpty {
             return mentalHealthItems
@@ -112,8 +112,8 @@ struct SpirivanceView: View {
                                     switch item {
                                     case "Mindfulness Realm":
                                         MindfulnessRealmView()
-                                    case "Mood Tracker":
-                                        MoodTrackerView()
+                                    case "Pathfinder":
+                                        PathfinderView()
                                     case "Journal":
                                         JournalView()
                                     case "Sleep":
@@ -247,8 +247,8 @@ struct SpirivanceView: View {
             return AnyView(FuelCheckView())
         case "Mindfulness Realm":
             return AnyView(MindfulnessRealmView())
-        case "Mood Tracker":
-            return AnyView(MoodTrackerView())
+        case "Pathfinder":
+            return AnyView(PathfinderView())
         case "Journal":
             return AnyView(JournalView())
         case "Resources":
@@ -357,7 +357,7 @@ struct SpirivanceView: View {
     private var mentalHealthSections: some View {
         Group {
             Section(header: Text("Main")) {
-                ForEach(["Dashboard", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
+                ForEach(["Dashboard", "Pathfinder", "Journal", "Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -487,7 +487,7 @@ private func getIconName(for item: String) -> String {
     case "Leaderboards": return "list.number"
         
     case "Mindfulness Realm": return "eye.fill"
-    case "Mood Tracker": return "sun.max"
+    case "Pathfinder": return "compass.drawing"
     case "Journal": return "book.fill"
     case "Resources": return "folder.fill"
     case "Meditation": return "sparkles"

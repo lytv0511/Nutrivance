@@ -1261,7 +1261,7 @@ enum RootTabSelection: Hashable {
     case heartZones
     case pastQuests
     case mindfulnessRealm
-    case moodTracker
+    case pathfinder
     case journal
     case sleep
     case stress
@@ -1296,7 +1296,7 @@ enum AppDestination: String, CaseIterable, Hashable, Identifiable {
     case heartZones
     case pastQuests
     case mindfulnessRealm
-    case moodTracker
+    case pathfinder
     case journal
     case sleep
     case stress
@@ -1434,7 +1434,7 @@ class NavigationState: ObservableObject {
             }
         case .mentalHealth:
             switch tab {
-            case .mindfulnessRealm, .moodTracker, .journal, .sleep, .stress:
+            case .mindfulnessRealm, .pathfinder, .journal, .sleep, .stress:
                 return true
             default:
                 return false
@@ -1470,7 +1470,7 @@ class NavigationState: ObservableObject {
         case .heartZones: return .heartZones
         case .pastQuests: return .pastQuests
         case .mindfulnessRealm: return .mindfulnessRealm
-        case .moodTracker: return .moodTracker
+        case .pathfinder: return .pathfinder
         case .journal: return .journal
         case .sleep: return .sleep
         case .stress: return .stress
@@ -2098,8 +2098,8 @@ struct NutrivanceApp: App {
                 }
                 .keyboardShortcut("M", modifiers: [.command, .shift])
 
-                Button("Mood Tracker") {
-                    navigate(focus: .mentalHealth, view: "Mood Tracker", tab: .moodTracker)
+                Button("Pathfinder") {
+                    navigate(focus: .mentalHealth, view: "Pathfinder", tab: .pathfinder)
                 }
                 .keyboardShortcut("O", modifiers: [.command, .shift])
 

@@ -76,8 +76,8 @@ struct ContentView_iPhone_alt: View {
             PastQuestsView()
         case .mindfulnessRealm:
             MindfulnessRealmView()
-        case .moodTracker:
-            MoodTrackerView()
+        case .pathfinder:
+            PathfinderView()
         case .journal:
             JournalView()
         case .sleep:

@@ -1934,6 +1934,19 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         healthStore.execute(query)
     }
 
+    func fetchStateOfMindSamples(from startDate: Date, to endDate: Date) async -> [HKStateOfMind] {
+        let sampleType = HKSampleType.stateOfMindType()
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: sampleType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                let states = (samples ?? []).compactMap { $0 as? HKStateOfMind }
+                continuation.resume(returning: states)
+            }
+            self.healthStore.execute(query)
+        }
+    }
+
     func fetchNutrientValueAsync(for nutrient: String) async -> Double {
         return await withCheckedContinuation { continuation in
             fetchNutrientData(for: nutrient) { value, _ in

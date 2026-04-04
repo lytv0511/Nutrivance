@@ -177,6 +177,8 @@ struct GradientBackgrounds {
         }
     }
 
+    // MARK: - Program Builder mesh (palette + gradients live here only)
+
     func programBuilderGradientFull(animationPhase: Binding<Double>) -> some View {
         MeshGradientView(colors: lightProgramBuilderColors, darkColors: darkProgramBuilderColors, animationPhase: animationPhase)
     }
@@ -186,6 +188,12 @@ struct GradientBackgrounds {
             programBuilderGradientFull(animationPhase: animationPhase)
             GradientFadeOverlay()
         }
+    }
+
+    /// Animated full-screen Program Builder background (mesh, fade overlay, smooth hue drift).
+    /// Use this from Program Builder, Pathfinder, Past Quests, and anywhere else that should match that look.
+    func programBuilderMeshBackground() -> some View {
+        ProgramBuilderMeshBackground()
     }
 
     func kineticPulseGradientFull(animationPhase: Binding<Double>) -> some View {
@@ -453,8 +461,9 @@ struct GradientBackgrounds {
             Color(red: 0.95, green: 0.90, blue: 0.80),  // Faded Beige
         ]
     }
-    
-    // Derived from Program Builder palette:
+
+    // MARK: - Program Builder palette stops (used only by programBuilderGradient* above)
+
     // Dark mode: (0.07,0.06,0.05) → (0.20,0.09,0.04) → (0.06,0.12,0.10)
     // Light mode: softly lifted versions of the same hues.
     private var lightProgramBuilderColors: [Color] {
@@ -610,17 +619,17 @@ struct GradientBackgrounds {
     }
 }
 
-struct MovingProgramBuilderBackground: View {
-    @State private var animationPhase: Double = 0
-
+/// Clock-driven hue phase so `repeatForever` animation transactions do not propagate to foreground UI.
+private struct ProgramBuilderMeshBackground: View {
     var body: some View {
-        GradientBackgrounds()
-            .programBuilderGradient(animationPhase: $animationPhase)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                    animationPhase = 20
-                }
-            }
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            let period = 8.0
+            let s = sin((elapsed / period) * (2 * Double.pi))
+            let phase = (s + 1) * 0.5 * 20.0
+            GradientBackgrounds()
+                .programBuilderGradient(animationPhase: .constant(phase))
+        }
     }
 }
 

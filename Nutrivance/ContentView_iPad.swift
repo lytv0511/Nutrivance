@@ -71,7 +71,7 @@ struct ContentView_iPad: View {
             "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards",
             
             // Mental Health
-            "Mindfulness Realm", "Mood Tracker", "Journal", "Resources",
+            "Mindfulness Realm", "Pathfinder", "Journal", "Resources",
             
             // Wellness
             "Meditation", "Breathing", "Sleep", "Stress"
@@ -323,8 +323,8 @@ struct ContentView_iPad: View {
                     // Mental Health Focus
                     case "Mindfulness Realm":
                         AnyView(MindfulnessRealmView())
-                    case "Mood Tracker":
-                        AnyView(MoodTrackerView())
+                    case "Pathfinder":
+                        AnyView(PathfinderView())
                     case "Journal":
                         AnyView(JournalView())
                     case "Resources":
@@ -484,7 +484,7 @@ struct ContentView_iPad: View {
                 }
             }
             Section(header: Text("Mental Health")) {
-                ForEach(["Mindfulness Realm", "Mood Tracker", "Journal", "Resources"], id: \.self) { item in
+                ForEach(["Mindfulness Realm", "Pathfinder", "Journal", "Resources"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -618,7 +618,7 @@ private func getIconName(for item: String) -> String {
         
     // Update
     case "Mindfulness Realm": return "eye.fill"
-    case "Mood Tracker": return "sun.max"
+    case "Pathfinder": return "compass.drawing"
     case "Journal": return "book.fill"
     case "Resources": return "folder.fill"
     case "Meditation": return "sparkles"

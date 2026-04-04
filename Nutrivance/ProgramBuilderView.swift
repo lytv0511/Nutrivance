@@ -239,7 +239,7 @@ struct ProgramBuilderView: View {
             .scrollBounceBehavior(.basedOnSize)
             .foregroundStyle(.orange)
             .tint(.orange)
-            .background(MovingProgramBuilderBackground())
+            .background(GradientBackgrounds().programBuilderMeshBackground())
         }
         .navigationTitle("Program Builder")
         .navigationBarTitleDisplayMode(.large)
@@ -2544,7 +2544,7 @@ struct ProgramBuilderView: View {
     private var workoutStagesExpandedView: some View {
         GeometryReader { proxy in
             ZStack {
-                MovingProgramBuilderBackground()
+                GradientBackgrounds().programBuilderMeshBackground()
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
@@ -3732,7 +3732,7 @@ private struct ProgramBuilderMetricLayoutView: View {
         }
         
         return ZStack {
-            MovingProgramBuilderBackground()
+            GradientBackgrounds().programBuilderMeshBackground()
 
             ScrollView {
                 VStack(spacing: 12) {
@@ -3880,7 +3880,7 @@ private struct ProgramBuilderWorkoutViewsLayoutView: View {
 
     var body: some View {
         ZStack {
-            MovingProgramBuilderBackground()
+            GradientBackgrounds().programBuilderMeshBackground()
 
             ScrollView {
                 VStack(spacing: 12) {

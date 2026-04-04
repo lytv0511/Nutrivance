@@ -1,10 +1,40 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 #if canImport(JournalingSuggestions)
 import JournalingSuggestions
 #endif
 import HealthKit
 import CoreLocation
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
+
+struct JournalStatCard: Identifiable, Codable, Hashable, Equatable {
+    let id: UUID
+    let icon: String
+    let title: String
+    let value: String
+    let subtitle: String
+    let size: CardSize
+    let accentHue: Double
+
+    enum CardSize: String, Codable, Hashable {
+        case small, medium, large
+    }
+
+    init(icon: String, title: String, value: String, subtitle: String = "", size: CardSize = .medium, accentHue: Double = 30) {
+        self.id = UUID()
+        self.icon = icon
+        self.title = title
+        self.value = value
+        self.subtitle = subtitle
+        self.size = size
+        self.accentHue = accentHue
+    }
+}
 
 struct JournalEntry: Identifiable, Codable, Equatable {
     let id: UUID
@@ -15,6 +45,7 @@ struct JournalEntry: Identifiable, Codable, Equatable {
     var imageData: [Data] = []
     var kind: String
     var reportMetrics: [WorkoutReportMetric]
+    var statCards: [JournalStatCard]
     
     init(title: String = "", content: String = "") {
         self.id = UUID()
@@ -25,17 +56,11 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         self.imageData = []
         self.kind = "standard"
         self.reportMetrics = []
+        self.statCards = []
     }
     
     enum CodingKeys: String, CodingKey {
-        case id
-        case title
-        case content
-        case inspiration
-        case date
-        case imageData
-        case kind
-        case reportMetrics
+        case id, title, content, inspiration, date, imageData, kind, reportMetrics, statCards
     }
     
     init(from decoder: Decoder) throws {
@@ -48,6 +73,7 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         imageData = try container.decodeIfPresent([Data].self, forKey: .imageData) ?? []
         kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "standard"
         reportMetrics = try container.decodeIfPresent([WorkoutReportMetric].self, forKey: .reportMetrics) ?? []
+        statCards = try container.decodeIfPresent([JournalStatCard].self, forKey: .statCards) ?? []
     }
     
     func encode(to encoder: Encoder) throws {
@@ -60,11 +86,50 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         try container.encode(imageData, forKey: .imageData)
         try container.encode(kind, forKey: .kind)
         try container.encode(reportMetrics, forKey: .reportMetrics)
+        try container.encode(statCards, forKey: .statCards)
     }
 }
 
 private func isFitnessReportEntry(_ entry: JournalEntry) -> Bool {
-    entry.kind == "workout_report" || !entry.reportMetrics.isEmpty
+    entry.kind == "workout_report" || !entry.reportMetrics.isEmpty || !entry.statCards.isEmpty
+}
+
+/// Strips HealthKit debug dumps and non-user icon tokens from journal text for display and persistence.
+enum JournalDisplaySanitizer {
+    static func endUserText(_ text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        let kept = lines.filter { !shouldStripLine($0) }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func metricSFSymbolName(_ raw: String) -> String {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if t.isEmpty { return "chart.bar.fill" }
+        if t.range(of: #"^[0-9a-f]{6,}$"#, options: .regularExpression) != nil { return "figure.run" }
+        if t.contains("rawvalue") || t.contains("hkworkout") { return "figure.run" }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789.")
+        guard t.unicodeScalars.allSatisfy({ allowed.contains($0) }), t.contains(where: { $0.isLetter }) else {
+            return "chart.bar.fill"
+        }
+        return t
+    }
+
+    private static func shouldStripLine(_ line: String) -> Bool {
+        let s = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return false }
+        let lower = s.lowercased()
+        if lower.contains("hkworkoutactivitytype(rawvalue:") { return true }
+        if lower.hasPrefix("activitytype:"), lower.contains("hkworkout") { return true }
+        if lower.hasPrefix("icon:") {
+            let afterColon = s.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard afterColon.count > 1 else { return false }
+            let rest = String(afterColon[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if rest.range(of: #"^[0-9A-Fa-f\-]+$"#, options: .regularExpression) != nil, rest.count >= 6 {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 enum JournalPersistence {
@@ -164,17 +229,18 @@ enum JournalPersistence {
         if rhs.date != lhs.date {
             return rhs.date > lhs.date ? rhs : lhs
         }
-        let lhsSignal = lhs.content.count + lhs.inspiration.count + lhs.imageData.count * 100 + lhs.reportMetrics.count * 10
-        let rhsSignal = rhs.content.count + rhs.inspiration.count + rhs.imageData.count * 100 + rhs.reportMetrics.count * 10
+        let lhsSignal = lhs.content.count + lhs.inspiration.count + lhs.imageData.count * 100 + lhs.reportMetrics.count * 10 + lhs.statCards.count * 15
+        let rhsSignal = rhs.content.count + rhs.inspiration.count + rhs.imageData.count * 100 + rhs.reportMetrics.count * 10 + rhs.statCards.count * 15
         return rhsSignal >= lhsSignal ? rhs : lhs
     }
 
     static func appendWorkoutReport(title: String, content: String, date: Date = Date()) {
         var entries = loadEntries()
-        var entry = JournalEntry(title: title, content: content)
+        let cleaned = JournalDisplaySanitizer.endUserText(content)
+        var entry = JournalEntry(title: title, content: cleaned)
         entry.date = date
         entry.kind = "workout_report"
-        entry.reportMetrics = WorkoutReportNLPParser.parseMetrics(from: content)
+        entry.reportMetrics = WorkoutReportNLPParser.parseMetrics(from: cleaned)
         entries.insert(entry, at: 0)
         persistEntries(entries)
     }
@@ -194,11 +260,11 @@ private struct WorkoutReportMetricsWall: View {
                 ForEach(metrics) { metric in
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .top) {
-                            Image(systemName: metric.icon)
-                                .font(.title3.weight(.bold))
+                            Image(systemName: JournalDisplaySanitizer.metricSFSymbolName(metric.icon))
+                                .font(.title2.weight(.bold))
                                 .foregroundStyle(.orange)
-                                .frame(width: 34, height: 34)
-                                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .frame(width: 46, height: 46)
+                                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                             Spacer()
                         }
 
@@ -235,7 +301,7 @@ private struct InspirationCardContent: Identifiable {
 }
 
 private func inspirationCards(from inspiration: String) -> [InspirationCardContent] {
-    inspiration
+    JournalDisplaySanitizer.endUserText(inspiration)
         .components(separatedBy: "\n\n")
         .compactMap { block in
             let lines = block
@@ -417,7 +483,7 @@ private struct InspirationSectionView: View {
                                 Image(uiImage: uiImage)
                                     .resizable()
                                     .scaledToFill()
-                                    .frame(width: compact ? 148 : 188, height: compact ? 108 : 148)
+                                    .frame(width: compact ? 168 : 208, height: compact ? 124 : 164)
                                     .clipped()
                                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                                     .overlay(
@@ -428,7 +494,7 @@ private struct InspirationSectionView: View {
                         }
                     }
                 }
-                .frame(height: compact ? 112 : 152)
+                .frame(height: compact ? 132 : 172)
             }
             
             LazyVStack(alignment: .leading, spacing: 12) {
@@ -440,8 +506,42 @@ private struct InspirationSectionView: View {
     }
 }
 
+/// Mesh hue phase from wall-clock time — avoids `withAnimation(.repeatForever)` so toolbar and
+/// text fields are not continuously re-animated with the background.
+private struct JournalMeshPhaseBackground: View {
+    enum Style {
+        case spirit
+        case burning
+    }
+
+    let style: Style
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let phase = Self.phase(for: context.date)
+            Group {
+                switch style {
+                case .spirit:
+                    GradientBackgrounds().spiritGradient(animationPhase: .constant(phase))
+                case .burning:
+                    ZStack {
+                        GradientBackgrounds().burningGradient(animationPhase: .constant(phase))
+                        Color.black.opacity(0.22)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func phase(for date: Date) -> Double {
+        let elapsed = date.timeIntervalSinceReferenceDate
+        let period = 8.0
+        let s = sin((elapsed / period) * (2 * Double.pi))
+        return (s + 1) * 0.5 * 20.0
+    }
+}
+
 struct JournalView: View {
-    @State private var animationPhase: Double = 0
     @State private var entries: [JournalEntry] = []
     @State private var showingEditor = false
     @State private var currentEntry = JournalEntry()
@@ -520,9 +620,6 @@ struct JournalView: View {
             }
             .onAppear {
                 loadEntries()
-                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                    animationPhase = 20
-                }
             }
             .fullScreenCover(isPresented: $showingEditor) {
                 JournalEditorView(
@@ -553,25 +650,20 @@ struct JournalView: View {
 
     @ViewBuilder
     private var backgroundView: some View {
-        if filter == .reports {
-            ZStack {
-                GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
-                Color.black.opacity(0.22)
-            }
+        JournalMeshPhaseBackground(style: filter == .reports ? .burning : .spirit)
             .ignoresSafeArea()
-        } else {
-            GradientBackgrounds().spiritGradient(animationPhase: $animationPhase)
-                .ignoresSafeArea()
-        }
     }
     
     func saveEntry(_ entry: JournalEntry) {
-        if let index = entries.firstIndex(where: {$0.id == entry.id}) {
-            entries[index] = entry
+        var normalized = entry
+        normalized.content = JournalDisplaySanitizer.endUserText(normalized.content)
+        normalized.inspiration = JournalDisplaySanitizer.endUserText(normalized.inspiration)
+        if let index = entries.firstIndex(where: { $0.id == normalized.id }) {
+            entries[index] = normalized
         } else {
-            entries.insert(entry, at: 0)
+            entries.insert(normalized, at: 0)
         }
-        
+
         persistEntries()
     }
     
@@ -607,6 +699,10 @@ struct JournalView: View {
             .map { "\($0.title) \($0.value)" }
             .joined(separator: " ")
 
+        let statCardText = entry.statCards
+            .map { "\($0.title) \($0.value) \($0.subtitle)" }
+            .joined(separator: " ")
+
         let imageHintText = entry.imageData.isEmpty ? "" : "photo image inspiration memory picture"
         let haystack = [
             entry.title,
@@ -614,6 +710,7 @@ struct JournalView: View {
             entry.inspiration,
             entry.kind,
             metricText,
+            statCardText,
             imageHintText
         ]
         .joined(separator: "\n")
@@ -822,23 +919,32 @@ private struct JournalEntryRow: View {
                     Spacer()
 
                     Image(systemName: isFitnessReportEntry(entry) ? "figure.run" : "book.pages")
-                        .font(.headline.weight(.bold))
+                        .font(.title3.weight(.bold))
                         .foregroundStyle(isFitnessReportEntry(entry) ? Color.orange : Color.white.opacity(0.82))
-                        .frame(width: 42, height: 42)
+                        .frame(width: 50, height: 50)
                         .background(
                             (isFitnessReportEntry(entry) ? Color.orange.opacity(0.14) : Color.white.opacity(0.08)),
-                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
                         )
                 }
 
                 if !entry.content.isEmpty {
-                    Text(entry.content)
+                    Text(JournalDisplaySanitizer.endUserText(entry.content))
                         .lineLimit(8)
                         .foregroundStyle(.secondary)
                 }
 
                 if isFitnessReportEntry(entry) {
                     WorkoutReportMetricsWall(metrics: entry.reportMetrics)
+                }
+
+                if !entry.statCards.isEmpty {
+                    JournalStatCardsGrid(
+                        cards: entry.statCards,
+                        onResize: { _, _ in },
+                        onDelete: { _ in }
+                    )
+                    .allowsHitTesting(false)
                 }
 
                 if !entry.inspiration.isEmpty || !entry.imageData.isEmpty {
@@ -894,15 +1000,1577 @@ private struct JournalEntryRow: View {
     }
 }
 
+// MARK: - Journal selectable editor (cursor-aware inline suggestions)
+
+#if canImport(UIKit)
+struct JournalSelectableTextEditor: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var selection: NSRange
+    var onEdit: (String, NSRange) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.delegate = context.coordinator
+        tv.font = UIFont.preferredFont(forTextStyle: .body)
+        tv.textColor = UIColor.label
+        tv.backgroundColor = .clear
+        tv.textContainer.lineFragmentPadding = 0
+        tv.textContainerInset = .zero
+        tv.adjustsFontForContentSizeCategory = true
+        return tv
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        let ns = text as NSString
+        let maxLen = ns.length
+        let loc = min(max(0, selection.location), maxLen)
+        let len = min(max(0, selection.length), maxLen - loc)
+        let desired = NSRange(location: loc, length: len)
+
+        if uiView.text != text {
+            context.coordinator.isProgrammaticUpdate = true
+            uiView.text = text
+            uiView.selectedRange = desired
+            context.coordinator.isProgrammaticUpdate = false
+        } else if uiView.selectedRange.location != desired.location || uiView.selectedRange.length != desired.length {
+            context.coordinator.isProgrammaticUpdate = true
+            uiView.selectedRange = desired
+            context.coordinator.isProgrammaticUpdate = false
+        }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: JournalSelectableTextEditor
+        var isProgrammaticUpdate = false
+
+        init(_ parent: JournalSelectableTextEditor) {
+            self.parent = parent
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            guard !isProgrammaticUpdate else { return }
+            let t = textView.text ?? ""
+            parent.text = t
+            parent.selection = textView.selectedRange
+            parent.onEdit(t, textView.selectedRange)
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard !isProgrammaticUpdate else { return }
+            parent.selection = textView.selectedRange
+            parent.onEdit(textView.text ?? "", textView.selectedRange)
+        }
+    }
+}
+#endif
+
+// MARK: - Inline Suggestion Engine
+
+struct InlineSuggestion: Identifiable {
+    let id = UUID()
+    /// Shown on the suggestion chip
+    let preview: String
+    let confidence: Double
+    let mode: InlineSuggestionApplyMode
+}
+
+/// How a suggestion is merged into the entry when tapped.
+enum InlineSuggestionApplyMode: Hashable {
+    /// Insert at the caret (or replace the current selection) without removing text before the caret.
+    case completion(insertUTF16: String)
+    /// Replace a utf-16 range (e.g. rewrite the whole clause or sentence prefix).
+    case replacement(location: Int, length: Int, replacementUTF16: String)
+
+    fileprivate var isReplacement: Bool {
+        if case .replacement = self { return true }
+        return false
+    }
+}
+
+#if canImport(FoundationModels)
+@available(iOS 26.0, *)
+@Generable(description: "Whether journal paragraphs share one narrative thread.")
+struct JournalParagraphRelationOutput {
+    var sameThread: Bool
+}
+
+@available(iOS 26.0, *)
+@Generable(description: "Cursor-aware journal completions and rewrites.")
+struct JournalAIInlineSuggestionPack {
+    var completionLines: [String]
+    var rewriteLines: [String]
+}
+
+@available(iOS 26.0, *)
+@Generable(description: "A concise title for a journal entry.")
+struct JournalAITitleOutput {
+    var suggestedTitle: String
+}
+#endif
+
+@MainActor
+final class JournalInlineSuggestionEngine: ObservableObject {
+    @Published var suggestions: [InlineSuggestion] = []
+    private var debounceTask: Task<Void, Never>?
+    private var cachedMoodStates: [HKStateOfMind] = []
+    private var moodCacheDate: Date?
+    private var paragraphRelationCache: (signature: UInt64, unrelated: Bool)?
+
+    private struct SuggestionFocusContext {
+        let fullText: String
+        let fullTextLower: String
+        let activeParagraph: String
+        let activeParagraphLower: String
+        /// When true, keyword triggers only match inside the paragraph that contains the caret.
+        let restrictTriggersToActiveParagraph: Bool
+        let typingFragment: String
+        let typingLower: String
+        let cursorUTF16: Int
+        let clauseStartUTF16: Int
+    }
+
+    func prepare(referenceDate: Date) {
+        Task {
+            let cal = Calendar.current
+            let start = cal.startOfDay(for: referenceDate)
+            let end = cal.date(byAdding: .day, value: 1, to: start) ?? referenceDate
+            let hkm = HealthKitManager()
+            cachedMoodStates = await hkm.fetchStateOfMindSamples(from: start, to: end)
+            moodCacheDate = referenceDate
+        }
+    }
+
+    func textDidChange(_ text: String, selection: NSRange, referenceDate: Date, isFitnessReport: Bool, inspirationContext: String) {
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+
+            let unrelated = await paragraphsUnrelatedToCursorParagraph(text: text, selection: selection)
+            let ctx = Self.makeFocusContext(text: text, selection: selection, paragraphsUnrelated: unrelated)
+
+            var newSuggestions = buildSuggestions(ctx: ctx, referenceDate: referenceDate, isFitnessReport: isFitnessReport)
+
+            let inspirationTrimmed = inspirationContext.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prioritizeImportedInspiration = !inspirationTrimmed.isEmpty
+
+            #if canImport(FoundationModels)
+            if #available(iOS 26.0, *) {
+                let shouldRunAI = newSuggestions.count < 3 || prioritizeImportedInspiration
+                if shouldRunAI, let aiPack = await aiSuggestions(
+                    ctx: ctx,
+                    referenceDate: referenceDate,
+                    inspirationLayer: inspirationTrimmed
+                ) {
+                    newSuggestions.append(contentsOf: aiPack)
+                }
+            }
+            #endif
+
+            guard !Task.isCancelled else { return }
+
+            if prioritizeImportedInspiration {
+                newSuggestions.sort { $0.confidence > $1.confidence }
+            }
+
+            let deduped = deduplicateSuggestions(newSuggestions, existingText: text)
+            withAnimation(.easeOut(duration: 0.15)) {
+                suggestions = Array(deduped.prefix(6))
+            }
+        }
+    }
+
+    func apply(_ suggestion: InlineSuggestion, to text: String, selection: NSRange) -> (String, NSRange) {
+        let ns = text as NSString
+        let maxLen = ns.length
+        let safeLoc = min(max(0, selection.location), maxLen)
+        let safeLen = min(max(0, selection.length), maxLen - safeLoc)
+
+        switch suggestion.mode {
+        case .completion(let insert):
+            let r = NSRange(location: safeLoc, length: safeLen)
+            let newText = ns.replacingCharacters(in: r, with: insert)
+            let newPos = r.location + (insert as NSString).length
+            return (newText, NSRange(location: newPos, length: 0))
+
+        case .replacement(let loc, let len, let repl):
+            let r = NSRange(
+                location: min(max(0, loc), maxLen),
+                length: min(max(0, len), maxLen - min(max(0, loc), maxLen))
+            )
+            let newText = ns.replacingCharacters(in: r, with: repl)
+            let newPos = r.location + (repl as NSString).length
+            return (newText, NSRange(location: newPos, length: 0))
+        }
+    }
+
+    func clear() {
+        suggestions = []
+    }
+
+    // MARK: - Focus / paragraphs
+
+    private static func makeFocusContext(text: String, selection: NSRange, paragraphsUnrelated: Bool) -> SuggestionFocusContext {
+        let ns = text as NSString
+        let maxLen = ns.length
+        let cursor = min(max(0, selection.location), maxLen)
+        let paraRange = activeParagraphUTF16Range(in: ns, cursorUTF16: cursor)
+        let active = ns.substring(with: paraRange).trimmingCharacters(in: .whitespacesAndNewlines)
+        let clauseStart = clauseStartUTF16(full: ns, cursorUTF16: cursor)
+        let frag = ns.substring(with: NSRange(location: clauseStart, length: cursor - clauseStart))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fullLower = text.lowercased()
+        return SuggestionFocusContext(
+            fullText: text,
+            fullTextLower: fullLower,
+            activeParagraph: active,
+            activeParagraphLower: active.lowercased(),
+            restrictTriggersToActiveParagraph: paragraphsUnrelated,
+            typingFragment: frag,
+            typingLower: frag.lowercased(),
+            cursorUTF16: cursor,
+            clauseStartUTF16: clauseStart
+        )
+    }
+
+    private static func activeParagraphUTF16Range(in ns: NSString, cursorUTF16: Int) -> NSRange {
+        let len = ns.length
+        let c = min(max(0, cursorUTF16), len)
+        var start = 0
+        var i = 0
+        while i <= len {
+            let r = ns.range(of: "\n\n", options: [], range: NSRange(location: i, length: len - i))
+            if r.location == NSNotFound {
+                return NSRange(location: start, length: len - start)
+            }
+            if c >= start && c < r.location {
+                return NSRange(location: start, length: r.location - start)
+            }
+            start = r.location + r.length
+            i = start
+        }
+        return NSRange(location: 0, length: len)
+    }
+
+    private static func clauseStartUTF16(full: NSString, cursorUTF16: Int) -> Int {
+        let c = min(max(0, cursorUTF16), full.length)
+        if c == 0 { return 0 }
+        let charset = CharacterSet(charactersIn: ".!?\n")
+        let search = full.rangeOfCharacter(from: charset, options: [.backwards], range: NSRange(location: 0, length: c))
+        if search.location == NSNotFound { return 0 }
+        return search.location + search.length
+    }
+
+    private static func logicalParagraphs(_ text: String) -> [String] {
+        let n = text.replacingOccurrences(of: "\r\n", with: "\n")
+        return n.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func paragraphsUnrelatedToCursorParagraph(text: String, selection: NSRange) async -> Bool {
+        let paras = Self.logicalParagraphs(text)
+        guard paras.count >= 2 else {
+            paragraphRelationCache = nil
+            return false
+        }
+
+        var hasher = Hasher()
+        for p in paras { hasher.combine(p) }
+        let sig = UInt64(bitPattern: Int64(hasher.finalize()))
+
+        if let cache = paragraphRelationCache, cache.signature == sig {
+            return cache.unrelated
+        }
+
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            let model = SystemLanguageModel(useCase: .general)
+            if model.isAvailable {
+                let joined = paras.enumerated().map { "P\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
+                let prompt = """
+                The user wrote these paragraphs in one journal entry (possibly same day or different topics).
+                Do they describe one continuous story/theme, or mostly separate unrelated events/thoughts?
+                Answer unrelated=true if the paragraphs are separate topics (e.g. morning workout vs evening argument) with no single narrative thread.
+                unrelated=false if they clearly continue the same story, reflection, or theme.
+                Paragraphs:
+                \(String(joined.prefix(2500)))
+                """
+                do {
+                    let session = LanguageModelSession(model: model, instructions: "Reply only with structured output. Be conservative: unrelated=true only when paragraphs are clearly different topics.")
+                    let response = try await session.respond(to: prompt, generating: JournalParagraphRelationOutput.self)
+                    let unrelated = !response.content.sameThread
+                    paragraphRelationCache = (sig, unrelated)
+                    return unrelated
+                } catch {}
+            }
+        }
+        #endif
+
+        let unrelated = heuristicParagraphsUnrelated(paras)
+        paragraphRelationCache = (sig, unrelated)
+        return unrelated
+    }
+
+    private func heuristicParagraphsUnrelated(_ paragraphs: [String]) -> Bool {
+        guard paragraphs.count >= 2 else { return false }
+        let words0 = Set(paragraphs[0].lowercased().split { !$0.isLetter && !$0.isNumber }.filter { $0.count > 2 })
+        guard !words0.isEmpty else { return false }
+        for p in paragraphs.dropFirst() {
+            let w1 = Set(p.lowercased().split { !$0.isLetter && !$0.isNumber }.filter { $0.count > 2 })
+            let uni = words0.union(w1)
+            guard !uni.isEmpty else { continue }
+            let j = Double(words0.intersection(w1).count) / Double(uni.count)
+            if j < 0.05 { return true }
+        }
+        return false
+    }
+
+    // MARK: - Deduplication
+
+    private func deduplicateSuggestions(_ suggestions: [InlineSuggestion], existingText: String) -> [InlineSuggestion] {
+        let lowerText = existingText.lowercased()
+        var seen: Set<String> = []
+        return suggestions.filter { s in
+            let normalized = s.preview.trimmingCharacters(in: .whitespaces).lowercased()
+            guard !normalized.isEmpty else { return false }
+            if lowerText.contains(normalized) { return false }
+            guard !seen.contains(normalized) else { return false }
+            seen.insert(normalized)
+            return true
+        }
+    }
+
+    private func completionChip(_ tail: String, after fragment: String, confidence: Double) -> InlineSuggestion {
+        let t = grammarAdjust(tail, after: fragment)
+        let preview = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return InlineSuggestion(preview: preview.isEmpty ? tail : preview, confidence: confidence, mode: .completion(insertUTF16: t))
+    }
+
+    // MARK: - Pattern Matching
+
+    private func buildSuggestions(ctx: SuggestionFocusContext, referenceDate: Date, isFitnessReport: Bool) -> [InlineSuggestion] {
+        let trimmed = ctx.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return [] }
+
+        var results: [InlineSuggestion] = []
+
+        results.append(contentsOf: workoutMetricSuggestions(ctx: ctx, referenceDate: referenceDate))
+        results.append(contentsOf: moodSuggestions(ctx: ctx))
+        results.append(contentsOf: sleepSuggestions(ctx: ctx))
+        results.append(contentsOf: recoverySuggestions(ctx: ctx))
+        results.append(contentsOf: vitalsSuggestions(ctx: ctx))
+
+        if isFitnessReport {
+            results.sort { $0.confidence > $1.confidence }
+        }
+
+        return results
+    }
+
+    // MARK: - Grammar Adjustment
+
+    private func grammarAdjust(_ suggestion: String, after trailing: String) -> String {
+        let trimTrail = trailing.trimmingCharacters(in: .whitespaces)
+        guard let lastWord = trimTrail.split(separator: " ").last?.lowercased() else { return suggestion }
+        let trimSug = suggestion.trimmingCharacters(in: .whitespaces)
+
+        let prepositions: Set<String> = ["for", "in", "at", "on", "with", "about", "to", "from", "during", "after", "before"]
+        let copulas: Set<String> = ["is", "was", "were", "are", "been", "being", "felt", "feels"]
+        let articles: Set<String> = ["a", "an", "the"]
+
+        if prepositions.contains(lastWord) {
+            // After "for", "in" etc. — no leading article needed, just the value
+            if trimSug.hasPrefix("a ") || trimSug.hasPrefix("an ") {
+                return " " + trimSug
+            }
+            return trimSug.hasPrefix(" ") ? trimSug : " " + trimSug
+        }
+
+        if copulas.contains(lastWord) {
+            // After "is", "was" etc. — ensure no double space
+            return trimSug.hasPrefix(" ") ? trimSug : " " + trimSug
+        }
+
+        if articles.contains(lastWord) {
+            // After "a" or "an" — strip leading article from suggestion
+            var cleaned = trimSug
+            if cleaned.hasPrefix("a ") { cleaned = String(cleaned.dropFirst(2)) }
+            if cleaned.hasPrefix("an ") { cleaned = String(cleaned.dropFirst(3)) }
+            return cleaned.hasPrefix(" ") ? cleaned : " " + cleaned
+        }
+
+        return trimSug.hasPrefix(" ") ? trimSug : " " + trimSug
+    }
+
+    // MARK: - AI-Powered Suggestions
+
+    /// Builds prompt text from Apple Journaling Suggestions import (Inspiration section): venue, city, coords, dates → meal hints.
+    private static func journalingInspirationPromptBlock(_ layer: String) -> String {
+        let trimmed = layer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        var lines: [String] = []
+        lines.append("IMPORTED JOURNALING SUGGESTIONS LAYER (authoritative for proper nouns, place names, spelling, area/neighborhood, and timing). Prefer these facts over guessing.")
+        lines.append(String(trimmed.prefix(4500)))
+
+        var place = ""
+        var city = ""
+        for raw in trimmed.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            let low = line.lowercased()
+            if low.hasPrefix("place:") {
+                place = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            } else if low.hasPrefix("city:") {
+                city = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            }
+        }
+
+        if !place.isEmpty || !city.isEmpty {
+            lines.append("PARSED VENUE LINE: \(place)\(place.isEmpty || city.isEmpty ? "" : ", ")\(city)")
+        }
+
+        for raw in trimmed.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.lowercased().hasPrefix("title:") {
+                let t = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty { lines.append("SUGGESTION TITLE: \(t)") }
+            }
+        }
+
+        if let mealHint = mealHintsFromInspirationDates(in: trimmed) {
+            lines.append("TIME / MEAL CONTEXT (from Date fields in the layer): \(mealHint)")
+        }
+
+        lines.append("""
+        When the user's clause is about dining, a restaurant, going out, travel, or an event, use EXACT venue and area names from the layer (e.g. \"Kushi\", \"Reston Town Center\", \"Reston\"). Combine neighborhood + city when it reads naturally. If times suggest evening, prefer \"dinner\"; midday → \"lunch\"; morning → \"breakfast\".
+        """)
+
+        return lines.joined(separator: "\n\n")
+    }
+
+    private static func mealHintsFromInspirationDates(in text: String) -> String? {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        df.locale = Locale.current
+
+        var hints: [String] = []
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.lowercased().hasPrefix("date:") else { continue }
+            let value = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            for segment in value.components(separatedBy: " - ").map({ $0.trimmingCharacters(in: .whitespaces) }) where !segment.isEmpty {
+                if let d = df.date(from: segment) {
+                    hints.append(mealLabel(for: d))
+                }
+            }
+        }
+        let unique = Array(Set(hints))
+        return unique.isEmpty ? nil : unique.joined(separator: "; ")
+    }
+
+    private static func mealLabel(for date: Date) -> String {
+        let h = Calendar.current.component(.hour, from: date)
+        switch h {
+        case 5..<11: return "morning (~breakfast)"
+        case 11..<14: return "midday (~lunch)"
+        case 14..<17: return "afternoon (~snack or early dinner)"
+        case 17..<22: return "evening (~dinner)"
+        default: return "late night"
+        }
+    }
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, *)
+    private func aiSuggestions(ctx: SuggestionFocusContext, referenceDate: Date, inspirationLayer: String) async -> [InlineSuggestion]? {
+        let model = SystemLanguageModel(useCase: .general)
+        guard model.isAvailable else { return nil }
+
+        guard ctx.typingFragment.count >= 4 else { return nil }
+
+        let inspirationTrimmed = inspirationLayer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasInspiration = !inspirationTrimmed.isEmpty
+        let inspirationBlock = Self.journalingInspirationPromptBlock(inspirationTrimmed)
+
+        let completionConfidence: Double = hasInspiration ? 0.92 : 0.72
+        let rewriteConfidence: Double = hasInspiration ? 0.9 : 0.68
+
+        let engine = HealthStateEngine.shared
+        var contextFacts: [String] = []
+        if let sleep = engine.sleepHours { contextFacts.append("Sleep: \(String(format: "%.1f", sleep))h") }
+        if let hrv = engine.latestHRV { contextFacts.append("HRV: \(Int(hrv))ms") }
+        if let rhr = engine.restingHeartRate { contextFacts.append("RHR: \(Int(rhr))bpm") }
+        let recoveryScore = Int(engine.recoveryScore)
+        if recoveryScore > 0 { contextFacts.append("Recovery: \(recoveryScore)") }
+
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: referenceDate)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? referenceDate
+        let todayWorkouts = engine.workoutAnalytics.filter { $0.workout.startDate >= dayStart && $0.workout.startDate < dayEnd }
+        for w in todayWorkouts.prefix(3) {
+            let dur = Int(w.workout.duration / 60)
+            let name = w.workout.workoutActivityType.name
+            contextFacts.append("\(name): \(dur)min")
+            if let dist = w.workout.totalDistance?.doubleValue(for: .meter()), dist > 0 {
+                contextFacts.append("\(name) distance: \(String(format: "%.1f", dist / 1000))km")
+            }
+        }
+
+        let focusBody = ctx.restrictTriggersToActiveParagraph ? ctx.activeParagraph : ctx.fullText
+        let clauseLen = max(0, ctx.cursorUTF16 - ctx.clauseStartUTF16)
+        let clausePrefix = (ctx.fullText as NSString).substring(with: NSRange(location: ctx.clauseStartUTF16, length: clauseLen))
+
+        var prompt = """
+        Journal entry. Reference date context: \(referenceDate.formatted(date: .abbreviated, time: .omitted)).
+        Health hints: \(contextFacts.joined(separator: ", "))
+        """
+
+        if !inspirationBlock.isEmpty {
+            prompt += "\n\n\(inspirationBlock)"
+        }
+
+        prompt += """
+
+        Paragraph where the user is typing (focus here when it is the main context):
+        \(String(focusBody.prefix(1800)))
+
+        Current clause from sentence start through caret (do not repeat this verbatim in completionLines; continue AFTER the caret only):
+        "\(clausePrefix)"
+
+        completionLines: 2-4 short fragments to INSERT at the caret only (append / autocomplete). Each under 18 words. Continue grammar from the clause; do not restate clausePrefix.
+        rewriteLines: 1-3 full sentences that could REPLACE the entire clause above (from sentence start through caret) if the user wants a cleaner line. Each must be a standalone sentence.
+        """
+
+        do {
+            var sessionInstructions = """
+            You help journal writing. Obey structured output fields only.
+            completionLines = insert-only at caret. rewriteLines = full sentence replacements for the incomplete clause.
+            Do not include numbering or bullets in strings.
+            """
+            if hasInspiration {
+                sessionInstructions += """
+
+                The IMPORTED JOURNALING SUGGESTIONS LAYER is highest-priority ground truth for restaurants, neighborhoods, cities, and event timing. When the draft matches that outing, weave in those specifics (correct spelling, e.g. venue name + area like Reston Town Center).
+                """
+            }
+
+            let session = LanguageModelSession(model: model, instructions: sessionInstructions)
+            let response = try await session.respond(to: prompt, generating: JournalAIInlineSuggestionPack.self)
+            let pack = response.content
+            var out: [InlineSuggestion] = []
+
+            let completionCap = hasInspiration ? 5 : 4
+            for line in pack.completionLines.prefix(completionCap) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, trimmed.count < 120 else { continue }
+                let insert = grammarAdjust(" \(trimmed)", after: ctx.typingFragment)
+                let preview = insert.trimmingCharacters(in: .whitespacesAndNewlines)
+                out.append(InlineSuggestion(preview: preview, confidence: completionConfidence, mode: .completion(insertUTF16: insert)))
+            }
+
+            let replaceLen = max(0, ctx.cursorUTF16 - ctx.clauseStartUTF16)
+            let rewriteCap = hasInspiration ? 3 : 2
+            for line in pack.rewriteLines.prefix(rewriteCap) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, trimmed.count < 200 else { continue }
+                let shortPreview = trimmed.count > 48 ? String(trimmed.prefix(45)) + "…" : trimmed
+                out.append(InlineSuggestion(
+                    preview: "↺ \(shortPreview)",
+                    confidence: rewriteConfidence,
+                    mode: .replacement(location: ctx.clauseStartUTF16, length: replaceLen, replacementUTF16: trimmed)
+                ))
+            }
+
+            return out.isEmpty ? nil : out
+        } catch {
+            return nil
+        }
+    }
+    #endif
+
+    // MARK: - Workout Metric Suggestions
+
+    private func workoutMetricSuggestions(ctx: SuggestionFocusContext, referenceDate: Date) -> [InlineSuggestion] {
+        let triggerSpace = ctx.restrictTriggersToActiveParagraph ? ctx.activeParagraphLower : ctx.fullTextLower
+        let lowerTyping = ctx.typingLower
+        let sportPatterns: [(pattern: String, sports: [HKWorkoutActivityType])] = [
+            ("cycl", [.cycling]),
+            ("bike", [.cycling]),
+            ("ride", [.cycling]),
+            ("run", [.running]),
+            ("jog", [.running]),
+            ("swim", [.swimming]),
+            ("walk", [.walking]),
+            ("hik", [.hiking]),
+            ("yoga", [.yoga]),
+            ("row", [.rowing]),
+            ("elliptical", [.elliptical]),
+            ("strength", [.traditionalStrengthTraining, .functionalStrengthTraining]),
+            ("lift", [.traditionalStrengthTraining]),
+            ("weight", [.traditionalStrengthTraining]),
+        ]
+
+        let metricPatterns: [(pattern: String, extract: (WorkoutAnalytics, HKWorkout) -> String?)] = [
+            ("power", { a, _ in
+                let vals = a.powerSeries.map(\.1)
+                guard !vals.isEmpty else { return nil }
+                let avg = Int(vals.reduce(0, +) / Double(vals.count))
+                let peak = Int(vals.max() ?? 0)
+                return "averaging \(avg)W (peak \(peak)W)"
+            }),
+            ("heart rate", { a, _ in
+                let hrs = a.heartRates.map(\.1)
+                guard !hrs.isEmpty else { return nil }
+                let avg = Int(hrs.reduce(0, +) / Double(hrs.count))
+                return "averaging \(avg) bpm"
+            }),
+            ("hr", { a, _ in
+                let hrs = a.heartRates.map(\.1)
+                guard !hrs.isEmpty else { return nil }
+                let avg = Int(hrs.reduce(0, +) / Double(hrs.count))
+                return "averaging \(avg) bpm"
+            }),
+            ("cadence", { a, _ in
+                let vals = a.cadenceSeries.map(\.1)
+                guard !vals.isEmpty else { return nil }
+                return "averaging \(Int(vals.reduce(0, +) / Double(vals.count))) rpm"
+            }),
+            ("pace", { a, _ in
+                let speeds = a.speedSeries.map(\.1).filter { $0 > 0 }
+                guard !speeds.isEmpty else { return nil }
+                let avgSpeed = speeds.reduce(0, +) / Double(speeds.count)
+                let paceSecsPerKm = Int(1000.0 / avgSpeed)
+                return "\(paceSecsPerKm / 60):\(String(format: "%02d", paceSecsPerKm % 60)) /km"
+            }),
+            ("speed", { a, _ in
+                let vals = a.speedSeries.map(\.1)
+                guard !vals.isEmpty else { return nil }
+                let avg = vals.reduce(0, +) / Double(vals.count) * 3.6
+                return String(format: "averaging %.1f km/h", avg)
+            }),
+            ("calorie", { _, w in
+                guard let kcal = w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) else { return nil }
+                return "\(Int(kcal)) kcal burned"
+            }),
+            ("distance", { _, w in
+                guard let d = w.totalDistance?.doubleValue(for: .meter()) else { return nil }
+                return d >= 1000 ? String(format: "%.2f km", d / 1000) : "\(Int(d)) m"
+            }),
+        ]
+
+        let engine = HealthStateEngine.shared
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: referenceDate)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? referenceDate
+
+        var results: [InlineSuggestion] = []
+
+        for sp in sportPatterns where triggerSpace.contains(sp.pattern) || lowerTyping.contains(sp.pattern) {
+            let workoutsForSport = engine.workoutAnalytics.filter { pair in
+                pair.workout.startDate >= dayStart && pair.workout.startDate < dayEnd
+                    && sp.sports.contains(pair.workout.workoutActivityType)
+            }
+            guard let pair = workoutsForSport.first else { continue }
+
+            let hasSpecificMetric = metricPatterns.contains { lowerTyping.contains($0.pattern) }
+
+            if hasSpecificMetric {
+                for mp in metricPatterns where lowerTyping.contains(mp.pattern) {
+                    if let desc = mp.extract(pair.analytics, pair.workout) {
+                        results.append(completionChip(" is \(desc)", after: ctx.typingFragment, confidence: 0.9))
+
+                        if let b = baselineString(pair: pair, metricExtract: mp.extract, days: 7, before: referenceDate, engine: engine) {
+                            results.append(completionChip(" is \(b)", after: ctx.typingFragment, confidence: 0.8))
+                        }
+
+                        if let qual = qualitativeMetricPhrase(pair: pair, metricExtract: mp.extract, days: 7, before: referenceDate, engine: engine) {
+                            results.append(completionChip(qual, after: ctx.typingFragment, confidence: 0.75))
+                        }
+                    }
+                }
+            }
+
+            let openEndedPatterns = ["for", "and it", "which", "that was", "it was"]
+            let isOpenEnded = !hasSpecificMetric || openEndedPatterns.contains(where: { lowerTyping.hasSuffix($0) || lowerTyping.contains("\($0) ") })
+
+            if isOpenEnded || results.isEmpty {
+                let dur = Int(pair.workout.duration / 60)
+                let trailing = ctx.typingFragment
+
+                if !ctx.fullTextLower.contains("\(dur) min") {
+                    results.append(completionChip(" \(dur) minutes", after: trailing, confidence: 0.7))
+                }
+
+                if let d = pair.workout.totalDistance?.doubleValue(for: .meter()), d > 0 {
+                    let distStr = d >= 1000 ? String(format: "%.1f km", d / 1000) : "\(Int(d)) m"
+                    if !ctx.fullTextLower.contains("km") && !ctx.fullTextLower.contains("meter") {
+                        results.append(completionChip(" \(distStr)", after: trailing, confidence: 0.68))
+                    }
+                }
+
+                if let durationQual = qualitativeDurationPhrase(workout: pair.workout, days: 7, before: referenceDate, engine: engine) {
+                    results.append(completionChip(durationQual, after: trailing, confidence: 0.65))
+                }
+
+                if let overallQual = qualitativeWorkoutPhrase(pair: pair, sportCount: workoutsForSport.count, days: 7, before: referenceDate, engine: engine) {
+                    results.append(completionChip(overallQual, after: trailing, confidence: 0.6))
+                }
+            }
+        }
+
+        return results
+    }
+
+    // MARK: - Qualitative Suggestions
+
+    private func qualitativeMetricPhrase(pair: (workout: HKWorkout, analytics: WorkoutAnalytics), metricExtract: (WorkoutAnalytics, HKWorkout) -> String?, days: Int, before: Date, engine: HealthStateEngine) -> String? {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: before))!
+        let end = cal.startOfDay(for: before)
+        let prior = engine.workoutAnalytics.filter { p in
+            p.workout.startDate >= start && p.workout.startDate < end
+                && p.workout.workoutActivityType == pair.workout.workoutActivityType
+        }
+        guard !prior.isEmpty else { return nil }
+        guard let currentStr = metricExtract(pair.analytics, pair.workout),
+              let currentNum = extractLeadingNumber(from: currentStr) else { return nil }
+        let priorNums = prior.compactMap { p in metricExtract(p.analytics, p.workout).flatMap { extractLeadingNumber(from: $0) } }
+        guard !priorNums.isEmpty else { return nil }
+        let avg = priorNums.reduce(0, +) / Double(priorNums.count)
+        guard avg > 0 else { return nil }
+        let pct = ((currentNum - avg) / avg) * 100
+
+        if pct > 20 { return " significantly higher than usual" }
+        if pct > 5 { return " slightly above my average" }
+        if pct < -20 { return " noticeably lower than usual" }
+        if pct < -5 { return " a bit below my average" }
+        return " right around my usual level"
+    }
+
+    private func qualitativeDurationPhrase(workout: HKWorkout, days: Int, before: Date, engine: HealthStateEngine) -> String? {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: before))!
+        let end = cal.startOfDay(for: before)
+        let prior = engine.workoutAnalytics.filter { p in
+            p.workout.startDate >= start && p.workout.startDate < end
+                && p.workout.workoutActivityType == workout.workoutActivityType
+        }
+        guard !prior.isEmpty else { return nil }
+        let avgDur = prior.map { $0.workout.duration }.reduce(0, +) / Double(prior.count)
+        guard avgDur > 0 else { return nil }
+        let pct = ((workout.duration - avgDur) / avgDur) * 100
+
+        if pct > 30 { return " an extended session" }
+        if pct > 10 { return " a slightly longer session" }
+        if pct < -30 { return " a quick session" }
+        if pct < -10 { return " a shorter session than usual" }
+
+        let isFrequent = prior.count >= 3
+        if isFrequent { return " another solid session" }
+        return " a typical session"
+    }
+
+    private func qualitativeWorkoutPhrase(pair: (workout: HKWorkout, analytics: WorkoutAnalytics), sportCount: Int, days: Int, before: Date, engine: HealthStateEngine) -> String? {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: before))!
+        let end = cal.startOfDay(for: before)
+        let prior = engine.workoutAnalytics.filter { p in
+            p.workout.startDate >= start && p.workout.startDate < end
+                && p.workout.workoutActivityType == pair.workout.workoutActivityType
+        }
+
+        let avgHR = pair.analytics.heartRates.map(\.1).reduce(0, +) / max(1, Double(pair.analytics.heartRates.count))
+        if prior.isEmpty {
+            if avgHR > 150 { return " pretty intense" }
+            if avgHR > 120 { return " a moderate effort" }
+            return " a light effort"
+        }
+
+        let priorAvgHRs = prior.compactMap { p -> Double? in
+            let hrs = p.analytics.heartRates.map(\.1)
+            guard !hrs.isEmpty else { return nil }
+            return hrs.reduce(0, +) / Double(hrs.count)
+        }
+        guard !priorAvgHRs.isEmpty else { return nil }
+        let baselineHR = priorAvgHRs.reduce(0, +) / Double(priorAvgHRs.count)
+        guard baselineHR > 0 else { return nil }
+
+        let hrPct = ((avgHR - baselineHR) / baselineHR) * 100
+        if hrPct > 15 { return " pretty gruelling" }
+        if hrPct > 5 { return " challenging" }
+        if hrPct < -15 { return " a great light session" }
+        if hrPct < -5 { return " a relaxed session" }
+        return nil
+    }
+
+    private func baselineString(pair: (workout: HKWorkout, analytics: WorkoutAnalytics), metricExtract: (WorkoutAnalytics, HKWorkout) -> String?, days: Int, before: Date, engine: HealthStateEngine) -> String? {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: before))!
+        let end = cal.startOfDay(for: before)
+        let prior = engine.workoutAnalytics.filter { p in
+            p.workout.startDate >= start && p.workout.startDate < end
+                && p.workout.workoutActivityType == pair.workout.workoutActivityType
+        }
+        guard !prior.isEmpty else { return nil }
+
+        guard let currentStr = metricExtract(pair.analytics, pair.workout),
+              let currentNum = extractLeadingNumber(from: currentStr) else { return nil }
+
+        let priorNums = prior.compactMap { p in
+            metricExtract(p.analytics, p.workout).flatMap { extractLeadingNumber(from: $0) }
+        }
+        guard !priorNums.isEmpty else { return nil }
+        let avg = priorNums.reduce(0, +) / Double(priorNums.count)
+        guard avg > 0 else { return nil }
+        let pct = ((currentNum - avg) / avg) * 100
+        let direction = pct >= 0 ? "above" : "below"
+        return String(format: "%+.0f%% %@ %dd baseline", pct, direction, days)
+    }
+
+    private func extractLeadingNumber(from s: String) -> Double? {
+        let scanner = Scanner(string: s.replacingOccurrences(of: "averaging ", with: ""))
+        return scanner.scanDouble()
+    }
+
+    // MARK: - Mood Suggestions
+
+    private func moodSuggestions(ctx: SuggestionFocusContext) -> [InlineSuggestion] {
+        let lowerTyping = ctx.typingLower
+        let triggers = ["today is", "i feel", "feeling", "my mood", "i'm", "my day", "this day"]
+        guard triggers.contains(where: { lowerTyping.contains($0) }) else { return [] }
+
+        let trailing = ctx.typingFragment
+        var results: [InlineSuggestion] = []
+
+        if !cachedMoodStates.isEmpty {
+            for state in cachedMoodStates.prefix(3) {
+                let phrase = moodPhrase(from: state)
+                results.append(completionChip(" \(phrase)", after: trailing, confidence: 0.85))
+            }
+        }
+
+        let engine = HealthStateEngine.shared
+        if engine.moodScore > 70 {
+            results.append(completionChip(" a great day", after: trailing, confidence: 0.5))
+        } else if engine.moodScore > 50 {
+            results.append(completionChip(" a good day", after: trailing, confidence: 0.5))
+        } else if engine.moodScore > 30 {
+            results.append(completionChip(" an okay day", after: trailing, confidence: 0.5))
+        } else {
+            results.append(completionChip(" a tough day", after: trailing, confidence: 0.5))
+        }
+
+        return results
+    }
+
+    private func moodPhrase(from state: HKStateOfMind) -> String {
+        let valence = state.valence
+        let labels = state.labels
+        let associations = state.associations
+
+        let emotionWord: String
+        if labels.contains(.happy) || labels.contains(.joyful) { emotionWord = "wonderful" }
+        else if labels.contains(.content) || labels.contains(.satisfied) { emotionWord = "content" }
+        else if labels.contains(.calm) || labels.contains(.peaceful) { emotionWord = "peaceful" }
+        else if labels.contains(.excited) || labels.contains(.passionate) { emotionWord = "exciting" }
+        else if labels.contains(.grateful) { emotionWord = "grateful" }
+        else if labels.contains(.hopeful) || labels.contains(.brave) { emotionWord = "hopeful" }
+        else if labels.contains(.proud) || labels.contains(.confident) { emotionWord = "proud" }
+        else if labels.contains(.relieved) { emotionWord = "relieving" }
+        else if labels.contains(.amazed) { emotionWord = "amazing" }
+        else if labels.contains(.amused) { emotionWord = "fun" }
+        else if labels.contains(.sad) || labels.contains(.lonely) { emotionWord = "melancholy" }
+        else if labels.contains(.anxious) || labels.contains(.worried) { emotionWord = "anxious" }
+        else if labels.contains(.stressed) || labels.contains(.overwhelmed) { emotionWord = "stressful" }
+        else if labels.contains(.frustrated) || labels.contains(.angry) { emotionWord = "frustrating" }
+        else if labels.contains(.drained) || labels.contains(.discouraged) { emotionWord = "draining" }
+        else if labels.contains(.indifferent) { emotionWord = "neutral" }
+        else if valence > 0.5 { emotionWord = "wonderful" }
+        else if valence > 0 { emotionWord = "decent" }
+        else if valence > -0.5 { emotionWord = "difficult" }
+        else { emotionWord = "tough" }
+
+        let contextWord: String?
+        if associations.contains(.friends) { contextWord = "with friends" }
+        else if associations.contains(.family) { contextWord = "with family" }
+        else if associations.contains(.partner) { contextWord = "with my partner" }
+        else if associations.contains(.work) { contextWord = "at work" }
+        else if associations.contains(.fitness) { contextWord = "through fitness" }
+        else if associations.contains(.health) { contextWord = "for my health" }
+        else if associations.contains(.selfCare) { contextWord = "focused on self-care" }
+        else if associations.contains(.hobbies) { contextWord = "enjoying hobbies" }
+        else if associations.contains(.travel) { contextWord = "while traveling" }
+        else if associations.contains(.education) { contextWord = "through learning" }
+        else if associations.contains(.community) { contextWord = "in community" }
+        else if associations.contains(.spirituality) { contextWord = "in reflection" }
+        else if associations.contains(.dating) { contextWord = "on a date" }
+        else if associations.contains(.weather) { contextWord = "with the weather" }
+        else if associations.contains(.money) { contextWord = "regarding finances" }
+        else if associations.contains(.currentEvents) { contextWord = "following the news" }
+        else if associations.contains(.identity) { contextWord = "exploring identity" }
+        else if associations.contains(.tasks) { contextWord = "getting things done" }
+        else { contextWord = nil }
+
+        if let ctx = contextWord {
+            return "a \(emotionWord) day \(ctx)"
+        }
+        return "a \(emotionWord) day"
+    }
+
+    // MARK: - Sleep Suggestions
+
+    private func sleepSuggestions(ctx: SuggestionFocusContext) -> [InlineSuggestion] {
+        let lowerTyping = ctx.typingLower
+        let triggers = ["my sleep", "i slept", "sleep was", "sleep is", "last night", "slept for", "hours of sleep"]
+        guard triggers.contains(where: { lowerTyping.contains($0) }) else { return [] }
+
+        let engine = HealthStateEngine.shared
+        let trailing = ctx.typingFragment
+        var results: [InlineSuggestion] = []
+
+        if let hours = engine.sleepHours {
+            results.append(completionChip(" \(String(format: "%.1f", hours)) hours", after: trailing, confidence: 0.85))
+            if let baseline = engine.sleepBaseline7Day, baseline > 0 {
+                let diff = hours - baseline
+                let direction = diff >= 0 ? "above" : "below"
+                results.append(completionChip(String(format: " %.1f hours (%+.1f %@ average)", hours, abs(diff), direction), after: trailing, confidence: 0.8))
+
+                let pct = ((hours - baseline) / baseline) * 100
+                if pct > 15 {
+                    results.append(completionChip(" really well, more than usual", after: trailing, confidence: 0.65))
+                } else if pct > 5 {
+                    results.append(completionChip(" well, slightly above average", after: trailing, confidence: 0.65))
+                } else if pct < -15 {
+                    results.append(completionChip(" less than I needed", after: trailing, confidence: 0.65))
+                } else if pct < -5 {
+                    results.append(completionChip(" a bit less than usual", after: trailing, confidence: 0.65))
+                } else {
+                    results.append(completionChip(" about the right amount", after: trailing, confidence: 0.6))
+                }
+            }
+        }
+
+        return results
+    }
+
+    // MARK: - Recovery / HRV Suggestions
+
+    private func recoverySuggestions(ctx: SuggestionFocusContext) -> [InlineSuggestion] {
+        let lowerTyping = ctx.typingLower
+        let triggers = ["my hrv", "recovery", "readiness", "how i feel", "my recovery", "body feels", "feeling recovered"]
+        guard triggers.contains(where: { lowerTyping.contains($0) }) else { return [] }
+
+        let engine = HealthStateEngine.shared
+        let trailing = ctx.typingFragment
+        var results: [InlineSuggestion] = []
+
+        if lowerTyping.contains("hrv"), let hrv = engine.latestHRV {
+            results.append(completionChip(" \(Int(hrv)) ms", after: trailing, confidence: 0.85))
+            if let baseline = engine.hrvBaseline7Day, baseline > 0 {
+                let pct = ((hrv - baseline) / baseline) * 100
+                results.append(completionChip(String(format: " %d ms (%+.0f%% vs 7d)", Int(hrv), pct), after: trailing, confidence: 0.8))
+            }
+        }
+
+        if lowerTyping.contains("recovery") {
+            let score = Int(engine.recoveryScore)
+            let label = score >= 70 ? "strong" : score >= 40 ? "moderate" : "low"
+            results.append(completionChip(" score is \(score) (\(label))", after: trailing, confidence: 0.8))
+
+            if score >= 70 {
+                results.append(completionChip(" well-recovered and ready to push", after: trailing, confidence: 0.6))
+            } else if score < 40 {
+                results.append(completionChip(" still recovering, taking it easy", after: trailing, confidence: 0.6))
+            }
+        }
+
+        if lowerTyping.contains("readiness") {
+            let score = Int(engine.readinessScore)
+            results.append(completionChip(" score is \(score)", after: trailing, confidence: 0.8))
+        }
+
+        return results
+    }
+
+    // MARK: - Vitals Suggestions
+
+    private func vitalsSuggestions(ctx: SuggestionFocusContext) -> [InlineSuggestion] {
+        let lowerTyping = ctx.typingLower
+        let engine = HealthStateEngine.shared
+        let trailing = ctx.typingFragment
+        var results: [InlineSuggestion] = []
+
+        if lowerTyping.contains("resting heart rate") || lowerTyping.contains("rhr") {
+            if let rhr = engine.restingHeartRate {
+                results.append(completionChip(" \(Int(rhr)) bpm", after: trailing, confidence: 0.85))
+                if let baseline = engine.rhrBaseline7Day, baseline > 0 {
+                    let diff = rhr - baseline
+                    results.append(completionChip(String(format: " %d bpm (%+.0f vs 7d avg)", Int(rhr), diff), after: trailing, confidence: 0.8))
+                }
+            }
+        }
+
+        let vitalsTriggers: [(trigger: String, key: String, unit: String)] = [
+            ("respiratory rate", "RespiratoryRate", "br/min"),
+            ("spo2", "SpO2", "%"),
+            ("oxygen", "SpO2", "%"),
+            ("temperature", "WristTemp", "°C"),
+            ("wrist temp", "WristTemp", "°C"),
+        ]
+
+        for vt in vitalsTriggers where lowerTyping.contains(vt.trigger) {
+            if let summary = engine.vitalsSummary[vt.key], let current = summary.current {
+                results.append(completionChip(" \(String(format: "%.1f", current)) \(vt.unit)", after: trailing, confidence: 0.8))
+            }
+        }
+
+        return results
+    }
+}
+
+// MARK: - Journal Stat Resolver
+
+private enum JournalStatMetricKey: String, CaseIterable, Identifiable {
+    case duration, heartRate, calories, hrr, power, cadence, speed, pace, elevationGain
+    case verticalOscillation, groundContactTime, strideLength, strokeCount
+    case zone1, zone2, zone3, zone4, zone5
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .duration: return "Duration"
+        case .heartRate: return "Heart Rate"
+        case .calories: return "Calories"
+        case .hrr: return "HRR"
+        case .power: return "Power"
+        case .cadence: return "Cadence"
+        case .speed: return "Speed"
+        case .pace: return "Pace"
+        case .elevationGain: return "Elevation Gain"
+        case .verticalOscillation: return "Vertical Oscillation"
+        case .groundContactTime: return "Ground Contact"
+        case .strideLength: return "Stride Length"
+        case .strokeCount: return "Stroke Count"
+        case .zone1: return "Zone 1"
+        case .zone2: return "Zone 2"
+        case .zone3: return "Zone 3"
+        case .zone4: return "Zone 4"
+        case .zone5: return "Zone 5"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .duration: return "clock.fill"
+        case .heartRate: return "heart.fill"
+        case .calories: return "flame.fill"
+        case .hrr: return "heart.text.square.fill"
+        case .power: return "bolt.fill"
+        case .cadence: return "gauge.with.dots.needle.bottom.50percent"
+        case .speed: return "speedometer"
+        case .pace: return "figure.run"
+        case .elevationGain: return "mountain.2.fill"
+        case .verticalOscillation: return "arrow.up.arrow.down"
+        case .groundContactTime: return "shoe.fill"
+        case .strideLength: return "ruler.fill"
+        case .strokeCount: return "figure.pool.swim"
+        case .zone1: return "heart.fill"
+        case .zone2: return "heart.fill"
+        case .zone3: return "heart.fill"
+        case .zone4: return "waveform.path.ecg"
+        case .zone5: return "flame.fill"
+        }
+    }
+
+    var accentHue: Double {
+        switch self {
+        case .heartRate, .hrr, .zone4, .zone5: return 0
+        case .power, .calories: return 30
+        case .cadence, .speed, .pace: return 200
+        case .duration: return 270
+        case .elevationGain: return 120
+        case .verticalOscillation, .groundContactTime, .strideLength: return 180
+        case .strokeCount: return 210
+        case .zone1: return 210
+        case .zone2: return 140
+        case .zone3: return 50
+        }
+    }
+}
+
+private enum JournalStatVariant: String, CaseIterable, Identifiable {
+    case average, peak, total, pctFrom7d, pctFrom28d, quests
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .average: return "Average"
+        case .peak: return "Peak"
+        case .total: return "Total"
+        case .pctFrom7d: return "% from 7d"
+        case .pctFrom28d: return "% from 28d"
+        case .quests: return "Quests"
+        }
+    }
+}
+
+private enum JournalStatResolver {
+    static func availableMetrics(for activityType: HKWorkoutActivityType, analytics: WorkoutAnalytics) -> [JournalStatMetricKey] {
+        var keys: [JournalStatMetricKey] = [.duration, .heartRate, .calories]
+        if analytics.hrr1 != nil || analytics.hrr2 != nil { keys.append(.hrr) }
+        if !analytics.powerSeries.isEmpty { keys.append(.power) }
+        if !analytics.cadenceSeries.isEmpty { keys.append(.cadence) }
+        if !analytics.speedSeries.isEmpty { keys.append(.speed) }
+        if activityType == .running || activityType == .walking {
+            if !analytics.speedSeries.isEmpty { keys.append(.pace) }
+        }
+        if analytics.elevationGain != nil { keys.append(.elevationGain) }
+        if analytics.verticalOscillation != nil { keys.append(.verticalOscillation) }
+        if analytics.groundContactTime != nil { keys.append(.groundContactTime) }
+        if analytics.strideLength != nil { keys.append(.strideLength) }
+        if !analytics.strokeCountSeries.isEmpty { keys.append(.strokeCount) }
+        if !analytics.hrZoneBreakdown.isEmpty {
+            for i in 1...min(5, analytics.hrZoneBreakdown.count) {
+                if analytics.hrZoneBreakdown[i - 1].timeInZone > 0 {
+                    switch i {
+                    case 1: keys.append(.zone1)
+                    case 2: keys.append(.zone2)
+                    case 3: keys.append(.zone3)
+                    case 4: keys.append(.zone4)
+                    case 5: keys.append(.zone5)
+                    default: break
+                    }
+                }
+            }
+        }
+        return keys
+    }
+
+    static func availableVariants(for metric: JournalStatMetricKey) -> [JournalStatVariant] {
+        switch metric {
+        case .duration:
+            return [.total, .pctFrom7d, .pctFrom28d]
+        case .heartRate:
+            return [.average, .peak, .pctFrom7d, .pctFrom28d]
+        case .calories:
+            return [.total, .pctFrom7d, .pctFrom28d]
+        case .hrr:
+            return [.average, .pctFrom7d, .pctFrom28d]
+        case .power:
+            return [.average, .peak, .pctFrom7d, .pctFrom28d, .quests]
+        case .cadence:
+            return [.average, .pctFrom7d, .pctFrom28d, .quests]
+        case .speed:
+            return [.average, .peak, .pctFrom7d, .pctFrom28d]
+        case .pace:
+            return [.average, .peak, .pctFrom7d, .pctFrom28d, .quests]
+        case .elevationGain:
+            return [.total, .pctFrom7d, .pctFrom28d]
+        case .verticalOscillation, .groundContactTime, .strideLength:
+            return [.average, .pctFrom7d, .pctFrom28d]
+        case .strokeCount:
+            return [.total, .average]
+        case .zone1, .zone2, .zone3, .zone4, .zone5:
+            return [.total, .pctFrom7d, .pctFrom28d, .quests]
+        }
+    }
+
+    @MainActor
+    static func resolve(
+        metric: JournalStatMetricKey,
+        variant: JournalStatVariant,
+        workout: HKWorkout,
+        analytics: WorkoutAnalytics,
+        referenceDate: Date
+    ) -> (value: String, subtitle: String) {
+        let raw = rawValue(metric: metric, variant: variant, workout: workout, analytics: analytics, referenceDate: referenceDate)
+        let sub = subtitle(metric: metric, variant: variant, workout: workout, analytics: analytics, referenceDate: referenceDate)
+        return (raw, sub)
+    }
+
+    @MainActor
+    private static func rawValue(metric: JournalStatMetricKey, variant: JournalStatVariant, workout: HKWorkout, analytics: WorkoutAnalytics, referenceDate: Date) -> String {
+        if variant == .quests {
+            return questValue(metric: metric, workout: workout, referenceDate: referenceDate)
+        }
+
+        let primary = primaryNumericValue(metric: metric, variant: variant, workout: workout, analytics: analytics)
+
+        if variant == .pctFrom7d || variant == .pctFrom28d {
+            let days = variant == .pctFrom7d ? 7 : 28
+            let baseline = baselineAverage(metric: metric, sport: workout.workoutActivityType, days: days, before: referenceDate)
+            guard let p = primary, let b = baseline, b > 0 else { return "—" }
+            let pct = ((p - b) / b) * 100
+            let sign = pct >= 0 ? "+" : ""
+            return "\(sign)\(String(format: "%.0f", pct))%"
+        }
+
+        guard let p = primary else { return "—" }
+        return formatNumeric(p, metric: metric)
+    }
+
+    @MainActor
+    private static func subtitle(metric: JournalStatMetricKey, variant: JournalStatVariant, workout: HKWorkout, analytics: WorkoutAnalytics, referenceDate: Date) -> String {
+        switch variant {
+        case .pctFrom7d: return "vs 7-day baseline"
+        case .pctFrom28d: return "vs 28-day baseline"
+        case .quests: return questSubtitle(metric: metric, workout: workout, referenceDate: referenceDate)
+        default:
+            let days7 = baselineAverage(metric: metric, sport: workout.workoutActivityType, days: 7, before: referenceDate)
+            if let b = days7 {
+                return "7d avg: \(formatNumeric(b, metric: metric))"
+            }
+            return ""
+        }
+    }
+
+    private static func primaryNumericValue(metric: JournalStatMetricKey, variant: JournalStatVariant, workout: HKWorkout, analytics: WorkoutAnalytics) -> Double? {
+        switch metric {
+        case .duration:
+            return workout.duration / 60.0
+        case .heartRate:
+            let hrs = analytics.heartRates.map(\.1)
+            guard !hrs.isEmpty else { return nil }
+            return variant == .peak ? hrs.max() : hrs.reduce(0, +) / Double(hrs.count)
+        case .calories:
+            return workout.totalEnergyBurned?.doubleValue(for: .kilocalorie())
+        case .hrr:
+            return analytics.hrr2 ?? analytics.hrr1
+        case .power:
+            let vals = analytics.powerSeries.map(\.1)
+            guard !vals.isEmpty else { return nil }
+            return variant == .peak ? vals.max() : vals.reduce(0, +) / Double(vals.count)
+        case .cadence:
+            let vals = analytics.cadenceSeries.map(\.1)
+            guard !vals.isEmpty else { return nil }
+            return vals.reduce(0, +) / Double(vals.count)
+        case .speed:
+            let vals = analytics.speedSeries.map(\.1)
+            guard !vals.isEmpty else { return nil }
+            let v = variant == .peak ? vals.max()! : vals.reduce(0, +) / Double(vals.count)
+            return v * 3.6
+        case .pace:
+            let vals = analytics.speedSeries.map(\.1).filter { $0 > 0 }
+            guard !vals.isEmpty else { return nil }
+            let avgSpeed = variant == .peak ? vals.max()! : vals.reduce(0, +) / Double(vals.count)
+            guard avgSpeed > 0 else { return nil }
+            return 1000.0 / avgSpeed / 60.0
+        case .elevationGain:
+            return analytics.elevationGain
+        case .verticalOscillation:
+            return analytics.verticalOscillation
+        case .groundContactTime:
+            return analytics.groundContactTime
+        case .strideLength:
+            return analytics.strideLength
+        case .strokeCount:
+            let vals = analytics.strokeCountSeries.map(\.1)
+            guard !vals.isEmpty else { return nil }
+            return variant == .total ? vals.last : vals.reduce(0, +) / Double(vals.count)
+        case .zone1, .zone2, .zone3, .zone4, .zone5:
+            let idx: Int
+            switch metric {
+            case .zone1: idx = 0; case .zone2: idx = 1; case .zone3: idx = 2
+            case .zone4: idx = 3; case .zone5: idx = 4; default: return nil
+            }
+            guard idx < analytics.hrZoneBreakdown.count else { return nil }
+            return analytics.hrZoneBreakdown[idx].timeInZone / 60.0
+        }
+    }
+
+    @MainActor
+    private static func baselineAverage(metric: JournalStatMetricKey, sport: HKWorkoutActivityType, days: Int, before date: Date) -> Double? {
+        let engine = HealthStateEngine.shared
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: date))!
+        let end = cal.startOfDay(for: date)
+        let matching = engine.workoutAnalytics.filter { pair in
+            pair.workout.startDate >= start && pair.workout.startDate < end
+                && pair.workout.workoutActivityType == sport
+        }
+        guard !matching.isEmpty else { return nil }
+        let vals: [Double] = matching.compactMap { pair in
+            primaryNumericValue(metric: metric, variant: .average, workout: pair.workout, analytics: pair.analytics)
+        }
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
+
+    @MainActor
+    private static func questValue(metric: JournalStatMetricKey, workout: HKWorkout, referenceDate: Date) -> String {
+        let quests = relevantQuests(metric: metric, workout: workout, referenceDate: referenceDate)
+        guard !quests.isEmpty else { return "None" }
+        return "\(quests.count) completed"
+    }
+
+    @MainActor
+    private static func questSubtitle(metric: JournalStatMetricKey, workout: HKWorkout, referenceDate: Date) -> String {
+        let quests = relevantQuests(metric: metric, workout: workout, referenceDate: referenceDate)
+        guard !quests.isEmpty else { return "No matching quests" }
+        let grouped = Dictionary(grouping: quests, by: { "\($0.role.rawValue) \($0.goal.rawValue)" })
+        var parts: [String] = []
+        for (_, recs) in grouped.sorted(by: { $0.value.count > $1.value.count }).prefix(3) {
+            guard let first = recs.first else { continue }
+            let roleName = first.role.rawValue
+            let goalName = first.goal.rawValue
+            let totalMin = recs.reduce(0) { $0 + $1.minutes }
+            let repeats = recs.reduce(0) { $0 + $1.repeats }
+            if repeats > 1 {
+                parts.append("\(recs.count) sets of \(roleName) \(goalName) (\(repeats) x \(totalMin / max(repeats, 1)) min)")
+            } else {
+                parts.append("\(recs.count)x \(roleName) \(goalName) for \(totalMin) min")
+            }
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    @MainActor
+    private static func relevantQuests(metric: JournalStatMetricKey, workout: HKWorkout, referenceDate: Date) -> [StageQuestRecord] {
+        let store = StageQuestStore.shared
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: referenceDate)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
+        let sportName = workout.workoutActivityType.name.lowercased().replacingOccurrences(of: " ", with: "-")
+        let all = store.quests(forSport: sportName, from: dayStart, to: dayEnd)
+        let goalKey: String
+        switch metric {
+        case .power: goalKey = "power"
+        case .cadence: goalKey = "cadence"
+        case .pace: goalKey = "pace"
+        case .zone1, .zone2, .zone3, .zone4, .zone5: goalKey = "heartRateZone"
+        default: return all
+        }
+        return all.filter { $0.goalRawValue == goalKey }
+    }
+
+    private static func formatNumeric(_ value: Double, metric: JournalStatMetricKey) -> String {
+        switch metric {
+        case .duration:
+            let h = Int(value) / 60
+            let m = Int(value) % 60
+            return h > 0 ? "\(h)h \(m)m" : "\(m) min"
+        case .heartRate, .hrr:
+            return "\(Int(value)) bpm"
+        case .calories:
+            return "\(Int(value)) kcal"
+        case .power:
+            return "\(Int(value)) W"
+        case .cadence:
+            return "\(Int(value)) rpm"
+        case .speed:
+            return String(format: "%.1f km/h", value)
+        case .pace:
+            let totalSecs = Int(value * 60)
+            return "\(totalSecs / 60):\(String(format: "%02d", totalSecs % 60)) /km"
+        case .elevationGain:
+            return "\(Int(value)) m"
+        case .verticalOscillation:
+            return String(format: "%.1f cm", value)
+        case .groundContactTime:
+            return "\(Int(value)) ms"
+        case .strideLength:
+            return String(format: "%.2f m", value)
+        case .strokeCount:
+            return "\(Int(value))"
+        case .zone1, .zone2, .zone3, .zone4, .zone5:
+            return "\(Int(value)) min"
+        }
+    }
+}
+
+// MARK: - Achievement Card Views
+
+private struct JournalStatCardView: View {
+    let card: JournalStatCard
+    let onResize: (JournalStatCard.CardSize) -> Void
+    let onDelete: () -> Void
+
+    private var accent: Color { Color(hue: card.accentHue / 360.0, saturation: 0.7, brightness: 0.9) }
+
+    var body: some View {
+        Group {
+            switch card.size {
+            case .small:
+                smallCard
+            case .medium:
+                mediumCard
+            case .large:
+                largeCard
+            }
+        }
+        .contextMenu {
+            Menu("Resize") {
+                Button("Small") { onResize(.small) }
+                Button("Medium") { onResize(.medium) }
+                Button("Large") { onResize(.large) }
+            }
+            Button(role: .destructive) { onDelete() } label: { Label("Remove", systemImage: "trash") }
+        }
+    }
+
+    private var smallCard: some View {
+        VStack(spacing: 4) {
+            Image(systemName: card.icon)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(accent)
+            Text(card.value)
+                .font(.system(.caption, design: .rounded, weight: .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(card.title.uppercased())
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(accent.opacity(0.2), lineWidth: 1))
+    }
+
+    private var mediumCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: card.icon)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(accent)
+                    .frame(width: 32, height: 32)
+                    .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Spacer()
+            }
+            Text(card.value)
+                .font(.system(.title3, design: .rounded, weight: .bold))
+                .foregroundStyle(.primary)
+            Text(card.title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+            if !card.subtitle.isEmpty {
+                Text(card.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(accent.opacity(0.16), lineWidth: 1))
+    }
+
+    private var largeCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: card.icon)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(accent)
+                    .frame(width: 40, height: 40)
+                    .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(card.title)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.primary)
+                    Text(card.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                Spacer()
+                Text(card.value)
+                    .font(.system(.title2, design: .rounded, weight: .bold))
+                    .foregroundStyle(accent)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(accent.opacity(0.16), lineWidth: 1))
+    }
+}
+
+private struct JournalStatCardsGrid: View {
+    let cards: [JournalStatCard]
+    let onResize: (UUID, JournalStatCard.CardSize) -> Void
+    let onDelete: (UUID) -> Void
+
+    var body: some View {
+        if !cards.isEmpty {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(cards) { card in
+                    JournalStatCardView(
+                        card: card,
+                        onResize: { newSize in onResize(card.id, newSize) },
+                        onDelete: { onDelete(card.id) }
+                    )
+                    .gridCellColumns(card.size == .large ? 2 : 1)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Editor
+
 struct JournalEditorView: View {
     @Environment(\.dismiss) var dismiss
     @Binding var entry: JournalEntry
     var onSave: (JournalEntry) -> Void
-    @State private var editorAnimationPhase: Double = 0
+    @State private var referenceDate: Date = Date()
+
+    // Stats picker state
+    @State private var selectedWorkoutIndex: Int? = nil
+    @State private var selectedMetric: JournalStatMetricKey? = nil
+    @State private var selectedVariant: JournalStatVariant? = nil
+    @State private var selectedCardSize: JournalStatCard.CardSize = .medium
+    @State private var showStatPicker = false
+
+    // Inline suggestion engine
+    @StateObject private var suggestionEngine = JournalInlineSuggestionEngine()
+    @State private var activeSuggestionField: SuggestionField = .content
+    @State private var contentSelection = NSRange(location: 0, length: 0)
+    @State private var inspirationSelection = NSRange(location: 0, length: 0)
+    @State private var isGeneratingAITitle = false
+    private enum SuggestionField { case content, inspiration }
+
+    private var trimmedReflection: String {
+        entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Enough body text to infer a meaningful title.
+    private var hasSufficientContentForTitleSuggestion: Bool {
+        let t = trimmedReflection
+        guard t.count >= 48 else { return false }
+        let words = t.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }
+        return words.count >= 10
+    }
+
+    // Correlation detection
+    @StateObject private var correlationEngine = JournalCorrelationEngine()
+    @State private var editingCorrelationInJournal: EmotionCorrelation? = nil
+    @State private var showAddCorrelationInJournal = false
 
     #if canImport(JournalingSuggestions)
     @State private var showingSuggestions = false
     #endif
+
+    private var isFitnessReport: Bool { entry.kind == "workout_report" }
+
+    @MainActor
+    private var todaysWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: referenceDate)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? referenceDate
+        return HealthStateEngine.shared.workoutAnalytics.filter { pair in
+            pair.workout.startDate >= dayStart && pair.workout.startDate < dayEnd
+        }.sorted { $0.workout.startDate < $1.workout.startDate }
+    }
     
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -917,25 +2585,89 @@ struct JournalEditorView: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+
+    private static let timeOnlyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
     
     private func generateHealthSnapshot() -> String {
-        // Placeholder snapshot (can later connect to HealthStateEngine)
+        let engine = HealthStateEngine.shared
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
-        
-        return """
-        
-        --- Health Snapshot ---
-        Date: \(formatter.string(from: Date()))
-        Feel‑Good Score: —
-        HRV: —
-        Sleep: —
-        Mood: —
-        -----------------------
-        
-        """
+        var lines: [String] = ["--- Health Snapshot ---", "Date: \(formatter.string(from: Date()))"]
+        if let hrv = engine.latestHRV { lines.append("HRV: \(Int(hrv)) ms") }
+        if let rhr = engine.restingHeartRate { lines.append("RHR: \(Int(rhr)) bpm") }
+        if let sleep = engine.sleepHours { lines.append("Sleep: \(String(format: "%.1f", sleep)) hrs") }
+        lines.append("Recovery: \(Int(engine.recoveryScore))")
+        lines.append("Readiness: \(Int(engine.readinessScore))")
+        lines.append("-----------------------")
+        return "\n" + lines.joined(separator: "\n") + "\n"
     }
-    
+
+    private func fallbackTitleFromReflection(_ content: String) -> String {
+        let firstSentence = content.components(separatedBy: CharacterSet(charactersIn: ".!?\n"))
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? content
+        let words = firstSentence.split { $0.isWhitespace || $0.isNewline }.prefix(10)
+        let joined = words.joined(separator: " ")
+        if joined.count <= 80 { return joined }
+        return String(joined.prefix(77)).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    @MainActor
+    private func generateSuggestedTitle() async {
+        let raw = trimmedReflection
+        guard raw.count >= 48 else { return }
+
+        isGeneratingAITitle = true
+        defer { isGeneratingAITitle = false }
+
+        let inspirationSnippet = entry.inspiration.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            let model = SystemLanguageModel(useCase: .general)
+            if model.isAvailable {
+                do {
+                    let session = LanguageModelSession(
+                        model: model,
+                        instructions: """
+                        Propose a short diary title: 2–10 words, natural language, no quotation marks, no emoji, no trailing period unless part of a name.
+                        Capture the main theme or moment. Use proper nouns from the text when important.
+                        """
+                    )
+                    let body = String(raw.prefix(3500))
+                    let prompt: String
+                    if inspirationSnippet.isEmpty {
+                        prompt = "Reflection text:\n\(body)"
+                    } else {
+                        prompt = """
+                        Reflection text:
+                        \(body)
+
+                        Imported inspiration / context (for names, places, events):
+                        \(String(inspirationSnippet.prefix(2000)))
+                        """
+                    }
+                    let response = try await session.respond(to: prompt, generating: JournalAITitleOutput.self)
+                    let t = response.content.suggestedTitle
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .replacingOccurrences(of: #"^[\"']|[\"']$"#, with: "", options: .regularExpression)
+                    if !t.isEmpty, t.count <= 120 {
+                        entry.title = t
+                        return
+                    }
+                } catch {}
+            }
+        }
+        #endif
+
+        let fallback = fallbackTitleFromReflection(raw)
+        if !fallback.isEmpty { entry.title = fallback }
+    }
+
     #if canImport(JournalingSuggestions)
     private func downloadImagesFromSuggestion(_ suggestion: JournalingSuggestion) async -> [Data] {
         let imageURLs = await imageURLs(from: suggestion)
@@ -1311,33 +3043,140 @@ struct JournalEditorView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                GradientBackgrounds().spiritGradient(animationPhase: $editorAnimationPhase)
-                    .ignoresSafeArea()
+                editorBackground.ignoresSafeArea()
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
+                        // Title + Date + Kind Toggle
                         VStack(alignment: .leading, spacing: 10) {
-                            TextField("Untitled entry", text: $entry.title)
-                                .font(.system(.largeTitle, design: .serif, weight: .bold))
-                                .foregroundStyle(.primary)
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                TextField("Untitled entry", text: $entry.title)
+                                    .font(.system(.largeTitle, design: .serif, weight: .bold))
+                                    .foregroundStyle(.primary)
 
-                            Text(entry.date.formatted(.dateTime.weekday(.wide).month().day().hour().minute()))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                                if hasSufficientContentForTitleSuggestion {
+                                    Button {
+                                        Task { await generateSuggestedTitle() }
+                                    } label: {
+                                        Group {
+                                            if isGeneratingAITitle {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                            } else {
+                                                Image(systemName: "wand.and.stars")
+                                                    .font(.title3.weight(.semibold))
+                                            }
+                                        }
+                                        .frame(width: 36, height: 36)
+                                        .background(Color.orange.opacity(0.18), in: Circle())
+                                        .overlay(Circle().stroke(Color.orange.opacity(0.35), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(isGeneratingAITitle)
+                                    .accessibilityLabel("Suggest title from reflection")
+                                    .help("Suggest a title from your reflection")
+                                }
+                            }
+
+                            HStack(spacing: 12) {
+                                Text(entry.date.formatted(.dateTime.weekday(.wide).month().day().hour().minute()))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                Spacer()
+
+                                Menu {
+                                    Button { withAnimation { entry.kind = "standard" } } label: {
+                                        Label("Entry", systemImage: "book.pages")
+                                    }
+                                    Button { withAnimation { entry.kind = "workout_report" } } label: {
+                                        Label("Fitness Report", systemImage: "figure.run")
+                                    }
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: isFitnessReport ? "figure.run" : "book.pages")
+                                        Text(isFitnessReport ? "Fitness Report" : "Entry")
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.system(size: 8, weight: .bold))
+                                    }
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(isFitnessReport ? Color.orange : Color.primary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        (isFitnessReport ? Color.orange.opacity(0.16) : Color.white.opacity(0.1)),
+                                        in: Capsule()
+                                    )
+                                    .overlay(Capsule().stroke(
+                                        isFitnessReport ? Color.orange.opacity(0.25) : Color.white.opacity(0.12),
+                                        lineWidth: 1
+                                    ))
+                                }
+                            }
                         }
 
+                        // Reflection
                         journalEditorSection(
                             title: "Reflection",
                             subtitle: "Write like you're speaking to yourself, not filling out a form."
                         ) {
-                            TextEditor(text: $entry.content)
+                            ZStack(alignment: .bottom) {
+                                #if canImport(UIKit)
+                                JournalSelectableTextEditor(text: $entry.content, selection: $contentSelection) { text, range in
+                                    activeSuggestionField = .content
+                                    suggestionEngine.textDidChange(
+                                        text,
+                                        selection: range,
+                                        referenceDate: referenceDate,
+                                        isFitnessReport: isFitnessReport,
+                                        inspirationContext: entry.inspiration
+                                    )
+                                    let combined = text + " " + entry.inspiration
+                                    correlationEngine.analyzeText(combined, journalEntryID: entry.id, referenceDate: referenceDate)
+                                }
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 260)
                                 .font(.body)
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 6)
+                                #else
+                                TextEditor(text: $entry.content)
+                                    .scrollContentBackground(.hidden)
+                                    .frame(minHeight: 260)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 6)
+                                    .onChange(of: entry.content) { _, newValue in
+                                        activeSuggestionField = .content
+                                        let r = NSRange(location: (newValue as NSString).length, length: 0)
+                                        suggestionEngine.textDidChange(
+                                            newValue,
+                                            selection: r,
+                                            referenceDate: referenceDate,
+                                            isFitnessReport: isFitnessReport,
+                                            inspirationContext: entry.inspiration
+                                        )
+                                        let combined = newValue + " " + entry.inspiration
+                                        correlationEngine.analyzeText(combined, journalEntryID: entry.id, referenceDate: referenceDate)
+                                    }
+                                #endif
+
+                                if activeSuggestionField == .content && !suggestionEngine.suggestions.isEmpty {
+                                    inlineSuggestionBar { selected in
+                                        let (newText, newSel) = suggestionEngine.apply(selected, to: entry.content, selection: contentSelection)
+                                        entry.content = newText
+                                        contentSelection = newSel
+                                    }
+                                }
+                            }
                         }
 
+                        // Stats (Fitness Report only)
+                        if isFitnessReport {
+                            statsSection
+                        }
+
+                        // Inspiration
                         journalEditorSection(
                             title: "Inspiration",
                             subtitle: "Imported prompts, places, workouts, and memories live here."
@@ -1359,16 +3198,96 @@ struct JournalEditorView: View {
                                 )
                             }
 
-                            TextEditor(text: $entry.inspiration)
+                            ZStack(alignment: .bottom) {
+                                #if canImport(UIKit)
+                                JournalSelectableTextEditor(text: $entry.inspiration, selection: $inspirationSelection) { text, range in
+                                    activeSuggestionField = .inspiration
+                                    suggestionEngine.textDidChange(
+                                        text,
+                                        selection: range,
+                                        referenceDate: referenceDate,
+                                        isFitnessReport: isFitnessReport,
+                                        inspirationContext: entry.inspiration
+                                    )
+                                }
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 220)
                                 .font(.body)
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 6)
+                                #else
+                                TextEditor(text: $entry.inspiration)
+                                    .scrollContentBackground(.hidden)
+                                    .frame(minHeight: 220)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 6)
+                                    .onChange(of: entry.inspiration) { _, newValue in
+                                        activeSuggestionField = .inspiration
+                                        let r = NSRange(location: (newValue as NSString).length, length: 0)
+                                        suggestionEngine.textDidChange(
+                                            newValue,
+                                            selection: r,
+                                            referenceDate: referenceDate,
+                                            isFitnessReport: isFitnessReport,
+                                            inspirationContext: entry.inspiration
+                                        )
+                                    }
+                                #endif
+
+                                if activeSuggestionField == .inspiration && !suggestionEngine.suggestions.isEmpty {
+                                    inlineSuggestionBar { selected in
+                                        let (newText, newSel) = suggestionEngine.apply(selected, to: entry.inspiration, selection: inspirationSelection)
+                                        entry.inspiration = newText
+                                        inspirationSelection = newSel
+                                    }
+                                }
+                            }
 
                             Text("You can refine imported inspiration here. New inspiration is still added through Journaling Suggestions.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
+
+                        // Detected Correlations
+                        if !correlationEngine.detectedCorrelations.isEmpty || !CorrelationStore.shared.correlations(forJournal: entry.id).isEmpty {
+                            journalEditorSection(
+                                title: "Detected Correlations",
+                                subtitle: "Emotions and connections detected from your writing."
+                            ) {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        let displayed = correlationEngine.detectedCorrelations.isEmpty
+                                            ? CorrelationStore.shared.correlations(forJournal: entry.id)
+                                            : correlationEngine.detectedCorrelations
+
+                                        ForEach(displayed) { corr in
+                                            correlationBubble(corr)
+                                        }
+
+                                        Button {
+                                            showAddCorrelationInJournal = true
+                                        } label: {
+                                            Image(systemName: "plus")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(.secondary)
+                                                .frame(width: 32, height: 32)
+                                                .background(.ultraThinMaterial, in: Circle())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+
+                        // Stat cards for non-editor display (they also show in the editor below stats section)
+                        if !entry.statCards.isEmpty && !isFitnessReport {
+                            JournalStatCardsGrid(
+                                cards: entry.statCards,
+                                onResize: { id, size in resizeCard(id: id, to: size) },
+                                onDelete: { id in deleteCard(id: id) }
+                            )
                         }
                     }
                     .padding(.horizontal)
@@ -1381,15 +3300,22 @@ struct JournalEditorView: View {
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
                         entry.date = Date()
                         onSave(entry)
+
+                        // Persist detected correlations
+                        let correlationsToSave = correlationEngine.detectedCorrelations.map { corr in
+                            var mutable = corr
+                            mutable.journalEntryID = entry.id
+                            return mutable
+                        }
+                        CorrelationStore.shared.appendBatch(correlationsToSave)
+
                         dismiss()
                     }
                     .fontWeight(.semibold)
@@ -1412,15 +3338,18 @@ struct JournalEditorView: View {
                         } else {
                             entry.content += "\n" + generateHealthSnapshot()
                         }
+                        contentSelection = NSRange(location: (entry.content as NSString).length, length: 0)
                     } label: {
                         Label("Health Snapshot", systemImage: "heart.text.square")
                     }
                 }
             }
             .onAppear {
-                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                    editorAnimationPhase = 20
-                }
+                suggestionEngine.prepare(referenceDate: referenceDate)
+                let cLen = (entry.content as NSString).length
+                contentSelection = NSRange(location: cLen, length: 0)
+                let iLen = (entry.inspiration as NSString).length
+                inspirationSelection = NSRange(location: iLen, length: 0)
             }
             #if canImport(JournalingSuggestions)
             .sheet(isPresented: $showingSuggestions) {
@@ -1433,6 +3362,10 @@ struct JournalEditorView: View {
                                 entry.title = suggestion.title
                             }
 
+                            if let dateInterval = suggestion.date {
+                                referenceDate = dateInterval.end
+                            }
+
                             entry.inspiration = mergeInspiration(
                                 existing: entry.inspiration,
                                 imported: importedSuggestion.text
@@ -1442,12 +3375,318 @@ struct JournalEditorView: View {
                                 entry.imageData.append(image)
                             }
 
+                            activeSuggestionField = .content
+                            suggestionEngine.textDidChange(
+                                entry.content,
+                                selection: contentSelection,
+                                referenceDate: referenceDate,
+                                isFitnessReport: isFitnessReport,
+                                inspirationContext: entry.inspiration
+                            )
+
                             showingSuggestions = false
                         }
                     }
                 }
             }
             #endif
+            .sheet(isPresented: $showAddCorrelationInJournal) {
+                AddCorrelationSheet { correlation in
+                    var c = correlation
+                    c.journalEntryID = entry.id
+                    correlationEngine.detectedCorrelations.append(c)
+                }
+            }
+            .sheet(item: $editingCorrelationInJournal) { correlation in
+                EditCorrelationSheet(correlation: correlation) { updated in
+                    if let idx = correlationEngine.detectedCorrelations.firstIndex(where: { $0.id == updated.id }) {
+                        correlationEngine.detectedCorrelations[idx] = updated
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Correlation Bubble
+
+    @ViewBuilder
+    private func correlationBubble(_ corr: EmotionCorrelation) -> some View {
+        let color = corr.valenceCategory.color
+        HStack(spacing: 6) {
+            Image(systemName: emotionIcon(for: corr.emotionLabel))
+                .font(.caption2)
+                .foregroundStyle(color)
+            Text(corr.emotionLabel.capitalized)
+                .font(.caption2.weight(.semibold))
+            Text(corr.association.displayName)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(color.opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.25), lineWidth: 1))
+        .contextMenu {
+            Button {
+                editingCorrelationInJournal = corr
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                correlationEngine.detectedCorrelations.removeAll { $0.id == corr.id }
+            } label: {
+                Label("Remove", systemImage: "trash")
+            }
+        }
+    }
+
+    // MARK: - Editor Background
+
+    @ViewBuilder
+    private var editorBackground: some View {
+        JournalMeshPhaseBackground(style: isFitnessReport ? .burning : .spirit)
+    }
+
+    // MARK: - Stats Section
+
+    @ViewBuilder
+    private var statsSection: some View {
+        journalEditorSection(
+            title: "Stats",
+            subtitle: "Add workout metrics as achievement cards."
+        ) {
+            // Workout picker
+            if todaysWorkouts.isEmpty {
+                Text("No workouts found for this day.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(todaysWorkouts.enumerated()), id: \.offset) { idx, pair in
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    selectedWorkoutIndex = (selectedWorkoutIndex == idx) ? nil : idx
+                                    selectedMetric = nil
+                                    selectedVariant = nil
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: workoutIcon(pair.workout.workoutActivityType))
+                                        .font(.caption2.weight(.bold))
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(pair.workout.workoutActivityType.name)
+                                            .font(.caption.weight(.semibold))
+                                        Text("\(Self.timeOnlyFormatter.string(from: pair.workout.startDate))–\(Self.timeOnlyFormatter.string(from: pair.workout.endDate))")
+                                            .font(.system(size: 9))
+                                    }
+                                }
+                                .foregroundStyle(selectedWorkoutIndex == idx ? Color.white : Color.primary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
+                                    selectedWorkoutIndex == idx ? Color.orange : Color.white.opacity(0.08),
+                                    in: Capsule()
+                                )
+                                .overlay(Capsule().stroke(Color.orange.opacity(selectedWorkoutIndex == idx ? 0.5 : 0.15), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+
+            // Metric picker (after workout selection)
+            if let wIdx = selectedWorkoutIndex, wIdx < todaysWorkouts.count {
+                let pair = todaysWorkouts[wIdx]
+                let metrics = JournalStatResolver.availableMetrics(for: pair.workout.workoutActivityType, analytics: pair.analytics)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Metric")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(metrics) { m in
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        selectedMetric = (selectedMetric == m) ? nil : m
+                                        selectedVariant = nil
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: m.icon)
+                                            .font(.system(size: 10, weight: .bold))
+                                        Text(m.title)
+                                            .font(.caption2.weight(.semibold))
+                                    }
+                                    .foregroundStyle(selectedMetric == m ? Color.white : Color.primary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(selectedMetric == m ? Color.orange : Color.white.opacity(0.06), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.orange.opacity(selectedMetric == m ? 0.4 : 0.12), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+
+                // Variant + Size picker
+                if let metric = selectedMetric {
+                    let variants = JournalStatResolver.availableVariants(for: metric)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Value")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(variants) { v in
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            selectedVariant = (selectedVariant == v) ? nil : v
+                                        }
+                                    } label: {
+                                        Text(v.title)
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(selectedVariant == v ? Color.white : Color.primary)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 7)
+                                            .background(selectedVariant == v ? Color.orange : Color.white.opacity(0.06), in: Capsule())
+                                            .overlay(Capsule().stroke(Color.orange.opacity(selectedVariant == v ? 0.4 : 0.12), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    if selectedVariant != nil {
+                        HStack(spacing: 10) {
+                            Text("Size")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
+                            Picker("", selection: $selectedCardSize) {
+                                Text("S").tag(JournalStatCard.CardSize.small)
+                                Text("M").tag(JournalStatCard.CardSize.medium)
+                                Text("L").tag(JournalStatCard.CardSize.large)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 140)
+
+                            Spacer()
+
+                            Button {
+                                addStatCard()
+                            } label: {
+                                Label("Add", systemImage: "plus.circle.fill")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                        }
+                    }
+                }
+            }
+
+            // Achievement cards grid
+            if !entry.statCards.isEmpty {
+                JournalStatCardsGrid(
+                    cards: entry.statCards,
+                    onResize: { id, size in resizeCard(id: id, to: size) },
+                    onDelete: { id in deleteCard(id: id) }
+                )
+            }
+        }
+    }
+
+    // MARK: - Inline Suggestions
+
+    @ViewBuilder
+    private func inlineSuggestionBar(onSelect: @escaping (InlineSuggestion) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(suggestionEngine.suggestions) { suggestion in
+                    Button {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            onSelect(suggestion)
+                            suggestionEngine.clear()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: suggestion.mode.isReplacement ? "arrow.triangle.2.circlepath" : "text.cursor")
+                                .font(.caption2)
+                                .foregroundStyle(suggestion.mode.isReplacement ? .purple : .orange)
+                            Text(suggestion.preview)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(Color.orange.opacity(0.25), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    // MARK: - Helpers
+
+    @MainActor
+    private func addStatCard() {
+        guard let wIdx = selectedWorkoutIndex, wIdx < todaysWorkouts.count,
+              let metric = selectedMetric, let variant = selectedVariant else { return }
+        let pair = todaysWorkouts[wIdx]
+        let resolved = JournalStatResolver.resolve(
+            metric: metric, variant: variant,
+            workout: pair.workout, analytics: pair.analytics,
+            referenceDate: referenceDate
+        )
+        let variantLabel = variant == .average || variant == .peak || variant == .total ? "\(variant.title) " : ""
+        let card = JournalStatCard(
+            icon: metric.icon,
+            title: "\(variantLabel)\(metric.title)",
+            value: resolved.value,
+            subtitle: resolved.subtitle,
+            size: selectedCardSize,
+            accentHue: metric.accentHue
+        )
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+            entry.statCards.append(card)
+        }
+        selectedMetric = nil
+        selectedVariant = nil
+    }
+
+    private func resizeCard(id: UUID, to size: JournalStatCard.CardSize) {
+        guard let idx = entry.statCards.firstIndex(where: { $0.id == id }) else { return }
+        let old = entry.statCards[idx]
+        let resized = JournalStatCard(icon: old.icon, title: old.title, value: old.value, subtitle: old.subtitle, size: size, accentHue: old.accentHue)
+        withAnimation { entry.statCards[idx] = resized }
+    }
+
+    private func deleteCard(id: UUID) {
+        withAnimation { entry.statCards.removeAll { $0.id == id } }
+    }
+
+    private func workoutIcon(_ type: HKWorkoutActivityType) -> String {
+        switch type {
+        case .cycling: return "bicycle"
+        case .running: return "figure.run"
+        case .walking: return "figure.walk"
+        case .swimming: return "figure.pool.swim"
+        case .hiking: return "figure.hiking"
+        default: return "figure.mixed.cardio"
         }
     }
 

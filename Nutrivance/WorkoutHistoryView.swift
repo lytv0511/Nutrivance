@@ -620,7 +620,8 @@ struct WorkoutCard: View {
             if isExpanded {
                 WorkoutDetailView(
                     analytics: analytics,
-                    hrZoneSettings: hrZoneSettings
+                    hrZoneSettings: hrZoneSettings,
+                    showsMapSection: false
                 )
             }
         }
@@ -835,6 +836,14 @@ struct WorkoutDetailView: View {
 
     private var usesLinkedChartScrubbing: Bool {
         scrubbedDate != nil
+    }
+
+    /// Outdoor-style workouts may have a GPS route; map loads only in detail sheet when inline map is hidden.
+    private var workoutTypeMayHaveRoute: Bool {
+        switch analytics.workout.workoutActivityType {
+        case .running, .walking, .hiking, .cycling: return true
+        default: return false
+        }
     }
 
     private func updateSelectedScrubbedDate(_ date: Date?) {
@@ -1389,6 +1398,37 @@ struct WorkoutDetailView: View {
                         .buttonStyle(.plain)
                     }
                 }
+            } else if !showsMapSection, allowsMapExpansion, workoutTypeMayHaveRoute {
+                Button {
+                    showMapDetail = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "map.fill")
+                            .font(.title3)
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("View route & details")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Map and route load here to keep the list fast.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.orange.opacity(0.22), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
+                }
+                .buttonStyle(.plain)
             }
 
             if showsSummaryContent {
@@ -2212,7 +2252,7 @@ struct WorkoutDetailView: View {
         }
         .padding(.top, 8)
         .onAppear {
-            if showsMapSection || showsSummaryContent {
+            if showsMapSection {
                 loadRoute()
             }
         }
