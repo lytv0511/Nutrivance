@@ -3,7 +3,7 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(JournalingSuggestions)
+#if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
 import JournalingSuggestions
 #endif
 import HealthKit
@@ -2994,9 +2994,17 @@ struct JournalEditorView: View {
     @State private var editingCorrelationInJournal: EmotionCorrelation? = nil
     @State private var showAddCorrelationInJournal = false
 
-    #if canImport(JournalingSuggestions)
+    #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
     @State private var showingSuggestions = false
     #endif
+
+    private var supportsJournalingSuggestions: Bool {
+        #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
+        true
+        #else
+        false
+        #endif
+    }
 
     private var isFitnessReport: Bool { entry.kind == "workout_report" }
 
@@ -3115,7 +3123,7 @@ struct JournalEditorView: View {
         if !fallback.isEmpty { entry.title = fallback }
     }
 
-    #if canImport(JournalingSuggestions)
+    #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
     private func downloadImagesFromSuggestion(_ suggestion: JournalingSuggestion) async -> [Data] {
         let imageURLs = await imageURLs(from: suggestion)
         var downloadedImages: [Data] = []
@@ -3854,11 +3862,13 @@ struct JournalEditorView: View {
                 }
 
                 ToolbarItemGroup(placement: .bottomBar) {
-                    #if canImport(JournalingSuggestions)
-                    Button {
-                        showingSuggestions = true
-                    } label: {
-                        Label("Suggestions", systemImage: "sparkles")
+                    #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
+                    if supportsJournalingSuggestions {
+                        Button {
+                            showingSuggestions = true
+                        } label: {
+                            Label("Suggestions", systemImage: "sparkles")
+                        }
                     }
                     #endif
 
@@ -3892,42 +3902,47 @@ struct JournalEditorView: View {
             .onDisappear {
                 flushJournalEditorMindfulSession()
             }
-            #if canImport(JournalingSuggestions)
+            #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
             .sheet(isPresented: $showingSuggestions) {
-                JournalingSuggestionsPicker("What's on your mind?") { suggestion in
-                    Task {
-                        let importedSuggestion = await importSuggestion(suggestion)
+                if supportsJournalingSuggestions {
+                    JournalingSuggestionsPicker("What's on your mind?") { suggestion in
+                        Task {
+                            let importedSuggestion = await importSuggestion(suggestion)
 
-                        await MainActor.run {
-                            if entry.title.isEmpty {
-                                entry.title = suggestion.title
+                            await MainActor.run {
+                                if entry.title.isEmpty {
+                                    entry.title = suggestion.title
+                                }
+
+                                if let dateInterval = suggestion.date {
+                                    referenceDate = dateInterval.end
+                                }
+
+                                entry.inspiration = mergeInspiration(
+                                    existing: entry.inspiration,
+                                    imported: importedSuggestion.text
+                                )
+
+                                for image in importedSuggestion.imageData where !entry.imageData.contains(image) {
+                                    entry.imageData.append(image)
+                                }
+
+                                activeSuggestionField = .content
+                                suggestionEngine.textDidChange(
+                                    entry.content,
+                                    selection: contentSelection,
+                                    referenceDate: referenceDate,
+                                    isFitnessReport: isFitnessReport,
+                                    inspirationContext: entry.inspiration
+                                )
+
+                                showingSuggestions = false
                             }
-
-                            if let dateInterval = suggestion.date {
-                                referenceDate = dateInterval.end
-                            }
-
-                            entry.inspiration = mergeInspiration(
-                                existing: entry.inspiration,
-                                imported: importedSuggestion.text
-                            )
-
-                            for image in importedSuggestion.imageData where !entry.imageData.contains(image) {
-                                entry.imageData.append(image)
-                            }
-
-                            activeSuggestionField = .content
-                            suggestionEngine.textDidChange(
-                                entry.content,
-                                selection: contentSelection,
-                                referenceDate: referenceDate,
-                                isFitnessReport: isFitnessReport,
-                                inspirationContext: entry.inspiration
-                            )
-
-                            showingSuggestions = false
                         }
                     }
+                } else {
+                    Text("Journaling Suggestions are unavailable on Mac Catalyst.")
+                        .padding()
                 }
             }
             #endif

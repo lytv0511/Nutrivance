@@ -70,12 +70,13 @@ struct StrainRecoveryView: View {
         let calendar = Calendar.current
         let currentDay = calendar.startOfDay(for: selectedDate)
         let today = calendar.startOfDay(for: Date())
+        let minimumDate = MacCatalystHealthDataPolicy.isActive ? MacCatalystHealthDataPolicy.minimumAllowedDate : .distantPast
         
         guard let steppedDate = calendar.date(byAdding: timeFilter.navigationComponent, value: value, to: currentDay) else {
             return
         }
         
-        selectedDate = min(steppedDate, today)
+        selectedDate = min(max(steppedDate, minimumDate), today)
     }
     
     private var canStepForward: Bool {
@@ -94,6 +95,10 @@ struct StrainRecoveryView: View {
         selectedDate = Date()
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
+    }
+
+    private var minimumSelectableDate: Date {
+        MacCatalystHealthDataPolicy.isActive ? MacCatalystHealthDataPolicy.minimumAllowedDate : .distantPast
     }
 
     private var coachSummaryAnchorDate: Date {
@@ -126,37 +131,46 @@ struct StrainRecoveryView: View {
                                 .tint(timeFilter == filter ? .orange : .orange.opacity(0.3))
                             }
                         }
-                        Spacer()
-                        Menu {
-                            Button("All Sports") { sportFilter = nil
-                                let impact = UIImpactFeedbackGenerator(style: .medium)
-                                impact.impactOccurred()}
-                            ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique, id: \.self) { sport in
-                                Button(sport.capitalized) { sportFilter = sport
+                        if !MacCatalystHealthDataPolicy.isActive {
+                            Spacer()
+                            Menu {
+                                Button("All Sports") { sportFilter = nil
                                     let impact = UIImpactFeedbackGenerator(style: .medium)
                                     impact.impactOccurred()}
+                                ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique, id: \.self) { sport in
+                                    Button(sport.capitalized) { sportFilter = sport
+                                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                                        impact.impactOccurred()}
+                                }
+                            } label: {
+                                HStack {
+                                    Text(sportFilter?.capitalized ?? "All Sports")
+                                    Image(systemName: "chevron.down")
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .foregroundStyle(.orange)
+                                .background(
+                                    Capsule()
+                                        .fill(Color.orange.opacity(0.14))
+                                )
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                                )
                             }
-                        } label: {
-                            HStack {
-                                Text(sportFilter?.capitalized ?? "All Sports")
-                                Image(systemName: "chevron.down")
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .foregroundStyle(.orange)
-                            .background(
-                                Capsule()
-                                    .fill(Color.orange.opacity(0.14))
-                            )
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-                            )
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal)
+
+                    if MacCatalystHealthDataPolicy.isActive {
+                        Text(MacCatalystHealthDataPolicy.historyNotice)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
+                    }
 
                         StrainRecoveryAISummarySection(
                             engine: engine,
@@ -166,41 +180,51 @@ struct StrainRecoveryView: View {
                             aggressiveCachingController: aggressiveCachingController
                         )
 
-                    MetricSectionGroup(title: "Training Load") {
-                        StrainRecoveryMathSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        WorkoutContributionsSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate,
-                            sportFilter: nil
-                        )
-                        METAggregatesSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            sportFilter: sportFilter,
-                            anchorDate: selectedDate
-                        )
-                        TrainingScheduleSection(
-                            engine: engine,
-                            sportFilter: sportFilter,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        VO2AggregatesSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            sportFilter: sportFilter,
-                            anchorDate: selectedDate
-                        )
+                    if MacCatalystHealthDataPolicy.isActive {
+                        MetricSectionGroup(title: "Training Load") {
+                            MetricCard(title: "Workout Insights") {
+                                Text("Workout analytics are unavailable on Mac Catalyst.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } else {
+                        MetricSectionGroup(title: "Training Load") {
+                            StrainRecoveryMathSection(
+                                engine: engine,
+                                headlineTimeFilter: timeFilter,
+                                chartTimeFilter: graphTimeFilter,
+                                anchorDate: selectedDate
+                            )
+                            WorkoutContributionsSection(
+                                engine: engine,
+                                headlineTimeFilter: timeFilter,
+                                chartTimeFilter: graphTimeFilter,
+                                anchorDate: selectedDate,
+                                sportFilter: nil
+                            )
+                            METAggregatesSection(
+                                engine: engine,
+                                headlineTimeFilter: timeFilter,
+                                chartTimeFilter: graphTimeFilter,
+                                sportFilter: sportFilter,
+                                anchorDate: selectedDate
+                            )
+                            TrainingScheduleSection(
+                                engine: engine,
+                                sportFilter: sportFilter,
+                                headlineTimeFilter: timeFilter,
+                                chartTimeFilter: graphTimeFilter,
+                                anchorDate: selectedDate
+                            )
+                            VO2AggregatesSection(
+                                engine: engine,
+                                headlineTimeFilter: timeFilter,
+                                chartTimeFilter: graphTimeFilter,
+                                sportFilter: sportFilter,
+                                anchorDate: selectedDate
+                            )
+                        }
                     }
 
                     MetricSectionGroup(title: "Recovery") {
@@ -325,7 +349,7 @@ struct StrainRecoveryView: View {
                     DatePicker(
                         "Reference Date",
                         selection: $selectedDate,
-                        in: ...Date(),
+                        in: minimumSelectableDate...Date(),
                         displayedComponents: .date
                     )
                     .labelsHidden()
@@ -338,6 +362,13 @@ struct StrainRecoveryView: View {
                         Image(systemName: "chevron.right")
                     }
                     .disabled(!canStepForward)
+                }
+            }
+            .onChange(of: selectedDate) { _, newValue in
+                guard MacCatalystHealthDataPolicy.isActive else { return }
+                let clamped = max(Calendar.current.startOfDay(for: newValue), minimumSelectableDate)
+                if clamped != newValue {
+                    selectedDate = clamped
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in

@@ -1123,6 +1123,13 @@ struct SleepView: View {
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingWakeAlarmView = false
     
+    private var availablePeriods: [SleepPeriod] {
+        MacCatalystHealthDataPolicy.isActive ? [.lastNight, .thisWeek, .thisMonth] : SleepPeriod.allCases
+    }
+
+    private var minimumSelectableDate: Date {
+        MacCatalystHealthDataPolicy.isActive ? MacCatalystHealthDataPolicy.minimumAllowedDate : .distantPast
+    }
 
 
     
@@ -1159,16 +1166,16 @@ struct SleepView: View {
         let today = calendar.startOfDay(for: Date())
         switch period {
         case .lastNight:
-            return today
+            return max(today, minimumSelectableDate)
         case .thisWeek:
             // Most recent Sunday on or before today
             let currentWeekday = calendar.component(.weekday, from: today)
             let daysBack = currentWeekday == 1 ? 0 : (currentWeekday - 1)
-            return calendar.date(byAdding: .day, value: -daysBack, to: today)!
+            return max(calendar.date(byAdding: .day, value: -daysBack, to: today)!, minimumSelectableDate)
         case .thisMonth:
-            return calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+            return max(calendar.date(from: calendar.dateComponents([.year, .month], from: today))!, minimumSelectableDate)
         case .thisYear:
-            return calendar.date(from: DateComponents(year: calendar.component(.year, from: today), month: 1, day: 1))!
+            return max(calendar.date(from: DateComponents(year: calendar.component(.year, from: today), month: 1, day: 1))!, minimumSelectableDate)
         }
     }
     
@@ -1187,6 +1194,7 @@ struct SleepView: View {
     
     private func isValidDate(_ date: Date, for period: SleepPeriod) -> Bool {
         let calendar = Calendar.current
+        guard date >= minimumSelectableDate else { return false }
         switch period {
         case .lastNight:
             return date <= calendar.startOfDay(for: Date())
@@ -1255,7 +1263,7 @@ struct SleepView: View {
                     VStack(spacing: 24) {
                         // Filter buttons
                         HStack(spacing: 12) {
-                            ForEach(Array(SleepPeriod.allCases.enumerated()), id: \.element) { index, period in
+                            ForEach(Array(availablePeriods.enumerated()), id: \.element) { index, period in
                                 Button(action: {
                                     selectPeriod(period)
                                 }) {
@@ -1275,6 +1283,13 @@ struct SleepView: View {
                             }
                         }
                         .padding(.horizontal)
+
+                        if MacCatalystHealthDataPolicy.isActive {
+                            Text(MacCatalystHealthDataPolicy.historyNotice)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                        }
                         
                         // Date picker popup button in top bar
                         SleepDatePopupPicker(
@@ -1371,10 +1386,15 @@ struct SleepView: View {
                 selectPeriod(.thisMonth)
             }
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter4)) { _ in
-                selectPeriod(.thisYear)
+                if availablePeriods.contains(.thisYear) {
+                    selectPeriod(.thisYear)
+                }
             }
         }
         .task {
+            if !availablePeriods.contains(viewModel.selectedPeriod) {
+                viewModel.selectedPeriod = availablePeriods.first ?? .lastNight
+            }
             let defaultD = defaultDate(for: viewModel.selectedPeriod)
             selectedDate = defaultD
             await viewModel.loadSleepData(for: defaultD)
@@ -4035,11 +4055,13 @@ func periodDateRange(period: SleepPeriod, earliest: Date?) -> (Date, Date) {
     let calendar = Calendar.current
     let now = Date()
     let today = calendar.startOfDay(for: now)
+    let catalystMinimum = MacCatalystHealthDataPolicy.isActive ? MacCatalystHealthDataPolicy.minimumAllowedDate : .distantPast
     switch period {
     case .lastNight:
         let minDate = earliest.map { calendar.startOfDay(for: $0) } ?? calendar.date(byAdding: .year, value: -5, to: today)!
         let maxDate = today
-        return (minDate, maxDate)
+        let clampedMin = max(minDate, catalystMinimum)
+        return (min(clampedMin, maxDate), maxDate)
     case .thisWeek:
         // Only Sundays selectable, from earliest Sunday after earliestSleepDate up to this week's Sunday
         let thisSunday = calendar.nextDate(after: today, matching: DateComponents(weekday: 1), matchingPolicy: .previousTimePreservingSmallerComponents) ?? today
@@ -4053,7 +4075,8 @@ func periodDateRange(period: SleepPeriod, earliest: Date?) -> (Date, Date) {
         } else {
             minDate = calendar.date(byAdding: .year, value: -5, to: thisSunday)!
         }
-        return (minDate, thisSunday)
+        let clampedMin = max(minDate, catalystMinimum)
+        return (min(clampedMin, thisSunday), thisSunday)
     case .thisMonth:
         // Only first of month selectable, from earliest first-of-month to this month
         let currentFirst = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
@@ -4065,7 +4088,8 @@ func periodDateRange(period: SleepPeriod, earliest: Date?) -> (Date, Date) {
         } else {
             minDate = calendar.date(byAdding: .year, value: -5, to: currentFirst)!
         }
-        return (minDate, currentFirst)
+        let clampedMin = max(minDate, catalystMinimum)
+        return (min(clampedMin, currentFirst), currentFirst)
     case .thisYear:
         // Only Jan 1 selectable, from earliest year to current year
         let currentJan1 = calendar.date(from: DateComponents(year: calendar.component(.year, from: today), month: 1, day: 1))!
@@ -4077,6 +4101,7 @@ func periodDateRange(period: SleepPeriod, earliest: Date?) -> (Date, Date) {
         } else {
             minDate = calendar.date(byAdding: .year, value: -5, to: currentJan1)!
         }
-        return (minDate, currentJan1)
+        let clampedMin = max(minDate, catalystMinimum)
+        return (min(clampedMin, currentJan1), currentJan1)
     }
 }
