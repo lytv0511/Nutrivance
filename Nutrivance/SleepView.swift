@@ -1373,13 +1373,17 @@ struct SleepView: View {
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter4)) { _ in
                 selectPeriod(.thisYear)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlSleepWakeAlarms)) { _ in
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                showingWakeAlarmView = true
+            }
         }
         .task {
             let defaultD = defaultDate(for: viewModel.selectedPeriod)
             selectedDate = defaultD
             await viewModel.loadSleepData(for: defaultD)
         }
-        .sheet(isPresented: $showingWakeAlarmView) {
+        .fullScreenCover(isPresented: $showingWakeAlarmView) {
             WakeUpAlarmView(store: wakeAlarmStore)
         }
         .environmentObject(viewModel)
