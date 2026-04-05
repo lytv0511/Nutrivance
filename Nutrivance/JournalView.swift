@@ -25,8 +25,8 @@ struct JournalStatCard: Identifiable, Codable, Hashable, Equatable {
         case small, medium, large
     }
 
-    init(icon: String, title: String, value: String, subtitle: String = "", size: CardSize = .medium, accentHue: Double = 30) {
-        self.id = UUID()
+    init(id: UUID = UUID(), icon: String, title: String, value: String, subtitle: String = "", size: CardSize = .medium, accentHue: Double = 30) {
+        self.id = id
         self.icon = icon
         self.title = title
         self.value = value
@@ -1023,7 +1023,10 @@ private struct JournalEntryRow: View {
 struct JournalSelectableTextEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var selection: NSRange
-    var onEdit: (String, NSRange) -> Void
+    /// Bump when `text` is set from SwiftUI (suggestion apply, imports, etc.) so `updateUIView` may sync while the view is first responder.
+    var syncToken: Int
+    /// `true` while dictation / IME has an active composition range — suggestion work can be deferred.
+    var onEdit: (String, NSRange, Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -1042,6 +1045,11 @@ struct JournalSelectableTextEditor: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
+        // During dictation / multi-stage input, UIKit owns text and marked ranges; pushing a stale SwiftUI binding wipes or duplicates text.
+        if uiView.markedTextRange != nil {
+            return
+        }
+
         let ns = text as NSString
         let maxLen = ns.length
         let loc = min(max(0, selection.location), maxLen)
@@ -1049,10 +1057,17 @@ struct JournalSelectableTextEditor: UIViewRepresentable {
         let desired = NSRange(location: loc, length: len)
 
         if uiView.text != text {
-            context.coordinator.isProgrammaticUpdate = true
-            uiView.text = text
-            uiView.selectedRange = desired
-            context.coordinator.isProgrammaticUpdate = false
+            var allowTextSync = !uiView.isFirstResponder
+            if uiView.isFirstResponder, syncToken != context.coordinator.lastSyncedTextToken {
+                allowTextSync = true
+            }
+            if allowTextSync {
+                context.coordinator.isProgrammaticUpdate = true
+                uiView.text = text
+                uiView.selectedRange = desired
+                context.coordinator.isProgrammaticUpdate = false
+                context.coordinator.lastSyncedTextToken = syncToken
+            }
         } else if uiView.selectedRange.location != desired.location || uiView.selectedRange.length != desired.length {
             context.coordinator.isProgrammaticUpdate = true
             uiView.selectedRange = desired
@@ -1063,6 +1078,8 @@ struct JournalSelectableTextEditor: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: JournalSelectableTextEditor
         var isProgrammaticUpdate = false
+        /// Last `syncToken` applied from SwiftUI → UITextView (avoids clobbering live typing when token unchanged).
+        var lastSyncedTextToken: Int = .min
 
         init(_ parent: JournalSelectableTextEditor) {
             self.parent = parent
@@ -1073,13 +1090,15 @@ struct JournalSelectableTextEditor: UIViewRepresentable {
             let t = textView.text ?? ""
             parent.text = t
             parent.selection = textView.selectedRange
-            parent.onEdit(t, textView.selectedRange)
+            let composing = textView.markedTextRange != nil
+            parent.onEdit(t, textView.selectedRange, composing)
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !isProgrammaticUpdate else { return }
             parent.selection = textView.selectedRange
-            parent.onEdit(textView.text ?? "", textView.selectedRange)
+            let composing = textView.markedTextRange != nil
+            parent.onEdit(textView.text ?? "", textView.selectedRange, composing)
         }
     }
 }
@@ -1233,8 +1252,11 @@ final class JournalInlineSuggestionEngine: ObservableObject {
         }
     }
 
-    func textDidChange(_ text: String, selection: NSRange, referenceDate: Date, isFitnessReport: Bool, inspirationContext: String) {
+    func textDidChange(_ text: String, selection: NSRange, referenceDate: Date, isFitnessReport: Bool, inspirationContext: String, isComposing: Bool = false) {
         debounceTask?.cancel()
+        if isComposing {
+            return
+        }
         refreshBackbone(text: text)
         debounceTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -2832,7 +2854,11 @@ private struct JournalStatCardView: View {
         Group {
             switch card.size {
             case .small:
-                smallCard
+                VStack(spacing: 0) {
+                    smallCard
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, minHeight: 0, alignment: .top)
             case .medium:
                 mediumCard
             case .large:
@@ -2849,81 +2875,97 @@ private struct JournalStatCardView: View {
         }
     }
 
+    /// Lock-screen style: minimal chrome, value-first; no baseline / quest copy.
     private var smallCard: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 3) {
             Image(systemName: card.icon)
-                .font(.caption.weight(.bold))
+                .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(accent)
             Text(card.value)
-                .font(.system(.caption, design: .rounded, weight: .bold))
+                .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.65)
             Text(card.title.uppercased())
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 7, weight: .heavy))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
+        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(accent.opacity(0.2), lineWidth: 1))
+        .padding(.vertical, 7)
+        .padding(.horizontal, 4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(accent.opacity(0.22), lineWidth: 1))
     }
 
+    /// Half-row widget: icon + main value + title + short context.
     private var mediumCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Image(systemName: card.icon)
-                    .font(.subheadline.weight(.bold))
+                    .font(.caption.weight(.bold))
                     .foregroundStyle(accent)
-                    .frame(width: 32, height: 32)
-                    .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                Spacer()
+                    .frame(width: 28, height: 28)
+                    .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Spacer(minLength: 0)
             }
             Text(card.value)
                 .font(.system(.title3, design: .rounded, weight: .bold))
                 .foregroundStyle(.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
             Text(card.title.uppercased())
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(.secondary)
+                .lineLimit(2)
             if !card.subtitle.isEmpty {
                 Text(card.subtitle)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
                     .lineLimit(2)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(accent.opacity(0.16), lineWidth: 1))
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 108, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(accent.opacity(0.16), lineWidth: 1))
     }
 
+    /// Full-row widget: full title, extended context, prominent value.
     private var largeCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 Image(systemName: card.icon)
                     .font(.title3.weight(.bold))
                     .foregroundStyle(accent)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 44, height: 44)
                     .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(card.title)
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(.primary)
-                    Text(card.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !card.subtitle.isEmpty {
+                        Text(card.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(5)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 Text(card.value)
                     .font(.system(.title2, design: .rounded, weight: .bold))
                     .foregroundStyle(accent)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.75)
             }
         }
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 124, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(accent.opacity(0.16), lineWidth: 1))
     }
@@ -2934,18 +2976,34 @@ private struct JournalStatCardsGrid: View {
     let onResize: (UUID, JournalStatCard.CardSize) -> Void
     let onDelete: (UUID) -> Void
 
+    /// Lock-screen style: 4 columns — small = 1 slot, medium = 2, large = 4.
+    private static let widgetColumns: [GridItem] = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8)
+    ]
+
     var body: some View {
         if !cards.isEmpty {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: Self.widgetColumns, alignment: .center, spacing: 8) {
                 ForEach(cards) { card in
                     JournalStatCardView(
                         card: card,
                         onResize: { newSize in onResize(card.id, newSize) },
                         onDelete: { onDelete(card.id) }
                     )
-                    .gridCellColumns(card.size == .large ? 2 : 1)
+                    .gridCellColumns(gridSpan(for: card.size))
                 }
             }
+        }
+    }
+
+    private func gridSpan(for size: JournalStatCard.CardSize) -> Int {
+        switch size {
+        case .small: return 1
+        case .medium: return 2
+        case .large: return 4
         }
     }
 }
@@ -2970,6 +3028,9 @@ struct JournalEditorView: View {
     @State private var activeSuggestionField: SuggestionField = .content
     @State private var contentSelection = NSRange(location: 0, length: 0)
     @State private var inspirationSelection = NSRange(location: 0, length: 0)
+    /// Forces `JournalSelectableTextEditor` to apply `entry.content` from SwiftUI while the field is first responder.
+    @State private var journalContentSyncToken = 0
+    @State private var journalInspirationSyncToken = 0
     @State private var journalInlineAssistantExpanded = true
     @State private var journalNudgesAssistantExpanded = true
     @State private var isGeneratingAITitle = false
@@ -3584,17 +3645,24 @@ struct JournalEditorView: View {
                         ) {
                             VStack(alignment: .leading, spacing: 10) {
                                 #if canImport(UIKit)
-                                JournalSelectableTextEditor(text: $entry.content, selection: $contentSelection) { text, range in
+                                JournalSelectableTextEditor(
+                                    text: $entry.content,
+                                    selection: $contentSelection,
+                                    syncToken: journalContentSyncToken
+                                ) { text, range, isComposing in
                                     activeSuggestionField = .content
                                     suggestionEngine.textDidChange(
                                         text,
                                         selection: range,
                                         referenceDate: referenceDate,
                                         isFitnessReport: isFitnessReport,
-                                        inspirationContext: entry.inspiration
+                                        inspirationContext: entry.inspiration,
+                                        isComposing: isComposing
                                     )
-                                    let combined = text + " " + entry.inspiration
-                                    correlationEngine.analyzeText(combined, journalEntryID: entry.id, referenceDate: referenceDate)
+                                    if !isComposing {
+                                        let combined = text + " " + entry.inspiration
+                                        correlationEngine.analyzeText(combined, journalEntryID: entry.id, referenceDate: referenceDate)
+                                    }
                                 }
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 260)
@@ -3616,7 +3684,8 @@ struct JournalEditorView: View {
                                             selection: r,
                                             referenceDate: referenceDate,
                                             isFitnessReport: isFitnessReport,
-                                            inspirationContext: entry.inspiration
+                                            inspirationContext: entry.inspiration,
+                                            isComposing: false
                                         )
                                         let combined = newValue + " " + entry.inspiration
                                         correlationEngine.analyzeText(combined, journalEntryID: entry.id, referenceDate: referenceDate)
@@ -3627,6 +3696,7 @@ struct JournalEditorView: View {
                                     Divider().opacity(0.35)
                                     journalAssistantBars { selected in
                                         let (newText, newSel) = suggestionEngine.apply(selected, to: entry.content, selection: contentSelection)
+                                        journalContentSyncToken &+= 1
                                         entry.content = newText
                                         contentSelection = newSel
                                     }
@@ -3663,14 +3733,19 @@ struct JournalEditorView: View {
 
                             VStack(alignment: .leading, spacing: 10) {
                                 #if canImport(UIKit)
-                                JournalSelectableTextEditor(text: $entry.inspiration, selection: $inspirationSelection) { text, range in
+                                JournalSelectableTextEditor(
+                                    text: $entry.inspiration,
+                                    selection: $inspirationSelection,
+                                    syncToken: journalInspirationSyncToken
+                                ) { text, range, isComposing in
                                     activeSuggestionField = .inspiration
                                     suggestionEngine.textDidChange(
                                         text,
                                         selection: range,
                                         referenceDate: referenceDate,
                                         isFitnessReport: isFitnessReport,
-                                        inspirationContext: entry.inspiration
+                                        inspirationContext: entry.inspiration,
+                                        isComposing: isComposing
                                     )
                                 }
                                 .scrollContentBackground(.hidden)
@@ -3693,7 +3768,8 @@ struct JournalEditorView: View {
                                             selection: r,
                                             referenceDate: referenceDate,
                                             isFitnessReport: isFitnessReport,
-                                            inspirationContext: entry.inspiration
+                                            inspirationContext: entry.inspiration,
+                                            isComposing: false
                                         )
                                     }
                                 #endif
@@ -3702,6 +3778,7 @@ struct JournalEditorView: View {
                                     Divider().opacity(0.35)
                                     journalAssistantBars { selected in
                                         let (newText, newSel) = suggestionEngine.apply(selected, to: entry.inspiration, selection: inspirationSelection)
+                                        journalInspirationSyncToken &+= 1
                                         entry.inspiration = newText
                                         inspirationSelection = newSel
                                     }
@@ -3875,6 +3952,7 @@ struct JournalEditorView: View {
                     Spacer()
 
                     Button {
+                        journalContentSyncToken &+= 1
                         if entry.content.isEmpty {
                             entry.content = generateHealthSnapshot()
                         } else {
@@ -3922,6 +4000,11 @@ struct JournalEditorView: View {
                                     existing: entry.inspiration,
                                     imported: importedSuggestion.text
                                 )
+                            journalInspirationSyncToken &+= 1
+                            entry.inspiration = mergeInspiration(
+                                existing: entry.inspiration,
+                                imported: importedSuggestion.text
+                            )
 
                                 for image in importedSuggestion.imageData where !entry.imageData.contains(image) {
                                     entry.imageData.append(image)
@@ -3935,6 +4018,15 @@ struct JournalEditorView: View {
                                     isFitnessReport: isFitnessReport,
                                     inspirationContext: entry.inspiration
                                 )
+                            activeSuggestionField = .content
+                            suggestionEngine.textDidChange(
+                                entry.content,
+                                selection: contentSelection,
+                                referenceDate: referenceDate,
+                                isFitnessReport: isFitnessReport,
+                                inspirationContext: entry.inspiration,
+                                isComposing: false
+                            )
 
                                 showingSuggestions = false
                             }
@@ -4565,7 +4657,7 @@ struct JournalEditorView: View {
     private func resizeCard(id: UUID, to size: JournalStatCard.CardSize) {
         guard let idx = entry.statCards.firstIndex(where: { $0.id == id }) else { return }
         let old = entry.statCards[idx]
-        let resized = JournalStatCard(icon: old.icon, title: old.title, value: old.value, subtitle: old.subtitle, size: size, accentHue: old.accentHue)
+        let resized = JournalStatCard(id: old.id, icon: old.icon, title: old.title, value: old.value, subtitle: old.subtitle, size: size, accentHue: old.accentHue)
         withAnimation { entry.statCards[idx] = resized }
     }
 

@@ -1149,6 +1149,7 @@ extension Notification.Name {
     static let nutrivanceViewControlRefresh = Notification.Name("nutrivance.viewControl.refresh")
     static let nutrivanceViewControlSaveToJournal = Notification.Name("nutrivance.viewControl.saveToJournal")
     static let nutrivanceViewControlExpandCollapse = Notification.Name("nutrivance.viewControl.expandCollapse")
+    static let nutrivanceViewControlSleepWakeAlarms = Notification.Name("nutrivance.viewControl.sleep.wakeAlarms")
     static let nutrivanceViewControlLogNewQuest = Notification.Name("nutrivance.viewControl.logNewQuest")
     static let nutrivanceViewControlNewJournalEntry = Notification.Name("nutrivance.viewControl.newJournalEntry")
     static let nutrivanceViewControlRefreshWorkouts = Notification.Name("nutrivance.viewControl.refreshWorkouts")
@@ -2204,6 +2205,11 @@ struct NutrivanceApp: App {
                             postViewControl(.nutrivanceViewControlExpandCollapse)
                         }
                         .keyboardShortcut("E", modifiers: [.command])
+
+                        Button("Wake Alarms") {
+                            postViewControl(.nutrivanceViewControlSleepWakeAlarms)
+                        }
+                        .keyboardShortcut("U", modifiers: [.command])
                     }
 
                     if navigationState.selectedRootTab == .pastQuests {

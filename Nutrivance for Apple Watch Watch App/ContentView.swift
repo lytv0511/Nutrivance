@@ -5239,6 +5239,7 @@ private struct SleepManagerView: View {
                         }
                     }
                     .labelsHidden()
+                    .pickerStyle(.navigationLink)
                     Text(store.wakeScheduler.statusText)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.68))

@@ -271,6 +271,66 @@ struct SearchView: View {
         return scored.sorted { $0.score > $1.score }.map { $0.item }
     }
 
+    // MARK: - Search backdrop (match destination screens, not just Movance / Spirivance buckets)
+
+    /// Builds the same family of background the opened screen uses (see `destinationView(for:)` targets).
+    @ViewBuilder
+    private func backdropGradient(for item: String) -> some View {
+        switch item {
+        case "Home":
+            gradients.forestGradient(animationPhase: $animationPhase)
+        case "Readiness", "Readiness Check":
+            gradients.oxygenFlowGradient(animationPhase: $animationPhase)
+        case "Recovery Score":
+            gradients.forestGradient(animationPhase: $animationPhase)
+        case "Heart Zones":
+            gradients.burningGradientFull(animationPhase: $animationPhase)
+        case "Program Builder", "Pathfinder", "Past Quests":
+            gradients.programBuilderMeshBackground()
+        case "Today's Plan":
+            gradients.warmGradientFull(animationPhase: $animationPhase)
+        case "Mindfulness Realm":
+            gradients.realmGradientFull(animationPhase: $animationPhase)
+        case "Meditation", "Resources", "Breathing":
+            gradients.spiritGradientFull(animationPhase: $animationPhase)
+        case "Journal", "Sleep", "Stress":
+            gradients.spiritGradient(animationPhase: $animationPhase)
+        case "Dashboard", "Workout History", "Training Calendar", "Strain vs Recovery", "Workout Generator",
+            "Movement Analysis", "Exercise Library", "Sleep Analysis", "Mobility Test", "Step Count", "Distance",
+            "Calories Burned", "Pre-Workout Timing", "Post-Workout Window", "Performance Foods", "Hydration Status",
+            "Macro Balance", "Live Challenges", "Friend Activity", "Achievements", "Share Workouts", "Leaderboards",
+            "Fuel Check":
+            gradients.burningGradient(animationPhase: $animationPhase)
+        default:
+            if nutritionItems.contains(item) {
+                gradients.forestGradient(animationPhase: $animationPhase)
+            } else if fitnessItems.contains(item) {
+                gradients.burningGradient(animationPhase: $animationPhase)
+            } else if mentalHealthItems.contains(item) {
+                gradients.spiritGradient(animationPhase: $animationPhase)
+            } else {
+                gradients.boldGradient(animationPhase: $animationPhase)
+            }
+        }
+    }
+
+    private func makeBackdropEquatable(firstItem: String?) -> EquatableAnyView {
+        guard let item = firstItem else {
+            return EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
+        }
+        return EquatableAnyView(view: AnyView(backdropGradient(for: item)))
+    }
+
+    private func refreshSearchBackdrop() {
+        let first = filteredItems.first
+        let key = first ?? "__default__"
+        let next = makeBackdropEquatable(firstItem: first)
+        withAnimation(.easeInOut(duration: 1.0)) {
+            searchBackdropKey = key
+            currentGradientView = next
+        }
+    }
+
     // MARK: - Usage Tracking
     private func recordUsage(for item: String) {
         let key = "usage_\(item)"
@@ -430,6 +490,8 @@ struct SearchView: View {
     }
 
     @State private var currentGradientView: EquatableAnyView
+    /// Drives cross-fade when the first search result (or sort order) changes.
+    @State private var searchBackdropKey: String = "__default__"
 
     init() {
         _currentGradientView = State(initialValue: EquatableAnyView(view: AnyView(GradientBackgrounds().boldGradient(animationPhase: .constant(0)))))
@@ -445,6 +507,8 @@ struct SearchView: View {
                 currentGradient
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
+                    .id(searchBackdropKey)
+                    .transition(.opacity)
                     .onAppear {
                         withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                             animationPhase = 20
@@ -493,34 +557,16 @@ struct SearchView: View {
                             .padding()
                         }
                     }
-                    .onChange(of: searchState.searchText) { _, newValue in
-                        let newGradient: EquatableAnyView
-
-                        if !newValue.isEmpty, let firstResult = filteredItems.first {
-                            if nutritionItems.contains(firstResult) {
-                                newGradient = EquatableAnyView(view: AnyView(gradients.forestGradient(animationPhase: $animationPhase)))
-                            } else if fitnessItems.contains(firstResult) {
-                                newGradient = EquatableAnyView(view: AnyView(gradients.burningGradient(animationPhase: $animationPhase)))
-                            } else if mentalHealthItems.contains(firstResult) {
-                                newGradient = EquatableAnyView(view: AnyView(gradients.spiritGradient(animationPhase: $animationPhase)))
-                            } else {
-                                newGradient = EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
-                            }
-                        } else {
-                            newGradient = EquatableAnyView(view: AnyView(gradients.boldGradient(animationPhase: $animationPhase)))
-                        }
-
-                        withAnimation(.easeInOut(duration: 1)) {
-                            currentGradientView = newGradient
-                        }
-
-                        animationPhase += 0.2
-
+                    .onChange(of: searchState.searchText) { _, _ in
+                        refreshSearchBackdrop()
                         if searchState.isSearching {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 proxy.scrollTo("search-top", anchor: .top)
                             }
                         }
+                    }
+                    .onChange(of: searchState.selectedScope) { _, _ in
+                        refreshSearchBackdrop()
                     }
                 }
             }
@@ -543,6 +589,7 @@ struct SearchView: View {
             }
             .onAppear {
                 searchState.selectedScope = .all
+                refreshSearchBackdrop()
             }
         }
     }
