@@ -222,7 +222,7 @@ struct GradientBackgrounds {
         MeshGradientView(colors: solarFlareColors, darkColors: darkSolarFlareColors, animationPhase: animationPhase)
     }
 
-    func solarFlareGradient(animationPhase: Binding<Double>) -> some View {
+    func seadient(animationPhase: Binding<Double>) -> some View {
         ZStack {
             solarFlareGradientFull(animationPhase: animationPhase)
             GradientFadeOverlay()

@@ -5,6 +5,8 @@ struct RecoveryScoreView: View {
     @State private var isLoading = false
     @State private var timeFilter: RecoveryFocusTimeFilter = .day
     @State private var snapshotsByFilter: [RecoveryFocusTimeFilter: RecoverySnapshot] = [:]
+    /// Avoids re-running CloudKit / coverage on every navigation back to this screen the same day.
+    @State private var lastCompletedCoverageTaskID: String?
 
     private var today: Date {
         Calendar.current.startOfDay(for: Date())
@@ -290,21 +292,43 @@ struct RecoveryScoreView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        Task {
-                            await refreshCoverage(forceNetwork: true)
-                        }
+                        scheduleForceRefresh()
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .foregroundStyle(.green)
                     }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlRecoveryScoreRefresh)) { _ in
+                scheduleForceRefresh()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlRecoveryScoreFilter1D)) { _ in
+                timeFilter = .day
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlRecoveryScoreFilter1W)) { _ in
+                timeFilter = .week
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlRecoveryScoreFilter1M)) { _ in
+                timeFilter = .month
+            }
             .task(id: refreshTaskID) {
                 withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                     animationPhase = 20
                 }
+                if lastCompletedCoverageTaskID == refreshTaskID {
+                    snapshotsByFilter = buildSnapshots()
+                    return
+                }
                 await refreshCoverage(forceNetwork: false)
+                lastCompletedCoverageTaskID = refreshTaskID
             }
+        }
+    }
+
+    private func scheduleForceRefresh() {
+        Task {
+            await refreshCoverage(forceNetwork: true)
+            lastCompletedCoverageTaskID = refreshTaskID
         }
     }
 

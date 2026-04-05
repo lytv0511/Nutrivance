@@ -4,12 +4,14 @@ struct ReadinessCheckView: View {
     @State private var animationPhase: Double = 0
     @State private var isLoading = false
     @State private var snapshot = ReadinessSnapshot.empty
+    /// Same calendar day: rebuild from engine only when returning to this screen (no redundant coverage / CloudKit).
+    @State private var lastCompletedCoverageTaskID: String?
 
     private var today: Date {
         Calendar.current.startOfDay(for: Date())
     }
 
-    /// Stable per calendar day so `.task` does not re-run on every tab switch.
+    /// Stable per calendar day so a new day triggers a fresh `.task` cycle.
     private var refreshTaskID: String {
         let cal = Calendar.current
         let c = cal.dateComponents([.year, .month, .day], from: today)
@@ -224,21 +226,34 @@ struct ReadinessCheckView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        Task {
-                            await refreshCoverage(forceNetwork: true)
-                        }
+                        scheduleForceRefresh()
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .foregroundStyle(.cyan)
                     }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlReadinessRefresh)) { _ in
+                scheduleForceRefresh()
+            }
             .task(id: refreshTaskID) {
                 withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                     animationPhase = 20
                 }
+                if lastCompletedCoverageTaskID == refreshTaskID {
+                    snapshot = buildSnapshot()
+                    return
+                }
                 await refreshCoverage(forceNetwork: false)
+                lastCompletedCoverageTaskID = refreshTaskID
             }
+        }
+    }
+
+    private func scheduleForceRefresh() {
+        Task {
+            await refreshCoverage(forceNetwork: true)
+            lastCompletedCoverageTaskID = refreshTaskID
         }
     }
 

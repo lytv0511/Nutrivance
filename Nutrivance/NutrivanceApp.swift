@@ -1161,6 +1161,11 @@ extension Notification.Name {
     static let nutrivanceViewControlWorkoutMetricLayout = Notification.Name("nutrivance.viewControl.workoutMetricLayout")
     /// userInfo["slot"]: Int — 0 = all sports, 1 = first sorted sport name, …, 9 = ninth sport
     static let nutrivanceViewControlHeartZonesSportSlot = Notification.Name("nutrivance.viewControl.heartZones.sportSlot")
+    static let nutrivanceViewControlRecoveryScoreRefresh = Notification.Name("nutrivance.viewControl.recoveryScore.refresh")
+    static let nutrivanceViewControlRecoveryScoreFilter1D = Notification.Name("nutrivance.viewControl.recoveryScore.filter1D")
+    static let nutrivanceViewControlRecoveryScoreFilter1W = Notification.Name("nutrivance.viewControl.recoveryScore.filter1W")
+    static let nutrivanceViewControlRecoveryScoreFilter1M = Notification.Name("nutrivance.viewControl.recoveryScore.filter1M")
+    static let nutrivanceViewControlReadinessRefresh = Notification.Name("nutrivance.viewControl.readiness.refresh")
 }
 
 func toggleSystemSidebar() {
@@ -1934,7 +1939,7 @@ struct NutrivanceApp: App {
     
     private func hasContextualControls(for tab: RootTabSelection) -> Bool {
         switch tab {
-        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder, .heartZones:
+        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder, .heartZones, .recoveryScore, .readiness:
             return true
         default:
             return false
@@ -1951,8 +1956,10 @@ struct NutrivanceApp: App {
             return ["Night", "Week", "Month", "Year"]
         case .pastQuests:
             return ["7d", "28d", "Year"]
-        case .journal, .workoutHistory:
+        case .journal, .workoutHistory, .readiness:
             return []
+        case .recoveryScore:
+            return ["1D", "1W", "1M"]
         default:
             return []
         }
@@ -1986,76 +1993,6 @@ struct NutrivanceApp: App {
                 }
                 .keyboardShortcut("[", modifiers: [.command])
 
-                Button("Insights") {
-                    navigate(focus: .nutrition, view: "Insights", tab: .insights)
-                }
-                .keyboardShortcut("I", modifiers: [.command, .shift])
-
-                Button("Labels") {
-                    navigate(focus: .nutrition, view: "Labels", tab: .labels)
-                }
-                .keyboardShortcut("E", modifiers: [.command, .shift])
-
-                Button("Log") {
-                    navigate(focus: .nutrition, view: "Log", tab: .log)
-                }
-                .keyboardShortcut("G", modifiers: [.command, .shift])
-
-                Button("Calories") {
-                    navigate(focus: .nutrition, view: "Calories", tab: .calories)
-                }
-                .keyboardShortcut("1", modifiers: [.command, .option])
-
-                Button("Carbs") {
-                    navigate(focus: .nutrition, view: "Carbs", tab: .carbs)
-                }
-                .keyboardShortcut("2", modifiers: [.command, .option])
-
-                Button("Protein") {
-                    navigate(focus: .nutrition, view: "Protein", tab: .protein)
-                }
-                .keyboardShortcut("3", modifiers: [.command, .option])
-
-                Button("Fats") {
-                    navigate(focus: .nutrition, view: "Fats", tab: .fats)
-                }
-                .keyboardShortcut("4", modifiers: [.command, .option])
-
-                Button("Water") {
-                    navigate(focus: .nutrition, view: "Water", tab: .water)
-                }
-                .keyboardShortcut("5", modifiers: [.command, .option])
-
-                Button("Fiber") {
-                    navigate(focus: .nutrition, view: "Fiber", tab: .fiber)
-                }
-                .keyboardShortcut("6", modifiers: [.command, .option])
-
-                Button("Vitamins") {
-                    navigate(focus: .nutrition, view: "Vitamins", tab: .vitamins)
-                }
-                .keyboardShortcut("7", modifiers: [.command, .option])
-
-                Button("Minerals") {
-                    navigate(focus: .nutrition, view: "Minerals", tab: .minerals)
-                }
-                .keyboardShortcut("8", modifiers: [.command, .option])
-
-                Button("Phytochemicals") {
-                    navigate(focus: .nutrition, view: "Phytochemicals", tab: .phytochemicals)
-                }
-                .keyboardShortcut("9", modifiers: [.command, .option])
-
-                Button("Antioxidants") {
-                    navigate(focus: .nutrition, view: "Antioxidants", tab: .antioxidants)
-                }
-                .keyboardShortcut("0", modifiers: [.command, .option])
-
-                Button("Electrolytes") {
-                    navigate(focus: .nutrition, view: "Electrolytes", tab: .electrolytes)
-                }
-                .keyboardShortcut("-", modifiers: [.command, .option])
-
                 Button("Dashboard") {
                     navigate(focus: .fitness, view: "Dashboard", tab: .dashboard)
                 }
@@ -2070,11 +2007,6 @@ struct NutrivanceApp: App {
                     navigate(focus: .fitness, view: "Training Calendar", tab: .trainingCalendar)
                 }
                 .keyboardShortcut("R", modifiers: [.command, .shift])
-
-                Button("Coach") {
-                    navigate(focus: .fitness, view: "Coach", tab: .coach)
-                }
-                .keyboardShortcut("C", modifiers: [.command, .shift])
 
                 Button("Recovery Score") {
                     navigate(focus: .fitness, view: "Recovery Score", tab: .recoveryScore)
@@ -2095,11 +2027,6 @@ struct NutrivanceApp: App {
                     navigate(focus: .fitness, view: "Workout History", tab: .workoutHistory)
                 }
                 .keyboardShortcut("H", modifiers: [.command, .shift])
-
-                Button("Activity Rings") {
-                    navigate(focus: .fitness, view: "Activity Rings", tab: .activityRings)
-                }
-                .keyboardShortcut("A", modifiers: [.command, .shift])
 
                 Button("Heart Zones") {
                     navigate(focus: .fitness, view: "Heart Zones", tab: .heartZones)
@@ -2320,6 +2247,37 @@ struct NutrivanceApp: App {
                     if navigationState.selectedRootTab == .workoutHistory {
                         Button("Refresh Workouts") {
                             postViewControl(.nutrivanceViewControlRefreshWorkouts)
+                        }
+                        .keyboardShortcut("R", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .recoveryScore {
+                        Button("1D") {
+                            postViewControl(.nutrivanceViewControlRecoveryScoreFilter1D)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("1W") {
+                            postViewControl(.nutrivanceViewControlRecoveryScoreFilter1W)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Button("1M") {
+                            postViewControl(.nutrivanceViewControlRecoveryScoreFilter1M)
+                        }
+                        .keyboardShortcut("3", modifiers: [.command])
+
+                        Divider()
+
+                        Button("Refresh") {
+                            postViewControl(.nutrivanceViewControlRecoveryScoreRefresh)
+                        }
+                        .keyboardShortcut("R", modifiers: [.command])
+                    }
+
+                    if navigationState.selectedRootTab == .readiness {
+                        Button("Refresh") {
+                            postViewControl(.nutrivanceViewControlReadinessRefresh)
                         }
                         .keyboardShortcut("R", modifiers: [.command])
                     }

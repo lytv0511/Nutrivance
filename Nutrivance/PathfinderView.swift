@@ -969,57 +969,59 @@ struct PathfinderView: View {
     }
 
     var body: some View {
-        ZStack {
-            GradientBackgrounds().programBuilderMeshBackground()
+        NavigationStack {
+            ZStack {
+                GradientBackgrounds().programBuilderMeshBackground()
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    searchBar
-                    dateRangeSection
-                    modeTabsSection
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        searchBar
+                        dateRangeSection
+                        modeTabsSection
 
-                    phase2QuestSection
-                    journalNudge
-                    phase3GemSection
-                    phase2AISection
+                        phase2QuestSection
+                        journalNudge
+                        phase3GemSection
+                        phase2AISection
 
-                    statsSection
-                    phase3StatSection
+                        statsSection
+                        phase3StatSection
 
-                    correlationListSection
-                }
-                .padding()
-            }
-        }
-        .navigationTitle("Pathfinder")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button { showAddSheet = true } label: {
-                    Image(systemName: "plus.circle.fill")
+                        correlationListSection
+                    }
+                    .padding()
                 }
             }
-        }
-        .sheet(isPresented: $showAddSheet) {
-            AddCorrelationSheet { correlation in
-                store.append(correlation)
+            .navigationTitle("Pathfinder")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showAddSheet = true } label: {
+                        Image(systemName: "plus.circle.fill")
+                    }
+                }
             }
-        }
-        .sheet(item: $editingCorrelation) { correlation in
-            EditCorrelationSheet(correlation: correlation) { updated in
-                store.update(updated)
+            .sheet(isPresented: $showAddSheet) {
+                AddCorrelationSheet { correlation in
+                    store.append(correlation)
+                }
             }
-        }
-        .sheet(isPresented: $showDatePicker) {
-            DatePicker("Select Date", selection: $anchorDate, displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .padding()
-                .presentationDetents([.medium])
-        }
-        .task { await loadHKStates() }
-        .onChange(of: anchorDate) { _, _ in Task { await loadHKStates() } }
-        .onChange(of: selectedDateRange) { _, _ in Task { await loadHKStates() } }
-        .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
-            store.load()
+            .sheet(item: $editingCorrelation) { correlation in
+                EditCorrelationSheet(correlation: correlation) { updated in
+                    store.update(updated)
+                }
+            }
+            .sheet(isPresented: $showDatePicker) {
+                DatePicker("Select Date", selection: $anchorDate, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .padding()
+                    .presentationDetents([.medium])
+            }
+            .task { await loadHKStates() }
+            .onChange(of: anchorDate) { _, _ in Task { await loadHKStates() } }
+            .onChange(of: selectedDateRange) { _, _ in Task { await loadHKStates() } }
+            .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+                store.load()
+            }
         }
     }
 
@@ -2554,7 +2556,5 @@ extension PathfinderView {
 // MARK: - Preview
 
 #Preview {
-    NavigationStack {
-        PathfinderView()
-    }
+    PathfinderView()
 }
