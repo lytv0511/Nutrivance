@@ -504,15 +504,53 @@ private struct CompanionWorkoutSnapshotPayload: Codable {
 }
 
 @MainActor
+enum WatchWakeDeliveryMode: String, CaseIterable {
+    case preserveSilentMode
+
+    var title: String {
+        switch self {
+        case .preserveSilentMode:
+            return "Preserve Silent Mode"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .preserveSilentMode:
+            return "Delivers a gentle haptic wake tap on Apple Watch without forcing audio."
+        }
+    }
+}
+
+@MainActor
 final class WatchWakeScheduler: ObservableObject {
     @Published private(set) var statusText = "Wake timer off"
     @Published private(set) var authorizationGranted = false
+    @Published var deliveryMode: WatchWakeDeliveryMode = .preserveSilentMode {
+        didSet {
+            defaults.set(deliveryMode.rawValue, forKey: deliveryModeKey)
+        }
+    }
 
-    func scheduleWakeNotification(for wakeTime: Date) async {
+    private let defaults = UserDefaults.standard
+    private let deliveryModeKey = "watch.sleep.wakeDeliveryMode.v1"
+
+    init() {
+        if let rawValue = defaults.string(forKey: deliveryModeKey),
+           let storedMode = WatchWakeDeliveryMode(rawValue: rawValue) {
+            deliveryMode = storedMode
+        }
+    }
+
+    var availabilityText: String {
+        "For a true system alarm that breaks through silent mode, schedule it from Nutrivance on iPhone or iPad. Apple forwards those AlarmKit alerts to a paired watch."
+    }
+
+    func scheduleWakeAlarm(for wakeTime: Date) async {
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         if settings.authorizationStatus == .notDetermined {
-            let granted = try? await center.requestAuthorization(options: [.alert, .sound])
+            let granted = try? await center.requestAuthorization(options: [.alert])
             authorizationGranted = granted == true
         } else {
             authorizationGranted = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
@@ -530,15 +568,15 @@ final class WatchWakeScheduler: ObservableObject {
 
         let content = UNMutableNotificationContent()
         content.title = "Wake Up"
-        content.body = "Your Nutrivance wake timer is ready."
-        content.sound = .default
+        content.body = deliveryMode.summary
+        content.sound = nil
 
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         let request = UNNotificationRequest(identifier: "watch-wake-timer", content: content, trigger: trigger)
 
         do {
             try await center.add(request)
-            statusText = "Next wake: \(nextWakeDate.formatted(date: .omitted, time: .shortened))"
+            statusText = "Haptic wake: \(nextWakeDate.formatted(date: .omitted, time: .shortened))"
         } catch {
             statusText = "Wake timer unavailable"
         }

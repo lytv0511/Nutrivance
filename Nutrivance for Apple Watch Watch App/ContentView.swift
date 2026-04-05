@@ -5227,9 +5227,27 @@ private struct SleepManagerView: View {
                 SectionCard(title: "Wake-Up Timer") {
                     DatePicker("Wake Time", selection: $store.wakeUpTime, displayedComponents: .hourAndMinute)
                         .labelsHidden()
+                    Picker(
+                        "Wake Style",
+                        selection: Binding(
+                            get: { store.wakeScheduler.deliveryMode },
+                            set: { store.wakeScheduler.deliveryMode = $0 }
+                        )
+                    ) {
+                        ForEach(WatchWakeDeliveryMode.allCases, id: \.self) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
                     Text(store.wakeScheduler.statusText)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.68))
+                    Text(store.wakeScheduler.deliveryMode.summary)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.72))
+                    Text(store.wakeScheduler.availabilityText)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.58))
                 }
 
                 SectionCard(title: "Suggestion") {
@@ -5242,11 +5260,16 @@ private struct SleepManagerView: View {
         }
         .navigationTitle("Sleep Manager")
         .task {
-            await store.wakeScheduler.scheduleWakeNotification(for: store.wakeUpTime)
+            await store.wakeScheduler.scheduleWakeAlarm(for: store.wakeUpTime)
         }
         .onChange(of: store.wakeUpTime) { _, newValue in
             Task {
-                await store.wakeScheduler.scheduleWakeNotification(for: newValue)
+                await store.wakeScheduler.scheduleWakeAlarm(for: newValue)
+            }
+        }
+        .onChange(of: store.wakeScheduler.deliveryMode) { _, _ in
+            Task {
+                await store.wakeScheduler.scheduleWakeAlarm(for: store.wakeUpTime)
             }
         }
     }

@@ -370,22 +370,91 @@ struct DetectedCorrelationItem {
 }
 
 @available(iOS 26.0, *)
-@Generable(description: "All emotional correlations detected from a journal entry.")
+@Generable(description: "A named person mentioned in the journal (not generic groups).")
+struct DetectedPersonItem {
+    var name: String
+    var mentionContext: String
+}
+
+@available(iOS 26.0, *)
+@Generable(description: "A short follow-up to disambiguate people or life areas. choiceAssociationKeys must parallel choiceLabels; use skip when that choice should not change correlation buckets.")
+struct FollowUpClarifierItem {
+    var question: String
+    var choiceLabels: [String]
+    var choiceAssociationKeys: [String]
+    var linkedContextHint: String
+    var linkedPersonName: String
+}
+
+@available(iOS 26.0, *)
+@Generable(description: "Emotional correlations, named people, and quick-check follow-ups from a journal entry.")
 struct DetectedCorrelationOutput {
     var correlations: [DetectedCorrelationItem]
+    var mentionedPeople: [DetectedPersonItem]
+    var followUpClarifiers: [FollowUpClarifierItem]
 }
 #endif
+
+// MARK: - Journal correlation UI models (people + clarifiers)
+
+struct JournalSuggestedPerson: Identifiable, Hashable {
+    let id: UUID
+    var name: String
+    var mentionContext: String
+
+    init(id: UUID = UUID(), name: String, mentionContext: String) {
+        self.id = id
+        self.name = name
+        self.mentionContext = mentionContext
+    }
+}
+
+struct JournalCorrelationClarifier: Identifiable, Hashable {
+    let id: UUID
+    var question: String
+    var choices: [String]
+    /// Parallel to choices: NutrivanceAssociation rawValue, or skip / empty.
+    var associationKeys: [String]
+    var linkedPersonName: String?
+    var linkedContextHint: String
+    /// Correlations this clarifier is meant to refine (may be empty → infer by name/hint on apply).
+    var targetCorrelationIDs: [UUID]
+
+    init(
+        id: UUID = UUID(),
+        question: String,
+        choices: [String],
+        associationKeys: [String],
+        linkedPersonName: String?,
+        linkedContextHint: String,
+        targetCorrelationIDs: [UUID] = []
+    ) {
+        self.id = id
+        self.question = question
+        self.choices = choices
+        self.associationKeys = associationKeys
+        self.linkedPersonName = linkedPersonName
+        self.linkedContextHint = linkedContextHint
+        self.targetCorrelationIDs = targetCorrelationIDs
+    }
+}
 
 @MainActor
 final class JournalCorrelationEngine: ObservableObject {
     @Published var detectedCorrelations: [EmotionCorrelation] = []
+    @Published var suggestedPeople: [JournalSuggestedPerson] = []
+    @Published var correlationClarifiers: [JournalCorrelationClarifier] = []
     private var analysisTask: Task<Void, Never>?
 
     func analyzeText(_ text: String, journalEntryID: UUID?, referenceDate: Date) {
         analysisTask?.cancel()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 15 else {
-            withAnimation { detectedCorrelations = [] }
+            withAnimation {
+                detectedCorrelations = []
+                suggestedPeople = []
+                correlationClarifiers = []
+            }
             return
         }
 
@@ -394,13 +463,17 @@ final class JournalCorrelationEngine: ObservableObject {
             guard !Task.isCancelled else { return }
 
             var results: [EmotionCorrelation] = []
+            var people: [JournalSuggestedPerson] = []
+            var clarifiers: [JournalCorrelationClarifier] = []
 
             #if canImport(FoundationModels)
             if #available(iOS 26.0, *) {
                 let model = SystemLanguageModel(useCase: .general)
                 if model.isAvailable {
-                    if let aiResults = await analyzeWithFoundationModels(text: trimmed, journalEntryID: journalEntryID, referenceDate: referenceDate) {
-                        results = aiResults
+                    if let pack = await analyzeWithFoundationModels(text: trimmed, journalEntryID: journalEntryID, referenceDate: referenceDate) {
+                        results = pack.correlations
+                        people = pack.people
+                        clarifiers = pack.clarifiers
                     }
                 }
             }
@@ -409,24 +482,38 @@ final class JournalCorrelationEngine: ObservableObject {
             if results.isEmpty {
                 results = analyzeWithRegex(text: trimmed, journalEntryID: journalEntryID, referenceDate: referenceDate)
             }
+            if people.isEmpty {
+                people = extractPeopleHeuristic(from: trimmed)
+            }
+            clarifiers = Self.resolveClarifierTargets(clarifiers, correlations: results)
 
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) {
                 detectedCorrelations = results
+                suggestedPeople = people
+                correlationClarifiers = clarifiers
             }
         }
     }
 
     func clear() {
         analysisTask?.cancel()
-        withAnimation { detectedCorrelations = [] }
+        withAnimation {
+            detectedCorrelations = []
+            suggestedPeople = []
+            correlationClarifiers = []
+        }
     }
 
     // MARK: - Foundation Models Path
 
     #if canImport(FoundationModels)
     @available(iOS 26.0, *)
-    private func analyzeWithFoundationModels(text: String, journalEntryID: UUID?, referenceDate: Date) async -> [EmotionCorrelation]? {
+    private func analyzeWithFoundationModels(
+        text: String,
+        journalEntryID: UUID?,
+        referenceDate: Date
+    ) async -> (correlations: [EmotionCorrelation], people: [JournalSuggestedPerson], clarifiers: [JournalCorrelationClarifier])? {
         let model = SystemLanguageModel(useCase: .general)
         guard model.isAvailable else { return nil }
 
@@ -434,21 +521,29 @@ final class JournalCorrelationEngine: ObservableObject {
             let session = LanguageModelSession(
                 model: model,
                 instructions: """
-                You are an emotional intelligence analyst. Read the journal entry and extract emotional correlations.
-                For each distinct emotion expressed or implied, identify:
-                - The emotion label (use standard emotion words: happy, sad, anxious, grateful, stressed, content, excited, drained, peaceful, frustrated, proud, lonely, overwhelmed, hopeful, angry, calm, joyful, disappointed, confident, worried, etc.)
-                - The valence (-1.0 to 1.0)
-                - The associated life area (use the exact key from the list)
-                - A brief context summary
-                Only extract emotions that are clearly present or strongly implied. Do not fabricate correlations.
-                Limit to at most 5 correlations per entry.
+                You are an emotional intelligence analyst for journal entries.
+
+                correlations: For each distinct emotion expressed or implied, output emotion, valence (-1…1), associationKey (exact raw key from the allowed set), and a brief contextSummary (quote-like snippet from the entry).
+                School, class, teacher, professor, homework, lecture, exam, study session → associationKey education (not work). Job, boss, office, deadline without school context → work.
+                Only extract emotions clearly present. At most 5 correlations.
+
+                mentionedPeople: Proper names and titled names (e.g. Frank, Mr. Hale). Skip vague "someone". mentionContext: short phrase showing how they appear (≤120 chars).
+
+                followUpClarifiers: 2–6 quick checks the app will show as multiple choice. Include:
+                - For each important person: "Who is [Name] to you?" (or similar) with choices like Friend, Family, Teacher/professor, Coworker, Partner, Not sure.
+                - When school vs work could be confused (e.g. "Mr. Hale's class", "meeting about grades"): ask which bucket fits with 3–5 choices (Education, Work, Friends/social, Other, Not sure).
+                - When a relationship affects how to read the entry, add one disambiguation question.
+                choiceLabels: 3–5 short options (≤6 words each). choiceAssociationKeys must parallel choiceLabels: use friends, family, partner, work, education, skip. Use skip for "Not sure" or when picking that option should not set a life-area bucket. Use education for teacher/classmate/study; work for job/coworker; friends for friend/social.
+                linkedPersonName: the person's name if the question is about them, else empty string.
+                linkedContextHint: a distinctive substring from the entry that identifies which sentence/clause this question clarifies (so the app can match correlations); empty string if not needed.
                 """
             )
 
             let truncated = String(text.prefix(2000))
             let response = try await session.respond(to: truncated, generating: DetectedCorrelationOutput.self)
+            let content = response.content
 
-            return response.content.correlations.prefix(5).compactMap { item in
+            let correlations: [EmotionCorrelation] = content.correlations.prefix(5).compactMap { item in
                 let assoc = NutrivanceAssociation(rawValue: item.associationKey) ?? guessAssociation(from: item.contextSummary)
                 return EmotionCorrelation(
                     journalEntryID: journalEntryID,
@@ -460,11 +555,102 @@ final class JournalCorrelationEngine: ObservableObject {
                     source: .aiDetected
                 )
             }
+
+            let people: [JournalSuggestedPerson] = content.mentionedPeople.prefix(6).compactMap { p in
+                let name = p.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard name.count >= 2 else { return nil }
+                let ctx = String(p.mentionContext.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+                return JournalSuggestedPerson(name: name, mentionContext: ctx)
+            }
+
+            let clarifiers: [JournalCorrelationClarifier] = content.followUpClarifiers.prefix(8).compactMap { item in
+                Self.clarifierFromModelItem(item)
+            }
+
+            return (correlations, people, clarifiers)
         } catch {
             return nil
         }
     }
+
+    private static func clarifierFromModelItem(_ item: FollowUpClarifierItem) -> JournalCorrelationClarifier? {
+        let labels = item.choiceLabels.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard labels.count >= 2, labels.count <= 6 else { return nil }
+
+        var keys = item.choiceAssociationKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        while keys.count < labels.count { keys.append("skip") }
+        keys = keys.prefix(labels.count).map { raw in
+            if raw.isEmpty || raw == "none" { return "skip" }
+            if raw == "skip" { return "skip" }
+            if NutrivanceAssociation(rawValue: raw) != nil { return raw }
+            return "skip"
+        }
+
+        let person = item.linkedPersonName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hint = item.linkedContextHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let q = item.question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return nil }
+
+        return JournalCorrelationClarifier(
+            question: q,
+            choices: Array(labels.prefix(6)),
+            associationKeys: Array(keys.prefix(labels.count)),
+            linkedPersonName: person.isEmpty ? nil : person,
+            linkedContextHint: hint,
+            targetCorrelationIDs: []
+        )
+    }
     #endif
+
+    private static func resolveClarifierTargets(_ items: [JournalCorrelationClarifier], correlations: [EmotionCorrelation]) -> [JournalCorrelationClarifier] {
+        items.map { c in
+            var copy = c
+            if copy.targetCorrelationIDs.isEmpty {
+                copy.targetCorrelationIDs = correlationIDs(matching: c, in: correlations)
+            }
+            return copy
+        }
+    }
+
+    private static func correlationIDs(matching clarifier: JournalCorrelationClarifier, in correlations: [EmotionCorrelation]) -> [UUID] {
+        let hint = clarifier.linkedContextHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let person = clarifier.linkedPersonName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var ids: [UUID] = []
+        if hint.count >= 3 {
+            ids = correlations.filter { $0.contextNotes.localizedCaseInsensitiveContains(hint) }.map(\.id)
+        }
+        if ids.isEmpty, person.count >= 2 {
+            ids = correlations.filter { $0.contextNotes.localizedCaseInsensitiveContains(person) }.map(\.id)
+        }
+        return Array(Set(ids))
+    }
+
+    private func extractPeopleHeuristic(from text: String) -> [JournalSuggestedPerson] {
+        var out: [JournalSuggestedPerson] = []
+        let ns = text as NSString
+
+        let titled = try? NSRegularExpression(pattern: #"\b(Mr|Mrs|Ms|Dr)\.?\s+([A-Z][a-z]+)\b"#, options: [])
+        titled?.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match, match.numberOfRanges >= 3 else { return }
+            let last = ns.substring(with: match.range(at: 2))
+            let full = ns.substring(with: match.range).trimmingCharacters(in: .whitespacesAndNewlines)
+            if last.count >= 2 {
+                out.append(JournalSuggestedPerson(name: full, mentionContext: String(full.prefix(80))))
+            }
+        }
+
+        let friend = try? NSRegularExpression(pattern: #"\bfriend\s+([A-Z][a-z]+)\b"#, options: .caseInsensitive)
+        friend?.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match, match.numberOfRanges >= 2 else { return }
+            let name = ns.substring(with: match.range(at: 1))
+            if name.count >= 2 {
+                out.append(JournalSuggestedPerson(name: name, mentionContext: "friend \(name)"))
+            }
+        }
+
+        var seen = Set<String>()
+        return out.filter { seen.insert($0.name.lowercased()).inserted }
+    }
 
     // MARK: - Regex Fallback
 

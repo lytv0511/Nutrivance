@@ -1367,6 +1367,9 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKObjectType.quantityType(forIdentifier: .dietaryCaffeine)!,
             HKSampleType.stateOfMindType(),
             
+            // Mindfulness (journal editor sessions → Mindful Minutes)
+            HKObjectType.categoryType(forIdentifier: .mindfulSession)!,
+            
             // Workouts
             HKObjectType.workoutType()
         ])
@@ -1418,6 +1421,11 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         
         healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { success, error in
             DispatchQueue.main.async {
+                #if os(iOS)
+                if success {
+                    HealthKitCloudSyncProducer.shared.startIfPossible(healthStore: self.healthStore)
+                }
+                #endif
                 completion(success, error)
             }
         }
@@ -1550,6 +1558,35 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         healthStore.save(samples) { success, error in
             DispatchQueue.main.async {
                 completion(success)
+            }
+        }
+    }
+
+    /// Writes a mindful session interval to Health (counts toward Mindful Minutes). Requires mindful session in share authorization.
+    func saveMindfulSession(start: Date, end: Date, completion: ((Bool, Error?) -> Void)? = nil) {
+        guard end > start else {
+            completion?(false, nil)
+            return
+        }
+        let seconds = end.timeIntervalSince(start)
+        guard seconds >= 15 else {
+            completion?(false, nil)
+            return
+        }
+        guard let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) else {
+            completion?(false, nil)
+            return
+        }
+        let sample = HKCategorySample(
+            type: mindfulType,
+            value: HKCategoryValue.notApplicable.rawValue,
+            start: start,
+            end: end,
+            metadata: ["NutrivanceActivity": "journal_editor"]
+        )
+        healthStore.save(sample) { success, error in
+            DispatchQueue.main.async {
+                completion?(success, error)
             }
         }
     }

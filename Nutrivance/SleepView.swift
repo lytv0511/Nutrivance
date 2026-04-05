@@ -10,6 +10,9 @@ import SwiftUI
 import HealthKit
 import UIKit
 import Charts
+#if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
+import AlarmKit
+#endif
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -1114,9 +1117,11 @@ private func sleepWindowLabelForVitals(stages: [SleepStageData]) -> String? {
 
 struct SleepView: View {
     @StateObject private var viewModel = SleepViewModel()
+    @StateObject private var wakeAlarmStore = WakeUpAlarmStore()
     @State private var animationPhase: Double = 0
     @State private var expandedStage: UUID?
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var showingWakeAlarmView = false
     
 
 
@@ -1336,6 +1341,16 @@ struct SleepView: View {
                             .font(.body)
                     }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                        showingWakeAlarmView = true
+                    }) {
+                        Image(systemName: "alarm")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Wake-up alarms")
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in
                 jumpToToday()
@@ -1364,9 +1379,1039 @@ struct SleepView: View {
             selectedDate = defaultD
             await viewModel.loadSleepData(for: defaultD)
         }
+        .sheet(isPresented: $showingWakeAlarmView) {
+            WakeUpAlarmView(store: wakeAlarmStore)
+        }
         .environmentObject(viewModel)
     }
 }
+
+private struct WakeAlarmDaySetting: Identifiable, Codable, Hashable, Sendable {
+    let weekday: Int
+    var isEnabled: Bool
+    var minutesFromMidnight: Int
+
+    var id: Int { weekday }
+}
+
+private struct WakeAlarmPreferences: Codable, Sendable {
+    var weeklyDays: [WakeAlarmDaySetting]
+    var selectedWeekday: Int
+    var tomorrowOnlyEnabled: Bool
+    var tomorrowAlarmDate: Date
+    var windDownLeadMinutes: Double
+    var scheduledAlarmIDs: [String]
+
+    static func `default`() -> WakeAlarmPreferences {
+        let calendar = Calendar.current
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())) ?? Date()
+        let baseMinutes = 7 * 60
+        return WakeAlarmPreferences(
+            weeklyDays: [
+                WakeAlarmDaySetting(weekday: 2, isEnabled: true, minutesFromMidnight: baseMinutes),
+                WakeAlarmDaySetting(weekday: 3, isEnabled: true, minutesFromMidnight: baseMinutes),
+                WakeAlarmDaySetting(weekday: 4, isEnabled: true, minutesFromMidnight: baseMinutes),
+                WakeAlarmDaySetting(weekday: 5, isEnabled: true, minutesFromMidnight: baseMinutes),
+                WakeAlarmDaySetting(weekday: 6, isEnabled: true, minutesFromMidnight: baseMinutes),
+                WakeAlarmDaySetting(weekday: 7, isEnabled: false, minutesFromMidnight: 8 * 60),
+                WakeAlarmDaySetting(weekday: 1, isEnabled: false, minutesFromMidnight: 8 * 60)
+            ],
+            selectedWeekday: 2,
+            tomorrowOnlyEnabled: false,
+            tomorrowAlarmDate: calendar.date(bySettingHour: 7, minute: 0, second: 0, of: tomorrow) ?? tomorrow,
+            windDownLeadMinutes: 60,
+            scheduledAlarmIDs: []
+        )
+    }
+}
+
+private struct WakeAlarmScheduleSummary {
+    let title: String
+    let detail: String
+}
+
+@MainActor
+private final class WakeUpAlarmStore: ObservableObject {
+    @Published var weeklyDays: [WakeAlarmDaySetting] = []
+    @Published var selectedWeekday: Int = 2
+    @Published var tomorrowOnlyEnabled = false
+    @Published var tomorrowAlarmDate = Date()
+    @Published var windDownLeadMinutes: Double = 60
+    @Published var statusText = "No wake alarms scheduled yet"
+    @Published var authorizationText = "Schedule a system wake alarm that breaks through silent mode."
+    @Published var isScheduling = false
+
+    private let storageKey = "sleep.wakeAlarm.preferences.v2"
+    private let defaults = UserDefaults.standard
+    private let scheduler = WakeUpSystemAlarmScheduler()
+    private var scheduledAlarmIDs: [String] = []
+
+    init() {
+        load()
+    }
+
+    var selectedDayIndex: Int? {
+        weeklyDays.firstIndex(where: { $0.weekday == selectedWeekday })
+    }
+
+    var selectedDayBinding: Binding<Date> {
+        Binding<Date>(
+            get: { [weak self] in
+                guard let self, let index = self.selectedDayIndex else { return Date() }
+                return Self.date(for: self.weeklyDays[index].minutesFromMidnight)
+            },
+            set: { [weak self] newValue in
+                guard let self, let index = self.selectedDayIndex else { return }
+                self.weeklyDays[index].minutesFromMidnight = Self.minutesFromMidnight(for: newValue)
+                self.persist()
+            }
+        )
+    }
+
+    var enabledWeekdays: [WakeAlarmDaySetting] {
+        weeklyDays.filter(\.isEnabled)
+    }
+
+    var nextWakeSummary: WakeAlarmScheduleSummary {
+        let calendar = Calendar.current
+        var upcoming: [(Date, String)] = []
+
+        for day in enabledWeekdays {
+            if let nextDate = nextDate(forWeekday: day.weekday, minutesFromMidnight: day.minutesFromMidnight, from: Date()) {
+                upcoming.append((nextDate, weekdayTitle(for: day.weekday)))
+            }
+        }
+
+        if tomorrowOnlyEnabled {
+            upcoming.append((tomorrowAlarmDate, "Tomorrow only"))
+        }
+
+        guard let earliest = upcoming.sorted(by: { $0.0 < $1.0 }).first else {
+            return WakeAlarmScheduleSummary(
+                title: "No wake alarm yet",
+                detail: "Pick the mornings you want protected, then schedule them as system alarms."
+            )
+        }
+
+        let bedtime = calendar.date(byAdding: .hour, value: -8, to: earliest.0) ?? earliest.0
+        let formatter = DateFormatter()
+        formatter.dateStyle = calendar.isDateInTomorrow(earliest.0) ? .medium : .none
+        formatter.timeStyle = .short
+
+        return WakeAlarmScheduleSummary(
+            title: earliest.0.formatted(date: calendar.isDateInToday(earliest.0) ? .omitted : .abbreviated, time: .shortened),
+            detail: "\(earliest.1) wake. Aim to be asleep around \(bedtime.formatted(date: .omitted, time: .shortened))."
+        )
+    }
+
+    var nextWindDownDate: Date? {
+        let calendar = Calendar.current
+        let nextAlarmDate: Date?
+
+        var upcoming: [Date] = enabledWeekdays.compactMap {
+            nextDate(forWeekday: $0.weekday, minutesFromMidnight: $0.minutesFromMidnight, from: Date())
+        }
+        if tomorrowOnlyEnabled {
+            upcoming.append(tomorrowAlarmDate)
+        }
+        nextAlarmDate = upcoming.sorted().first
+
+        guard let nextAlarmDate else { return nil }
+        let sleepTarget = calendar.date(byAdding: .hour, value: -8, to: nextAlarmDate) ?? nextAlarmDate
+        return calendar.date(byAdding: .minute, value: -Int(windDownLeadMinutes.rounded()), to: sleepTarget)
+    }
+
+    var consistencyScore: Int {
+        let enabled = enabledWeekdays
+        guard enabled.count > 1 else { return 100 }
+        let average = enabled.map(\.minutesFromMidnight).reduce(0, +) / enabled.count
+        let averageDistance = enabled
+            .map { abs($0.minutesFromMidnight - average) }
+            .reduce(0, +) / enabled.count
+        let score = max(58, 100 - Int(Double(averageDistance) / 1.4))
+        return min(score, 100)
+    }
+
+    var consistencyGuidance: String {
+        let enabled = enabledWeekdays
+        guard !enabled.isEmpty else {
+            return "Start with the mornings you care about most. Two or three anchor wake times are enough to build consistency."
+        }
+        if consistencyScore >= 90 {
+            return "Your wake times are already tightly clustered. Protect the same wind-down window and let your body learn the rhythm."
+        }
+        if consistencyScore >= 75 {
+            return "You are close. Tightening your wake times to within about 30 minutes on most days should make bedtime feel easier."
+        }
+        return "The biggest win is regularity. Try bringing your earliest and latest wake times closer together before chasing more total sleep."
+    }
+
+    var rhythmStartMinutes: Int {
+        let nextMinutes = enabledWeekdays.map(\.minutesFromMidnight) + (tomorrowOnlyEnabled ? [Self.minutesFromMidnight(for: tomorrowAlarmDate)] : [])
+        let earliestWake = nextMinutes.min() ?? (7 * 60)
+        return max(17 * 60, earliestWake - 9 * 60)
+    }
+
+    var rhythmWakeMinutes: Int {
+        enabledWeekdays.map(\.minutesFromMidnight).min() ?? Self.minutesFromMidnight(for: tomorrowAlarmDate)
+    }
+
+    var rhythmWindDownMinutes: Int {
+        max(rhythmStartMinutes, rhythmBedtimeMinutes - Int(windDownLeadMinutes.rounded()))
+    }
+
+    var rhythmBedtimeMinutes: Int {
+        max(rhythmStartMinutes + 30, rhythmWakeMinutes - (8 * 60))
+    }
+
+    func toggleDay(_ weekday: Int) {
+        guard let index = weeklyDays.firstIndex(where: { $0.weekday == weekday }) else { return }
+        selectedWeekday = weekday
+        weeklyDays[index].isEnabled.toggle()
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+        persist()
+    }
+
+    func selectDay(_ weekday: Int) {
+        selectedWeekday = weekday
+        UISelectionFeedbackGenerator().selectionChanged()
+        persist()
+    }
+
+    func scheduleAlarms() async {
+        persist()
+        isScheduling = true
+        defer { isScheduling = false }
+
+        do {
+            let result = try await scheduler.schedule(preferences: currentPreferences())
+            scheduledAlarmIDs = result.alarmIDs.map(\.uuidString)
+            statusText = result.statusText
+            authorizationText = result.authorizationText
+            persist()
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } catch {
+            authorizationText = error.localizedDescription
+            if scheduledAlarmIDs.isEmpty {
+                statusText = "Wake alarms are not scheduled"
+            }
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        }
+    }
+
+    func clearScheduledAlarms() async {
+        isScheduling = true
+        defer { isScheduling = false }
+
+        do {
+            try await scheduler.cancel(ids: scheduledAlarmIDs.compactMap(UUID.init(uuidString:)))
+            scheduledAlarmIDs = []
+            statusText = "Wake alarms cleared"
+            authorizationText = "Choose mornings again whenever you want to schedule a new system alarm."
+            persist()
+        } catch {
+            authorizationText = "Couldn't clear every alarm. You can still update them by scheduling again."
+        }
+    }
+
+    func saveDraft() {
+        persist()
+    }
+
+    private func load() {
+        guard let data = defaults.data(forKey: storageKey),
+              let preferences = try? JSONDecoder().decode(WakeAlarmPreferences.self, from: data) else {
+            apply(WakeAlarmPreferences.default())
+            persist()
+            return
+        }
+        apply(preferences)
+    }
+
+    private func apply(_ preferences: WakeAlarmPreferences) {
+        weeklyDays = preferences.weeklyDays.sorted { sortIndex(for: $0.weekday) < sortIndex(for: $1.weekday) }
+        selectedWeekday = preferences.selectedWeekday
+        tomorrowOnlyEnabled = preferences.tomorrowOnlyEnabled
+        tomorrowAlarmDate = preferences.tomorrowAlarmDate
+        windDownLeadMinutes = preferences.windDownLeadMinutes
+        scheduledAlarmIDs = preferences.scheduledAlarmIDs
+        statusText = scheduledAlarmIDs.isEmpty ? "No wake alarms scheduled yet" : "Wake alarms are ready"
+    }
+
+    private func persist() {
+        let payload = currentPreferences()
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        defaults.set(data, forKey: storageKey)
+    }
+
+    private func currentPreferences() -> WakeAlarmPreferences {
+        WakeAlarmPreferences(
+            weeklyDays: weeklyDays,
+            selectedWeekday: selectedWeekday,
+            tomorrowOnlyEnabled: tomorrowOnlyEnabled,
+            tomorrowAlarmDate: tomorrowAlarmDate,
+            windDownLeadMinutes: windDownLeadMinutes,
+            scheduledAlarmIDs: scheduledAlarmIDs
+        )
+    }
+
+    private func nextDate(forWeekday weekday: Int, minutesFromMidnight: Int, from now: Date) -> Date? {
+        let calendar = Calendar.current
+        var components = DateComponents()
+        components.weekday = weekday
+        components.hour = minutesFromMidnight / 60
+        components.minute = minutesFromMidnight % 60
+        components.second = 0
+        return calendar.nextDate(after: now.addingTimeInterval(-1), matching: components, matchingPolicy: .nextTimePreservingSmallerComponents)
+    }
+
+    private func weekdayTitle(for weekday: Int) -> String {
+        let symbols = Calendar.current.weekdaySymbols
+        let index = max(0, min(symbols.count - 1, weekday - 1))
+        return symbols[index]
+    }
+
+    private func sortIndex(for weekday: Int) -> Int {
+        let ordered = [2, 3, 4, 5, 6, 7, 1]
+        return ordered.firstIndex(of: weekday) ?? weekday
+    }
+
+    private static func date(for minutes: Int) -> Date {
+        let calendar = Calendar.current
+        let base = calendar.startOfDay(for: Date())
+        return calendar.date(byAdding: .minute, value: minutes, to: base) ?? base
+    }
+
+    private static func minutesFromMidnight(for date: Date) -> Int {
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+}
+
+private struct WakeUpAlarmView: View {
+    @ObservedObject var store: WakeUpAlarmStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.05, green: 0.09, blue: 0.16),
+                        Color(red: 0.08, green: 0.17, blue: 0.23),
+                        Color(red: 0.14, green: 0.19, blue: 0.26)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 18) {
+                        WakeAlarmHeroCard(store: store)
+                        SleepRhythmCanvas(store: store)
+                        WakeAlarmWindDownCard(store: store)
+                        WakeAlarmConsistencyCard(store: store)
+                        WakeAlarmWeeklyScheduleCard(store: store)
+                        WakeAlarmTomorrowCard(store: store)
+                        WakeAlarmFooterCard(store: store)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 20)
+                }
+            }
+            .navigationTitle("Wake-Up Alarm")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if store.isScheduling {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Button("Set") {
+                            Task {
+                                await store.scheduleAlarms()
+                            }
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+            }
+            .onChange(of: store.weeklyDays) { _, _ in
+                store.saveDraft()
+            }
+            .onChange(of: store.tomorrowOnlyEnabled) { _, _ in
+                store.saveDraft()
+            }
+            .onChange(of: store.tomorrowAlarmDate) { _, _ in
+                store.saveDraft()
+            }
+            .onChange(of: store.windDownLeadMinutes) { _, _ in
+                store.saveDraft()
+            }
+        }
+    }
+}
+
+private struct WakeAlarmHeroCard: View {
+    @ObservedObject var store: WakeUpAlarmStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("System wake alarm", systemImage: "alarm.waves.left.and.right.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.92))
+
+            Text(store.nextWakeSummary.title)
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+
+            Text(store.nextWakeSummary.detail)
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.76))
+
+            HStack(spacing: 10) {
+                WakeAlarmPill(text: "Breaks through silent mode", systemImage: "speaker.wave.3.fill")
+                if let windDown = store.nextWindDownDate {
+                    WakeAlarmPill(
+                        text: "Wind down \(windDown.formatted(date: .omitted, time: .shortened))",
+                        systemImage: "moon.stars.fill"
+                    )
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.14),
+                            Color(red: 0.40, green: 0.62, blue: 0.77).opacity(0.22),
+                            Color(red: 0.65, green: 0.82, blue: 0.80).opacity(0.14)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+        )
+    }
+}
+
+private struct SleepRhythmCanvas: View {
+    @ObservedObject var store: WakeUpAlarmStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Tonight's rhythm")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Text("A gentle target for easing into sleep and waking at a steadier hour.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.72))
+
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let trackWidth = max(width - 36, 40)
+                let start = CGFloat(store.rhythmStartMinutes)
+                let range = CGFloat(max(10 * 60, store.rhythmWakeMinutes - store.rhythmStartMinutes + 120))
+
+                let windDownX = max(18, min(width - 18, 18 + trackWidth * CGFloat(store.rhythmWindDownMinutes - store.rhythmStartMinutes) / range))
+                let bedX = max(18, min(width - 18, 18 + trackWidth * CGFloat(store.rhythmBedtimeMinutes - store.rhythmStartMinutes) / range))
+                let wakeX = max(18, min(width - 18, 18 + trackWidth * CGFloat(store.rhythmWakeMinutes - store.rhythmStartMinutes) / range))
+
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                        .frame(height: 88)
+
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.30, green: 0.50, blue: 0.67).opacity(0.45),
+                                    Color(red: 0.17, green: 0.25, blue: 0.39).opacity(0.88),
+                                    Color(red: 0.74, green: 0.80, blue: 0.79).opacity(0.55)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(24, wakeX - windDownX), height: 32)
+                        .position(x: (windDownX + wakeX) / 2, y: 44)
+
+                    WakeRhythmMarker(title: "Wind down", x: windDownX, color: Color(red: 0.69, green: 0.82, blue: 0.82))
+                    WakeRhythmMarker(title: "Asleep", x: bedX, color: Color(red: 0.56, green: 0.67, blue: 0.90))
+                    WakeRhythmMarker(title: "Wake", x: wakeX, color: Color(red: 0.94, green: 0.86, blue: 0.65))
+                }
+            }
+            .frame(height: 96)
+        }
+        .modifier(WakeAlarmCardStyle())
+    }
+}
+
+private struct WakeRhythmMarker: View {
+    let title: String
+    let x: CGFloat
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 12, height: 12)
+                .overlay(Circle().stroke(Color.white.opacity(0.85), lineWidth: 2))
+            Capsule()
+                .fill(color.opacity(0.8))
+                .frame(width: 2, height: 36)
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.78))
+        }
+        .position(x: x, y: 46)
+    }
+}
+
+private struct WakeAlarmWindDownCard: View {
+    @ObservedObject var store: WakeUpAlarmStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Wind down")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Text("Give yourself a softer runway into bed. The earlier you start, the easier consistency becomes.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.72))
+
+            HStack {
+                Text("\(Int(store.windDownLeadMinutes.rounded())) min")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer()
+                if let windDown = store.nextWindDownDate {
+                    Text(windDown.formatted(date: .omitted, time: .shortened))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.74, green: 0.87, blue: 0.85))
+                }
+            }
+
+            Slider(value: $store.windDownLeadMinutes, in: 15...120, step: 5)
+                .tint(Color(red: 0.70, green: 0.84, blue: 0.82))
+                .onChange(of: store.windDownLeadMinutes) { _, _ in
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+        }
+        .modifier(WakeAlarmCardStyle())
+    }
+}
+
+private struct WakeAlarmConsistencyCard: View {
+    @ObservedObject var store: WakeUpAlarmStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Sleep consistency")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(store.consistencyGuidance)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                Spacer()
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.12), lineWidth: 10)
+                        .frame(width: 70, height: 70)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(store.consistencyScore) / 100)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.67, green: 0.84, blue: 0.82),
+                                    Color(red: 0.94, green: 0.88, blue: 0.68)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 70, height: 70)
+                    Text("\(store.consistencyScore)")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .modifier(WakeAlarmCardStyle())
+    }
+}
+
+private struct WakeAlarmWeeklyScheduleCard: View {
+    @ObservedObject var store: WakeUpAlarmStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Weekly schedule")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Text("Mix different wake times by day, then turn on only the mornings you want protected.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.72))
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+                ForEach(store.weeklyDays) { day in
+                    Button(action: {
+                        store.selectDay(day.weekday)
+                    }) {
+                        WakeAlarmDayCard(
+                            day: day,
+                            isSelected: store.selectedWeekday == day.weekday,
+                            label: shortWeekday(for: day.weekday)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            store.toggleDay(day.weekday)
+                        }
+                    )
+                }
+            }
+
+            if store.selectedDayIndex != nil {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle(isOn: Binding(
+                        get: { store.selectedDayIndex.map { store.weeklyDays[$0].isEnabled } ?? false },
+                        set: { newValue in
+                            guard let index = store.selectedDayIndex else { return }
+                            store.weeklyDays[index].isEnabled = newValue
+                            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                        }
+                    )) {
+                        Text("Enable \(selectedWeekdayTitle)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .tint(Color(red: 0.73, green: 0.86, blue: 0.84))
+
+                    DatePicker(
+                        "Wake time",
+                        selection: store.selectedDayBinding,
+                        displayedComponents: .hourAndMinute
+                    )
+                    .datePickerStyle(.wheel)
+                    .labelsHidden()
+                    .colorScheme(.dark)
+                    .frame(height: 120)
+                }
+                .padding(16)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
+        }
+        .modifier(WakeAlarmCardStyle())
+    }
+
+    private var selectedWeekdayTitle: String {
+        let symbols = Calendar.current.weekdaySymbols
+        let index = max(0, min(symbols.count - 1, store.selectedWeekday - 1))
+        return symbols[index]
+    }
+
+    private func shortWeekday(for weekday: Int) -> String {
+        let symbols = Calendar.current.shortWeekdaySymbols
+        let index = max(0, min(symbols.count - 1, weekday - 1))
+        return symbols[index]
+    }
+}
+
+private struct WakeAlarmDayCard: View {
+    let day: WakeAlarmDaySetting
+    let isSelected: Bool
+    let label: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Circle()
+                    .fill(day.isEnabled ? Color(red: 0.74, green: 0.87, blue: 0.84) : Color.white.opacity(0.18))
+                    .frame(width: 10, height: 10)
+            }
+
+            Text(timeLabel(for: day.minutesFromMidnight))
+                .font(.title3.weight(.bold))
+                .foregroundStyle(day.isEnabled ? .white : .white.opacity(0.52))
+
+            Text(day.isEnabled ? "Active" : "Off")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.62))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(isSelected ? Color.white.opacity(0.12) : Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(isSelected ? Color(red: 0.75, green: 0.88, blue: 0.84) : Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    private func timeLabel(for minutes: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let base = Calendar.current.startOfDay(for: Date())
+        let date = Calendar.current.date(byAdding: .minute, value: minutes, to: base) ?? base
+        return formatter.string(from: date)
+    }
+}
+
+private struct WakeAlarmTomorrowCard: View {
+    @ObservedObject var store: WakeUpAlarmStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Toggle(isOn: $store.tomorrowOnlyEnabled) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tomorrow only")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("Use this when you need one earlier start without changing your weekly rhythm.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+            }
+            .tint(Color(red: 0.73, green: 0.86, blue: 0.84))
+
+            if store.tomorrowOnlyEnabled {
+                DatePicker(
+                    "Tomorrow wake time",
+                    selection: $store.tomorrowAlarmDate,
+                    in: tomorrowDateRange,
+                    displayedComponents: [.date, .hourAndMinute]
+                )
+                .datePickerStyle(.graphical)
+                .accentColor(Color(red: 0.76, green: 0.88, blue: 0.84))
+            }
+        }
+        .modifier(WakeAlarmCardStyle())
+    }
+
+    private var tomorrowDateRange: ClosedRange<Date> {
+        let calendar = Calendar.current
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())) ?? Date()
+        let start = calendar.startOfDay(for: tomorrow)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        return start...end
+    }
+}
+
+private struct WakeAlarmFooterCard: View {
+    @ObservedObject var store: WakeUpAlarmStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(store.statusText)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Text(store.authorizationText)
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.72))
+
+            HStack(spacing: 12) {
+                Button {
+                    Task {
+                        await store.scheduleAlarms()
+                    }
+                } label: {
+                    Label("Set wake alarms", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(WakeAlarmPrimaryButtonStyle())
+
+                Button {
+                    Task {
+                        await store.clearScheduledAlarms()
+                    }
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(WakeAlarmSecondaryButtonStyle())
+            }
+        }
+        .modifier(WakeAlarmCardStyle())
+    }
+}
+
+private struct WakeAlarmPill: View {
+    let text: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+            Text(text)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.white.opacity(0.84))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.08))
+        .clipShape(Capsule())
+    }
+}
+
+private struct WakeAlarmCardStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 26, style: .continuous)
+                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    )
+            )
+    }
+}
+
+private struct WakeAlarmPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Color(red: 0.07, green: 0.12, blue: 0.18))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.76, green: 0.89, blue: 0.84),
+                                Color(red: 0.94, green: 0.88, blue: 0.69)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .opacity(configuration.isPressed ? 0.82 : 1)
+            )
+    }
+}
+
+private struct WakeAlarmSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white.opacity(0.86))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.12 : 0.08))
+            )
+    }
+}
+
+private struct ScheduledWakeAlarmResult {
+    let alarmIDs: [UUID]
+    let statusText: String
+    let authorizationText: String
+}
+
+private enum WakeAlarmSchedulerError: LocalizedError {
+    case unavailable
+    case unauthorized
+    case noSchedule
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            #if targetEnvironment(macCatalyst)
+            return "Wake alarms via AlarmKit are not available on Mac. Schedule alarms on iPhone or iPad."
+            #else
+            return "AlarmKit needs iOS 26 or later to create a true system alarm from Nutrivance."
+            #endif
+        case .unauthorized:
+            return "Allow Nutrivance to schedule alarms in Settings so wake alarms can break through silent mode."
+        case .noSchedule:
+            return "Choose at least one weekday or enable the tomorrow-only alarm."
+        }
+    }
+}
+
+@MainActor
+private final class WakeUpSystemAlarmScheduler {
+    func schedule(preferences: WakeAlarmPreferences) async throws -> ScheduledWakeAlarmResult {
+        let enabledWeekdays = preferences.weeklyDays.filter(\.isEnabled)
+        guard preferences.tomorrowOnlyEnabled || !enabledWeekdays.isEmpty else {
+            throw WakeAlarmSchedulerError.noSchedule
+        }
+
+        #if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
+        if #available(iOS 26.0, *) {
+            let manager = AlarmManager.shared
+            try await cancel(ids: preferences.scheduledAlarmIDs.compactMap(UUID.init(uuidString:)))
+
+            let state = try await manager.requestAuthorization()
+            guard state == .authorized else {
+                throw WakeAlarmSchedulerError.unauthorized
+            }
+
+            var scheduledIDs: [UUID] = []
+            let grouped = Dictionary(grouping: enabledWeekdays, by: \.minutesFromMidnight)
+
+            for days in grouped.values.sorted(by: { ($0.first?.minutesFromMidnight ?? 0) < ($1.first?.minutesFromMidnight ?? 0) }) {
+                guard let first = days.first else { continue }
+                let id = UUID()
+                let weekdays = days.compactMap { localeWeekday(for: $0.weekday) }
+                let time = Alarm.Schedule.Relative.Time(hour: first.minutesFromMidnight / 60, minute: first.minutesFromMidnight % 60)
+                let schedule = Alarm.Schedule.relative(.init(time: time, repeats: .weekly(weekdays)))
+                let configuration = AlarmManager.AlarmConfiguration(
+                    countdownDuration: nil,
+                    schedule: schedule,
+                    attributes: attributes(title: "Wake Up", subtitle: weeklySubtitle(for: days)),
+                    stopIntent: nil,
+                    secondaryIntent: nil,
+                    sound: .default
+                )
+                _ = try await manager.schedule(id: id, configuration: configuration)
+                scheduledIDs.append(id)
+            }
+
+            if preferences.tomorrowOnlyEnabled {
+                let id = UUID()
+                let configuration = AlarmManager.AlarmConfiguration(
+                    countdownDuration: nil,
+                    schedule: .fixed(preferences.tomorrowAlarmDate),
+                    attributes: attributes(title: "Tomorrow's Wake Up", subtitle: "One-time morning alarm"),
+                    stopIntent: nil,
+                    secondaryIntent: nil,
+                    sound: .default
+                )
+                _ = try await manager.schedule(id: id, configuration: configuration)
+                scheduledIDs.append(id)
+            }
+
+            let summary = buildSummary(from: preferences)
+            return ScheduledWakeAlarmResult(
+                alarmIDs: scheduledIDs,
+                statusText: summary,
+                authorizationText: "Wake alarms are scheduled as system alarms and can alert on a paired Apple Watch when it is nearby."
+            )
+        }
+        #endif
+
+        throw WakeAlarmSchedulerError.unavailable
+    }
+
+    func cancel(ids: [UUID]) async throws {
+        guard !ids.isEmpty else { return }
+        #if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
+        if #available(iOS 26.0, *) {
+            let manager = AlarmManager.shared
+            for id in ids {
+                try? await manager.cancel(id: id)
+            }
+        }
+        #endif
+    }
+
+    #if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
+    @available(iOS 26.0, *)
+    private func attributes(title: String, subtitle: String) -> AlarmAttributes<WakeAlarmMetadata> {
+        let stopButton = AlarmButton(
+            text: "Dismiss",
+            textColor: .white,
+            systemImageName: "stop.circle"
+        )
+        let openButton = AlarmButton(
+            text: "Open",
+            textColor: .white,
+            systemImageName: "arrow.right.circle.fill"
+        )
+        let alertContent = AlarmPresentation.Alert(
+            title: LocalizedStringResource(stringLiteral: title),
+            stopButton: stopButton,
+            secondaryButton: openButton,
+            secondaryButtonBehavior: .custom
+        )
+        return AlarmAttributes(
+            presentation: AlarmPresentation(alert: alertContent),
+            metadata: WakeAlarmMetadata(subtitle: subtitle),
+            tintColor: Color(red: 0.61, green: 0.81, blue: 0.84)
+        )
+    }
+
+    @available(iOS 26.0, *)
+    private func localeWeekday(for weekday: Int) -> Locale.Weekday? {
+        switch weekday {
+        case 1: return .sunday
+        case 2: return .monday
+        case 3: return .tuesday
+        case 4: return .wednesday
+        case 5: return .thursday
+        case 6: return .friday
+        case 7: return .saturday
+        default: return nil
+        }
+    }
+    #endif
+
+    private func weeklySubtitle(for days: [WakeAlarmDaySetting]) -> String {
+        let symbols = Calendar.current.shortWeekdaySymbols
+        let dayLabels = days
+            .sorted { $0.weekday < $1.weekday }
+            .map { symbols[max(0, min(symbols.count - 1, $0.weekday - 1))] }
+            .joined(separator: ", ")
+        return "Repeats on \(dayLabels)"
+    }
+
+    private func buildSummary(from preferences: WakeAlarmPreferences) -> String {
+        let enabledDays = preferences.weeklyDays.filter(\.isEnabled).count
+        if preferences.tomorrowOnlyEnabled && enabledDays > 0 {
+            return "Weekly wake alarms plus tomorrow's one-time alarm are ready"
+        }
+        if preferences.tomorrowOnlyEnabled {
+            return "Tomorrow's one-time wake alarm is ready"
+        }
+        return enabledDays == 1 ? "One weekly wake alarm is ready" : "\(enabledDays) weekly wake mornings are ready"
+    }
+}
+
+#if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
+@available(iOS 26.0, *)
+private struct WakeAlarmMetadata: AlarmMetadata, Codable, Hashable, Sendable {
+    var subtitle: String
+}
+#endif
 
 // MARK: - SleepDatePopupPicker
 struct SleepDatePopupPicker: View {

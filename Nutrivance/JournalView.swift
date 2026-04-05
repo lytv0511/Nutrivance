@@ -46,6 +46,14 @@ struct JournalEntry: Identifiable, Codable, Equatable {
     var kind: String
     var reportMetrics: [WorkoutReportMetric]
     var statCards: [JournalStatCard]
+    /// Lowercased person name → role label (e.g. friend, teacher) from “Who is this?” picks.
+    var personRelationshipHints: [String: String] = [:]
+    /// User overrides for detected correlation life-areas (correlation UUID → NutrivanceAssociation rawValue).
+    var correlationAssociationOverrides: [UUID: String] = [:]
+    /// Stable keys for follow-up MC clarifiers → selected choice index.
+    var journalClarifierAnswers: [String: Int] = [:]
+    /// Nudges the user saved as used inspiration.
+    var savedNudges: [JournalSavedNudge] = []
     
     init(title: String = "", content: String = "") {
         self.id = UUID()
@@ -61,6 +69,7 @@ struct JournalEntry: Identifiable, Codable, Equatable {
     
     enum CodingKeys: String, CodingKey {
         case id, title, content, inspiration, date, imageData, kind, reportMetrics, statCards
+        case personRelationshipHints, correlationAssociationOverrides, journalClarifierAnswers, savedNudges
     }
     
     init(from decoder: Decoder) throws {
@@ -74,6 +83,10 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "standard"
         reportMetrics = try container.decodeIfPresent([WorkoutReportMetric].self, forKey: .reportMetrics) ?? []
         statCards = try container.decodeIfPresent([JournalStatCard].self, forKey: .statCards) ?? []
+        personRelationshipHints = try container.decodeIfPresent([String: String].self, forKey: .personRelationshipHints) ?? [:]
+        correlationAssociationOverrides = try container.decodeIfPresent([UUID: String].self, forKey: .correlationAssociationOverrides) ?? [:]
+        journalClarifierAnswers = try container.decodeIfPresent([String: Int].self, forKey: .journalClarifierAnswers) ?? [:]
+        savedNudges = try container.decodeIfPresent([JournalSavedNudge].self, forKey: .savedNudges) ?? []
     }
     
     func encode(to encoder: Encoder) throws {
@@ -87,6 +100,10 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         try container.encode(kind, forKey: .kind)
         try container.encode(reportMetrics, forKey: .reportMetrics)
         try container.encode(statCards, forKey: .statCards)
+        try container.encode(personRelationshipHints, forKey: .personRelationshipHints)
+        try container.encode(correlationAssociationOverrides, forKey: .correlationAssociationOverrides)
+        try container.encode(journalClarifierAnswers, forKey: .journalClarifierAnswers)
+        try container.encode(savedNudges, forKey: .savedNudges)
     }
 }
 
@@ -1070,12 +1087,32 @@ struct JournalSelectableTextEditor: UIViewRepresentable {
 
 // MARK: - Inline Suggestion Engine
 
-struct InlineSuggestion: Identifiable {
+/// Distinguishes predictive inline text, rewrites, metrics, and labeled nudges in the UI.
+enum InlineSuggestionChipRole: Hashable {
+    /// Health / keyword metric tails at the caret.
+    case caretContinuation
+    /// AI-predicted continuation of the user’s thought at the caret (not a question).
+    case predictedContinuation
+    /// Replaces the clause from sentence start through caret with a clearer full sentence.
+    case clauseRewrite
+    /// Reflective question or prompt—shown under the “Nudges” row, not as inline prediction.
+    case nudge
+}
+
+struct InlineSuggestion: Identifiable, Hashable {
     let id = UUID()
     /// Shown on the suggestion chip
     let preview: String
     let confidence: Double
     let mode: InlineSuggestionApplyMode
+    var chipRole: InlineSuggestionChipRole = .caretContinuation
+
+    init(preview: String, confidence: Double, mode: InlineSuggestionApplyMode, chipRole: InlineSuggestionChipRole = .caretContinuation) {
+        self.preview = preview
+        self.confidence = confidence
+        self.mode = mode
+        self.chipRole = chipRole
+    }
 }
 
 /// How a suggestion is merged into the entry when tapped.
@@ -1099,10 +1136,14 @@ struct JournalParagraphRelationOutput {
 }
 
 @available(iOS 26.0, *)
-@Generable(description: "Cursor-aware journal completions and rewrites.")
+@Generable(description: "Short, grounded continuations at the caret, light clause polish, and warm reflective nudges.")
 struct JournalAIInlineSuggestionPack {
-    var completionLines: [String]
-    var rewriteLines: [String]
+    /// Brief continuations (about 4-12 words) inserted at the caret. Stay close to what the user already wrote—same voice and facts; extend the thought without inventing new scenes. Never a question.
+    var inlineCompletions: [String]
+    /// Full sentences replacing the clause from sentence start through caret. Same topic and entities as the original; clearer or slightly reframed—not a new story. Preserve normal spacing after sentence-ending punctuation when relevant.
+    var clauseRewrites: [String]
+    /// Warm reflective questions shown as Nudge cards. Each references a specific person, activity, or detail from the cursor section. Never generic.
+    var nudges: [String]
 }
 
 @available(iOS 26.0, *)
@@ -1110,15 +1151,60 @@ struct JournalAIInlineSuggestionPack {
 struct JournalAITitleOutput {
     var suggestedTitle: String
 }
+
+@available(iOS 26.0, *)
+@Generable(description: "A labeled section from the backbone of a journal entry.")
+struct JournalBackboneSection {
+    var label: String
+    var themes: [String]
+}
+
+@available(iOS 26.0, *)
+@Generable(description: "A structural outline of a journal entry, broken into labeled sections by topic.")
+struct JournalBackboneOutput {
+    var sections: [JournalBackboneSection]
+}
 #endif
+
+// MARK: - Backbone Outline
+
+struct JournalOutlineSection: Identifiable, Equatable {
+    let id = UUID()
+    var label: String
+    var themes: [String]
+    /// Approximate UTF-16 range in the full text this section covers.
+    var textRange: NSRange
+}
+
+// MARK: - Saved Nudge
+
+struct JournalSavedNudge: Identifiable, Codable, Equatable, Hashable {
+    let id: UUID
+    var text: String
+    var savedDate: Date
+
+    init(id: UUID = UUID(), text: String, savedDate: Date = Date()) {
+        self.id = id
+        self.text = text
+        self.savedDate = savedDate
+    }
+}
 
 @MainActor
 final class JournalInlineSuggestionEngine: ObservableObject {
     @Published var suggestions: [InlineSuggestion] = []
+    /// Reflective questions—separate row in the editor, not treated as inline prediction.
+    @Published var nudgeSuggestions: [InlineSuggestion] = []
+    /// Backbone outline of the entry: labeled semantic sections for cursor-aware context.
+    @Published var backboneOutline: [JournalOutlineSection] = []
+    /// The pinned nudge (pauses new nudge generation while pinned).
+    @Published var pinnedNudge: InlineSuggestion? = nil
     private var debounceTask: Task<Void, Never>?
+    private var backboneTask: Task<Void, Never>?
     private var cachedMoodStates: [HKStateOfMind] = []
     private var moodCacheDate: Date?
     private var paragraphRelationCache: (signature: UInt64, unrelated: Bool)?
+    private var backboneCache: (textHash: UInt64, sections: [JournalOutlineSection])?
 
     private struct SuggestionFocusContext {
         let fullText: String
@@ -1131,6 +1217,9 @@ final class JournalInlineSuggestionEngine: ObservableObject {
         let typingLower: String
         let cursorUTF16: Int
         let clauseStartUTF16: Int
+        /// The backbone section where the cursor lives (nil if backbone not generated yet).
+        var cursorSectionLabel: String?
+        var cursorSectionThemes: [String]?
     }
 
     func prepare(referenceDate: Date) {
@@ -1146,27 +1235,33 @@ final class JournalInlineSuggestionEngine: ObservableObject {
 
     func textDidChange(_ text: String, selection: NSRange, referenceDate: Date, isFitnessReport: Bool, inspirationContext: String) {
         debounceTask?.cancel()
+        refreshBackbone(text: text)
         debounceTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
 
             let unrelated = await paragraphsUnrelatedToCursorParagraph(text: text, selection: selection)
-            let ctx = Self.makeFocusContext(text: text, selection: selection, paragraphsUnrelated: unrelated)
+            var ctx = Self.makeFocusContext(text: text, selection: selection, paragraphsUnrelated: unrelated)
+            ctx = enrichWithBackbone(ctx)
 
             var newSuggestions = buildSuggestions(ctx: ctx, referenceDate: referenceDate, isFitnessReport: isFitnessReport)
 
             let inspirationTrimmed = inspirationContext.trimmingCharacters(in: .whitespacesAndNewlines)
             let prioritizeImportedInspiration = !inspirationTrimmed.isEmpty
 
+            var newNudges: [InlineSuggestion] = []
             #if canImport(FoundationModels)
             if #available(iOS 26.0, *) {
                 let shouldRunAI = newSuggestions.count < 3 || prioritizeImportedInspiration
-                if shouldRunAI, let aiPack = await aiSuggestions(
+                if shouldRunAI, let parts = await aiSuggestions(
                     ctx: ctx,
                     referenceDate: referenceDate,
                     inspirationLayer: inspirationTrimmed
                 ) {
-                    newSuggestions.append(contentsOf: aiPack)
+                    newSuggestions.append(contentsOf: parts.inline)
+                    if pinnedNudge == nil {
+                        newNudges = parts.nudges
+                    }
                 }
             }
             #endif
@@ -1180,8 +1275,166 @@ final class JournalInlineSuggestionEngine: ObservableObject {
             let deduped = deduplicateSuggestions(newSuggestions, existingText: text)
             withAnimation(.easeOut(duration: 0.15)) {
                 suggestions = Array(deduped.prefix(6))
+                if pinnedNudge == nil {
+                    let dedupedNudges = deduplicateSuggestions(newNudges, existingText: text).sorted { $0.confidence > $1.confidence }
+                    nudgeSuggestions = Array(dedupedNudges.prefix(4))
+                }
             }
         }
+    }
+
+    func pinNudge(_ nudge: InlineSuggestion) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            pinnedNudge = nudge
+            nudgeSuggestions = []
+        }
+    }
+
+    func unpinNudge() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            pinnedNudge = nil
+        }
+    }
+
+    // MARK: - Backbone
+
+    func refreshBackbone(text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 60 else {
+            if !backboneOutline.isEmpty { withAnimation { backboneOutline = [] } }
+            return
+        }
+        var hasher = Hasher()
+        hasher.combine(trimmed)
+        let hash = UInt64(bitPattern: Int64(hasher.finalize()))
+        if let cache = backboneCache, cache.textHash == hash { return }
+
+        backboneTask?.cancel()
+        backboneTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+
+            #if canImport(FoundationModels)
+            if #available(iOS 26.0, *) {
+                if let sections = await generateBackbone(text: trimmed) {
+                    guard !Task.isCancelled else { return }
+                    backboneCache = (hash, sections)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        backboneOutline = sections
+                    }
+                    return
+                }
+            }
+            #endif
+
+            let sections = heuristicBackbone(text: trimmed)
+            guard !Task.isCancelled else { return }
+            backboneCache = (hash, sections)
+            withAnimation(.easeOut(duration: 0.2)) {
+                backboneOutline = sections
+            }
+        }
+    }
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, *)
+    private func generateBackbone(text: String) async -> [JournalOutlineSection]? {
+        let model = SystemLanguageModel(useCase: .general)
+        guard model.isAvailable else { return nil }
+        do {
+            let session = LanguageModelSession(
+                model: model,
+                instructions: """
+                Break the journal entry into its distinct topical sections in order. Each section gets a short label (3–8 words) and 1–3 keyword themes. A section may be one sentence or several. Do not merge unrelated topics. If a topic has clear sub-parts, split them. Keep the order as written.
+                """
+            )
+            let response = try await session.respond(to: String(text.prefix(3000)), generating: JournalBackboneOutput.self)
+            let ns = text as NSString
+            return mapBackboneSectionsToRanges(aiSections: response.content.sections, fullText: ns)
+        } catch {
+            return nil
+        }
+    }
+    #endif
+
+    private func heuristicBackbone(text: String) -> [JournalOutlineSection] {
+        let ns = text as NSString
+        let paragraphs = text.replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard paragraphs.count >= 1 else { return [] }
+
+        var offset = 0
+        return paragraphs.enumerated().map { idx, para in
+            let range = ns.range(of: para, options: [], range: NSRange(location: offset, length: ns.length - offset))
+            let actualRange = range.location != NSNotFound ? range : NSRange(location: offset, length: (para as NSString).length)
+            offset = actualRange.location + actualRange.length
+            let words = para.split { $0.isWhitespace || $0.isNewline }.prefix(6).map(String.init)
+            let label = words.joined(separator: " ") + (para.count > 40 ? "…" : "")
+            return JournalOutlineSection(label: label, themes: [], textRange: actualRange)
+        }
+    }
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, *)
+    private func mapBackboneSectionsToRanges(aiSections: [JournalBackboneSection], fullText: NSString) -> [JournalOutlineSection] {
+        let fullLen = fullText.length
+        var offset = 0
+        return aiSections.enumerated().map { idx, sec in
+            let keyword = sec.themes.first ?? sec.label
+            let searchStart = min(max(0, offset), fullLen)
+            let searchLen = max(0, fullLen - searchStart)
+            var range = NSRange(location: NSNotFound, length: 0)
+            if searchLen > 0, !keyword.isEmpty {
+                range = fullText.range(of: keyword, options: .caseInsensitive, range: NSRange(location: searchStart, length: searchLen))
+            }
+            if range.location == NSNotFound, searchLen > 0 {
+                let fallback = sec.label.components(separatedBy: " ").prefix(3).joined(separator: " ")
+                if !fallback.isEmpty {
+                    range = fullText.range(of: fallback, options: .caseInsensitive, range: NSRange(location: searchStart, length: searchLen))
+                }
+            }
+            let rawStart = range.location != NSNotFound ? range.location : offset
+            let sectionStart = min(max(0, rawStart), fullLen)
+
+            let nextStart: Int
+            if idx + 1 < aiSections.count {
+                let nextKw = aiSections[idx + 1].themes.first ?? aiSections[idx + 1].label
+                let nextSearchLoc = sectionStart + 1
+                if nextSearchLoc < fullLen, !nextKw.isEmpty {
+                    let nextLen = fullLen - nextSearchLoc
+                    let nextRange = fullText.range(of: nextKw, options: .caseInsensitive, range: NSRange(location: nextSearchLoc, length: nextLen))
+                    nextStart = nextRange.location != NSNotFound ? nextRange.location : fullLen
+                } else {
+                    nextStart = fullLen
+                }
+            } else {
+                nextStart = fullLen
+            }
+
+            let end = min(max(sectionStart, nextStart), fullLen)
+            let sectionRange = NSRange(location: sectionStart, length: max(0, end - sectionStart))
+            offset = end
+            return JournalOutlineSection(label: sec.label, themes: sec.themes, textRange: sectionRange)
+        }
+    }
+    #endif
+
+    private func enrichWithBackbone(_ ctx: SuggestionFocusContext) -> SuggestionFocusContext {
+        guard !backboneOutline.isEmpty else { return ctx }
+        var enriched = ctx
+        for section in backboneOutline {
+            let start = section.textRange.location
+            let end = start + section.textRange.length
+            if ctx.cursorUTF16 >= start && ctx.cursorUTF16 <= end {
+                enriched.cursorSectionLabel = section.label
+                enriched.cursorSectionThemes = section.themes
+                break
+            }
+        }
+        return enriched
     }
 
     func apply(_ suggestion: InlineSuggestion, to text: String, selection: NSRange) -> (String, NSRange) {
@@ -1198,18 +1451,26 @@ final class JournalInlineSuggestionEngine: ObservableObject {
             return (newText, NSRange(location: newPos, length: 0))
 
         case .replacement(let loc, let len, let repl):
-            let r = NSRange(
-                location: min(max(0, loc), maxLen),
-                length: min(max(0, len), maxLen - min(max(0, loc), maxLen))
-            )
-            let newText = ns.replacingCharacters(in: r, with: repl)
-            let newPos = r.location + (repl as NSString).length
+            let rLoc = min(max(0, loc), maxLen)
+            let rLen = min(max(0, len), maxLen - rLoc)
+            var finalRepl = repl.trimmingCharacters(in: .whitespacesAndNewlines)
+            if rLoc > 0, !finalRepl.isEmpty,
+               Self.needsLeadingSpaceAfterSentenceEnd(ns: ns, replaceLocation: rLoc),
+               finalRepl.first?.isWhitespace != true {
+                finalRepl = " " + finalRepl
+            }
+            let r = NSRange(location: rLoc, length: rLen)
+            let newText = ns.replacingCharacters(in: r, with: finalRepl)
+            let newPos = r.location + (finalRepl as NSString).length
             return (newText, NSRange(location: newPos, length: 0))
         }
     }
 
     func clear() {
         suggestions = []
+        if pinnedNudge == nil {
+            nudgeSuggestions = []
+        }
     }
 
     // MARK: - Focus / paragraphs
@@ -1348,7 +1609,16 @@ final class JournalInlineSuggestionEngine: ObservableObject {
     private func completionChip(_ tail: String, after fragment: String, confidence: Double) -> InlineSuggestion {
         let t = grammarAdjust(tail, after: fragment)
         let preview = t.trimmingCharacters(in: .whitespacesAndNewlines)
-        return InlineSuggestion(preview: preview.isEmpty ? tail : preview, confidence: confidence, mode: .completion(insertUTF16: t))
+        return InlineSuggestion(preview: preview.isEmpty ? tail : preview, confidence: confidence, mode: .completion(insertUTF16: t), chipRole: .caretContinuation)
+    }
+
+    /// Inserts standalone ideas/prompts as a new block, not glued to the clause at the caret.
+    private static func newlinePrefixForStandaloneInsert(fullText: String, cursorUTF16: Int) -> String {
+        let ns = fullText as NSString
+        let c = min(max(0, cursorUTF16), ns.length)
+        guard c > 0 else { return "" }
+        if ns.character(at: c - 1) == 10 { return "" }
+        return "\n\n"
     }
 
     // MARK: - Pattern Matching
@@ -1372,39 +1642,133 @@ final class JournalInlineSuggestionEngine: ObservableObject {
         return results
     }
 
+    /// True when the replaced range begins after sentence-ending punctuation, possibly with spaces between.
+    private static func needsLeadingSpaceAfterSentenceEnd(ns: NSString, replaceLocation: Int) -> Bool {
+        guard replaceLocation > 0 else { return false }
+        var i = replaceLocation - 1
+        while i >= 0 {
+            let u = ns.character(at: i)
+            if u == 0x0020 || u == 0x0009 || u == 0x00A0 { i -= 1; continue }
+            return u == 0x002E || u == 0x0021 || u == 0x003F
+        }
+        return false
+    }
+
+    /// Keeps completions short and on-topic in the UI and at insert time.
+    private static func clampInlineContinuation(_ text: String, maxWords: Int, maxChars: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        var clipped = words.prefix(maxWords).joined(separator: " ")
+        if clipped.count > maxChars {
+            clipped = String(clipped.prefix(maxChars))
+            if let lastSpace = clipped.lastIndex(of: " ") {
+                clipped = String(clipped[..<lastSpace])
+            }
+        }
+        return clipped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func clampClauseRewrite(_ text: String, maxWords: Int, maxChars: Int) -> String {
+        clampInlineContinuation(text, maxWords: maxWords, maxChars: maxChars)
+    }
+
     // MARK: - Grammar Adjustment
 
     private func grammarAdjust(_ suggestion: String, after trailing: String) -> String {
         let trimTrail = trailing.trimmingCharacters(in: .whitespaces)
-        guard let lastWord = trimTrail.split(separator: " ").last?.lowercased() else { return suggestion }
-        let trimSug = suggestion.trimmingCharacters(in: .whitespaces)
+        let lastToken = trimTrail.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
+        let lastWord = lastToken.trimmingCharacters(in: .punctuationCharacters).lowercased()
+        guard !lastWord.isEmpty else { return Self.joinCompletionFragment(suggestion) }
+        var trimSug = suggestion.trimmingCharacters(in: .whitespaces)
 
-        let prepositions: Set<String> = ["for", "in", "at", "on", "with", "about", "to", "from", "during", "after", "before"]
-        let copulas: Set<String> = ["is", "was", "were", "are", "been", "being", "felt", "feels"]
+        let prepositions: Set<String> = [
+            "for", "in", "at", "on", "with", "about", "to", "from", "during", "after", "before",
+            "around", "near", "above", "below", "under", "over", "like", "into", "onto", "by",
+            "between", "through", "than", "toward", "towards", "within", "across", "upon",
+        ]
+        let copulas: Set<String> = ["is", "was", "were", "are", "been", "being", "felt", "feels", "seemed", "seem", "looks", "looked"]
         let articles: Set<String> = ["a", "an", "the"]
 
         if prepositions.contains(lastWord) {
-            // After "for", "in" etc. — no leading article needed, just the value
+            trimSug = Self.rephraseCompletionAfterPreposition(trimSug, lastFragmentWord: lastWord)
             if trimSug.hasPrefix("a ") || trimSug.hasPrefix("an ") {
                 return " " + trimSug
             }
-            return trimSug.hasPrefix(" ") ? trimSug : " " + trimSug
+            return Self.joinCompletionFragment(trimSug)
         }
 
         if copulas.contains(lastWord) {
-            // After "is", "was" etc. — ensure no double space
-            return trimSug.hasPrefix(" ") ? trimSug : " " + trimSug
+            return Self.joinCompletionFragment(trimSug)
         }
 
         if articles.contains(lastWord) {
-            // After "a" or "an" — strip leading article from suggestion
             var cleaned = trimSug
-            if cleaned.hasPrefix("a ") { cleaned = String(cleaned.dropFirst(2)) }
-            if cleaned.hasPrefix("an ") { cleaned = String(cleaned.dropFirst(3)) }
-            return cleaned.hasPrefix(" ") ? cleaned : " " + cleaned
+            if cleaned.lowercased().hasPrefix("a ") { cleaned = String(cleaned.dropFirst(2)) }
+            if cleaned.lowercased().hasPrefix("an ") { cleaned = String(cleaned.dropFirst(3)) }
+            return Self.joinCompletionFragment(cleaned)
         }
 
+        return Self.joinCompletionFragment(trimSug)
+    }
+
+    private static func joinCompletionFragment(_ suggestion: String) -> String {
+        let trimSug = suggestion.trimmingCharacters(in: .whitespaces)
         return trimSug.hasPrefix(" ") ? trimSug : " " + trimSug
+    }
+
+    /// After trailing prepositions ("at", "around", …), completions must be noun phrases, not new clauses ("is averaging…").
+    private static func rephraseCompletionAfterPreposition(_ raw: String, lastFragmentWord: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespaces)
+        var low = s.lowercased()
+
+        for prefix in ["is ", "was ", "were ", "are "] {
+            guard low.hasPrefix(prefix) else { continue }
+            s = String(s.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            low = s.lowercased()
+            break
+        }
+
+        if low.hasPrefix("averaging ") {
+            s = String(s.dropFirst("averaging ".count)).trimmingCharacters(in: .whitespaces)
+            return s
+        }
+
+        if low.hasPrefix("heart rate was ") {
+            let rest = String(s.dropFirst("heart rate was ".count)).trimmingCharacters(in: .whitespaces)
+            return "a heart rate that was \(rest)"
+        }
+
+        if low.hasPrefix("score is ") {
+            let rest = String(s.dropFirst("score is ".count)).trimmingCharacters(in: .whitespaces)
+            return "a score of \(rest)"
+        }
+
+        let qualRewrites: [(String, String)] = [
+            ("significantly higher than usual", "a reading significantly higher than my usual"),
+            ("slightly above my average", "a level slightly above my average"),
+            ("noticeably lower than usual", "a reading noticeably lower than my usual"),
+            ("a bit below my average", "a level a bit below my average"),
+            ("right around my usual level", "my usual level"),
+            ("pretty intense", "a pretty intense effort"),
+            ("pretty gruelling", "a pretty gruelling effort"),
+            ("challenging", "a challenging effort"),
+            ("a great light session", "a great light session"),
+            ("a relaxed session", "a relaxed session"),
+        ]
+        for (needle, replacement) in qualRewrites where low == needle || low.hasPrefix(needle) {
+            if low == needle { return replacement }
+            let suffix = s.dropFirst(needle.count).trimmingCharacters(in: .whitespaces)
+            return suffix.isEmpty ? replacement : "\(replacement) \(suffix)"
+        }
+
+        if lastFragmentWord == "around", low.contains("around my") || low.hasPrefix("right around") {
+            var t = s
+            t = t.replacingOccurrences(of: "right around ", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespaces)
+            return t
+        }
+
+        return s
     }
 
     // MARK: - AI-Powered Suggestions
@@ -1487,18 +1851,20 @@ final class JournalInlineSuggestionEngine: ObservableObject {
 
     #if canImport(FoundationModels)
     @available(iOS 26.0, *)
-    private func aiSuggestions(ctx: SuggestionFocusContext, referenceDate: Date, inspirationLayer: String) async -> [InlineSuggestion]? {
+    private func aiSuggestions(ctx: SuggestionFocusContext, referenceDate: Date, inspirationLayer: String) async -> (inline: [InlineSuggestion], nudges: [InlineSuggestion])? {
         let model = SystemLanguageModel(useCase: .general)
         guard model.isAvailable else { return nil }
 
-        guard ctx.typingFragment.count >= 4 else { return nil }
-
         let inspirationTrimmed = inspirationLayer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let focusBody = ctx.restrictTriggersToActiveParagraph ? ctx.activeParagraph : ctx.fullText
+        let focusTrimmed = focusBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard focusTrimmed.count >= 14 || ctx.typingFragment.count >= 2 || inspirationTrimmed.count >= 24 else { return nil }
         let hasInspiration = !inspirationTrimmed.isEmpty
         let inspirationBlock = Self.journalingInspirationPromptBlock(inspirationTrimmed)
 
-        let completionConfidence: Double = hasInspiration ? 0.92 : 0.72
-        let rewriteConfidence: Double = hasInspiration ? 0.9 : 0.68
+        let completionConfidence: Double = hasInspiration ? 0.94 : 0.78
+        let rewriteConfidence: Double = hasInspiration ? 0.87 : 0.72
+        let nudgeConfidence: Double = hasInspiration ? 0.86 : 0.70
 
         let engine = HealthStateEngine.shared
         var contextFacts: [String] = []
@@ -1521,72 +1887,140 @@ final class JournalInlineSuggestionEngine: ObservableObject {
             }
         }
 
-        let focusBody = ctx.restrictTriggersToActiveParagraph ? ctx.activeParagraph : ctx.fullText
         let clauseLen = max(0, ctx.cursorUTF16 - ctx.clauseStartUTF16)
         let clausePrefix = (ctx.fullText as NSString).substring(with: NSRange(location: ctx.clauseStartUTF16, length: clauseLen))
 
+        // Build backbone context for the AI
+        var backboneBlock = ""
+        if !backboneOutline.isEmpty {
+            let outlineLines = backboneOutline.enumerated().map { idx, sec in
+                let themes = sec.themes.isEmpty ? "" : " [\(sec.themes.joined(separator: ", "))]"
+                let marker = (ctx.cursorSectionLabel == sec.label) ? " ← CURSOR IS HERE" : ""
+                return "  \(idx + 1). \(sec.label)\(themes)\(marker)"
+            }
+            backboneBlock = "ENTRY BACKBONE (structural outline):\n" + outlineLines.joined(separator: "\n")
+        }
+
+        var cursorSectionBlock = ""
+        if let sectionLabel = ctx.cursorSectionLabel {
+            let themes = ctx.cursorSectionThemes?.joined(separator: ", ") ?? ""
+            cursorSectionBlock = """
+            CURSOR SECTION: "\(sectionLabel)" (themes: \(themes))
+            Focus ALL completions and rewrites on this section's topics. The user is currently writing about THIS part of their entry, not other sections.
+            """
+        }
+
         var prompt = """
-        Journal entry. Reference date context: \(referenceDate.formatted(date: .abbreviated, time: .omitted)).
+        Journal entry. Reference date: \(referenceDate.formatted(date: .abbreviated, time: .omitted)).
         Health hints: \(contextFacts.joined(separator: ", "))
         """
 
+        if !backboneBlock.isEmpty {
+            prompt += "\n\n\(backboneBlock)"
+        }
+        if !cursorSectionBlock.isEmpty {
+            prompt += "\n\n\(cursorSectionBlock)"
+        }
         if !inspirationBlock.isEmpty {
             prompt += "\n\n\(inspirationBlock)"
         }
 
         prompt += """
 
-        Paragraph where the user is typing (focus here when it is the main context):
-        \(String(focusBody.prefix(1800)))
+        FULL ENTRY (for broad context):
+        \(String(ctx.fullText.prefix(2400)))
 
-        Current clause from sentence start through caret (do not repeat this verbatim in completionLines; continue AFTER the caret only):
+        ACTIVE PARAGRAPH (cursor is here):
+        \(String(ctx.activeParagraph.prefix(800)))
+
+        CLAUSE from sentence start through caret (continue FROM the caret, do not repeat it):
         "\(clausePrefix)"
 
-        completionLines: 2-4 short fragments to INSERT at the caret only (append / autocomplete). Each under 18 words. Continue grammar from the clause; do not restate clausePrefix.
-        rewriteLines: 1-3 full sentences that could REPLACE the entire clause above (from sentence start through caret) if the user wants a cleaner line. Each must be a standalone sentence.
+        === EXAMPLES ===
+        Bad inlineCompletion for "I am inspired by his passion in...": "things" or "a whole new chapter of discovery and wonder across continents"
+        Bad inlineCompletion when clause ends with "...high at around": "is averaging 170 bpm" or "heart rate was elevated" (new clause after a preposition)
+        Good inlineCompletion for "...high at around": "170 bpm" or "a level a bit above my usual average"
+        Good inlineCompletion: "architecture and how cities take shape"
+        Good inlineCompletion: "the way he talks about design"
+        Bad clauseRewrite: "Suddenly we were astronauts on Mars" (off-topic fantasy)
+        Good clauseRewrite: "I'm inspired by his passion for architecture and urban design."
+        === END EXAMPLES ===
+
+        inlineCompletions: 2-4 items. Each 4-12 words only. Stay literal: finish the same thought using words already implied nearby (people, places, activities). Same voice, tense, POV. No new plot twists. No questions.
+        If the clause ends with a preposition or "around"/"at"/"near" (e.g. "pretty high at around"), each completion must be a noun phrase or number that fits directly after it—e.g. "170 bpm" or "a level above my usual"—never a new clause starting with "is", "was", "were", or "heart rate was".
+        clauseRewrites: 1-2 items. One clear sentence replacing the clause—same facts and topic, slightly clearer or smoother. If the previous character before the clause is . ! or ?, the rewritten sentence must read correctly with a normal space after that punctuation (do not run words together).
+        nudges: 1-3 items. Warm QUESTIONS referencing specific people/activities/details from THIS section. Never generic.
         """
 
         do {
             var sessionInstructions = """
-            You help journal writing. Obey structured output fields only.
-            completionLines = insert-only at caret. rewriteLines = full sentence replacements for the incomplete clause.
-            Do not include numbering or bullets in strings.
+            You are a restrained journaling assistant. Suggest SHORT, grounded phrases—not mini essays.
+
+            CRITICAL RULES:
+            1. Backbone / cursor section = current topic only. Do not introduce unrelated themes.
+            2. inlineCompletions: 4-12 words each. Extend what they already started; prefer concrete nouns from the paragraph over flowery language. No metaphors unless the user already uses that tone.
+            3. After prepositions ("in", "about", "for", "at", "around", "near"), supply a noun phrase or number that completes the grammar—not a fresh predicate. Never start the completion with "is", "was", "were", "heart rate was", or "averaging" when the user already ended on a preposition.
+            4. clauseRewrites: one sentence, same meaning and entities as the original clause; clearer wording only. Do not invent new events.
+            5. nudges: reflective QUESTIONS naming specific people or details from the cursor section.
+            6. No numbering, bullets, or generic filler.
             """
             if hasInspiration {
-                sessionInstructions += """
-
-                The IMPORTED JOURNALING SUGGESTIONS LAYER is highest-priority ground truth for restaurants, neighborhoods, cities, and event timing. When the draft matches that outing, weave in those specifics (correct spelling, e.g. venue name + area like Reston Town Center).
-                """
+                sessionInstructions += "\n\nIMPORTED JOURNALING SUGGESTIONS LAYER is highest-priority ground truth for proper nouns and timing."
             }
 
             let session = LanguageModelSession(model: model, instructions: sessionInstructions)
             let response = try await session.respond(to: prompt, generating: JournalAIInlineSuggestionPack.self)
             let pack = response.content
-            var out: [InlineSuggestion] = []
+            var outInline: [InlineSuggestion] = []
+            var outNudges: [InlineSuggestion] = []
 
-            let completionCap = hasInspiration ? 5 : 4
-            for line in pack.completionLines.prefix(completionCap) {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty, trimmed.count < 120 else { continue }
+            let blockPrefix = Self.newlinePrefixForStandaloneInsert(fullText: ctx.fullText, cursorUTF16: ctx.cursorUTF16)
+
+            let completionCap = hasInspiration ? 4 : 3
+            for line in pack.inlineCompletions.prefix(completionCap) {
+                let trimmed = Self.clampInlineContinuation(line, maxWords: 12, maxChars: 90)
+                let wordCount = trimmed.split(whereSeparator: { $0.isWhitespace }).count
+                guard !trimmed.isEmpty, trimmed.count < 160, !trimmed.contains("?"), wordCount >= 3 else { continue }
                 let insert = grammarAdjust(" \(trimmed)", after: ctx.typingFragment)
                 let preview = insert.trimmingCharacters(in: .whitespacesAndNewlines)
-                out.append(InlineSuggestion(preview: preview, confidence: completionConfidence, mode: .completion(insertUTF16: insert)))
-            }
-
-            let replaceLen = max(0, ctx.cursorUTF16 - ctx.clauseStartUTF16)
-            let rewriteCap = hasInspiration ? 3 : 2
-            for line in pack.rewriteLines.prefix(rewriteCap) {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty, trimmed.count < 200 else { continue }
-                let shortPreview = trimmed.count > 48 ? String(trimmed.prefix(45)) + "…" : trimmed
-                out.append(InlineSuggestion(
-                    preview: "↺ \(shortPreview)",
-                    confidence: rewriteConfidence,
-                    mode: .replacement(location: ctx.clauseStartUTF16, length: replaceLen, replacementUTF16: trimmed)
+                outInline.append(InlineSuggestion(
+                    preview: preview,
+                    confidence: completionConfidence,
+                    mode: .completion(insertUTF16: insert),
+                    chipRole: .predictedContinuation
                 ))
             }
 
-            return out.isEmpty ? nil : out
+            let replaceLen = max(0, ctx.cursorUTF16 - ctx.clauseStartUTF16)
+            for line in pack.clauseRewrites.prefix(2) {
+                let trimmed = Self.clampClauseRewrite(line, maxWords: 22, maxChars: 140)
+                let rewriteWords = trimmed.split(whereSeparator: { $0.isWhitespace }).count
+                guard !trimmed.isEmpty, trimmed.count < 220, rewriteWords >= 5 else { continue }
+                let shortPreview = trimmed.count > 56 ? String(trimmed.prefix(53)) + "…" : trimmed
+                outInline.append(InlineSuggestion(
+                    preview: "↺ \(shortPreview)",
+                    confidence: rewriteConfidence,
+                    mode: .replacement(location: ctx.clauseStartUTF16, length: replaceLen, replacementUTF16: trimmed),
+                    chipRole: .clauseRewrite
+                ))
+            }
+
+            let nudgeCap = hasInspiration ? 3 : 2
+            for line in pack.nudges.prefix(nudgeCap) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, trimmed.count < 220 else { continue }
+                let insert = blockPrefix + trimmed
+                let shortPreview = trimmed.count > 60 ? String(trimmed.prefix(57)) + "…" : trimmed
+                outNudges.append(InlineSuggestion(
+                    preview: shortPreview,
+                    confidence: nudgeConfidence,
+                    mode: .completion(insertUTF16: insert),
+                    chipRole: .nudge
+                ))
+            }
+
+            if outInline.isEmpty && outNudges.isEmpty { return nil }
+            return (outInline, outNudges)
         } catch {
             return nil
         }
@@ -2536,7 +2970,11 @@ struct JournalEditorView: View {
     @State private var activeSuggestionField: SuggestionField = .content
     @State private var contentSelection = NSRange(location: 0, length: 0)
     @State private var inspirationSelection = NSRange(location: 0, length: 0)
+    @State private var journalInlineAssistantExpanded = true
+    @State private var journalNudgesAssistantExpanded = true
     @State private var isGeneratingAITitle = false
+    /// Start of this editor presentation; used to log Mindful Minutes on dismiss.
+    @State private var journalMindfulSessionStart: Date?
     private enum SuggestionField { case content, inspiration }
 
     private var trimmedReflection: String {
@@ -2561,6 +2999,15 @@ struct JournalEditorView: View {
     #endif
 
     private var isFitnessReport: Bool { entry.kind == "workout_report" }
+
+    /// Collapsible assistant rows save vertical space on iPhone.
+    private var journalAssistantSectionsCollapsible: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
 
     @MainActor
     private var todaysWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
@@ -3039,6 +3486,13 @@ struct JournalEditorView: View {
         value ? "Yes" : "No"
     }
     #endif
+
+    private func flushJournalEditorMindfulSession() {
+        guard let start = journalMindfulSessionStart else { return }
+        journalMindfulSessionStart = nil
+        let end = Date()
+        HealthKitManager().saveMindfulSession(start: start, end: end, completion: nil)
+    }
     
     var body: some View {
         NavigationStack {
@@ -3120,7 +3574,7 @@ struct JournalEditorView: View {
                             title: "Reflection",
                             subtitle: "Write like you're speaking to yourself, not filling out a form."
                         ) {
-                            ZStack(alignment: .bottom) {
+                            VStack(alignment: .leading, spacing: 10) {
                                 #if canImport(UIKit)
                                 JournalSelectableTextEditor(text: $entry.content, selection: $contentSelection) { text, range in
                                     activeSuggestionField = .content
@@ -3161,8 +3615,9 @@ struct JournalEditorView: View {
                                     }
                                 #endif
 
-                                if activeSuggestionField == .content && !suggestionEngine.suggestions.isEmpty {
-                                    inlineSuggestionBar { selected in
+                                if activeSuggestionField == .content && hasJournalAssistantChips {
+                                    Divider().opacity(0.35)
+                                    journalAssistantBars { selected in
                                         let (newText, newSel) = suggestionEngine.apply(selected, to: entry.content, selection: contentSelection)
                                         entry.content = newText
                                         contentSelection = newSel
@@ -3198,7 +3653,7 @@ struct JournalEditorView: View {
                                 )
                             }
 
-                            ZStack(alignment: .bottom) {
+                            VStack(alignment: .leading, spacing: 10) {
                                 #if canImport(UIKit)
                                 JournalSelectableTextEditor(text: $entry.inspiration, selection: $inspirationSelection) { text, range in
                                     activeSuggestionField = .inspiration
@@ -3235,8 +3690,9 @@ struct JournalEditorView: View {
                                     }
                                 #endif
 
-                                if activeSuggestionField == .inspiration && !suggestionEngine.suggestions.isEmpty {
-                                    inlineSuggestionBar { selected in
+                                if activeSuggestionField == .inspiration && hasJournalAssistantChips {
+                                    Divider().opacity(0.35)
+                                    journalAssistantBars { selected in
                                         let (newText, newSel) = suggestionEngine.apply(selected, to: entry.inspiration, selection: inspirationSelection)
                                         entry.inspiration = newText
                                         inspirationSelection = newSel
@@ -3250,33 +3706,45 @@ struct JournalEditorView: View {
                         }
 
                         // Detected Correlations
-                        if !correlationEngine.detectedCorrelations.isEmpty || !CorrelationStore.shared.correlations(forJournal: entry.id).isEmpty {
+                        if !correlationEngine.detectedCorrelations.isEmpty
+                            || !CorrelationStore.shared.correlations(forJournal: entry.id).isEmpty
+                            || !correlationEngine.suggestedPeople.isEmpty
+                            || !correlationEngine.correlationClarifiers.isEmpty {
                             journalEditorSection(
                                 title: "Detected Correlations",
-                                subtitle: "Emotions and connections detected from your writing."
+                                subtitle: "Emotions, people, and quick checks to sharpen what we spotted."
                             ) {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 8) {
-                                        let displayed = correlationEngine.detectedCorrelations.isEmpty
-                                            ? CorrelationStore.shared.correlations(forJournal: entry.id)
-                                            : correlationEngine.detectedCorrelations
+                                VStack(alignment: .leading, spacing: 14) {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 8) {
+                                            let displayed = correlationEngine.detectedCorrelations.isEmpty
+                                                ? CorrelationStore.shared.correlations(forJournal: entry.id)
+                                                : correlationEngine.detectedCorrelations
 
-                                        ForEach(displayed) { corr in
-                                            correlationBubble(corr)
-                                        }
+                                            ForEach(displayed) { corr in
+                                                correlationBubble(corr)
+                                            }
 
-                                        Button {
-                                            showAddCorrelationInJournal = true
-                                        } label: {
-                                            Image(systemName: "plus")
-                                                .font(.caption.weight(.bold))
-                                                .foregroundStyle(.secondary)
-                                                .frame(width: 32, height: 32)
-                                                .background(.ultraThinMaterial, in: Circle())
+                                            Button {
+                                                showAddCorrelationInJournal = true
+                                            } label: {
+                                                Image(systemName: "plus")
+                                                    .font(.caption.weight(.bold))
+                                                    .foregroundStyle(.secondary)
+                                                    .frame(width: 32, height: 32)
+                                                    .background(.ultraThinMaterial, in: Circle())
+                                            }
+                                            .buttonStyle(.plain)
                                         }
-                                        .buttonStyle(.plain)
+                                        .padding(.vertical, 4)
                                     }
-                                    .padding(.vertical, 4)
+
+                                    if !correlationEngine.suggestedPeople.isEmpty {
+                                        journalPersonDisambiguationBlock
+                                    }
+                                    if !correlationEngine.correlationClarifiers.isEmpty {
+                                        journalClarifierFollowUpsBlock
+                                    }
                                 }
                             }
                         }
@@ -3288,6 +3756,66 @@ struct JournalEditorView: View {
                                 onResize: { id, size in resizeCard(id: id, to: size) },
                                 onDelete: { id in deleteCard(id: id) }
                             )
+                        }
+
+                        // Saved Nudges
+                        if !entry.savedNudges.isEmpty {
+                            journalEditorSection(
+                                title: "Saved Nudges",
+                                subtitle: "Nudges you used as inspiration for this entry."
+                            ) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(entry.savedNudges) { nudge in
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "bookmark.fill")
+                                                .font(.caption2)
+                                                .foregroundStyle(.blue)
+                                            Text(nudge.text)
+                                                .font(.caption.weight(.medium))
+                                                .foregroundStyle(.primary)
+                                            Spacer()
+                                            Button {
+                                                withAnimation { entry.savedNudges.removeAll { $0.id == nudge.id } }
+                                            } label: {
+                                                Image(systemName: "xmark")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                        .padding(.vertical, 4)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Backbone Outline
+                        if !suggestionEngine.backboneOutline.isEmpty {
+                            journalEditorSection(
+                                title: "Entry Outline",
+                                subtitle: "AI-detected structure of your entry. Helps the assistant know where you are."
+                            ) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(Array(suggestionEngine.backboneOutline.enumerated()), id: \.element.id) { idx, section in
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Text("\(idx + 1)")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(.orange)
+                                                .frame(width: 20, alignment: .trailing)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(section.label)
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(.primary)
+                                                if !section.themes.isEmpty {
+                                                    Text(section.themes.joined(separator: " · "))
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal)
@@ -3308,10 +3836,14 @@ struct JournalEditorView: View {
                         entry.date = Date()
                         onSave(entry)
 
-                        // Persist detected correlations
+                        // Persist detected correlations (merge user association overrides)
                         let correlationsToSave = correlationEngine.detectedCorrelations.map { corr in
                             var mutable = corr
                             mutable.journalEntryID = entry.id
+                            if let raw = entry.correlationAssociationOverrides[corr.id],
+                               let assoc = NutrivanceAssociation(rawValue: raw) {
+                                mutable.association = assoc
+                            }
                             return mutable
                         }
                         CorrelationStore.shared.appendBatch(correlationsToSave)
@@ -3345,11 +3877,20 @@ struct JournalEditorView: View {
                 }
             }
             .onAppear {
+                if journalMindfulSessionStart == nil {
+                    journalMindfulSessionStart = Date()
+                }
                 suggestionEngine.prepare(referenceDate: referenceDate)
                 let cLen = (entry.content as NSString).length
                 contentSelection = NSRange(location: cLen, length: 0)
                 let iLen = (entry.inspiration as NSString).length
                 inspirationSelection = NSRange(location: iLen, length: 0)
+            }
+            .onChange(of: suggestionEngine.pinnedNudge?.id) { _, newID in
+                if newID != nil { journalNudgesAssistantExpanded = true }
+            }
+            .onDisappear {
+                flushJournalEditorMindfulSession()
             }
             #if canImport(JournalingSuggestions)
             .sheet(isPresented: $showingSuggestions) {
@@ -3436,6 +3977,133 @@ struct JournalEditorView: View {
                 correlationEngine.detectedCorrelations.removeAll { $0.id == corr.id }
             } label: {
                 Label("Remove", systemImage: "trash")
+            }
+        }
+    }
+
+    // MARK: - Person Disambiguation
+
+    @ViewBuilder
+    private var journalPersonDisambiguationBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("People Mentioned")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+            ForEach(correlationEngine.suggestedPeople) { person in
+                HStack(spacing: 10) {
+                    Image(systemName: "person.fill.questionmark")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(person.name)
+                            .font(.caption.weight(.semibold))
+                        if !person.mentionContext.isEmpty {
+                            Text(person.mentionContext)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    if let existing = entry.personRelationshipHints[person.name.lowercased()] {
+                        Text(existing.capitalized)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.blue.opacity(0.12), in: Capsule())
+                    }
+                    Menu {
+                        ForEach(["Friend", "Family", "Teacher", "Classmate", "Coworker", "Partner", "Mentor", "Other"], id: \.self) { role in
+                            Button {
+                                withAnimation {
+                                    entry.personRelationshipHints[person.name.lowercased()] = role.lowercased()
+                                }
+                            } label: {
+                                Text(role)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    // MARK: - Follow-Up Clarifiers
+
+    @ViewBuilder
+    private var journalClarifierFollowUpsBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Quick Checks")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+            ForEach(correlationEngine.correlationClarifiers) { clarifier in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(clarifier.question)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    
+                    let stableKey = "\(clarifier.question.prefix(40))_\(clarifier.choices.count)"
+                    let selectedIdx = entry.journalClarifierAnswers[stableKey]
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(Array(clarifier.choices.enumerated()), id: \.offset) { idx, choice in
+                                let isSelected = selectedIdx == idx
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.15)) {
+                                        entry.journalClarifierAnswers[stableKey] = idx
+                                        applyClarifierAnswer(clarifier, choiceIndex: idx)
+                                    }
+                                } label: {
+                                    Text(choice)
+                                        .font(.caption2.weight(isSelected ? .bold : .medium))
+                                        .foregroundStyle(isSelected ? .white : .primary)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            isSelected ? Color.blue : Color.clear,
+                                            in: Capsule()
+                                        )
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                        .overlay(Capsule().stroke(Color.blue.opacity(isSelected ? 0 : 0.3), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                )
+            }
+        }
+    }
+
+    private func applyClarifierAnswer(_ clarifier: JournalCorrelationClarifier, choiceIndex: Int) {
+        guard choiceIndex < clarifier.associationKeys.count else { return }
+        let key = clarifier.associationKeys[choiceIndex]
+        guard key != "skip", let assoc = NutrivanceAssociation(rawValue: key) else { return }
+
+        for corrID in clarifier.targetCorrelationIDs {
+            if let idx = correlationEngine.detectedCorrelations.firstIndex(where: { $0.id == corrID }) {
+                correlationEngine.detectedCorrelations[idx].association = assoc
+            }
+            entry.correlationAssociationOverrides[corrID] = key
+        }
+
+        if let person = clarifier.linkedPersonName?.lowercased(), !person.isEmpty {
+            let roleMap: [String: String] = ["friends": "friend", "family": "family", "partner": "partner", "work": "coworker", "education": "teacher"]
+            if let role = roleMap[key] {
+                entry.personRelationshipHints[person] = role
             }
         }
     }
@@ -3606,11 +4274,42 @@ struct JournalEditorView: View {
 
     // MARK: - Inline Suggestions
 
+    private func inlineSuggestionIcon(_ suggestion: InlineSuggestion) -> String {
+        if suggestion.mode.isReplacement || suggestion.chipRole == .clauseRewrite {
+            return "arrow.triangle.2.circlepath"
+        }
+        switch suggestion.chipRole {
+        case .predictedContinuation: return "brain.head.profile"
+        case .nudge: return "questionmark.bubble"
+        case .caretContinuation: return "text.cursor"
+        case .clauseRewrite: return "text.cursor"
+        }
+    }
+
+    private func inlineSuggestionIconTint(_ suggestion: InlineSuggestion) -> Color {
+        if suggestion.mode.isReplacement || suggestion.chipRole == .clauseRewrite {
+            return .purple
+        }
+        switch suggestion.chipRole {
+        case .predictedContinuation: return .orange
+        case .nudge: return .blue
+        case .caretContinuation, .clauseRewrite: return .orange
+        }
+    }
+
+    private var hasJournalAssistantChips: Bool {
+        !suggestionEngine.suggestions.isEmpty || !suggestionEngine.nudgeSuggestions.isEmpty || suggestionEngine.pinnedNudge != nil
+    }
+
     @ViewBuilder
-    private func inlineSuggestionBar(onSelect: @escaping (InlineSuggestion) -> Void) -> some View {
+    private func suggestionChipScroll(
+        suggestions: [InlineSuggestion],
+        stroke: Color,
+        onSelect: @escaping (InlineSuggestion) -> Void
+    ) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(suggestionEngine.suggestions) { suggestion in
+                ForEach(suggestions) { suggestion in
                     Button {
                         withAnimation(.easeOut(duration: 0.15)) {
                             onSelect(suggestion)
@@ -3618,18 +4317,18 @@ struct JournalEditorView: View {
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: suggestion.mode.isReplacement ? "arrow.triangle.2.circlepath" : "text.cursor")
+                            Image(systemName: inlineSuggestionIcon(suggestion))
                                 .font(.caption2)
-                                .foregroundStyle(suggestion.mode.isReplacement ? .purple : .orange)
+                                .foregroundStyle(inlineSuggestionIconTint(suggestion))
                             Text(suggestion.preview)
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.primary)
-                                .lineLimit(2)
+                                .lineLimit(1)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().stroke(Color.orange.opacity(0.25), lineWidth: 1))
+                        .overlay(Capsule().stroke(stroke.opacity(0.35), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }
@@ -3637,7 +4336,187 @@ struct JournalEditorView: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 6)
         }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    @ViewBuilder
+    private func journalAssistantCollapsibleHeader(title: String, expanded: Binding<Bool>) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded.wrappedValue.toggle() }
+        } label: {
+            HStack {
+                Text(title)
+                    .font(.caption2.weight(.bold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: expanded.wrappedValue ? "chevron.up" : "chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(expanded.wrappedValue ? "expanded" : "collapsed")")
+    }
+
+    @ViewBuilder
+    private func journalAssistantBars(onSelect: @escaping (InlineSuggestion) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !suggestionEngine.suggestions.isEmpty {
+                if journalAssistantSectionsCollapsible {
+                    journalAssistantCollapsibleHeader(title: "Inline suggestions", expanded: $journalInlineAssistantExpanded)
+                    if journalInlineAssistantExpanded {
+                        suggestionChipScroll(suggestions: suggestionEngine.suggestions, stroke: .orange, onSelect: onSelect)
+                    }
+                } else {
+                    suggestionChipScroll(suggestions: suggestionEngine.suggestions, stroke: .orange, onSelect: onSelect)
+                }
+            }
+
+            if let pinned = suggestionEngine.pinnedNudge {
+                if journalAssistantSectionsCollapsible {
+                    journalAssistantCollapsibleHeader(title: "Nudges", expanded: $journalNudgesAssistantExpanded)
+                    if journalNudgesAssistantExpanded {
+                        pinnedNudgeCard(pinned, onSelect: onSelect)
+                    }
+                } else {
+                    pinnedNudgeCard(pinned, onSelect: onSelect)
+                }
+            } else if !suggestionEngine.nudgeSuggestions.isEmpty {
+                if journalAssistantSectionsCollapsible {
+                    journalAssistantCollapsibleHeader(title: "Nudges", expanded: $journalNudgesAssistantExpanded)
+                    if journalNudgesAssistantExpanded {
+                        nudgeCardsRow(showSectionTitle: false)
+                    }
+                } else {
+                    nudgeCardsRow(showSectionTitle: true)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func nudgeCardsRow(showSectionTitle: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if showSectionTitle {
+                Text("Nudges")
+                    .font(.caption2.weight(.bold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 10)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 10) {
+                    ForEach(suggestionEngine.nudgeSuggestions) { nudge in
+                        nudgeCard(nudge, onTap: {
+                            suggestionEngine.pinNudge(nudge)
+                        })
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private enum JournalNudgeCardMetrics {
+        static let width: CGFloat = 200
+        static let minHeight: CGFloat = 128
+    }
+
+    @ViewBuilder
+    private func nudgeCard(_ nudge: InlineSuggestion, onTap: @escaping () -> Void) -> some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: "questionmark.bubble")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.blue)
+                Text(nudge.preview)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(5)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .frame(
+                minWidth: JournalNudgeCardMetrics.width,
+                maxWidth: JournalNudgeCardMetrics.width,
+                minHeight: JournalNudgeCardMetrics.minHeight,
+                alignment: .topLeading
+            )
+            .padding(14)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.blue.opacity(0.25), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func pinnedNudgeCard(_ nudge: InlineSuggestion, onSelect: @escaping (InlineSuggestion) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "pin.fill")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.blue)
+                Text("Pinned Nudge")
+                    .font(.caption2.weight(.bold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    suggestionEngine.unpinNudge()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(nudge.preview)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 12) {
+                Button {
+                    entry.savedNudges.append(JournalSavedNudge(text: nudge.preview))
+                    suggestionEngine.unpinNudge()
+                } label: {
+                    Label("Save", systemImage: "bookmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    onSelect(nudge)
+                    suggestionEngine.unpinNudge()
+                } label: {
+                    Label("Insert", systemImage: "text.insert")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.blue.opacity(0.35), lineWidth: 1.5)
+        )
+        .padding(.horizontal, 6)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 
     // MARK: - Helpers

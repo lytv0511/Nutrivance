@@ -1,7 +1,9 @@
 import SwiftUI
 import CoreLocation
 import HealthKit
+#if !targetEnvironment(macCatalyst)
 import ActivityKit
+#endif
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 #endif
@@ -13,8 +15,9 @@ struct WorkoutTimerSync: Equatable {
     let splitCount: Int
 }
 
+#if !targetEnvironment(macCatalyst)
 struct WorkoutLiveActivityAttributes: ActivityAttributes {
-    
+
     public struct ContentState: Codable, Hashable {
         var elapsedSeconds: Int
         var elapsedReferenceDate: Date
@@ -38,6 +41,7 @@ struct WorkoutLiveActivityAttributes: ActivityAttributes {
     var userInitials: String
     var maxHeartRate: Int?
 }
+#endif
 
 private enum WorkoutMetricsVariant {
     case primary
@@ -729,6 +733,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             startElapsedTimer()
         }
 
+        #if !targetEnvironment(macCatalyst)
         if #available(iOS 26.0, *) {
             let builder = session.associatedWorkoutBuilder()
             self.builder = builder
@@ -736,6 +741,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             print("[Companion] Associated workout builder attached")
             rebuildMetrics()
         }
+        #else
+        rebuildMetrics()
+        #endif
         requestLiveWorkoutSnapshotBurst(reason: "attach-mirrored-session")
         persistCurrentSession()
     }
@@ -972,13 +980,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
         persistCurrentSession()
 
-        if normalizedState != "paused" && normalizedState != "preparing" {
-            if workoutLiveActivity == nil {
-                startLiveActivityIfNeeded()
-            } else {
-                updateLiveActivity()
-            }
-        }
+        companionSyncLiveActivityWhenWorkoutActive(normalizedState: normalizedState)
     }
 
     private func handleWatchLifecycleState(_ state: String, reason: String?) {
@@ -1051,11 +1053,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
         persistCurrentSession()
 
-        if workoutLiveActivity == nil {
-            startLiveActivityIfNeeded()
-        } else {
-            updateLiveActivity()
-        }
+        companionSyncLiveActivityUnconditionally()
 
         if let metricsData = payload["metrics"] as? [[String: Any]] {
             var parsed: [LiveMetric] = []
@@ -1154,15 +1152,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         metrics = realtimeMetrics
 
         persistCurrentSession()
-        if normalizedState != "paused" && normalizedState != "preparing" {
-            if workoutLiveActivity == nil {
-                startLiveActivityIfNeeded()
-            } else {
-                updateLiveActivity()
-            }
-        } else if workoutLiveActivity != nil {
-            updateLiveActivity()
-        }
+        companionSyncLiveActivityForRealtime(normalizedState: normalizedState)
 
         return true
     }
@@ -1231,6 +1221,8 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
                 // Request watch to auto-present live workout UI when iPhone workout starts
                 self.requestWatchPresentation()
+            } catch LocalWorkoutPlatformError.unavailableOnMacCatalyst {
+                launchStatusMessage = "On-device workout tracking isn’t available on Mac. Start a workout on iPhone, iPad, or Apple Watch."
             } catch {
                 launchStatusMessage = "Could not start the workout on iPhone."
             }
@@ -1754,12 +1746,19 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         }
     }
 
+    private enum LocalWorkoutPlatformError: Error {
+        case unavailableOnMacCatalyst
+    }
+
     private func beginLocalWorkout(
         title: String,
         subtitle: String,
         activity: HKWorkoutActivityType,
         location: HKWorkoutSessionLocationType
     ) throws {
+        #if targetEnvironment(macCatalyst)
+        throw LocalWorkoutPlatformError.unavailableOnMacCatalyst
+        #else
         resetForNewSession()
 
         let configuration = HKWorkoutConfiguration()
@@ -1810,6 +1809,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
                 self.finishSession()
             }
         }
+        #endif
     }
 
     private func localPageKinds(for activity: HKWorkoutActivityType, location: HKWorkoutSessionLocationType) -> [CompanionWorkoutPageKind] {
@@ -1930,8 +1930,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         shouldAutoPresentLiveView = true
     }
 
-    // MARK: - Live Activity Management
+    // MARK: - Live Activity Management (iOS / watchOS only; unavailable on Mac Catalyst)
 
+    #if !targetEnvironment(macCatalyst)
     private var workoutLiveActivity: Activity<WorkoutLiveActivityAttributes>?
 
     private func startLiveActivityIfNeeded() {
@@ -2009,7 +2010,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         let displayHeartRate = currentHeartRate ?? companionNumericValue(from: metrics.first(where: { $0.id == "hr" || $0.symbol.contains("heart") })?.value) ?? 0
         let normalizedState = stateText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let isPaused = normalizedState.contains("paused")
-        
+
         let paceMinutesPerKm: Double? = {
             guard let speed = currentSpeedMetersPerSecond, speed > 0 else { return nil }
             return 1000.0 / speed / 60.0
@@ -2068,6 +2069,41 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         if percentage < 0.9 { return 4 }
         return 5
     }
+
+    private func companionSyncLiveActivityWhenWorkoutActive(normalizedState: String) {
+        guard normalizedState != "paused", normalizedState != "preparing" else { return }
+        if workoutLiveActivity == nil {
+            startLiveActivityIfNeeded()
+        } else {
+            updateLiveActivity()
+        }
+    }
+
+    private func companionSyncLiveActivityUnconditionally() {
+        if workoutLiveActivity == nil {
+            startLiveActivityIfNeeded()
+        } else {
+            updateLiveActivity()
+        }
+    }
+
+    private func companionSyncLiveActivityForRealtime(normalizedState: String) {
+        if normalizedState != "paused" && normalizedState != "preparing" {
+            if workoutLiveActivity == nil {
+                startLiveActivityIfNeeded()
+            } else {
+                updateLiveActivity()
+            }
+        } else if workoutLiveActivity != nil {
+            updateLiveActivity()
+        }
+    }
+    #else
+    private func companionSyncLiveActivityWhenWorkoutActive(normalizedState _: String) {}
+    private func companionSyncLiveActivityUnconditionally() {}
+    private func companionSyncLiveActivityForRealtime(normalizedState _: String) {}
+    private func endLiveActivity(showSummary _: Bool = true) {}
+    #endif
 
     fileprivate func finishSession(immediate: Bool = false) {
         stopElapsedTimer()
@@ -2217,6 +2253,9 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 
     @available(iOS 26.0, *)
     private func recoverActiveWorkoutSessionIfNeeded() async {
+        #if targetEnvironment(macCatalyst)
+        return
+        #else
         guard localSession == nil, mirroredSession == nil else { return }
         let recoveredSession = await withCheckedContinuation { continuation in
             healthStore.recoverActiveWorkoutSession(completion: { session, _ in
@@ -2235,6 +2274,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         } else {
             attachMirroredSession(recoveredSession)
         }
+        #endif
     }
 
     @available(iOS 26.0, *)
@@ -2246,8 +2286,12 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         localWorkoutSubtitle = restoredSubtitle
         localSession = session
         mirroredSession = nil
+        #if !targetEnvironment(macCatalyst)
         builder = session.associatedWorkoutBuilder()
         builder?.delegate = self
+        #else
+        builder = nil
+        #endif
         session.delegate = self
         title = restoredTitle
         activityType = session.workoutConfiguration.activityType

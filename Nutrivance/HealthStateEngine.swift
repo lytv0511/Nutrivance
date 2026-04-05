@@ -354,6 +354,7 @@ final class HealthStateEngine: ObservableObject {
     private var foregroundResumeTask: Task<Void, Never>?
     private var startupWorkoutCoverageTask: Task<Void, Never>?
     private var cloudSnapshotObserver: NSObjectProtocol?
+    private var workoutCloudUploadTask: Task<Void, Never>?
     @Published private(set) var hasHydratedCachedMetrics: Bool = false
     @Published private(set) var cachedMetricsUpdatedAt: Date?
     @Published private(set) var isRefreshingCachedMetrics: Bool = false
@@ -678,6 +679,97 @@ final class HealthStateEngine: ObservableObject {
         applyMetricsSnapshot(bestSnapshot)
     }
 
+    /// Mac Catalyst has no practical HealthKit access; UI reads the same **aggregated** `MetricsSnapshot` iPhone/iPad uploads to iCloud Key-Value (+ local file).
+    private static var usesAggregatedCloudHealthPath: Bool {
+        #if targetEnvironment(macCatalyst)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// Pull latest snapshot from iCloud KVS + disk merge, then **await** CloudKit frozen blobs on Mac Catalyst (so charts have data before UI settles).
+    private func reloadAggregatedHealthSnapshotFromICloud() async {
+        NSUbiquitousKeyValueStore.default.synchronize()
+        hydrateMetricsFromCacheIfAvailable()
+        updateScores()
+        if Self.usesAggregatedCloudHealthPath {
+            await pullEngineSyncBlobsFromCloudKit()
+        }
+    }
+
+    /// Mac Catalyst: load full **time series** snapshots from CloudKit (`EngineSyncBlob`) written by iOS.
+    private func pullEngineSyncBlobsFromCloudKit() async {
+        guard Self.usesAggregatedCloudHealthPath else { return }
+        guard await CloudKitManager.shared.accountCanUseCloudKit() else { return }
+
+        if let (_, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
+            recordName: NutrivanceEngineSyncSchema.RecordName.metricsSnapshot
+        ),
+           let snap = try? JSONDecoder().decode(MetricsSnapshot.self, from: data) {
+            let localAnchor = cachedMetricsUpdatedAt ?? .distantPast
+            let localSeriesEmpty = dailyHRV.isEmpty && dailyRestingHeartRate.isEmpty
+            if snap.updatedAt > localAnchor || localSeriesEmpty {
+                applyMetricsSnapshot(snap)
+                if let url = metricsSnapshotURL(), let enc = try? JSONEncoder().encode(snap) {
+                    try? enc.write(to: url, options: .atomic)
+                }
+            }
+        }
+
+        if let (ckUpdated, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
+            recordName: NutrivanceEngineSyncSchema.RecordName.workoutAnalytics
+        ),
+           let entries = try? JSONDecoder().decode([PersistedWorkoutAnalyticsEntry].self, from: data),
+           entries.allSatisfy({ $0.schemaVersion >= Self.workoutAnalyticsSchemaVersion }) {
+            let anchor = workoutAnalyticsCacheTimestamp ?? .distantPast
+            if ckUpdated > anchor || workoutAnalytics.isEmpty {
+                workoutAnalytics = rebuildWorkoutAnalytics(from: entries)
+                workoutAnalyticsCacheTimestamp = ckUpdated
+                lastCachedWorkoutDate = entries.map(\.workoutStartDate).max()
+                earliestRequestedWorkoutDate = entries.map(\.workoutStartDate).min()
+                hasInitializedWorkoutAnalytics = true
+                if let url = persistentCacheURL() {
+                    try? data.write(to: url, options: .atomic)
+                }
+            }
+        }
+
+        updateScores()
+        scheduleScoresRefresh()
+    }
+
+    #if !targetEnvironment(macCatalyst)
+    /// Push latest metrics + workout JSON to CloudKit immediately (e.g. app background) so Mac Catalyst can show frozen graph data.
+    private func pushFrozenEngineHandoffToCloudKit() async {
+        guard await CloudKitManager.shared.accountCanUseCloudKit() else { return }
+        let snapshot = currentMetricsSnapshot()
+        if let fullEncoded = try? JSONEncoder().encode(snapshot) {
+            do {
+                try await CloudKitManager.shared.uploadEngineSyncBlob(
+                    recordName: NutrivanceEngineSyncSchema.RecordName.metricsSnapshot,
+                    data: fullEncoded
+                )
+            } catch {
+                CloudKitManager.shared.reportHealthSyncError("Engine metrics handoff: \(error.localizedDescription)")
+            }
+        }
+        if let url = persistentCacheURL(),
+           FileManager.default.fileExists(atPath: url.path),
+           let wdata = try? Data(contentsOf: url),
+           !wdata.isEmpty {
+            do {
+                try await CloudKitManager.shared.uploadEngineSyncBlob(
+                    recordName: NutrivanceEngineSyncSchema.RecordName.workoutAnalytics,
+                    data: wdata
+                )
+            } catch {
+                CloudKitManager.shared.reportHealthSyncError("Engine workout handoff: \(error.localizedDescription)")
+            }
+        }
+    }
+    #endif
+
     private func saveMetricsSnapshotNow() {
         guard isAppActive else { return }
         let snapshot = currentMetricsSnapshot()
@@ -687,18 +779,32 @@ final class HealthStateEngine: ObservableObject {
         let localURL = metricsSnapshotURL()
         let cloudKey = metricsSnapshotCloudKey
         let cloudSnapshot = cloudTrimmedSnapshot(from: snapshot)
+        let fullEncoded = try? JSONEncoder().encode(snapshot)
         metricsSnapshotWriteTask?.cancel()
-        metricsSnapshotWriteTask = Task.detached(priority: .utility) {
-            if let url = localURL,
-               let localData = try? JSONEncoder().encode(snapshot) {
-                try? localData.write(to: url, options: .atomic)
-            }
-
-            if let cloudData = try? JSONEncoder().encode(cloudSnapshot) {
-                let cloudStore = NSUbiquitousKeyValueStore.default
-                cloudStore.set(cloudData, forKey: cloudKey)
+        metricsSnapshotWriteTask = Task.detached(priority: .utility) { [fullEncoded] in
+            if let url = localURL, let fullEncoded {
+                try? fullEncoded.write(to: url, options: .atomic)
             }
         }
+
+        #if !targetEnvironment(macCatalyst)
+        Task { @MainActor in
+            if let cloudData = try? JSONEncoder().encode(cloudSnapshot) {
+                NSUbiquitousKeyValueStore.default.set(cloudData, forKey: cloudKey)
+                NSUbiquitousKeyValueStore.default.synchronize()
+            }
+            if let fullEncoded {
+                do {
+                    try await CloudKitManager.shared.uploadEngineSyncBlob(
+                        recordName: NutrivanceEngineSyncSchema.RecordName.metricsSnapshot,
+                        data: fullEncoded
+                    )
+                } catch {
+                    CloudKitManager.shared.reportHealthSyncError("Metrics snapshot CK upload: \(error.localizedDescription)")
+                }
+            }
+        }
+        #endif
     }
 
     private func scheduleMetricsSnapshotSave(delayNanoseconds: UInt64 = 600_000_000) {
@@ -776,10 +882,34 @@ final class HealthStateEngine: ObservableObject {
             let jsonData = try encoder.encode(cacheEntries)
             try jsonData.write(to: url, options: .atomicWrite)
             print("[Cache] Saved \(cacheEntries.count) workouts to disk")
+            #if !targetEnvironment(macCatalyst)
+            scheduleWorkoutAnalyticsCloudUpload(jsonData: jsonData)
+            #endif
         } catch {
             print("Failed to save persistent cache: \(error)")
         }
     }
+
+    #if !targetEnvironment(macCatalyst)
+    /// Debounced upload so CloudKit is not hammered while workout list updates rapidly.
+    private func scheduleWorkoutAnalyticsCloudUpload(jsonData: Data) {
+        workoutCloudUploadTask?.cancel()
+        let payload = jsonData
+        workoutCloudUploadTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let self, !Task.isCancelled, self.isAppActive else { return }
+            guard await CloudKitManager.shared.accountCanUseCloudKit() else { return }
+            do {
+                try await CloudKitManager.shared.uploadEngineSyncBlob(
+                    recordName: NutrivanceEngineSyncSchema.RecordName.workoutAnalytics,
+                    data: payload
+                )
+            } catch {
+                CloudKitManager.shared.reportHealthSyncError("Workout analytics CK upload: \(error.localizedDescription)")
+            }
+        }
+    }
+    #endif
 
     private func canonicalWorkoutID(for workout: HKWorkout) -> String {
         if let metadataValue = workout.metadata?[Self.cachedWorkoutUUIDMetadataKey] as? String,
@@ -2426,6 +2556,14 @@ final class HealthStateEngine: ObservableObject {
             // Stagger authorization-driven metric refresh slightly so launch feels responsive.
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
+
+            if Self.usesAggregatedCloudHealthPath {
+                await self.reloadAggregatedHealthSnapshotFromICloud()
+                self.scheduleScoresRefresh()
+                self.scheduleMetricsSnapshotSave(delayNanoseconds: 400_000_000)
+                return
+            }
+
             self.hkManager.requestAuthorization { [weak self] success, error in
                 DispatchQueue.main.async {
                     if success {
@@ -2445,6 +2583,7 @@ final class HealthStateEngine: ObservableObject {
     }
 
     deinit {
+        workoutCloudUploadTask?.cancel()
         if let cloudSnapshotObserver {
             NotificationCenter.default.removeObserver(cloudSnapshotObserver)
         }
@@ -2469,6 +2608,7 @@ final class HealthStateEngine: ObservableObject {
 
         foregroundResumeTask?.cancel()
         startupWorkoutCoverageTask?.cancel()
+        workoutCloudUploadTask?.cancel()
         isSyncingStartupWorkoutCoverage = false
         scoreRefreshTask?.cancel()
         metricsSnapshotSaveTask?.cancel()
@@ -2478,6 +2618,12 @@ final class HealthStateEngine: ObservableObject {
         historicalBatchLoadTask?.cancel()
 
         isRefreshingCachedMetrics = false
+
+        #if !targetEnvironment(macCatalyst)
+        Task { [weak self] in
+            await self?.pushFrozenEngineHandoffToCloudKit()
+        }
+        #endif
     }
 
     // MARK: - Analytics Cache Helpers
@@ -2508,6 +2654,15 @@ final class HealthStateEngine: ObservableObject {
         }
         lastMetricsRefreshAt = Date()
         beginBackgroundMetricsRefreshWindow()
+
+        if Self.usesAggregatedCloudHealthPath {
+            Task { [weak self] in
+                await self?.reloadAggregatedHealthSnapshotFromICloud()
+                self?.scheduleScoresRefresh()
+                self?.scheduleMetricsSnapshotSave(delayNanoseconds: 500_000_000)
+            }
+            return
+        }
 
         // All fetches are now on the main actor
         self.fetchLatestHRV()
@@ -2548,6 +2703,15 @@ final class HealthStateEngine: ObservableObject {
         lastMetricsRefreshAt = Date()
         beginBackgroundMetricsRefreshWindow()
 
+        if Self.usesAggregatedCloudHealthPath {
+            Task { [weak self] in
+                await self?.reloadAggregatedHealthSnapshotFromICloud()
+                self?.scheduleScoresRefresh()
+                self?.scheduleMetricsSnapshotSave(delayNanoseconds: 400_000_000)
+            }
+            return
+        }
+
         // Startup should only refresh lightweight, user-visible summary metrics.
         self.fetchLatestHRV()
         self.fetchRestingHeartRate()
@@ -2579,6 +2743,7 @@ final class HealthStateEngine: ObservableObject {
     }
 
     private func scheduleStartupWorkoutCoverageSync() {
+        if Self.usesAggregatedCloudHealthPath { return }
         startupWorkoutCoverageTask?.cancel()
         startupWorkoutCoverageTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 700_000_000)
@@ -2595,6 +2760,22 @@ final class HealthStateEngine: ObservableObject {
     /// Only fetches from HealthKit if cache is stale or days range changed
     func refreshWorkoutAnalytics(days: Int = 30, forceRefresh: Bool = false) async {
         if !forceRefresh, AppResourceCoordinator.shared.isStrainRecoveryForegroundCritical() {
+            return
+        }
+
+        if Self.usesAggregatedCloudHealthPath {
+            let cachedEntries = loadPersistedWorkoutAnalyticsEntries()
+            if !cachedEntries.isEmpty {
+                workoutAnalytics = rebuildWorkoutAnalytics(from: cachedEntries)
+                workoutAnalyticsCacheTimestamp = Date()
+                lastCachedWorkoutDate = cachedEntries.map(\.workoutStartDate).max()
+                earliestRequestedWorkoutDate = cachedEntries.map(\.workoutStartDate).min()
+                hasInitializedWorkoutAnalytics = true
+                scheduleScoresRefresh()
+                scheduleMetricsSnapshotSave()
+            } else {
+                hasInitializedWorkoutAnalytics = true
+            }
             return
         }
 
@@ -2667,6 +2848,28 @@ final class HealthStateEngine: ObservableObject {
         guard !hasStartedInitialDifferentialRefresh else { return }
         hasStartedInitialDifferentialRefresh = true
 
+        if Self.usesAggregatedCloudHealthPath {
+            let cachedEntries = loadPersistedWorkoutAnalyticsEntries()
+            if !cachedEntries.isEmpty {
+                self.lastCachedWorkoutDate = cachedEntries.map(\.workoutStartDate).max()
+                self.earliestRequestedWorkoutDate = cachedEntries.map(\.workoutStartDate).min()
+                self.workoutAnalytics = rebuildWorkoutAnalytics(from: cachedEntries)
+                self.workoutAnalyticsCacheTimestamp = Date()
+                self.requiresInitialFullSync = false
+                self.hasInitializedWorkoutAnalytics = true
+                self.scheduleScoresRefresh()
+                print("[Cache] Mac Catalyst: loaded \(cachedEntries.count) workouts from disk cache (HealthKit disabled).")
+            } else {
+                self.requiresInitialFullSync = false
+                self.hasInitializedWorkoutAnalytics = true
+                print("[Cache] Mac Catalyst: no workout disk cache; use iPhone to sync or open app on iOS first.")
+            }
+            if hasHydratedCachedMetrics {
+                scheduleMetricsSnapshotSave()
+            }
+            return
+        }
+
         let cachedEntries = loadPersistedWorkoutAnalyticsEntries()
         let cachedSummaries = cachedEntries.map { entry in
             CachedWorkoutSummary(
@@ -2736,6 +2939,7 @@ final class HealthStateEngine: ObservableObject {
     
     /// Smart differential refresh: fetch new data first, then batch-load historical data
     func smartDifferentialRefresh(totalDays: Int = 3650) async {
+        if Self.usesAggregatedCloudHealthPath { return }
         let endDate = Date()
         let totalStartDate = Calendar.current.date(byAdding: .day, value: -totalDays, to: endDate) ?? endDate
         
@@ -2835,6 +3039,7 @@ final class HealthStateEngine: ObservableObject {
     /// Loads data backwards in time: from newest unfetched to oldest
     /// This ensures batches append naturally to the view in chronological order
     private func batchLoadHistoricalWorkouts(from earliestDate: Date, to latestDate: Date, batchSize: Int = 30) async {
+        if Self.usesAggregatedCloudHealthPath { return }
         print("[Cache] Starting batch historical load: \(earliestDate.formatted()) to \(latestDate.formatted())")
         
         // Start from latest (most recent unfetched) and work backwards
@@ -2913,18 +3118,37 @@ final class HealthStateEngine: ObservableObject {
     }
 
     func needsWorkoutAnalyticsCoverage(from start: Date, to end: Date) -> Bool {
-        let normalizedStart = Calendar.current.startOfDay(for: start)
-        let normalizedEnd = end
+        let calendar = Calendar.current
+        let normalizedStart = calendar.startOfDay(for: start)
+        let normalizedEnd = calendar.startOfDay(for: end)
         let latestCoveredDate = lastCachedWorkoutDate ?? workoutAnalytics.map { $0.workout.startDate }.max()
 
         if let earliestRequestedWorkoutDate, let latestCoveredDate {
-            return normalizedStart < earliestRequestedWorkoutDate || normalizedEnd > latestCoveredDate
+            if normalizedStart < calendar.startOfDay(for: earliestRequestedWorkoutDate) {
+                return true
+            }
+
+            // When cached analytics were refreshed today, treat the current day as covered
+            // so simply opening a screen does not retrigger expensive HRR analytics work.
+            if hasInitializedWorkoutAnalytics,
+               let workoutAnalyticsCacheTimestamp,
+               calendar.isDate(workoutAnalyticsCacheTimestamp, inSameDayAs: Date()),
+               !workoutAnalyticsNeedsSeriesBackfill(workoutAnalytics) {
+                return false
+            }
+
+            return normalizedEnd > calendar.startOfDay(for: latestCoveredDate)
         }
 
         return true
     }
 
     func ensureWorkoutAnalyticsCoverage(from start: Date, to end: Date, forceFetch: Bool = false) async {
+        if Self.usesAggregatedCloudHealthPath {
+            await reloadAggregatedHealthSnapshotFromICloud()
+            scheduleScoresRefresh()
+            return
+        }
         let normalizedStart = Calendar.current.startOfDay(for: start)
         let normalizedEnd = min(end, Date())
         guard normalizedStart < normalizedEnd else { return }
@@ -2993,6 +3217,10 @@ final class HealthStateEngine: ObservableObject {
     }
 
     func ensureSpO2Coverage(from start: Date, to end: Date) async {
+        if Self.usesAggregatedCloudHealthPath {
+            await reloadAggregatedHealthSnapshotFromICloud()
+            return
+        }
         let normalizedStart = Calendar.current.startOfDay(for: start)
         let normalizedEnd = min(end, Date())
         guard normalizedStart < normalizedEnd else { return }
@@ -3017,6 +3245,12 @@ final class HealthStateEngine: ObservableObject {
     }
 
     func ensureRecoveryMetricsCoverage(from start: Date, to end: Date) async {
+        if Self.usesAggregatedCloudHealthPath {
+            await reloadAggregatedHealthSnapshotFromICloud()
+            scheduleScoresRefresh()
+            scheduleMetricsSnapshotSave()
+            return
+        }
         let normalizedStart = Calendar.current.startOfDay(for: start)
         let normalizedEnd = min(end, Date())
         guard normalizedStart < normalizedEnd else { return }

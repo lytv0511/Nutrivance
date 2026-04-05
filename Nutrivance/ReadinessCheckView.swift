@@ -286,58 +286,62 @@ struct ReadinessCheckView: View {
     @MainActor
     private func refreshCoverage(forceNetwork: Bool) async {
         let calendar = Calendar.current
-        let start = calendar.date(byAdding: .day, value: -28, to: today) ?? today
+        let recoveryStart = calendar.date(byAdding: .day, value: -28, to: today) ?? today
+        let workoutStart = calendar.date(byAdding: .day, value: -10, to: today) ?? today
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today
         snapshot = buildSnapshot()
 
-        let needRecovery = forceNetwork || healthEngine.needsRecoveryMetricsCoverage(from: start, to: end)
-        let needWorkouts = forceNetwork || healthEngine.needsWorkoutAnalyticsCoverage(from: start, to: end)
+        let needRecovery = forceNetwork || healthEngine.needsRecoveryMetricsCoverage(from: recoveryStart, to: end)
+        let needWorkouts = forceNetwork || healthEngine.needsWorkoutAnalyticsCoverage(from: workoutStart, to: end)
         guard needRecovery || needWorkouts else { return }
 
         isLoading = true
         if needRecovery {
-            await healthEngine.ensureRecoveryMetricsCoverage(from: start, to: end)
+            await healthEngine.ensureRecoveryMetricsCoverage(from: recoveryStart, to: end)
         }
         if needWorkouts {
-            await healthEngine.ensureWorkoutAnalyticsCoverage(from: start, to: end)
+            await healthEngine.ensureWorkoutAnalyticsCoverage(from: workoutStart, to: end)
         }
         snapshot = buildSnapshot()
         isLoading = false
     }
 
+    @MainActor
     private func buildSnapshot() -> ReadinessSnapshot {
         let calendar = Calendar.current
         let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
-        let readinessWindow = readinessDateSequence(from: start, to: today)
+        let readinessWindow = sharedDateSequence(from: start, to: today)
         let hrvLookup = Dictionary(uniqueKeysWithValues: healthEngine.dailyHRV.map { ($0.date, $0.average) })
-
-        var workoutLoadByDay: [Date: Double] = [:]
-        for pair in healthEngine.workoutAnalytics {
-            let day = calendar.startOfDay(for: pair.workout.startDate)
-            workoutLoadByDay[day, default: 0] += HealthStateEngine.proWorkoutLoad(
-                for: pair.workout,
-                analytics: pair.analytics,
-                estimatedMaxHeartRate: healthEngine.estimatedMaxHeartRate
-            )
-        }
+        let readinessDisplayWindow = (
+            start: start,
+            end: today,
+            endExclusive: calendar.date(byAdding: .day, value: 1, to: today) ?? today
+        )
+        let loadSnapshots = sharedDailyLoadSnapshots(
+            workouts: healthEngine.workoutAnalytics,
+            estimatedMaxHeartRate: healthEngine.estimatedMaxHeartRate,
+            displayWindow: readinessDisplayWindow
+        )
+        let strainLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.strainScore) })
 
         let recoverySeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
-            (day, recoveryScoreForDay(day, hrvLookup: hrvLookup))
+            (day, sharedRecoveryScore(for: day, engine: healthEngine) ?? healthEngine.recoveryScore)
         })
         let strainSeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
-            (day, strainScoreForDay(day, workoutLoadByDay: workoutLoadByDay))
+            (day, strainLookup[day] ?? healthEngine.strainScore)
         })
         let hrvTrendSeries = readinessWindow.map { day in
-            (day, readinessTrendScore(for: day, hrvLookup: hrvLookup))
+            (day, sharedReadinessTrendComponent(for: day, engine: healthEngine))
         }
         let readinessSeries = readinessWindow.map { day in
             (
                 day,
-                HealthStateEngine.proReadinessScore(
+                sharedReadinessScore(
+                    for: day,
                     recoveryScore: recoverySeriesMap[day] ?? healthEngine.recoveryScore,
                     strainScore: strainSeriesMap[day] ?? healthEngine.strainScore,
-                    hrvTrendComponent: hrvTrendSeries.first(where: { $0.0 == day })?.1 ?? healthEngine.hrvTrendScore
-                )
+                    engine: healthEngine
+                ) ?? healthEngine.readinessScore
             )
         }
 
@@ -431,33 +435,6 @@ struct ReadinessCheckView: View {
         ]
     }
 
-    private func recoveryScoreForDay(_ day: Date, hrvLookup: [Date: Double]) -> Double {
-        let normalizedDay = Calendar.current.startOfDay(for: day)
-        let inputs = recoveryInputs(for: normalizedDay, hrvLookup: hrvLookup)
-        guard !inputs.isInconclusive else { return healthEngine.recoveryScore }
-        return HealthStateEngine.proRecoveryScore(from: inputs)
-    }
-
-    private func strainScoreForDay(_ day: Date, workoutLoadByDay: [Date: Double]) -> Double {
-        let normalized = Calendar.current.startOfDay(for: day)
-        let totalLoad = workoutLoadByDay[normalized] ?? 0
-
-        let recentStart = Calendar.current.date(byAdding: .day, value: -6, to: normalized) ?? normalized
-        let loadSeries = readinessDateSequence(from: recentStart, to: normalized).map { loadDay -> Double in
-            workoutLoadByDay[loadDay] ?? 0
-        }
-
-        let acuteLoad = loadSeries.reduce(0, +)
-        let chronicLoad = max(loadSeries.average ?? totalLoad, 1)
-        let acwr = acuteLoad / chronicLoad
-        let logarithmicLoad = 6.2 * log10(max(acuteLoad, 0) + 1)
-        let expandedLoad = pow(max(logarithmicLoad, 0), 1.08)
-        let adjustment = min(max(8 * (acwr - 1.0), -1.5), 4.5)
-        let preSoftCap = expandedLoad + adjustment + 0.5
-        let softCapped = 21 * (1 - exp(-preSoftCap / 21))
-        return max(0, min(21, softCapped))
-    }
-
     private func recoveryInputs(for day: Date, hrvLookup: [Date: Double]) -> HealthStateEngine.ProRecoveryInputs {
         let normalizedDay = Calendar.current.startOfDay(for: day)
         return HealthStateEngine.proRecoveryInputs(
@@ -498,16 +475,6 @@ struct ReadinessCheckView: View {
         return sleepDuration / timeInBed
     }
 
-    private func readinessTrendScore(for day: Date, hrvLookup: [Date: Double]) -> Double {
-        let normalized = Calendar.current.startOfDay(for: day)
-        guard let hrvValue = hrvLookup[normalized] ?? healthEngine.effectHRV[normalized] else {
-            return healthEngine.hrvTrendScore
-        }
-        let baseline = healthEngine.hrvBaseline7Day ?? healthEngine.hrvBaseline60Day?.mean ?? hrvValue
-        guard baseline > 0 else { return healthEngine.hrvTrendScore }
-        let deviation = (hrvValue - baseline) / baseline
-        return max(0, min(100, (deviation * 200) + 50))
-    }
 }
 
 private struct ReadinessSnapshot {
@@ -713,21 +680,6 @@ private struct ReadinessOrb: View {
             }
         }
     }
-}
-
-private func readinessDateSequence(from start: Date, to end: Date) -> [Date] {
-    let calendar = Calendar.current
-    var dates: [Date] = []
-    var cursor = calendar.startOfDay(for: start)
-    let finish = calendar.startOfDay(for: end)
-
-    while cursor <= finish {
-        dates.append(cursor)
-        guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
-        cursor = next
-    }
-
-    return dates
 }
 
 private func readinessFormatted(_ value: Double?, digits: Int) -> String {

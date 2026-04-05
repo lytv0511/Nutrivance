@@ -2,7 +2,12 @@ import Combine
 import HealthKit
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#endif
+#if os(macOS)
+import AppKit
+#endif
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 #endif
@@ -10,19 +15,21 @@ import WatchConnectivity
 import BackgroundTasks
 #endif
 
+#if canImport(UIKit)
 private func allViewControllers(from root: UIViewController) -> [UIViewController] {
     var controllers: [UIViewController] = [root]
-    
+
     if let presented = root.presentedViewController {
         controllers.append(contentsOf: allViewControllers(from: presented))
     }
-    
+
     for child in root.children {
         controllers.append(contentsOf: allViewControllers(from: child))
     }
-    
+
     return controllers
 }
+#endif
 
 #if canImport(WatchConnectivity)
 private struct WatchDashboardPayload: Codable {
@@ -1078,25 +1085,26 @@ private func watchWorkoutNote(for analytics: WorkoutAnalytics) -> String {
 }
 #endif
 
+#if canImport(UIKit)
 private func topViewController(from controller: UIViewController) -> UIViewController {
     if let presented = controller.presentedViewController {
         return topViewController(from: presented)
     }
-    
+
     if let navigationController = controller as? UINavigationController,
        let visibleViewController = navigationController.visibleViewController {
         return topViewController(from: visibleViewController)
     }
-    
+
     if let tabBarController = controller as? UITabBarController,
        let selectedViewController = tabBarController.selectedViewController {
         return topViewController(from: selectedViewController)
     }
-    
+
     for child in controller.children.reversed() {
         return topViewController(from: child)
     }
-    
+
     return controller
 }
 
@@ -1104,20 +1112,20 @@ private func activeNavigationController() -> UINavigationController? {
     let activeScenes = UIApplication.shared.connectedScenes
         .compactMap { $0 as? UIWindowScene }
         .filter { $0.activationState == .foregroundActive }
-    
+
     for scene in activeScenes {
         if let keyWindow = scene.windows.first(where: \.isKeyWindow),
            let rootViewController = keyWindow.rootViewController {
             let topController = topViewController(from: rootViewController)
-            
+
             if let navigationController = topController.navigationController {
                 return navigationController
             }
-            
+
             if let navigationController = topController as? UINavigationController {
                 return navigationController
             }
-            
+
             for controller in allViewControllers(from: rootViewController).reversed() {
                 if let navigationController = controller as? UINavigationController {
                     return navigationController
@@ -1125,9 +1133,10 @@ private func activeNavigationController() -> UINavigationController? {
             }
         }
     }
-    
+
     return nil
 }
+#endif
 
 extension Notification.Name {
     static let nutrivanceViewControlToday = Notification.Name("nutrivance.viewControl.today")
@@ -1155,12 +1164,12 @@ extension Notification.Name {
 }
 
 func toggleSystemSidebar() {
-    #if os(iOS)
+    #if canImport(UIKit)
     let selector = Selector(("toggleSidebar:"))
     let activeScenes = UIApplication.shared.connectedScenes
         .compactMap { $0 as? UIWindowScene }
         .filter { $0.activationState == .foregroundActive }
-    
+
     for scene in activeScenes {
         if let keyWindow = scene.windows.first(where: \.isKeyWindow) {
             if let rootViewController = keyWindow.rootViewController {
@@ -1169,13 +1178,13 @@ func toggleSystemSidebar() {
                         _ = target.perform(selector, with: nil)
                         return
                     }
-                    
+
                     if controller.responds(to: selector) {
                         _ = controller.perform(selector, with: nil)
                         return
                     }
                 }
-                
+
                 UIApplication.shared.sendAction(
                     selector,
                     to: nil,
@@ -1184,7 +1193,7 @@ func toggleSystemSidebar() {
                 )
                 return
             }
-            
+
             UIApplication.shared.sendAction(
                 selector,
                 to: nil,
@@ -1194,13 +1203,15 @@ func toggleSystemSidebar() {
             return
         }
     }
-    
+
     UIApplication.shared.sendAction(
         selector,
         to: nil,
         from: nil,
         for: nil
     )
+    #elseif os(macOS)
+    NSApp.sendAction(Selector(("toggleSidebar:")), to: nil, from: nil)
     #endif
 }
 
@@ -1208,21 +1219,29 @@ func performBackNavigation(
     presentedDestination: Binding<AppDestination?>,
     dismissAction: (() -> Void)?
 ) {
-    #if os(iOS)
+    #if canImport(UIKit)
     if let dismissAction {
         dismissAction()
         return
     }
-    
+
     if presentedDestination.wrappedValue != nil {
         presentedDestination.wrappedValue = nil
         return
     }
-    
+
     if let navigationController = activeNavigationController(),
        navigationController.viewControllers.count > 1 {
         navigationController.popViewController(animated: true)
         return
+    }
+    #else
+    if let dismissAction {
+        dismissAction()
+        return
+    }
+    if presentedDestination.wrappedValue != nil {
+        presentedDestination.wrappedValue = nil
     }
     #endif
 }
@@ -1399,6 +1418,7 @@ class NavigationState: ObservableObject {
     }
 
     static func defaultRootTab(for focus: AppFocus) -> RootTabSelection {
+        #if os(iOS)
         if UIDevice.current.userInterfaceIdiom == .phone {
             switch focus {
             case .nutrition: return .search
@@ -1406,6 +1426,7 @@ class NavigationState: ObservableObject {
             case .mentalHealth: return .dashboard
             }
         }
+        #endif
 
         switch focus {
         case .nutrition: return .search
@@ -1486,6 +1507,7 @@ class NavigationState: ObservableObject {
         appFocus = focus
         selectedView = view
 
+        #if os(iOS)
         if UIDevice.current.userInterfaceIdiom == .phone {
             switch tab {
             case .dashboard, .programBuilder, .search, .playground, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .stress:
@@ -1497,6 +1519,7 @@ class NavigationState: ObservableObject {
             }
             return
         }
+        #endif
 
         selectedRootTab = tab
         presentedDestination = nil

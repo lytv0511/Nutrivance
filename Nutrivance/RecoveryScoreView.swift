@@ -365,14 +365,15 @@ struct RecoveryScoreView: View {
         isLoading = false
     }
 
+    @MainActor
     private func buildSnapshots() -> [RecoveryFocusTimeFilter: RecoverySnapshot] {
         let hrvLookup = Dictionary(uniqueKeysWithValues: healthEngine.dailyHRV.map { ($0.date, $0.average) })
         var snapshots: [RecoveryFocusTimeFilter: RecoverySnapshot] = [:]
 
         for filter in RecoveryFocusTimeFilter.allCases {
-            let selectedWindow = recoveryDateSequence(from: filter.windowStart(anchor: today), to: today)
+            let selectedWindow = sharedDateSequence(from: filter.windowStart(anchor: today), to: today)
             let recoverySeries = selectedWindow.map { day in
-                (day, recoveryScoreForDay(day, hrvLookup: hrvLookup))
+                (day, sharedRecoveryScore(for: day, engine: healthEngine) ?? healthEngine.recoveryScore)
             }
             let effectHRVSeries = selectedWindow.compactMap { day in
                 effectHRV(on: day, hrvLookup: hrvLookup).map { (day, $0) }
@@ -498,12 +499,6 @@ struct RecoveryScoreView: View {
         ]
     }
 
-    private func recoveryScoreForDay(_ day: Date, hrvLookup: [Date: Double]) -> Double {
-        let inputs = recoveryInputs(for: day, hrvLookup: hrvLookup)
-        guard !inputs.isInconclusive else { return healthEngine.recoveryScore }
-        return HealthStateEngine.proRecoveryScore(from: inputs)
-    }
-
     private func recoveryInputs(for day: Date, hrvLookup: [Date: Double]) -> HealthStateEngine.ProRecoveryInputs {
         let normalizedDay = Calendar.current.startOfDay(for: day)
         return HealthStateEngine.proRecoveryInputs(
@@ -563,7 +558,7 @@ private struct RecoverySnapshot {
 
     static func empty(for filter: RecoveryFocusTimeFilter, anchor: Date) -> RecoverySnapshot {
         RecoverySnapshot(
-            selectedWindow: recoveryDateSequence(from: filter.windowStart(anchor: anchor), to: anchor),
+            selectedWindow: sharedDateSequence(from: filter.windowStart(anchor: anchor), to: anchor),
             recoverySeries: [],
             effectHRVSeries: [],
             basalRhrSeries: [],
@@ -745,21 +740,6 @@ private struct RecoveryHalo: View {
             }
         }
     }
-}
-
-private func recoveryDateSequence(from start: Date, to end: Date) -> [Date] {
-    let calendar = Calendar.current
-    var dates: [Date] = []
-    var cursor = calendar.startOfDay(for: start)
-    let finish = calendar.startOfDay(for: end)
-
-    while cursor <= finish {
-        dates.append(cursor)
-        guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
-        cursor = next
-    }
-
-    return dates
 }
 
 private func recoveryFocusFormatted(_ value: Double?, digits: Int) -> String {
