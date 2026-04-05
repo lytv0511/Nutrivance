@@ -126,6 +126,11 @@ struct ContentView_iPhone_alt: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)
+        .onChange(of: navigationState.selectedRootTab) { _, tab in
+            if tab == .search {
+                navigationState.bumpSearchTabKeyboardFocus()
+            }
+        }
         .fullScreenCover(item: $navigationState.presentedDestination) { destination in
             NavigationStack {
                 destinationView(for: destination)
@@ -134,6 +139,10 @@ struct ContentView_iPhone_alt: View {
                             Button("Close") {
                                 navigationState.presentedDestination = nil
                             }
+                            .catalystDesktopFocusable()
+                            #if targetEnvironment(macCatalyst)
+                            .keyboardShortcut(.escape, modifiers: [])
+                            #endif
                         }
                     }
             }

@@ -383,12 +383,14 @@ private struct HeartZonesDateToolbarButtons: View {
             }
             .buttonStyle(LiquidGlassCircleButtonStyle())
             .accessibilityLabel("Previous period")
+            .catalystDesktopFocusable()
 
             Button(action: onToday) {
                 Text("Today")
             }
             .buttonStyle(LiquidGlassTodayButtonStyle())
             .accessibilityLabel("Jump to today")
+            .catalystDesktopFocusable()
 
             Button(action: onNext) {
                 Image(systemName: "chevron.right")
@@ -396,6 +398,7 @@ private struct HeartZonesDateToolbarButtons: View {
             }
             .buttonStyle(LiquidGlassCircleButtonStyle())
             .accessibilityLabel("Next period")
+            .catalystDesktopFocusable()
         }
     }
 }
@@ -701,6 +704,7 @@ struct HeartZonesView: View {
             Text(label)
         }
         .buttonStyle(LiquidGlassSportChipStyle(isSelected: ui.sportFilter == sport))
+        .catalystDesktopFocusable()
     }
 
     // MARK: - Aggregation Controls
@@ -714,6 +718,7 @@ struct HeartZonesView: View {
             }
             .pickerStyle(.segmented)
             .tint(.orange)
+            .catalystDesktopFocusable()
 
             Picker("Baseline", selection: $ui.baselineWindow) {
                 ForEach(BaselineWindow.allCases, id: \.self) { window in
@@ -722,6 +727,7 @@ struct HeartZonesView: View {
             }
             .pickerStyle(.segmented)
             .tint(.orange)
+            .catalystDesktopFocusable()
         }
         .padding(12)
         .background {
@@ -967,6 +973,7 @@ struct HeartZonesView: View {
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.orange)
+                    .catalystDesktopFocusable()
                 }
             }
 

@@ -35,6 +35,7 @@ struct HealthKitImportView: View {
                         Text("\(nutrient.name.capitalized): \(String(format: "%.1f", nutrient.value)) \(nutrient.unit)")
 
                     }
+                    .catalystDesktopFocusable()
                 }
             }
             .navigationTitle("Import to Health")
@@ -53,11 +54,16 @@ struct HealthKitImportView: View {
                             }
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .catalystDesktopFocusable()
+                    #if targetEnvironment(macCatalyst)
+                    .keyboardShortcut(.escape, modifiers: [])
+                    #endif
                 }
             }
             .onAppear {

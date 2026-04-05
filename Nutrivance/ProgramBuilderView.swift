@@ -1,4 +1,9 @@
-
+import SwiftUI
+import HealthKit
+import MapKit
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 private struct UniformChipWidthGrid: View {
     let activities: [ProgramWorkoutType]
@@ -16,13 +21,6 @@ private struct UniformChipWidthGrid: View {
         .animation(.default, value: activities)
     }
 }
-import SwiftUI
-import HealthKit
-import MapKit
-#if canImport(FoundationModels)
-import FoundationModels
-#endif
-
 private enum ProgramBuilderTab: String, CaseIterable, Identifiable {
     case overview
     case workoutStages
@@ -100,6 +98,8 @@ struct ProgramBuilderView: View {
     @State private var stageManagerBannedRoles: Set<ProgramMicroStageRole> = []
     @State private var stageManagerBannedGoals: Set<ProgramMicroStageGoal> = []
     @State private var isStageManagerBanSheetPresented = false
+    @State private var navigateToWorkoutViewsLayout = false
+    @State private var navigateToMetricLayout = false
 
     private var catalog: [ProgramWorkoutType] {
         ProgramWorkoutType.catalog + customActivities
@@ -245,10 +245,14 @@ struct ProgramBuilderView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                NavigationLink(destination: ProgramBuilderWorkoutViewsLayoutView()) {
+                Button {
+                    navigateToWorkoutViewsLayout = true
+                } label: {
                     Image(systemName: "square.grid.2x2")
                 }
-                NavigationLink(destination: ProgramBuilderMetricLayoutView()) {
+                Button {
+                    navigateToMetricLayout = true
+                } label: {
                     Image(systemName: "gauge")
                 }
             }
@@ -258,6 +262,12 @@ struct ProgramBuilderView: View {
                     dismissProgramBuilderKeyboard()
                 }
             }
+        }
+        .navigationDestination(isPresented: $navigateToWorkoutViewsLayout) {
+            ProgramBuilderWorkoutViewsLayoutView()
+        }
+        .navigationDestination(isPresented: $navigateToMetricLayout) {
+            ProgramBuilderMetricLayoutView()
         }
         .fullScreenCover(isPresented: $isWorkoutStagesViewPresented) {
             NavigationStack {
@@ -299,6 +309,12 @@ struct ProgramBuilderView: View {
         }
         .onAppear {
             handleViewAppear()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlWorkoutViews)) { _ in
+            navigateToWorkoutViewsLayout = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlWorkoutMetricLayout)) { _ in
+            navigateToMetricLayout = true
         }
     }
 
@@ -4225,7 +4241,7 @@ private struct ProgramBuilderMetricRow: View {
                 .foregroundStyle(.white.opacity(0.7))
 
             HStack(spacing: 12) {
-                Toggle("Visible", isOn: $isEnabled)
+                CatalystAccessibleToggle("Visible", isOn: $isEnabled)
                     .foregroundStyle(.white)
 
                 Spacer(minLength: 0)
@@ -4236,12 +4252,14 @@ private struct ProgramBuilderMetricRow: View {
                             .foregroundStyle(canMoveUp ? .white : .gray)
                     }
                     .disabled(!canMoveUp)
+                    .catalystDesktopFocusable()
 
                     Button(action: moveDown) {
                         Image(systemName: "chevron.down")
                             .foregroundStyle(canMoveDown ? .white : .gray)
                     }
                     .disabled(!canMoveDown)
+                    .catalystDesktopFocusable()
                 }
             }
         }
@@ -4265,7 +4283,7 @@ private struct ProgramBuilderWorkoutViewRow: View {
                 .foregroundStyle(.white)
 
             HStack(spacing: 12) {
-                Toggle("Visible", isOn: $isEnabled)
+                CatalystAccessibleToggle("Visible", isOn: $isEnabled)
                     .foregroundStyle(.white)
 
                 Spacer(minLength: 0)
@@ -4276,12 +4294,14 @@ private struct ProgramBuilderWorkoutViewRow: View {
                             .foregroundStyle(canMoveUp ? .white : .gray)
                     }
                     .disabled(!canMoveUp)
+                    .catalystDesktopFocusable()
 
                     Button(action: moveDown) {
                         Image(systemName: "chevron.down")
                             .foregroundStyle(canMoveDown ? .white : .gray)
                     }
                     .disabled(!canMoveDown)
+                    .catalystDesktopFocusable()
                 }
             }
         }

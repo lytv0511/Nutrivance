@@ -294,13 +294,7 @@ struct WorkoutHistoryView: View {
                         Button(action: {
                             Task {
                                 isLoading = true
-                                if engine.hasNewDataAvailable {
-                                    // New data detected: replace cache with fresh fetch
-                                    await engine.replaceWorkoutCacheWithNewData(days: 3650)
-                                } else {
-                                    // Standard reload: force refresh
-                                    await engine.forceRefreshWorkoutAnalytics(days: 3650)
-                                }
+                                await engine.refreshSyncedHealthDataFromICloud()
                                 isLoading = false
                             }
                         }) {
@@ -315,10 +309,12 @@ struct WorkoutHistoryView: View {
                                 }
                             }
                         }
+                        .catalystDesktopFocusable()
                         Button(action: { showDatePicker = true }) {
                             Image(systemName: "calendar")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
                         Menu {
                             Button("All Sports") { sportFilter = nil }
                             ForEach(uniqueSports, id: \.self) { sport in
@@ -328,10 +324,12 @@ struct WorkoutHistoryView: View {
                             Image(systemName: "line.horizontal.3.decrease.circle")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
                         Button(action: { showHRZoneSettings = true }) {
                             Image(systemName: "gear")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
                     }
                 }
             }
@@ -340,6 +338,7 @@ struct WorkoutHistoryView: View {
                     DatePicker("Select Date", selection: $selectedDate, displayedComponents: .date)
                         .datePickerStyle(.graphical)
                         .padding()
+                        .catalystDesktopFocusable()
                     if workoutDates.contains(Calendar.current.startOfDay(for: selectedDate)) {
                         HStack {
                             Circle()
@@ -365,6 +364,7 @@ struct WorkoutHistoryView: View {
                     .padding()
                     .foregroundColor(.orange)
                     .disabled(isJumpingToSelectedDate)
+                    .catalystDesktopFocusable()
                 }
             }
             .sheet(isPresented: $showHRZoneSettings) {
@@ -400,13 +400,12 @@ struct WorkoutHistoryView: View {
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlRefreshWorkouts)) { _ in
                 Task {
                     isLoading = true
-                    if engine.hasNewDataAvailable {
-                        await engine.replaceWorkoutCacheWithNewData(days: 3650)
-                    } else {
-                        await engine.forceRefreshWorkoutAnalytics(days: 3650)
-                    }
+                    await engine.refreshSyncedHealthDataFromICloud()
                     isLoading = false
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlHRZoneSettings)) { _ in
+                showHRZoneSettings = true
             }
             .onChange(of: navigationState.pendingWorkoutScrollID) { _, _ in
                 handlePendingWorkoutNavigation()

@@ -17,6 +17,12 @@ final class HealthStateEngine: ObservableObject {
     private let hkManager = HealthKitManager()
     private let metricsSnapshotFileName = "healthMetricsSnapshot.json"
     private let metricsSnapshotCloudKey = "health_metrics_snapshot_v1"
+    /// Max samples/segments uploaded per handoff blob (keeps CloudKit assets reasonable).
+    private let cloudHandoffMaxHRVSamples = 100_000
+    private let cloudHandoffMaxSleepSegments = 28_000
+    private var lastAppliedHRVSamplesHandoffAt: Date = .distantPast
+    private var lastAppliedSleepTimelineHandoffAt: Date = .distantPast
+    private var lastAppliedSleepUIMetricsHandoffAt: Date = .distantPast
 
     struct PersistedDateValue: Codable {
         let date: Date
@@ -303,6 +309,14 @@ final class HealthStateEngine: ObservableObject {
 
     // MARK: - Vitals & Advanced Metrics
     @Published var sleepStages: [Date: [String: Double]] = [:] // [date: [stage: hours]]
+    /// HealthKit sleep-analysis segments for cross-device graphs (CloudKit `sleepTimelineDetailed` handoff).
+    @Published var sleepTimelineSegments: [EngineSleepTimelineSegment] = []
+    /// iOS-built sleep cards (segments w/ HR/RR, dip, bedtime, overnight vitals) for Mac Catalyst.
+    @Published private(set) var sleepUIMetricsHandoff: EngineSleepUIMetricsBlob = EngineSleepUIMetricsBlob(
+        updatedAt: .distantPast,
+        nights: [],
+        bedtimeNights: []
+    )
     @Published var sleepEfficiency: [Date: Double] = [:] // [date: efficiency 0-1]
     @Published var sleepConsistency: Double? // stddev of sleep start times (hours)
     @Published var sleepStartHours: [Date: Double] = [:] // [date: bedtime hour]
@@ -481,7 +495,7 @@ final class HealthStateEngine: ObservableObject {
 
     private func cloudTrimmedSnapshot(from snapshot: MetricsSnapshot) -> MetricsSnapshot {
         let dayLimit = 180
-        let sampleLimit = 600
+        let sampleLimit = 5_000
         return MetricsSnapshot(
             updatedAt: snapshot.updatedAt,
             latestHRV: snapshot.latestHRV,
@@ -688,19 +702,18 @@ final class HealthStateEngine: ObservableObject {
         #endif
     }
 
-    /// Pull latest snapshot from iCloud KVS + disk merge, then **await** CloudKit frozen blobs on Mac Catalyst (so charts have data before UI settles).
-    private func reloadAggregatedHealthSnapshotFromICloud() async {
+    /// Pull latest snapshot from iCloud KVS + disk merge, then optionally await CloudKit `EngineSyncBlob` records.
+    /// - Parameter userInitiatedRefresh: When true on iOS/iPadOS, also fetches CloudKit handoff (same as Catalyst always does) so pull-to-refresh can merge phone-exported series without querying HealthKit.
+    private func reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: Bool = false) async {
         NSUbiquitousKeyValueStore.default.synchronize()
         hydrateMetricsFromCacheIfAvailable()
         updateScores()
-        if Self.usesAggregatedCloudHealthPath {
-            await pullEngineSyncBlobsFromCloudKit()
-        }
+        await pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: userInitiatedRefresh)
     }
 
-    /// Mac Catalyst: load full **time series** snapshots from CloudKit (`EngineSyncBlob`) written by iOS.
-    private func pullEngineSyncBlobsFromCloudKit() async {
-        guard Self.usesAggregatedCloudHealthPath else { return }
+    /// Load **time series** snapshots from CloudKit (`EngineSyncBlob`) written by iOS (required on Mac Catalyst; optional on other platforms when `allowOnNonCatalyst` is set for user refresh).
+    private func pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: Bool = false) async {
+        guard Self.usesAggregatedCloudHealthPath || allowOnNonCatalyst else { return }
         guard await CloudKitManager.shared.accountCanUseCloudKit() else { return }
 
         if let (_, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
@@ -709,13 +722,23 @@ final class HealthStateEngine: ObservableObject {
            let snap = try? JSONDecoder().decode(MetricsSnapshot.self, from: data) {
             let localAnchor = cachedMetricsUpdatedAt ?? .distantPast
             let localSeriesEmpty = dailyHRV.isEmpty && dailyRestingHeartRate.isEmpty
-            if snap.updatedAt > localAnchor || localSeriesEmpty {
+            #if targetEnvironment(macCatalyst)
+            let richerHandoffPending =
+                snap.hrvSampleHistory.count > hrvSampleHistory.count
+                || snap.sleepStages.count > sleepStages.count
+            let shouldApplyMetrics = snap.updatedAt > localAnchor || localSeriesEmpty || richerHandoffPending
+            #else
+            let shouldApplyMetrics = snap.updatedAt > localAnchor || localSeriesEmpty
+            #endif
+            if shouldApplyMetrics {
                 applyMetricsSnapshot(snap)
                 if let url = metricsSnapshotURL(), let enc = try? JSONEncoder().encode(snap) {
                     try? enc.write(to: url, options: .atomic)
                 }
             }
         }
+
+        await mergeDetailedHealthHandoffsFromCloudKit()
 
         if let (ckUpdated, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
             recordName: NutrivanceEngineSyncSchema.RecordName.workoutAnalytics
@@ -737,6 +760,162 @@ final class HealthStateEngine: ObservableObject {
 
         updateScores()
         scheduleScoresRefresh()
+    }
+
+    private func clampSleepTimelineSegmentCount() {
+        guard sleepTimelineSegments.count > cloudHandoffMaxSleepSegments else { return }
+        sleepTimelineSegments = Array(sleepTimelineSegments.sorted { $0.start < $1.start }.suffix(cloudHandoffMaxSleepSegments))
+    }
+
+    private func dedupeSleepTimelineSegments(_ segs: [EngineSleepTimelineSegment]) -> [EngineSleepTimelineSegment] {
+        var seen = Set<String>()
+        var out: [EngineSleepTimelineSegment] = []
+        for s in segs.sorted(by: { $0.start < $1.start }) {
+            let key = String(format: "%.3f_%.3f_%d", s.start.timeIntervalSince1970, s.end.timeIntervalSince1970, s.stageValue)
+            guard seen.insert(key).inserted else { continue }
+            out.append(s)
+        }
+        return out
+    }
+
+    private func applyHRVSamplesHandoffPayload(_ payload: EngineHRVSamplesBlob) {
+        let sorted = payload.samples.sorted { $0.date < $1.date }
+        hrvSampleHistory = sorted.map { HRVSamplePoint(date: $0.date, value: $0.value) }
+        hrvHistory = sorted.map(\.value)
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: sorted) { calendar.startOfDay(for: $0.date) }
+        dailyHRV = grouped.map { day, pts in
+            let vals = pts.map(\.value)
+            let avg = vals.reduce(0, +) / Double(max(vals.count, 1))
+            return DailyHRVPoint(
+                date: day,
+                average: avg,
+                min: vals.min() ?? avg,
+                max: vals.max() ?? avg
+            )
+        }.sorted { $0.date < $1.date }
+    }
+
+    /// Merges full HRV sample list + sleep segment timeline from iPhone/iPad CloudKit handoff (Stress / Sleep graphs on Mac Catalyst).
+    private func mergeDetailedHealthHandoffsFromCloudKit() async {
+        guard await CloudKitManager.shared.accountCanUseCloudKit() else { return }
+
+        if let (_, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
+            recordName: NutrivanceEngineSyncSchema.RecordName.hrvSamplesDetailed
+        ),
+           let payload = try? JSONDecoder().decode(EngineHRVSamplesBlob.self, from: data),
+           !payload.samples.isEmpty {
+            let shouldApply = payload.updatedAt > lastAppliedHRVSamplesHandoffAt
+                || hrvSampleHistory.isEmpty
+                || payload.samples.count > hrvSampleHistory.count
+            if shouldApply {
+                lastAppliedHRVSamplesHandoffAt = payload.updatedAt
+                applyHRVSamplesHandoffPayload(payload)
+            }
+        }
+
+        if let (_, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
+            recordName: NutrivanceEngineSyncSchema.RecordName.sleepTimelineDetailed
+        ),
+           let payload = try? JSONDecoder().decode(EngineSleepTimelineBlob.self, from: data),
+           !payload.segments.isEmpty {
+            let shouldApply = payload.updatedAt > lastAppliedSleepTimelineHandoffAt
+                || sleepTimelineSegments.isEmpty
+                || payload.segments.count > sleepTimelineSegments.count
+            if shouldApply {
+                lastAppliedSleepTimelineHandoffAt = payload.updatedAt
+                sleepTimelineSegments = dedupeSleepTimelineSegments(payload.segments)
+                clampSleepTimelineSegmentCount()
+            }
+        }
+
+        if let (_, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
+            recordName: NutrivanceEngineSyncSchema.RecordName.sleepUIMetricsDetailed
+        ),
+           let payload = try? JSONDecoder().decode(EngineSleepUIMetricsBlob.self, from: data),
+           (!payload.nights.isEmpty || !payload.bedtimeNights.isEmpty) {
+            let shouldApply = payload.updatedAt > lastAppliedSleepUIMetricsHandoffAt
+                || sleepUIMetricsHandoff.nights.isEmpty
+                || payload.nights.count > sleepUIMetricsHandoff.nights.count
+            if shouldApply {
+                lastAppliedSleepUIMetricsHandoffAt = payload.updatedAt
+                sleepUIMetricsHandoff = payload
+            }
+        }
+    }
+
+    /// Mac Catalyst: handoff package for a calendar wake day, if iPhone uploaded it.
+    func sleepNightUIPackage(forWakeDay wakeDayStart: Date) -> EngineSleepNightUIPackage? {
+        let cal = Calendar.current
+        let key = cal.startOfDay(for: wakeDayStart)
+        return sleepUIMetricsHandoff.nights.first { cal.isDate($0.wakeDayStart, inSameDayAs: key) }
+    }
+
+    #if !targetEnvironment(macCatalyst)
+    /// Call after iOS loads a night in Sleep (HealthKit) so Mac gets segments, vitals, dip, charts. Updates in-memory handoff immediately; CloudKit upload is scheduled so iOS Sleep UI is not blocked.
+    func upsertSleepUIMetricsHandoff(_ package: EngineSleepNightUIPackage, bedtimeNights: [EngineBedtimeNightHandoff]) {
+        var nights = sleepUIMetricsHandoff.nights
+        let cal = Calendar.current
+        nights.removeAll { cal.isDate($0.wakeDayStart, inSameDayAs: package.wakeDayStart) }
+        var trimmedSegs = package.segments
+        if trimmedSegs.count > 120 { trimmedSegs = Array(trimmedSegs.prefix(120)) }
+        var agg = package
+        agg.segments = trimmedSegs
+        nights.insert(agg, at: 0)
+        if nights.count > 30 { nights = Array(nights.prefix(30)) }
+        sleepUIMetricsHandoff = EngineSleepUIMetricsBlob(updatedAt: Date(), nights: nights, bedtimeNights: bedtimeNights)
+        Task { await self.pushDetailedHealthHandoffsToCloudKit() }
+    }
+
+    private func pushDetailedHealthHandoffsToCloudKit() async {
+        guard await CloudKitManager.shared.accountCanUseCloudKit() else { return }
+        let sortedHRV = hrvSampleHistory.sorted { $0.date < $1.date }
+        let hrvTrimmed = Array(sortedHRV.suffix(cloudHandoffMaxHRVSamples)).map {
+            EngineHRVSamplePoint(date: $0.date, value: $0.value)
+        }
+        let hrvBlob = EngineHRVSamplesBlob(updatedAt: Date(), samples: hrvTrimmed)
+        if let enc = try? JSONEncoder().encode(hrvBlob) {
+            do {
+                try await CloudKitManager.shared.uploadEngineSyncBlob(
+                    recordName: NutrivanceEngineSyncSchema.RecordName.hrvSamplesDetailed,
+                    data: enc
+                )
+            } catch {
+                CloudKitManager.shared.reportHealthSyncError("HRV samples handoff: \(error.localizedDescription)")
+            }
+        }
+        let sleepSorted = dedupeSleepTimelineSegments(sleepTimelineSegments)
+        let sleepTrimmed = Array(sleepSorted.suffix(cloudHandoffMaxSleepSegments))
+        let sleepBlob = EngineSleepTimelineBlob(updatedAt: Date(), segments: sleepTrimmed)
+        if let enc = try? JSONEncoder().encode(sleepBlob) {
+            do {
+                try await CloudKitManager.shared.uploadEngineSyncBlob(
+                    recordName: NutrivanceEngineSyncSchema.RecordName.sleepTimelineDetailed,
+                    data: enc
+                )
+            } catch {
+                CloudKitManager.shared.reportHealthSyncError("Sleep timeline handoff: \(error.localizedDescription)")
+            }
+        }
+        if !sleepUIMetricsHandoff.nights.isEmpty || !sleepUIMetricsHandoff.bedtimeNights.isEmpty,
+           let enc = try? JSONEncoder().encode(sleepUIMetricsHandoff) {
+            do {
+                try await CloudKitManager.shared.uploadEngineSyncBlob(
+                    recordName: NutrivanceEngineSyncSchema.RecordName.sleepUIMetricsDetailed,
+                    data: enc
+                )
+            } catch {
+                CloudKitManager.shared.reportHealthSyncError("Sleep UI metrics handoff: \(error.localizedDescription)")
+            }
+        }
+    }
+    #endif
+
+    /// User-visible refresh: merge **NSUbiquitousKeyValueStore** metrics snapshot with local cache and pull **CloudKit** engine blobs when the account allows. Does **not** run HealthKit coverage backfills.
+    func refreshSyncedHealthDataFromICloud() async {
+        await reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: true)
+        scheduleScoresRefresh()
+        scheduleMetricsSnapshotSave()
     }
 
     #if !targetEnvironment(macCatalyst)
@@ -767,6 +946,7 @@ final class HealthStateEngine: ObservableObject {
                 CloudKitManager.shared.reportHealthSyncError("Engine workout handoff: \(error.localizedDescription)")
             }
         }
+        await pushDetailedHealthHandoffsToCloudKit()
     }
     #endif
 
@@ -781,11 +961,13 @@ final class HealthStateEngine: ObservableObject {
         let cloudSnapshot = cloudTrimmedSnapshot(from: snapshot)
         let fullEncoded = try? JSONEncoder().encode(snapshot)
         metricsSnapshotWriteTask?.cancel()
+        #if !targetEnvironment(macCatalyst)
         metricsSnapshotWriteTask = Task.detached(priority: .utility) { [fullEncoded] in
             if let url = localURL, let fullEncoded {
                 try? fullEncoded.write(to: url, options: .atomic)
             }
         }
+        #endif
 
         #if !targetEnvironment(macCatalyst)
         Task { @MainActor in
@@ -803,6 +985,7 @@ final class HealthStateEngine: ObservableObject {
                     CloudKitManager.shared.reportHealthSyncError("Metrics snapshot CK upload: \(error.localizedDescription)")
                 }
             }
+            await pushDetailedHealthHandoffsToCloudKit()
         }
         #endif
     }
@@ -1188,6 +1371,7 @@ final class HealthStateEngine: ObservableObject {
             // even when `.inBed` samples are sparse in historical data.
             var stageSleepWindows: [Date: [(start: Date, end: Date)]] = [:]
             var inBedSleepWindows: [Date: [(start: Date, end: Date)]] = [:]
+            var collectedSegments: [EngineSleepTimelineSegment] = []
             for sample in samples {
                 let day = calendar.startOfDay(for: sample.startDate)
                 let duration = sample.endDate.timeIntervalSince(sample.startDate) / 3600 // hours
@@ -1220,6 +1404,9 @@ final class HealthStateEngine: ObservableObject {
                 } else if let stage = stage {
                     dayData[stage] = (dayData[stage] ?? 0.0) + duration
                     stageSleepWindows[day, default: []].append((start: sample.startDate, end: sample.endDate))
+                    collectedSegments.append(
+                        EngineSleepTimelineSegment(start: sample.startDate, end: sample.endDate, stageValue: value)
+                    )
                 }
                 stages[day] = dayData
             }
@@ -1305,6 +1492,15 @@ final class HealthStateEngine: ObservableObject {
                     self.sleepMidpointHours = midpointHours
                 }
 
+                let sortedNewSegments = collectedSegments.sorted { $0.start < $1.start }
+                if mergeIntoExisting {
+                    let kept = self.sleepTimelineSegments.filter { !($0.end > startDate && $0.start < endDate) }
+                    self.sleepTimelineSegments = self.dedupeSleepTimelineSegments(kept + sortedNewSegments)
+                } else {
+                    self.sleepTimelineSegments = self.dedupeSleepTimelineSegments(sortedNewSegments)
+                }
+                self.clampSleepTimelineSegmentCount()
+
                 let midpointValues = self.sleepMidpointHours.values.map { $0 }
                 if !midpointValues.isEmpty {
                     let mean = midpointValues.reduce(0, +) / Double(midpointValues.count)
@@ -1313,6 +1509,8 @@ final class HealthStateEngine: ObservableObject {
                 } else {
                     self.sleepConsistency = consistency
                 }
+
+                self.scheduleMetricsSnapshotSave()
             }
             
             Task { @MainActor in
@@ -2764,17 +2962,22 @@ final class HealthStateEngine: ObservableObject {
         }
 
         if Self.usesAggregatedCloudHealthPath {
-            let cachedEntries = loadPersistedWorkoutAnalyticsEntries()
-            if !cachedEntries.isEmpty {
-                workoutAnalytics = rebuildWorkoutAnalytics(from: cachedEntries)
-                workoutAnalyticsCacheTimestamp = Date()
-                lastCachedWorkoutDate = cachedEntries.map(\.workoutStartDate).max()
-                earliestRequestedWorkoutDate = cachedEntries.map(\.workoutStartDate).min()
-                hasInitializedWorkoutAnalytics = true
-                scheduleScoresRefresh()
+            if forceRefresh {
+                await reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: true)
                 scheduleMetricsSnapshotSave()
             } else {
-                hasInitializedWorkoutAnalytics = true
+                let cachedEntries = loadPersistedWorkoutAnalyticsEntries()
+                if !cachedEntries.isEmpty {
+                    workoutAnalytics = rebuildWorkoutAnalytics(from: cachedEntries)
+                    workoutAnalyticsCacheTimestamp = Date()
+                    lastCachedWorkoutDate = cachedEntries.map(\.workoutStartDate).max()
+                    earliestRequestedWorkoutDate = cachedEntries.map(\.workoutStartDate).min()
+                    hasInitializedWorkoutAnalytics = true
+                    scheduleScoresRefresh()
+                    scheduleMetricsSnapshotSave()
+                } else {
+                    hasInitializedWorkoutAnalytics = true
+                }
             }
             return
         }
@@ -3076,6 +3279,11 @@ final class HealthStateEngine: ObservableObject {
     
     /// Replace cache with new fetched data (called when user taps "Load New Metrics" button)
     func replaceWorkoutCacheWithNewData(days: Int = 3650) async {
+        if Self.usesAggregatedCloudHealthPath {
+            await reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: true)
+            scheduleMetricsSnapshotSave()
+            return
+        }
         let end = Date()
         let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
         let analytics = await hkManager.fetchWorkoutsWithAnalytics(from: start, to: end)
@@ -3600,6 +3808,7 @@ final class HealthStateEngine: ObservableObject {
                 }
                 self.dailyHRV = dailyPoints
                 self.scheduleScoresRefresh()
+                self.scheduleMetricsSnapshotSave()
             }
         }
 

@@ -1984,6 +1984,27 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Mindful-session category samples in the range (newest first). Used for mindfulness scoring and summaries.
+    func fetchMindfulSessionSamples(from startDate: Date, to endDate: Date) async -> [HKCategorySample] {
+        guard let mindfulType = HKObjectType.categoryType(forIdentifier: .mindfulSession) else {
+            return []
+        }
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: mindfulType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                let rows = (samples ?? []).compactMap { $0 as? HKCategorySample }
+                continuation.resume(returning: rows)
+            }
+            self.healthStore.execute(query)
+        }
+    }
+
     func fetchNutrientValueAsync(for nutrient: String) async -> Double {
         return await withCheckedContinuation { continuation in
             fetchNutrientData(for: nutrient) { value, _ in

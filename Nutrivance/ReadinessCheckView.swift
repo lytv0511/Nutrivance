@@ -306,8 +306,16 @@ struct ReadinessCheckView: View {
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today
         snapshot = buildSnapshot()
 
-        let needRecovery = forceNetwork || healthEngine.needsRecoveryMetricsCoverage(from: recoveryStart, to: end)
-        let needWorkouts = forceNetwork || healthEngine.needsWorkoutAnalyticsCoverage(from: workoutStart, to: end)
+        if forceNetwork {
+            isLoading = true
+            await healthEngine.refreshSyncedHealthDataFromICloud()
+            snapshot = buildSnapshot()
+            isLoading = false
+            return
+        }
+
+        let needRecovery = healthEngine.needsRecoveryMetricsCoverage(from: recoveryStart, to: end)
+        let needWorkouts = healthEngine.needsWorkoutAnalyticsCoverage(from: workoutStart, to: end)
         guard needRecovery || needWorkouts else { return }
 
         isLoading = true

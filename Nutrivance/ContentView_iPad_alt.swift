@@ -241,8 +241,13 @@ struct ContentView_iPad_alt: View {
             // }
             // .defaultVisibility(.hidden, for: .tabBar)
         }
-        .tabViewStyle(.sidebarAdaptable)
+//        .tabViewStyle(.sidebarAdaptable)
         .tabViewCustomization($customization)
+        .onChange(of: navigationState.selectedRootTab) { _, tab in
+            if tab == .search {
+                navigationState.bumpSearchTabKeyboardFocus()
+            }
+        }
         .sheet(isPresented: $showEmotionSheet) {
             EmotionLogSheet()
         }
@@ -256,6 +261,9 @@ struct ContentView_iPad_alt: View {
 struct EmotionLogSheet: View {
 
     @Environment(\.dismiss) private var dismiss
+
+    private enum SheetFocus: Hashable { case kind }
+    @FocusState private var sheetFocus: SheetFocus?
 
     @State private var kind: HKStateOfMind.Kind = .momentaryEmotion
     @State private var valence: Double = 0
@@ -357,6 +365,8 @@ struct EmotionLogSheet: View {
                         Text("Day Summary").tag(HKStateOfMind.Kind.dailyMood)
                     }
                     .pickerStyle(.segmented)
+                    .focused($sheetFocus, equals: .kind)
+                    .catalystDesktopFocusable()
                 }
 
                 Section("Valence") {
@@ -388,12 +398,22 @@ struct EmotionLogSheet: View {
 
             }
             .navigationTitle("Log Emotion")
+            .defaultFocus($sheetFocus, .kind)
+            .onAppear {
+                if CatalystKeyboardNavigation.isDesktopKeyboardChrome {
+                    sheetFocus = .kind
+                }
+            }
             .toolbar {
 
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .catalystDesktopFocusable()
+                    #if targetEnvironment(macCatalyst)
+                    .keyboardShortcut(.escape, modifiers: [])
+                    #endif
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -401,6 +421,7 @@ struct EmotionLogSheet: View {
                         saveStateOfMind()
                         dismiss()
                     }
+                    .catalystDesktopFocusable()
                 }
             }
         }

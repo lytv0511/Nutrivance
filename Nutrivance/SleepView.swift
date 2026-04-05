@@ -227,6 +227,15 @@ struct OvernightVitalMetric: Identifiable, Sendable {
     let valueLabel: String
 }
 
+/// One row for overnight vitals normality (HealthKit interval averages or engine daily aggregates on Catalyst).
+private struct OvernightNormalityNightAgg {
+    let sleepMin: Double
+    let hr: Double?
+    let rr: Double?
+    let o2Pct: Double?
+    let tempC: Double?
+}
+
 private let heartRateDipMinNocturnalSamples = 20
 private let heartRateDipMinDaytimeSamples = 5
 
@@ -260,14 +269,546 @@ class SleepViewModel: ObservableObject {
     @Published var overnightVitals: [OvernightVitalMetric] = []
 
     private let healthStore = HealthKitManager()
+    /// Cancels stale work when the user switches nights before enrichment finishes.
+    private var lastNightEnrichmentTask: Task<Void, Never>?
     
     init() {
         Task {
             await self.fetchEarliestSleepDate()
         }
     }
+
+    #if targetEnvironment(macCatalyst)
+    private func engineSleepStages(forDay day: Date, calendar: Calendar) -> [String: Double] {
+        let key = calendar.startOfDay(for: day)
+        let engine = HealthStateEngine.shared
+        if let s = engine.sleepStages[key] { return s }
+        for (d, s) in engine.sleepStages where calendar.isDate(d, inSameDayAs: key) {
+            return s
+        }
+        return [:]
+    }
+
+    /// Per-day stage map for the **wake calendar day** of this anchor night (matches HealthKit row for `dayStart`: night `nightStart` → `nightStart + 12h` at local midnight).
+    /// Using `max` across both spanning calendar days pulled the wrong night’s hours onto zero-sleep days on Catalyst.
+    private func engineStageHoursForNightWakeDay(nightStart: Date, calendar: Calendar) -> [String: Double] {
+        let probe = calendar.date(byAdding: .hour, value: 12, to: nightStart)!
+        let wakeDayStart = calendar.startOfDay(for: probe)
+        return engineSleepStages(forDay: wakeDayStart, calendar: calendar)
+    }
+
+    /// Maps a sleep-night anchor (6pm–6pm start) to the calendar `dayStart` that `dailySummaryFromEngine` expects.
+    private func dailySummaryFromEngineForNightStart(_ nightStart: Date, calendar: Calendar) -> DailySleepSummary {
+        let probe = calendar.date(byAdding: .hour, value: 12, to: nightStart)!
+        let dayStart = calendar.startOfDay(for: probe)
+        return dailySummaryFromEngine(dayStart: dayStart, calendar: calendar)
+    }
+
+    /// When detailed segments exist, per-night totals must come from the timeline (same as HealthKit), not `max` of two calendar `sleepStages` buckets — otherwise a missed night can show another night’s hours.
+    private func dailySummaryFromSyncedTimeline(dayStart: Date, nightStart: Date, nightEnd: Date, calendar: Calendar) -> DailySleepSummary {
+        let raw = HealthStateEngine.shared.sleepTimelineSegments.filter { seg in
+            guard seg.end > nightStart && seg.start < nightEnd else { return false }
+            return syncedSegmentSleepNightStart(seg, calendar: calendar) == nightStart
+        }
+        let segs = dedupeEngineTimelineSegments(raw)
+        if segs.isEmpty {
+            return DailySleepSummary(
+                date: dayStart,
+                totalMinutes: 0,
+                awakeMinutes: 0,
+                deepMinutes: 0,
+                coreMinutes: 0,
+                remMinutes: 0,
+                unspecifiedAsleepMinutes: 0
+            )
+        }
+        var out: [SleepStageData] = []
+        for seg in segs.sorted(by: { $0.start < $1.start }) {
+            guard let st = sleepStageForSyncedTimeline(seg.stageValue) else { continue }
+            let s = max(seg.start, nightStart)
+            let e = min(seg.end, nightEnd)
+            let durMin = e.timeIntervalSince(s) / 60
+            if durMin < 2 { continue }
+            out.append(SleepStageData(
+                startTime: s,
+                endTime: e,
+                stage: st,
+                averageHeartRate: nil,
+                averageRespiratoryRate: nil
+            ))
+        }
+        let consolidated = consolidateSleepStages(out)
+        guard syncedTimelineAsleepMinutesPlausible(consolidated) else {
+            return DailySleepSummary(
+                date: dayStart,
+                totalMinutes: 0,
+                awakeMinutes: 0,
+                deepMinutes: 0,
+                coreMinutes: 0,
+                remMinutes: 0,
+                unspecifiedAsleepMinutes: 0
+            )
+        }
+        var awake: Double = 0
+        var core: Double = 0
+        var deep: Double = 0
+        var rem: Double = 0
+        var unspec: Double = 0
+        for block in consolidated {
+            let mins = block.duration / 60
+            switch block.stage {
+            case .awake: awake += mins
+            case .core: core += mins
+            case .deep: deep += mins
+            case .rem: rem += mins
+            case .unspecifiedAsleep: unspec += mins
+            }
+        }
+        let total = awake + core + deep + rem + unspec
+        let cappedTotal = min(total, 16 * 60)
+        if cappedTotal < total, total > 0 {
+            let scale = cappedTotal / total
+            return DailySleepSummary(
+                date: dayStart,
+                totalMinutes: cappedTotal,
+                awakeMinutes: awake * scale,
+                deepMinutes: deep * scale,
+                coreMinutes: core * scale,
+                remMinutes: rem * scale,
+                unspecifiedAsleepMinutes: unspec * scale
+            )
+        }
+        return DailySleepSummary(
+            date: dayStart,
+            totalMinutes: total,
+            awakeMinutes: awake,
+            deepMinutes: deep,
+            coreMinutes: core,
+            remMinutes: rem,
+            unspecifiedAsleepMinutes: unspec
+        )
+    }
+
+    private func dailySummaryFromEngine(dayStart: Date, calendar: Calendar) -> DailySleepSummary {
+        let nightStart = sleepNightStart(for: dayStart, calendar: calendar)
+        let nightEnd = calendar.date(byAdding: .day, value: 1, to: nightStart)!
+        if !HealthStateEngine.shared.sleepTimelineSegments.isEmpty {
+            return dailySummaryFromSyncedTimeline(dayStart: dayStart, nightStart: nightStart, nightEnd: nightEnd, calendar: calendar)
+        }
+        let merged = engineStageHoursForNightWakeDay(nightStart: nightStart, calendar: calendar)
+        func minutes(_ k: String) -> Double { (merged[k] ?? 0) * 60 }
+        let awake = minutes("awake")
+        let core = minutes("core")
+        let deep = minutes("deep")
+        let rem = minutes("rem")
+        let unspec = minutes("unspecified")
+        let total = awake + core + deep + rem + unspec
+        let cappedTotal = min(total, 16 * 60)
+        if cappedTotal < total, total > 0 {
+            let scale = cappedTotal / total
+            return DailySleepSummary(
+                date: dayStart,
+                totalMinutes: cappedTotal,
+                awakeMinutes: awake * scale,
+                deepMinutes: deep * scale,
+                coreMinutes: core * scale,
+                remMinutes: rem * scale,
+                unspecifiedAsleepMinutes: unspec * scale
+            )
+        }
+        return DailySleepSummary(
+            date: dayStart,
+            totalMinutes: total,
+            awakeMinutes: awake,
+            deepMinutes: deep,
+            coreMinutes: core,
+            remMinutes: rem,
+            unspecifiedAsleepMinutes: unspec
+        )
+    }
+
+    private func sleepStageForSyncedTimeline(_ raw: Int) -> SleepStage? {
+        switch raw {
+        case SleepStage.awake.rawValue: return .awake
+        case SleepStage.unspecifiedAsleep.rawValue: return .unspecifiedAsleep
+        case SleepStage.core.rawValue: return .core
+        case SleepStage.deep.rawValue: return .deep
+        case SleepStage.rem.rawValue: return .rem
+        default: return nil
+        }
+    }
+
+    /// Drops exact duplicate rows (e.g. repeated CloudKit merges) before consolidation.
+    private func dedupeEngineTimelineSegments(_ segs: [EngineSleepTimelineSegment]) -> [EngineSleepTimelineSegment] {
+        var seen = Set<String>()
+        var out: [EngineSleepTimelineSegment] = []
+        for s in segs.sorted(by: { $0.start < $1.start }) {
+            let key = String(format: "%.3f_%.3f_%d", s.start.timeIntervalSince1970, s.end.timeIntervalSince1970, s.stageValue)
+            guard seen.insert(key).inserted else { continue }
+            out.append(s)
+        }
+        return out
+    }
+
+    /// True if summed asleep time is within a plausible single-night bound (guards corrupted / triple-counted sync).
+    private func syncedTimelineAsleepMinutesPlausible(_ stages: [SleepStageData]) -> Bool {
+        let asleepMin = stages.filter { $0.stage != .awake }.reduce(0) { $0 + $1.duration } / 60
+        return asleepMin <= 18 * 60 + 30
+    }
+
+    /// Prefer midpoint for night attribution so segments starting just before the anchor hour still map to the correct sleep night on Mac.
+    private func syncedSegmentSleepNightStart(_ seg: EngineSleepTimelineSegment, calendar: Calendar) -> Date {
+        let mid = seg.start.addingTimeInterval(seg.end.timeIntervalSince(seg.start) / 2)
+        return sleepNightStart(for: mid, calendar: calendar)
+    }
+
+    /// Real HealthKit segments synced from iPhone/iPad via `EngineSleepTimelineBlob` (CloudKit).
+    private func engineTimelineStagesForNight(nightStart: Date, nightEnd: Date, calendar: Calendar) -> [SleepStageData] {
+        let raw = HealthStateEngine.shared.sleepTimelineSegments.filter { seg in
+            guard seg.end > nightStart && seg.start < nightEnd else { return false }
+            // Match HK night window; midpoint avoids losing stages whose sample start falls in the prior calendar window.
+            return syncedSegmentSleepNightStart(seg, calendar: calendar) == nightStart
+        }
+        let segs = dedupeEngineTimelineSegments(raw)
+        var out: [SleepStageData] = []
+        for seg in segs.sorted(by: { $0.start < $1.start }) {
+            guard let st = sleepStageForSyncedTimeline(seg.stageValue) else { continue }
+            let s = max(seg.start, nightStart)
+            let e = min(seg.end, nightEnd)
+            let durMin = e.timeIntervalSince(s) / 60
+            if durMin < 2 { continue }
+            out.append(SleepStageData(
+                startTime: s,
+                endTime: e,
+                stage: st,
+                averageHeartRate: nil,
+                averageRespiratoryRate: nil
+            ))
+        }
+        let consolidated = consolidateSleepStages(out)
+        guard syncedTimelineAsleepMinutesPlausible(consolidated) else { return [] }
+        return consolidated
+    }
+
+    private func synthesizedSleepStagesFromEngine(
+        nightStart: Date,
+        nightEnd: Date,
+        mergedHours: [String: Double],
+        preferredSleepStart: Date?,
+        preferredSleepEnd: Date?
+    ) -> [SleepStageData] {
+        let awakeH = mergedHours["awake"] ?? 0
+        let coreH = mergedHours["core"] ?? 0
+        let deepH = mergedHours["deep"] ?? 0
+        let remH = mergedHours["rem"] ?? 0
+        let unspecH = mergedHours["unspecified"] ?? 0
+        let splitAwake1 = awakeH * 0.2
+        let splitAwake2 = max(0, awakeH - splitAwake1)
+        let ordered: [(SleepStage, Double)] = [
+            (.awake, splitAwake1),
+            (.deep, deepH),
+            (.core, coreH),
+            (.rem, remH),
+            (.unspecifiedAsleep, unspecH),
+            (.awake, splitAwake2)
+        ]
+        let totalW = ordered.map(\.1).reduce(0, +)
+        guard totalW > 1e-6 else { return [] }
+        var cursor = nightStart
+        if let ps = preferredSleepStart, ps >= nightStart, ps < nightEnd {
+            cursor = ps
+        }
+        var span = nightEnd.timeIntervalSince(cursor)
+        if span < 60 { return [] }
+        if let pe = preferredSleepEnd, pe > cursor {
+            let capped = min(pe, nightEnd)
+            span = capped.timeIntervalSince(cursor)
+        }
+        // Without a real sleep window, spreading weights across the full 6pm–6pm interval (~24h) makes totals look like “23h sleep”.
+        let plausibleSleepSeconds = min(max(totalW * 3600, 2.5 * 3600), 14 * 3600)
+        let hasPreferredWindow = preferredSleepStart.map { $0 >= nightStart && $0 < nightEnd } == true
+        if !hasPreferredWindow {
+            span = min(span, plausibleSleepSeconds)
+        } else if span > plausibleSleepSeconds + 2 * 3600 {
+            span = min(span, plausibleSleepSeconds + 1800)
+        }
+        var out: [SleepStageData] = []
+        for (stage, weight) in ordered where weight > 1e-9 {
+            let dur = span * (weight / totalW)
+            if dur < 30 { continue }
+            let end = min(cursor.addingTimeInterval(dur), nightEnd)
+            if end > cursor {
+                out.append(SleepStageData(
+                    startTime: cursor,
+                    endTime: end,
+                    stage: stage,
+                    averageHeartRate: nil,
+                    averageRespiratoryRate: nil
+                ))
+                cursor = end
+            }
+        }
+        return out
+    }
+
+    private func updateLast7AvgSleepHoursFromEngine(referenceNightStart: Date, calendar: Calendar) {
+        var totals: [Double] = []
+        for offset in 0..<7 {
+            guard let d = calendar.date(byAdding: .day, value: -offset, to: referenceNightStart) else { continue }
+            let startOfDay = calendar.startOfDay(for: d)
+            let summary = dailySummaryFromEngine(dayStart: startOfDay, calendar: calendar)
+            let actualMinutes = max(0, summary.totalMinutes - summary.awakeMinutes)
+            totals.append(actualMinutes / 60.0)
+        }
+        guard totals.count == 7 else {
+            last7AvgSleepHours = nil
+            return
+        }
+        last7AvgSleepHours = totals.reduce(0, +) / 7.0
+    }
+
+    private func engineDailyScalar(wakeDay: Date, dict: [Date: Double], calendar: Calendar) -> Double? {
+        let k = calendar.startOfDay(for: wakeDay)
+        if let v = dict[k] { return v }
+        for (dk, v) in dict where calendar.isDate(dk, inSameDayAs: k) { return v }
+        return nil
+    }
+
+    private func coreDeepREMIntervalsFromEngineTimeline(nightStart: Date, nightEnd: Date, calendar: Calendar) -> [(Date, Date)] {
+        let asleepVals: Set<Int> = [SleepStage.core.rawValue, SleepStage.deep.rawValue, SleepStage.rem.rawValue]
+        let raw = HealthStateEngine.shared.sleepTimelineSegments.filter { seg in
+            guard asleepVals.contains(seg.stageValue) else { return false }
+            guard seg.end > nightStart && seg.start < nightEnd else { return false }
+            return syncedSegmentSleepNightStart(seg, calendar: calendar) == nightStart
+        }
+        let segs = dedupeEngineTimelineSegments(raw).sorted { $0.start < $1.start }
+        var intervals: [(Date, Date)] = []
+        for seg in segs {
+            let a = max(seg.start, nightStart)
+            let b = min(seg.end, nightEnd)
+            if b > a { intervals.append((a, b)) }
+        }
+        return intervals
+    }
+
+    private func firstAsleepOnsetFromEngineTimeline(nightStart: Date, nightEnd: Date, calendar: Calendar) -> Date? {
+        let merged = mergeIntervals(coreDeepREMIntervalsFromEngineTimeline(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar))
+        return merged.first?.0
+    }
+
+    /// Uses synced daily resting vs sleep HR from `HealthStateEngine` (not raw HK samples on Catalyst).
+    private func loadHeartRateDipFromEngine(nightStart: Date, nightEnd _: Date, calendar: Calendar) async {
+        let engine = HealthStateEngine.shared
+        let probe = calendar.date(byAdding: .hour, value: 12, to: nightStart)!
+        let wakeDay = calendar.startOfDay(for: probe)
+        let nMean = engineDailyScalar(wakeDay: wakeDay, dict: engine.dailySleepHeartRate, calendar: calendar)
+            ?? engineDailyScalar(wakeDay: wakeDay, dict: engine.basalSleepingHeartRate, calendar: calendar)
+        let dMean = engineDailyScalar(wakeDay: wakeDay, dict: engine.dailyRestingHeartRate, calendar: calendar) ?? engine.restingHeartRate
+        let syntheticSamples = 24
+        let summary: HeartRateDipSummary
+        if let d = dMean, d > 0, let n = nMean, n > 0 {
+            let dip = ((d - n) / d) * 100.0
+            let band: HeartRateDipBand
+            if dip > 20 { band = .extremeDipper }
+            else if dip >= 10 { band = .dipper }
+            else if dip >= 0 { band = .nonDipper }
+            else { band = .reverseDipper }
+            summary = HeartRateDipSummary(
+                daytimeAvgBpm: d,
+                nocturnalAvgBpm: n,
+                dipPercent: dip,
+                band: band,
+                daytimeSampleCount: syntheticSamples,
+                nocturnalSampleCount: syntheticSamples
+            )
+        } else {
+            summary = HeartRateDipSummary(
+                daytimeAvgBpm: dMean,
+                nocturnalAvgBpm: nMean,
+                dipPercent: nil,
+                band: .insufficientData,
+                daytimeSampleCount: 0,
+                nocturnalSampleCount: 0
+            )
+        }
+        await MainActor.run { self.heartRateDip = summary }
+    }
+
+    private func loadBedtimeConsistencyFromEngine(currentNightStart: Date, calendar: Calendar, nights: Int) async {
+        var rows: [BedtimeConsistencyNight] = []
+        for i in 0..<nights {
+            guard let ns = calendar.date(byAdding: .day, value: -i, to: currentNightStart) else { continue }
+            let ne = calendar.date(byAdding: .day, value: 1, to: ns)!
+            if let onset = firstAsleepOnsetFromEngineTimeline(nightStart: ns, nightEnd: ne, calendar: calendar) {
+                let offsetMin = max(0, onset.timeIntervalSince(ns) / 60.0)
+                rows.append(BedtimeConsistencyNight(
+                    nightStart: ns,
+                    firstAsleepTime: onset,
+                    minutesFromNightAnchor: offsetMin,
+                    deviationMinutes: 0
+                ))
+            }
+        }
+        let meanOffset = rows.isEmpty ? 0 : rows.map(\.minutesFromNightAnchor).reduce(0, +) / Double(rows.count)
+        let adjusted = rows.map { r in
+            BedtimeConsistencyNight(
+                nightStart: r.nightStart,
+                firstAsleepTime: r.firstAsleepTime,
+                minutesFromNightAnchor: r.minutesFromNightAnchor,
+                deviationMinutes: r.minutesFromNightAnchor - meanOffset
+            )
+        }.sorted { $0.nightStart < $1.nightStart }
+        await MainActor.run { self.bedtimeConsistency = adjusted }
+    }
+
+    private func loadOvernightVitalsFromEngine(currentNightStart: Date, calendar: Calendar) async {
+        let engine = HealthStateEngine.shared
+        var aggs: [OvernightNormalityNightAgg] = []
+        for i in 0..<14 {
+            guard let ns = calendar.date(byAdding: .day, value: -i, to: currentNightStart) else { continue }
+            let ne = calendar.date(byAdding: .day, value: 1, to: ns)!
+            let probe = calendar.date(byAdding: .hour, value: 12, to: ns)!
+            let wakeDay = calendar.startOfDay(for: probe)
+            let ivs = mergeIntervals(coreDeepREMIntervalsFromEngineTimeline(nightStart: ns, nightEnd: ne, calendar: calendar))
+            let totalMin: Double
+            if !ivs.isEmpty {
+                totalMin = ivs.reduce(0.0) { acc, pair in acc + pair.1.timeIntervalSince(pair.0) } / 60.0
+            } else {
+                let sum = dailySummaryFromEngine(dayStart: wakeDay, calendar: calendar)
+                totalMin = max(0, sum.totalMinutes - sum.awakeMinutes)
+            }
+            guard totalMin >= 15 else { continue }
+            let hrV = engineDailyScalar(wakeDay: wakeDay, dict: engine.dailySleepHeartRate, calendar: calendar)
+                ?? engineDailyScalar(wakeDay: wakeDay, dict: engine.basalSleepingHeartRate, calendar: calendar)
+            let rrV = engineDailyScalar(wakeDay: wakeDay, dict: engine.respiratoryRate, calendar: calendar)
+            let o2V = engineDailyScalar(wakeDay: wakeDay, dict: engine.spO2, calendar: calendar)
+            let wtV = engineDailyScalar(wakeDay: wakeDay, dict: engine.wristTemperature, calendar: calendar)
+            aggs.append(OvernightNormalityNightAgg(sleepMin: totalMin, hr: hrV, rr: rrV, o2Pct: o2V, tempC: wtV))
+        }
+        let metrics = overnightVitalsMetricsFromAggregates(aggs)
+        await MainActor.run { self.overnightVitals = metrics }
+    }
+
+    private func loadLastNightDataFromEngine(calendar: Calendar, for date: Date) async {
+        heartRateDip = nil
+        bedtimeConsistency = []
+        overnightVitals = []
+        let nightStart = sleepNightStart(for: date, calendar: calendar)
+        let nightEnd = calendar.date(byAdding: .day, value: 1, to: nightStart)!
+        let engine = HealthStateEngine.shared
+        let wakeProbe = calendar.date(byAdding: .hour, value: 12, to: nightStart)!
+        let wakeDay = calendar.startOfDay(for: wakeProbe)
+
+        let uiPkg = engine.sleepNightUIPackage(forWakeDay: wakeDay)
+        let handoffBed = engine.sleepUIMetricsHandoff.bedtimeNights
+
+        var usedHandoffStages = false
+        if let pkg = uiPkg, !pkg.segments.isEmpty {
+            var mapped: [SleepStageData] = []
+            mapped.reserveCapacity(pkg.segments.count)
+            for seg in pkg.segments {
+                guard let st = sleepStageForSyncedTimeline(seg.stageValue) else { continue }
+                mapped.append(SleepStageData(
+                    startTime: seg.start,
+                    endTime: seg.end,
+                    stage: st,
+                    averageHeartRate: seg.averageHeartRate,
+                    averageRespiratoryRate: seg.averageRespiratoryRate
+                ))
+            }
+            if !mapped.isEmpty {
+                sleepData = consolidateSleepStages(mapped)
+                usedHandoffStages = true
+                if let d = pkg.heartRateDip {
+                    heartRateDip = HeartRateDipSummary(
+                        daytimeAvgBpm: d.daytimeAvgBpm,
+                        nocturnalAvgBpm: d.nocturnalAvgBpm,
+                        dipPercent: d.dipPercent,
+                        band: HeartRateDipBand(rawValue: d.bandRaw) ?? .insufficientData,
+                        daytimeSampleCount: d.daytimeSampleCount,
+                        nocturnalSampleCount: d.nocturnalSampleCount
+                    )
+                }
+                if !pkg.overnightVitals.isEmpty {
+                    overnightVitals = pkg.overnightVitals.map {
+                        OvernightVitalMetric(
+                            id: $0.id,
+                            title: $0.title,
+                            systemImage: $0.systemImage,
+                            normalityPosition: $0.normalityPosition,
+                            isOutlier: $0.isOutlier,
+                            valueLabel: $0.valueLabel
+                        )
+                    }
+                }
+            }
+        }
+
+        if !usedHandoffStages {
+            let merged = engineStageHoursForNightWakeDay(nightStart: nightStart, calendar: calendar)
+            let fromTimeline = engineTimelineStagesForNight(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar)
+            var stages: [SleepStageData] = fromTimeline
+            let ls = engine.lastSleepStart
+            let le = engine.lastSleepEnd
+            let useLastSleepWindow: Bool = {
+                guard let s = ls, let e = le else { return false }
+                return s >= nightStart && s < nightEnd && e > s && e <= nightEnd
+            }()
+            if stages.isEmpty && engine.sleepTimelineSegments.isEmpty {
+                stages = synthesizedSleepStagesFromEngine(
+                    nightStart: nightStart,
+                    nightEnd: nightEnd,
+                    mergedHours: merged,
+                    preferredSleepStart: useLastSleepWindow ? ls : nil,
+                    preferredSleepEnd: useLastSleepWindow ? le : nil
+                )
+            }
+            sleepData = consolidateSleepStages(stages)
+        }
+
+        if !handoffBed.isEmpty {
+            bedtimeConsistency = handoffBed.map {
+                BedtimeConsistencyNight(
+                    nightStart: $0.nightStart,
+                    firstAsleepTime: $0.firstAsleepTime,
+                    minutesFromNightAnchor: $0.minutesFromNightAnchor,
+                    deviationMinutes: $0.deviationMinutes
+                )
+            }.sorted { $0.nightStart < $1.nightStart }
+        } else {
+            await loadBedtimeConsistencyFromEngine(currentNightStart: nightStart, calendar: calendar, nights: 14)
+        }
+
+        updateLast7AvgSleepHoursFromEngine(referenceNightStart: nightStart, calendar: calendar)
+
+        if heartRateDip == nil {
+            await loadHeartRateDipFromEngine(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar)
+        }
+        if overnightVitals.isEmpty {
+            await loadOvernightVitalsFromEngine(currentNightStart: nightStart, calendar: calendar)
+        }
+    }
+    #endif
     
     func fetchEarliestSleepDate() async {
+        #if targetEnvironment(macCatalyst)
+        let cal = Calendar.current
+        let engine = HealthStateEngine.shared
+        var keys: [Date] = []
+        keys.append(contentsOf: engine.sleepStages.keys.map { cal.startOfDay(for: $0) })
+        keys.append(contentsOf: engine.dailySleepDuration.keys.map { cal.startOfDay(for: $0) })
+        keys.append(contentsOf: engine.anchoredSleepDuration.keys.map { cal.startOfDay(for: $0) })
+        let rawMin = keys.min()
+        let floor = MacCatalystHealthDataPolicy.minimumAllowedDate
+        await MainActor.run {
+            if let m = rawMin {
+                self.earliestSleepDate = max(m, floor)
+            } else {
+                self.earliestSleepDate = floor
+            }
+        }
+        return
+        #else
         guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return }
         let predicate = HKQuery.predicateForSamples(withStart: nil, end: Date(), options: [])
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
@@ -285,17 +826,32 @@ class SleepViewModel: ObservableObject {
         DispatchQueue.main.async {
             self.earliestSleepDate = earliest.first?.startDate
         }
+        #endif
     }
     
     func loadSleepData(for date: Date) async {
         isLoading = true
-        defer { isLoading = false }
-        
+        lastNightEnrichmentTask?.cancel()
+        lastNightEnrichmentTask = nil
         let calendar = Calendar.current
-        
+
         switch selectedPeriod {
         case .lastNight:
-            await loadLastNightData(calendar: calendar, for: date)
+            #if targetEnvironment(macCatalyst)
+            await loadLastNightDataFromEngine(calendar: calendar, for: date)
+            #else
+            if let payload = await loadLastNightPrimaryFromHealthKit(calendar: calendar, for: date) {
+                lastNightEnrichmentTask = Task { [weak self] in
+                    guard let self else { return }
+                    await self.loadLastNightSecondaryFromHealthKit(
+                        nightStart: payload.nightStart,
+                        nightEnd: payload.nightEnd,
+                        calendar: calendar,
+                        consolidatedStages: payload.consolidatedStages
+                    )
+                }
+            }
+            #endif
         case .thisWeek:
             await MainActor.run {
                 self.heartRateDip = nil
@@ -318,13 +874,21 @@ class SleepViewModel: ObservableObject {
             }
             await loadYearData(calendar: calendar, for: date)
         }
+
+        isLoading = false
     }
-    
-    private func loadLastNightData(calendar: Calendar, for date: Date) async {
-        // Use night-based boundaries, matching fetchDaySleepSummary
+
+    #if !targetEnvironment(macCatalyst)
+    private struct LastNightPrimaryPayload {
+        let nightStart: Date
+        let nightEnd: Date
+        let consolidatedStages: [SleepStageData]
+    }
+
+    /// HealthKit timeline + per-stage vitals only. Does not run dip / bedtime / overnight normality / CloudKit (those are secondary).
+    private func loadLastNightPrimaryFromHealthKit(calendar: Calendar, for date: Date) async -> LastNightPrimaryPayload? {
         let nightStart = sleepNightStart(for: date, calendar: calendar)
         let nightEnd = calendar.date(byAdding: .day, value: 1, to: nightStart)!
-        // Wide fetch window to capture cross‑midnight samples
         let predicate = HKQuery.predicateForSamples(
             withStart: calendar.date(byAdding: .hour, value: -12, to: nightStart)!,
             end: nightEnd,
@@ -332,7 +896,7 @@ class SleepViewModel: ObservableObject {
         )
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
 
-        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return }
+        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
 
         let sleepSamples: [HKCategorySample] = await withCheckedContinuation { continuation in
             let query = HKSampleQuery(
@@ -347,17 +911,13 @@ class SleepViewModel: ObservableObject {
             healthStore.healthStore.execute(query)
         }
 
-        // Filter to only samples attributed to this night
         let filteredSamples = sleepSamples.filter {
             sleepNightStart(for: $0.startDate, calendar: calendar) == nightStart
         }
 
-        // Convert to SleepStageData - include values matching SleepStage enum raw values
-        // awake=2, unspecifiedAsleep=1, core=3, deep=4, rem=5 (these are HealthKit values from the device)
         var stages: [SleepStageData] = []
         for sample in filteredSamples {
             let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60
-            // Filter out very short stages (less than 2 minutes)
             if duration < 2 {
                 continue
             }
@@ -405,11 +965,9 @@ class SleepViewModel: ObservableObject {
             }
         }
 
-        // Merge consecutive stages of the same type
         let consolidatedStages = consolidateSleepStages(stages)
-        // --- Compute past 7-day average actual sleep (excluding awake) ---
         let cal = Calendar.current
-        var totals: [Double] = [] // hours of actual sleep
+        var totals: [Double] = []
         for offset in 0..<7 {
             let d = cal.date(byAdding: .day, value: -offset, to: nightStart)!
             let startOfDay = cal.startOfDay(for: d)
@@ -419,16 +977,108 @@ class SleepViewModel: ObservableObject {
                 let actualMinutes = max(0, summary.totalMinutes - summary.awakeMinutes)
                 totals.append(actualMinutes / 60.0)
                 if totals.count == 7 {
-                    let avg = totals.reduce(0,+) / 7.0
+                    let avg = totals.reduce(0, +) / 7.0
                     await MainActor.run { self.last7AvgSleepHours = avg }
                 }
             }
         }
-        self.sleepData = consolidatedStages
-        await loadHeartRateDip(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar)
-        await loadBedtimeConsistencySeries(currentNightStart: nightStart, calendar: calendar, nights: 14)
-        await loadOvernightVitalsNormality(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar)
+        sleepData = consolidatedStages
+        return LastNightPrimaryPayload(nightStart: nightStart, nightEnd: nightEnd, consolidatedStages: consolidatedStages)
     }
+
+    private func loadLastNightSecondaryFromHealthKit(
+        nightStart: Date,
+        nightEnd: Date,
+        calendar: Calendar,
+        consolidatedStages: [SleepStageData]
+    ) async {
+        if Task.isCancelled { return }
+        async let dip: Void = loadHeartRateDip(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar)
+        async let bed: Void = loadBedtimeConsistencySeries(currentNightStart: nightStart, calendar: calendar, nights: 14)
+        async let vit: Void = loadOvernightVitalsNormality(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar)
+        _ = await (dip, bed, vit)
+        if Task.isCancelled { return }
+        recordSleepUIMetricsHandoffForCloudKit(
+            nightStart: nightStart,
+            calendar: calendar,
+            consolidatedStages: consolidatedStages
+        )
+    }
+    #endif
+
+    #if !targetEnvironment(macCatalyst)
+    /// Packages Sleep tab state for Mac Catalyst (CloudKit `sleepUIMetricsDetailed`). Runs off the night load critical path; CloudKit upload is scheduled inside the engine.
+    private func recordSleepUIMetricsHandoffForCloudKit(
+        nightStart: Date,
+        calendar: Calendar,
+        consolidatedStages: [SleepStageData]
+    ) {
+        let probe = calendar.date(byAdding: .hour, value: 12, to: nightStart)!
+        let wakeDay = calendar.startOfDay(for: probe)
+        let groups = Dictionary(grouping: consolidatedStages, by: { $0.stage.rawValue })
+        var aggs: [EngineSleepStageAggregateHandoff] = []
+        for (raw, arr) in groups {
+            let hrs = arr.compactMap { $0.averageHeartRate }
+            let rrs = arr.compactMap { $0.averageRespiratoryRate }
+            aggs.append(EngineSleepStageAggregateHandoff(
+                stageValue: raw,
+                blockCount: arr.count,
+                hrMin: hrs.min(),
+                hrMax: hrs.max(),
+                hrAvg: hrs.isEmpty ? nil : Double(hrs.reduce(0, +)) / Double(hrs.count),
+                rrMin: rrs.min(),
+                rrMax: rrs.max(),
+                rrAvg: rrs.isEmpty ? nil : Double(rrs.reduce(0, +)) / Double(rrs.count)
+            ))
+        }
+        aggs.sort { $0.stageValue < $1.stageValue }
+        let segs = consolidatedStages.map {
+            EngineSleepSegmentVitalsHandoff(
+                start: $0.startTime,
+                end: $0.endTime,
+                stageValue: $0.stage.rawValue,
+                averageHeartRate: $0.averageHeartRate,
+                averageRespiratoryRate: $0.averageRespiratoryRate
+            )
+        }
+        let dipH = heartRateDip.map {
+            EngineHeartRateDipHandoff(
+                daytimeAvgBpm: $0.daytimeAvgBpm,
+                nocturnalAvgBpm: $0.nocturnalAvgBpm,
+                dipPercent: $0.dipPercent,
+                bandRaw: $0.band.rawValue,
+                daytimeSampleCount: $0.daytimeSampleCount,
+                nocturnalSampleCount: $0.nocturnalSampleCount
+            )
+        }
+        let bed = bedtimeConsistency.map {
+            EngineBedtimeNightHandoff(
+                nightStart: $0.nightStart,
+                firstAsleepTime: $0.firstAsleepTime,
+                minutesFromNightAnchor: $0.minutesFromNightAnchor,
+                deviationMinutes: $0.deviationMinutes
+            )
+        }
+        let vit = overnightVitals.map {
+            EngineOvernightVitalHandoff(
+                id: $0.id,
+                title: $0.title,
+                systemImage: $0.systemImage,
+                normalityPosition: $0.normalityPosition,
+                isOutlier: $0.isOutlier,
+                valueLabel: $0.valueLabel
+            )
+        }
+        let pkg = EngineSleepNightUIPackage(
+            wakeDayStart: wakeDay,
+            stageAggregates: aggs,
+            segments: segs,
+            heartRateDip: dipH,
+            overnightVitals: vit
+        )
+        HealthStateEngine.shared.upsertSleepUIMetricsHandoff(pkg, bedtimeNights: bed)
+    }
+    #endif
 
     private func fetchQuantitySamples(
         type: HKQuantityType,
@@ -501,8 +1151,94 @@ class SleepViewModel: ObservableObject {
         return merged
     }
 
+    private func overnightVitalsMetricsFromAggregates(_ aggs: [OvernightNormalityNightAgg]) -> [OvernightVitalMetric] {
+        guard !aggs.isEmpty else { return [] }
+        let historyHR = aggs.compactMap(\.hr)
+        let historyRR = aggs.compactMap(\.rr)
+        let historyO2 = aggs.compactMap(\.o2Pct)
+        let historyTemp = aggs.compactMap(\.tempC)
+        let historySleepMin = aggs.map(\.sleepMin)
+        func median(_ a: [Double]) -> Double? {
+            guard !a.isEmpty else { return nil }
+            let s = a.sorted()
+            return s[s.count / 2]
+        }
+        let curHR = aggs.first?.hr
+        let curRR = aggs.first?.rr
+        let curO2 = aggs.first?.o2Pct
+        let curTemp = aggs.first?.tempC
+        let curSleep = aggs.first.map(\.sleepMin)
+        let hrP = curHR.map { v in
+            let med = median(historyHR) ?? v
+            let dev = v - med
+            let absDevs = historyHR.map { abs($0 - med) }.sorted()
+            let m = max(absDevs[absDevs.count / 2], 1)
+            let z = dev / m
+            return (max(-1, min(1, z / 2.5)), abs(z) >= 2, String(format: "%.0f bpm", v))
+        }
+        let rrP = curRR.map { v in
+            let med = median(historyRR) ?? v
+            let dev = v - med
+            let absDevs = historyRR.map { abs($0 - med) }.sorted()
+            let m = max(absDevs[absDevs.count / 2], 0.5)
+            let z = dev / m
+            return (max(-1, min(1, z / 2.5)), abs(z) >= 2, String(format: "%.1f /min", v))
+        }
+        let o2P = curO2.map { v in
+            let med = median(historyO2) ?? v
+            let dev = v - med
+            let absDevs = historyO2.map { abs($0 - med) }.sorted()
+            let m = max(absDevs[absDevs.count / 2], 0.5)
+            let z = dev / m
+            return (max(-1, min(1, z / 2.5)), abs(z) >= 2 && dev < 0, String(format: "%.0f%%", v))
+        }
+        let tempP = curTemp.map { v in
+            let med = median(historyTemp) ?? v
+            let dev = v - med
+            let absDevs = historyTemp.map { abs($0 - med) }.sorted()
+            let m = max(absDevs[absDevs.count / 2], 0.05)
+            let z = dev / m
+            return (max(-1, min(1, z / 2.5)), abs(z) >= 2 && dev > 0, String(format: "%.1f °C", v))
+        }
+        let sleepP = curSleep.map { v in
+            let med = median(historySleepMin) ?? v
+            let dev = v - med
+            let absDevs = historySleepMin.map { abs($0 - med) }.sorted()
+            let m = max(absDevs[absDevs.count / 2], 15)
+            let z = dev / m
+            return (max(-1, min(1, z / 2.5)), abs(z) >= 2, formatMinutesToHoursMinutes(v))
+        }
+        var metrics: [OvernightVitalMetric] = []
+        if let h = hrP {
+            metrics.append(OvernightVitalMetric(id: "hr", title: "Heart rate", systemImage: "heart.fill", normalityPosition: h.0, isOutlier: h.1, valueLabel: h.2))
+        }
+        if let r = rrP {
+            metrics.append(OvernightVitalMetric(id: "rr", title: "Respiratory", systemImage: "lungs.fill", normalityPosition: r.0, isOutlier: r.1, valueLabel: r.2))
+        }
+        if let t = tempP {
+            metrics.append(OvernightVitalMetric(id: "temp", title: "Wrist temp", systemImage: "thermometer.medium", normalityPosition: t.0, isOutlier: t.1, valueLabel: t.2))
+        }
+        if let o = o2P {
+            metrics.append(OvernightVitalMetric(id: "o2", title: "Blood O₂", systemImage: "drop.fill", normalityPosition: o.0, isOutlier: o.1, valueLabel: o.2))
+        }
+        if let s = sleepP {
+            metrics.append(OvernightVitalMetric(id: "sleep", title: "Sleep (asleep)", systemImage: "bed.double.fill", normalityPosition: s.0, isOutlier: s.1, valueLabel: s.2))
+        }
+        return metrics
+    }
+
     private func sampleOverlapsAsleep(_ t: Date, intervals: [(Date, Date)]) -> Bool {
         intervals.contains { t >= $0.0 && t <= $0.1 }
+    }
+
+    /// True when the sample’s time range intersects any merged asleep interval (handles point samples and samples whose start is just outside asleep but overlap).
+    private func quantitySampleOverlapsAsleepIntervals(_ sample: HKQuantitySample, intervals: [(Date, Date)]) -> Bool {
+        let s0 = sample.startDate
+        let s1 = max(sample.endDate, s0.addingTimeInterval(0.001))
+        for (a, b) in intervals where b > a {
+            if s1 > a && s0 < b { return true }
+        }
+        return false
     }
 
     private func loadHeartRateDip(nightStart: Date, nightEnd: Date, calendar: Calendar) async {
@@ -534,9 +1270,10 @@ class SleepViewModel: ObservableObject {
         let asleep = mergeIntervals(await asleepCoreDeepREMIntervals(nightStart: nightStart, nightEnd: nightEnd, calendar: calendar))
         let nightAll = await fetchQuantitySamples(type: hrType, from: nightStart, to: nightEnd)
         let nightBpms: [Double] = nightAll.compactMap { s in
-            sampleOverlapsAsleep(s.startDate, intervals: asleep)
-                ? s.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
-                : nil
+            guard quantitySampleOverlapsAsleepIntervals(s, intervals: asleep) else { return nil }
+            if let ctx = s.metadata?[HKMetadataKeyHeartRateMotionContext] as? NSNumber,
+               ctx.intValue == HKHeartRateMotionContext.active.rawValue { return nil }
+            return s.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
         }
         let nightMean = nightBpms.isEmpty ? nil : nightBpms.reduce(0, +) / Double(nightBpms.count)
 
@@ -603,18 +1340,26 @@ class SleepViewModel: ObservableObject {
         await MainActor.run { self.bedtimeConsistency = adjusted }
     }
 
+    /// Averages quantity samples that **overlap** merged asleep intervals. Uses `fetchFrom`…`fetchTo` (e.g. full sleep night) so samples aren’t dropped by `strictStartDate` when their start is before the first asleep segment. For heart rate, optionally drops active-motion samples to align closer with Health’s resting/sleep averages.
     private func averageQuantityDuringIntervals(
         type: HKQuantityType,
         unit: HKUnit,
-        intervals: [(Date, Date)]
+        intervals: [(Date, Date)],
+        fetchFrom: Date,
+        fetchTo: Date,
+        excludeActiveMotionHeartRate: Bool = false
     ) async -> Double? {
         guard !intervals.isEmpty else { return nil }
-        guard let first = intervals.map(\.0).min(), let last = intervals.map(\.1).max() else { return nil }
-        let samples = await fetchQuantitySamples(type: type, from: first, to: last)
+        let isHR = type.identifier == HKQuantityTypeIdentifier.heartRate.rawValue
+        let samples = await fetchQuantitySamples(type: type, from: fetchFrom, to: fetchTo)
         var vals: [Double] = []
         for s in samples {
-            let t = s.startDate
-            guard intervals.contains(where: { t >= $0.0 && t <= $0.1 }) else { continue }
+            guard quantitySampleOverlapsAsleepIntervals(s, intervals: intervals) else { continue }
+            if excludeActiveMotionHeartRate, isHR,
+               let ctx = s.metadata?[HKMetadataKeyHeartRateMotionContext] as? NSNumber,
+               ctx.intValue == HKHeartRateMotionContext.active.rawValue {
+                continue
+            }
             vals.append(s.quantity.doubleValue(for: unit))
         }
         guard !vals.isEmpty else { return nil }
@@ -627,14 +1372,7 @@ class SleepViewModel: ObservableObject {
             await MainActor.run { self.overnightVitals = [] }
             return
         }
-        struct NightAgg {
-            let sleepMin: Double
-            let hr: Double?
-            let rr: Double?
-            let o2Pct: Double?
-            let tempC: Double?
-        }
-        var aggs: [NightAgg] = []
+        var aggs: [OvernightNormalityNightAgg] = []
         for i in 0..<14 {
             guard let ns = calendar.date(byAdding: .day, value: -i, to: nightStart) else { continue }
             let ne = calendar.date(byAdding: .day, value: 1, to: ns)!
@@ -646,91 +1384,55 @@ class SleepViewModel: ObservableObject {
             var o2V: Double?
             var wtV: Double?
             if let hrT = HKQuantityType.quantityType(forIdentifier: .heartRate) {
-                hrV = await averageQuantityDuringIntervals(type: hrT, unit: HKUnit.count().unitDivided(by: .minute()), intervals: ivs)
+                hrV = await averageQuantityDuringIntervals(
+                    type: hrT,
+                    unit: HKUnit.count().unitDivided(by: .minute()),
+                    intervals: ivs,
+                    fetchFrom: ns,
+                    fetchTo: ne,
+                    excludeActiveMotionHeartRate: true
+                )
             }
             if let rrT = HKQuantityType.quantityType(forIdentifier: .respiratoryRate) {
-                rrV = await averageQuantityDuringIntervals(type: rrT, unit: HKUnit.count().unitDivided(by: .minute()), intervals: ivs)
+                rrV = await averageQuantityDuringIntervals(
+                    type: rrT,
+                    unit: HKUnit.count().unitDivided(by: .minute()),
+                    intervals: ivs,
+                    fetchFrom: ns,
+                    fetchTo: ne
+                )
             }
             if let o2T = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation),
-               let raw = await averageQuantityDuringIntervals(type: o2T, unit: HKUnit.percent(), intervals: ivs) {
+               let raw = await averageQuantityDuringIntervals(
+                type: o2T,
+                unit: HKUnit.percent(),
+                intervals: ivs,
+                fetchFrom: ns,
+                fetchTo: ne
+               ) {
                 o2V = raw * 100
             }
             if let wtT = HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
-                wtV = await averageQuantityDuringIntervals(type: wtT, unit: HKUnit.degreeCelsius(), intervals: ivs)
+                wtV = await averageQuantityDuringIntervals(
+                    type: wtT,
+                    unit: HKUnit.degreeCelsius(),
+                    intervals: ivs,
+                    fetchFrom: ns,
+                    fetchTo: ne
+                )
             }
-            aggs.append(NightAgg(sleepMin: totalMin, hr: hrV, rr: rrV, o2Pct: o2V, tempC: wtV))
+            if wtV == nil, let bt = HKQuantityType.quantityType(forIdentifier: .bodyTemperature) {
+                wtV = await averageQuantityDuringIntervals(
+                    type: bt,
+                    unit: HKUnit.degreeCelsius(),
+                    intervals: ivs,
+                    fetchFrom: ns,
+                    fetchTo: ne
+                )
+            }
+            aggs.append(OvernightNormalityNightAgg(sleepMin: totalMin, hr: hrV, rr: rrV, o2Pct: o2V, tempC: wtV))
         }
-        let historyHR = aggs.compactMap(\.hr)
-        let historyRR = aggs.compactMap(\.rr)
-        let historyO2 = aggs.compactMap(\.o2Pct)
-        let historyTemp = aggs.compactMap(\.tempC)
-        let historySleepMin = aggs.map(\.sleepMin)
-        func median(_ a: [Double]) -> Double? {
-            guard !a.isEmpty else { return nil }
-            let s = a.sorted()
-            return s[s.count / 2]
-        }
-        let curHR = aggs.first?.hr
-        let curRR = aggs.first?.rr
-        let curO2 = aggs.first?.o2Pct
-        let curTemp = aggs.first?.tempC
-        let curSleep = aggs.first.map(\.sleepMin)
-        let hrP = curHR.map { v in
-            let med = median(historyHR) ?? v
-            let dev = v - med
-            let absDevs = historyHR.map { abs($0 - med) }.sorted()
-            let m = max(absDevs[absDevs.count / 2], 1)
-            let z = dev / m
-            return (max(-1, min(1, z / 2.5)), abs(z) >= 2, String(format: "%.0f bpm", v))
-        }
-        let rrP = curRR.map { v in
-            let med = median(historyRR) ?? v
-            let dev = v - med
-            let absDevs = historyRR.map { abs($0 - med) }.sorted()
-            let m = max(absDevs[absDevs.count / 2], 0.5)
-            let z = dev / m
-            return (max(-1, min(1, z / 2.5)), abs(z) >= 2, String(format: "%.0f /min", v))
-        }
-        let o2P = curO2.map { v in
-            let med = median(historyO2) ?? v
-            let dev = v - med
-            let absDevs = historyO2.map { abs($0 - med) }.sorted()
-            let m = max(absDevs[absDevs.count / 2], 0.5)
-            let z = dev / m
-            return (max(-1, min(1, z / 2.5)), abs(z) >= 2 && dev < 0, String(format: "%.0f%%", v))
-        }
-        let tempP = curTemp.map { v in
-            let med = median(historyTemp) ?? v
-            let dev = v - med
-            let absDevs = historyTemp.map { abs($0 - med) }.sorted()
-            let m = max(absDevs[absDevs.count / 2], 0.05)
-            let z = dev / m
-            return (max(-1, min(1, z / 2.5)), abs(z) >= 2 && dev > 0, String(format: "%.1f °C", v))
-        }
-        let sleepP = curSleep.map { v in
-            let med = median(historySleepMin) ?? v
-            let dev = v - med
-            let absDevs = historySleepMin.map { abs($0 - med) }.sorted()
-            let m = max(absDevs[absDevs.count / 2], 15)
-            let z = dev / m
-            return (max(-1, min(1, z / 2.5)), abs(z) >= 2, formatMinutesToHoursMinutes(v))
-        }
-        var metrics: [OvernightVitalMetric] = []
-        if let h = hrP {
-            metrics.append(OvernightVitalMetric(id: "hr", title: "Heart rate", systemImage: "heart.fill", normalityPosition: h.0, isOutlier: h.1, valueLabel: h.2))
-        }
-        if let r = rrP {
-            metrics.append(OvernightVitalMetric(id: "rr", title: "Respiratory", systemImage: "lungs.fill", normalityPosition: r.0, isOutlier: r.1, valueLabel: r.2))
-        }
-        if let t = tempP {
-            metrics.append(OvernightVitalMetric(id: "temp", title: "Wrist temp", systemImage: "thermometer.medium", normalityPosition: t.0, isOutlier: t.1, valueLabel: t.2))
-        }
-        if let o = o2P {
-            metrics.append(OvernightVitalMetric(id: "o2", title: "Blood O₂", systemImage: "drop.fill", normalityPosition: o.0, isOutlier: o.1, valueLabel: o.2))
-        }
-        if let s = sleepP {
-            metrics.append(OvernightVitalMetric(id: "sleep", title: "Sleep (asleep)", systemImage: "bed.double.fill", normalityPosition: s.0, isOutlier: s.1, valueLabel: s.2))
-        }
+        let metrics = overnightVitalsMetricsFromAggregates(aggs)
         await MainActor.run { self.overnightVitals = metrics }
     }
     
@@ -759,9 +1461,8 @@ class SleepViewModel: ObservableObject {
             let startOfDay = calendar.startOfDay(for: d)
             let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
             let summary = await fetchDaySleepSummary(startDate: startOfDay, endDate: endOfDay)
-            if summary.totalMinutes > 0 {
-                summaries.append(summary)
-            }
+            // Always keep every calendar day so missing sleep does not shift bars vs axis labels.
+            summaries.append(summary)
         }
         self.dailySummaries = summaries
     }
@@ -837,6 +1538,9 @@ class SleepViewModel: ObservableObject {
 
     // Returns summary for a sleep night (anchor hour to anchor hour next day)
     private func fetchDaySleepSummary(startDate: Date, endDate: Date) async -> DailySleepSummary {
+        #if targetEnvironment(macCatalyst)
+        return dailySummaryFromEngine(dayStart: startDate, calendar: Calendar.current)
+        #else
         guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
             return DailySleepSummary(date: startDate, totalMinutes: 0, awakeMinutes: 0, deepMinutes: 0, coreMinutes: 0, remMinutes: 0, unspecifiedAsleepMinutes: 0)
         }
@@ -875,9 +1579,38 @@ class SleepViewModel: ObservableObject {
             remMinutes: remMinutes,
             unspecifiedAsleepMinutes: asleepUnspecifiedMinutes
         )
+        #endif
     }
     
     private func fetchMonthSleepSummary(startDate: Date, endDate: Date) async -> DailySleepSummary {
+        #if targetEnvironment(macCatalyst)
+        let calendar = Calendar.current
+        var awakeMinutes: Double = 0
+        var coreMinutes: Double = 0
+        var deepMinutes: Double = 0
+        var remMinutes: Double = 0
+        var asleepUnspecifiedMinutes: Double = 0
+        var night = sleepNightStart(for: startDate, calendar: calendar)
+        while night < endDate {
+            let s = dailySummaryFromEngineForNightStart(night, calendar: calendar)
+            awakeMinutes += s.awakeMinutes
+            coreMinutes += s.coreMinutes
+            deepMinutes += s.deepMinutes
+            remMinutes += s.remMinutes
+            asleepUnspecifiedMinutes += s.unspecifiedAsleepMinutes
+            night = calendar.date(byAdding: .day, value: 1, to: night)!
+        }
+        let totalMinutes = asleepUnspecifiedMinutes + awakeMinutes + coreMinutes + deepMinutes + remMinutes
+        return DailySleepSummary(
+            date: startDate,
+            totalMinutes: totalMinutes,
+            awakeMinutes: awakeMinutes,
+            deepMinutes: deepMinutes,
+            coreMinutes: coreMinutes,
+            remMinutes: remMinutes,
+            unspecifiedAsleepMinutes: asleepUnspecifiedMinutes
+        )
+        #else
         guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
             return DailySleepSummary(date: startDate, totalMinutes: 0, awakeMinutes: 0, deepMinutes: 0, coreMinutes: 0, remMinutes: 0, unspecifiedAsleepMinutes: 0)
         }
@@ -925,6 +1658,7 @@ class SleepViewModel: ObservableObject {
             remMinutes: remMinutes,
             unspecifiedAsleepMinutes: asleepUnspecifiedMinutes
         )
+        #endif
     }
     
     private func fetchMetricsDuringStage(startTime: Date, endTime: Date) async -> (heartRate: Int?, respiratoryRate: Int?) {
@@ -973,33 +1707,38 @@ class SleepViewModel: ObservableObject {
     
     private func consolidateSleepStages(_ stages: [SleepStageData]) -> [SleepStageData] {
         guard !stages.isEmpty else { return [] }
-        
+        /// Same stage samples must touch or overlap; otherwise merging bridged gaps inflated totals (~24h “core”).
+        let gapMergeTolerance: TimeInterval = 2 * 60
+        let sortedStages = stages.sorted { $0.startTime < $1.startTime }
+
         var consolidated: [SleepStageData] = []
-        var currentStage = stages[0]
-        
-        for i in 1..<stages.count {
-            let nextStage = stages[i]
-            
-            // If same stage type and consecutive (or very close), merge them
+        var currentStage = sortedStages[0]
+
+        for i in 1..<sortedStages.count {
+            let nextStage = sortedStages[i]
+
             if currentStage.stage == nextStage.stage {
-                // Create merged stage
-                currentStage = SleepStageData(
-                    startTime: currentStage.startTime,
-                    endTime: nextStage.endTime,
-                    stage: currentStage.stage,
-                    averageHeartRate: currentStage.averageHeartRate,
-                    averageRespiratoryRate: currentStage.averageRespiratoryRate
-                )
+                let gap = nextStage.startTime.timeIntervalSince(currentStage.endTime)
+                let overlaps = nextStage.startTime < currentStage.endTime
+                if overlaps || gap <= gapMergeTolerance {
+                    currentStage = SleepStageData(
+                        startTime: min(currentStage.startTime, nextStage.startTime),
+                        endTime: max(currentStage.endTime, nextStage.endTime),
+                        stage: currentStage.stage,
+                        averageHeartRate: currentStage.averageHeartRate,
+                        averageRespiratoryRate: currentStage.averageRespiratoryRate
+                    )
+                } else {
+                    consolidated.append(currentStage)
+                    currentStage = nextStage
+                }
             } else {
-                // Different stage type, save current and start new one
                 consolidated.append(currentStage)
                 currentStage = nextStage
             }
         }
-        
-        // Don't forget the last stage
+
         consolidated.append(currentStage)
-        
         return consolidated
     }
 
@@ -1246,6 +1985,96 @@ struct SleepView: View {
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
     }
+
+    @ViewBuilder
+    private var sleepPeriodFilterRow: some View {
+        HStack(spacing: 12) {
+            ForEach(availablePeriods, id: \.self) { period in
+                Button {
+                    selectPeriod(period)
+                } label: {
+                    sleepPeriodChip(for: period)
+                }
+                .buttonStyle(.plain)
+                .catalystDesktopFocusable()
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func sleepPeriodChip(for period: SleepPeriod) -> some View {
+        let selected = viewModel.selectedPeriod == period
+        Text(period.rawValue)
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundColor(selected ? .white : .gray)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(selected ? Color.blue.opacity(0.7) : Color.clear)
+                    .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+            )
+    }
+
+    @ViewBuilder
+    private var catalystSleepNotice: some View {
+        if MacCatalystHealthDataPolicy.isActive {
+            Text(MacCatalystHealthDataPolicy.historyNotice)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private var sleepPeriodBody: some View {
+        if viewModel.isLoading {
+            ProgressView()
+                .tint(.white)
+                .padding()
+        } else if viewModel.selectedPeriod == .lastNight {
+            VStack(spacing: 16) {
+                SleepStagesDropdownCard(stages: viewModel.sleepData)
+                SleepQualityCard(stages: viewModel.sleepData)
+                HeartRateDipCard(summary: viewModel.heartRateDip)
+                SleepBedtimeConsistencyCard(nights: viewModel.bedtimeConsistency)
+                OvernightVitalsNormalityCard(
+                    metrics: viewModel.overnightVitals,
+                    sleepWindowLabel: sleepWindowLabelForVitals(stages: viewModel.sleepData)
+                )
+            }
+            .padding(.horizontal)
+        } else {
+            VStack(spacing: 16) {
+                ForEach(viewModel.dailySummaries) { summary in
+                    SleepBarChart(summary: summary, period: viewModel.selectedPeriod)
+                }
+                SleepSummaryCard(summaries: viewModel.dailySummaries, period: viewModel.selectedPeriod)
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private var sleepScrollColumn: some View {
+        VStack(spacing: 24) {
+            sleepPeriodFilterRow
+            catalystSleepNotice
+            SleepDatePopupPicker(
+                selectedPeriod: viewModel.selectedPeriod,
+                earliestSleepDate: viewModel.earliestSleepDate,
+                selectedDate: $selectedDate,
+                onDateChange: { newDate in
+                    selectedDate = newDate
+                    Task { await viewModel.loadSleepData(for: newDate) }
+                }
+            )
+            sleepPeriodBody
+        }
+        .padding(.vertical, 20)
+    }
     
     var body: some View {
         NavigationStack {
@@ -1260,72 +2089,7 @@ struct SleepView: View {
                     .ignoresSafeArea()
                 
                 ScrollView {
-                    VStack(spacing: 24) {
-                        // Filter buttons
-                        HStack(spacing: 12) {
-                            ForEach(Array(availablePeriods.enumerated()), id: \.element) { index, period in
-                                Button(action: {
-                                    selectPeriod(period)
-                                }) {
-                                    Text(period.rawValue)
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(viewModel.selectedPeriod == period ? .white : .gray)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 20)
-                                                .fill(viewModel.selectedPeriod == period ?
-                                                      Color.blue.opacity(0.7) : Color.clear)
-                                                .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
-                                        )
-                                }
-                            }
-                        }
-                        .padding(.horizontal)
-
-                        if MacCatalystHealthDataPolicy.isActive {
-                            Text(MacCatalystHealthDataPolicy.historyNotice)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal)
-                        }
-                        
-                        // Date picker popup button in top bar
-                        SleepDatePopupPicker(
-                            selectedPeriod: viewModel.selectedPeriod,
-                            earliestSleepDate: viewModel.earliestSleepDate,
-                            selectedDate: $selectedDate,
-                            onDateChange: { newDate in
-                                selectedDate = newDate
-                                Task { await viewModel.loadSleepData(for: newDate) }
-                            }
-                        )
-                        
-                        if viewModel.isLoading {
-                            ProgressView()
-                                .tint(.white)
-                                .padding()
-                        } else if viewModel.selectedPeriod == .lastNight {
-                            VStack(spacing: 16) {
-                                SleepStagesDropdownCard(stages: viewModel.sleepData)
-                                SleepQualityCard(stages: viewModel.sleepData)
-                                HeartRateDipCard(summary: viewModel.heartRateDip)
-                                SleepBedtimeConsistencyCard(nights: viewModel.bedtimeConsistency)
-                                OvernightVitalsNormalityCard(metrics: viewModel.overnightVitals, sleepWindowLabel: sleepWindowLabelForVitals(stages: viewModel.sleepData))
-                            }
-                            .padding(.horizontal)
-                        } else {
-                            VStack(spacing: 16) {
-                                ForEach(viewModel.dailySummaries) { summary in
-                                    SleepBarChart(summary: summary, period: viewModel.selectedPeriod)
-                                }
-                                SleepSummaryCard(summaries: viewModel.dailySummaries, period: viewModel.selectedPeriod)
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
-                    .padding(.vertical, 20)
+                    sleepScrollColumn
                 }
             }
             .navigationTitle("Sleep")
@@ -2035,6 +2799,7 @@ private struct WakeAlarmWeeklyScheduleCard: View {
                             .foregroundStyle(.white)
                     }
                     .tint(Color(red: 0.73, green: 0.86, blue: 0.84))
+                    .catalystDesktopFocusable()
 
                     DatePicker(
                         "Wake time",
@@ -2129,6 +2894,7 @@ private struct WakeAlarmTomorrowCard: View {
                 }
             }
             .tint(Color(red: 0.73, green: 0.86, blue: 0.84))
+            .catalystDesktopFocusable()
 
             if store.tomorrowOnlyEnabled {
                 DatePicker(
@@ -3461,6 +4227,7 @@ struct HeartRateDipCard: View {
 
 struct SleepBedtimeConsistencyCard: View {
     let nights: [BedtimeConsistencyNight]
+    /// `nil` after scrub ends → UI falls back to the latest night on the chart.
     @State private var selectedNightStart: Date?
 
     private var meanOffsetMinutes: Double {
@@ -3474,9 +4241,18 @@ struct SleepBedtimeConsistencyCard: View {
         return t.formatted(date: .omitted, time: .shortened)
     }
 
-    private var selectedRow: BedtimeConsistencyNight? {
-        guard let sel = selectedNightStart else { return nil }
-        return nights.min(by: { abs($0.nightStart.timeIntervalSince(sel)) < abs($1.nightStart.timeIntervalSince(sel)) })
+    /// X-axis anchor for the highlighted point and caption: explicit scrub, else latest night (rightmost).
+    private var displayNightAnchor: Date? {
+        selectedNightStart ?? nights.last?.nightStart
+    }
+
+    private var displayRow: BedtimeConsistencyNight? {
+        guard let anchor = displayNightAnchor else { return nil }
+        return nights.min(by: { abs($0.nightStart.timeIntervalSince(anchor)) < abs($1.nightStart.timeIntervalSince(anchor)) })
+    }
+
+    private var scrubCaptionPrefix: String {
+        selectedNightStart == nil ? "Latest night: " : "Selected: "
     }
 
     var body: some View {
@@ -3489,7 +4265,7 @@ struct SleepBedtimeConsistencyCard: View {
                     .foregroundColor(.white)
                 Spacer()
             }
-            Text("Deviation from your average first-asleep time (core/deep/REM onset after 6 PM anchor). Scrub the chart to see bedtime for a night.")
+            Text("Deviation from your average first-asleep time (core/deep/REM onset after 6 PM anchor). Scrub the chart to compare nights; the label stays visible and defaults to the latest.")
                 .font(.caption2)
                 .foregroundColor(.gray)
             if nights.count >= 2 {
@@ -3504,7 +4280,7 @@ struct SleepBedtimeConsistencyCard: View {
                             x: .value("Night", n.nightStart),
                             y: .value("Δ min", n.deviationMinutes)
                         )
-                        .foregroundStyle(selectedRow?.nightStart == n.nightStart ? Color.yellow : Color.cyan)
+                        .foregroundStyle(displayRow?.nightStart == n.nightStart ? Color.yellow : Color.cyan)
                     }
                     RuleMark(y: .value("Average", 0))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 4]))
@@ -3519,10 +4295,13 @@ struct SleepBedtimeConsistencyCard: View {
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.65))
                 }
-                if let row = selectedRow {
-                    Text("Selected: \(row.firstAsleepTime.formatted(date: .abbreviated, time: .shortened))")
+                if let row = displayRow {
+                    let dev = Int(round(row.deviationMinutes))
+                    let devStr = dev >= 0 ? "+\(dev)" : "\(dev)"
+                    Text("\(scrubCaptionPrefix)\(row.firstAsleepTime.formatted(date: .abbreviated, time: .shortened)) · Δ \(devStr) min from avg")
                         .font(.caption.weight(.semibold))
                         .foregroundColor(.yellow.opacity(0.95))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 Text("Need at least two nights with stage data for this chart.")
@@ -3941,11 +4720,15 @@ struct SleepStagesDropdownCard: View {
                                         ? 0
                                         : recentSessions.map { $0.duration / 60.0 }.reduce(0, +) / Double(recentSessions.count)
 
+                                    let totalDurationMinutes = stageSessions.reduce(0) { $0 + $1.duration } / 60.0
+
                                     HStack(spacing: 2) {
-                                        Text("\(stageSessions.count)")
+                                        Text(formatMinutesToHoursMinutes(totalDurationMinutes))
                                             .font(.title2)
                                             .fontWeight(.bold)
                                             .foregroundColor(.white)
+                                            .minimumScaleFactor(0.5)
+                                            .lineLimit(1)
 
 //                                        if avgDuration > 0 {
 //                                            // Count quality sessions using the same logic used by glowOpacity
@@ -3961,15 +4744,13 @@ struct SleepStagesDropdownCard: View {
 //                                        }
                                     }
 
-                                    // Total and average duration (now split into two lines)
-                                    let totalDurationMinutes = stageSessions.reduce(0) { $0 + $1.duration } / 60.0
                                     let avgDurationMinutes = stageSessions.isEmpty ? 0 : totalDurationMinutes / Double(stageSessions.count)
                                     VStack(spacing: 2) {
-                                        Text("\(formatMinutesToHoursMinutes(totalDurationMinutes)) total")
+                                        Text("\(stageSessions.count) block\(stageSessions.count == 1 ? "" : "s")")
                                             .font(.caption2)
                                             .foregroundColor(.gray)
 
-                                        Text("\(formatMinutesToHoursMinutes(avgDurationMinutes)) avg")
+                                        Text("\(formatMinutesToHoursMinutes(avgDurationMinutes)) avg / block")
                                             .font(.caption2)
                                             .foregroundColor(.gray)
                                     }

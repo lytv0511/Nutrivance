@@ -319,6 +319,7 @@ struct PastQuestsView: View {
                         .padding(12)
                         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .catalystDesktopFocusable()
 
                     ForEach(supportedGoals(for: selectedWorkoutID), id: \.self) { goal in
                         VStack(alignment: .leading, spacing: 10) {
@@ -347,21 +348,31 @@ struct PastQuestsView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { isManualLoggerPresented = true } label: { Image(systemName: "plus") }
+                    .catalystDesktopFocusable()
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button { stepWindow(-1) } label: { Image(systemName: "chevron.left") }
+                    .catalystDesktopFocusable()
                 Menu(selectedWindow.rawValue) {
                     ForEach(StageHistoryWindow.allCases) { window in
                         Button(window.rawValue) { selectedWindow = window }
                     }
                 }
-                Button { stepWindow(1) } label: { Image(systemName: "chevron.right") }.disabled(!canStepForward)
+                .catalystDesktopFocusable()
+                Button { stepWindow(1) } label: { Image(systemName: "chevron.right") }
+                    .disabled(!canStepForward)
+                    .catalystDesktopFocusable()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter1)) { _ in selectedWindow = .d7 }
         .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter2)) { _ in selectedWindow = .d28 }
         .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlFilter3)) { _ in selectedWindow = .year }
         .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlLogNewQuest)) { _ in isManualLoggerPresented = true }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlPastQuestsPrevious)) { _ in stepWindow(-1) }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlPastQuestsNext)) { _ in
+            guard canStepForward else { return }
+            stepWindow(1)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in jumpToToday() }
         .sheet(isPresented: $isManualLoggerPresented) {
             ManualQuestLoggerSheet(defaultWorkoutID: selectedWorkoutID, workouts: availableWorkouts) { record in
@@ -888,7 +899,13 @@ private struct ManualQuestLoggerSheet: View {
             }
             .navigationTitle("Log Quest")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                        .catalystDesktopFocusable()
+                        #if targetEnvironment(macCatalyst)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        #endif
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         let parsedMin = wheelComparableValue(for: minSelection) ?? 0
@@ -924,6 +941,7 @@ private struct ManualQuestLoggerSheet: View {
                         onSave(record)
                         dismiss()
                     }
+                    .catalystDesktopFocusable()
                 }
             }
         }

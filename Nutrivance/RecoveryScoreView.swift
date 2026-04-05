@@ -129,6 +129,7 @@ struct RecoveryScoreView: View {
                                         )
                                 }
                                 .buttonStyle(.plain)
+                                .catalystDesktopFocusable()
                             }
                         }
                         .padding(8)
@@ -381,7 +382,15 @@ struct RecoveryScoreView: View {
 
         snapshotsByFilter = buildSnapshots()
 
-        guard forceNetwork || healthEngine.needsRecoveryMetricsCoverage(from: start, to: end) else { return }
+        if forceNetwork {
+            isLoading = true
+            await healthEngine.refreshSyncedHealthDataFromICloud()
+            snapshotsByFilter = buildSnapshots()
+            isLoading = false
+            return
+        }
+
+        guard healthEngine.needsRecoveryMetricsCoverage(from: start, to: end) else { return }
 
         isLoading = true
         await healthEngine.ensureRecoveryMetricsCoverage(from: start, to: end)

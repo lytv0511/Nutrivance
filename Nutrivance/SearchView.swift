@@ -73,6 +73,7 @@ struct SearchScopeBar: View {
                                 )
                         }
                         .buttonStyle(.plain)
+                        .catalystDesktopFocusable()
                         .keyboardShortcut(shortcut(for: scope), modifiers: [.control])
                         .accessibilityHint("Control plus \(shortcutLabel(for: scope))")
                     }
@@ -98,6 +99,7 @@ struct SearchScopeBar: View {
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .catalystDesktopFocusable()
                     }
                 }
                 .padding(.horizontal, 12)
@@ -113,12 +115,32 @@ struct SearchScopeBar: View {
                         focus.wrappedValue = false
                         searchState.isSearching = false
                     }
+                    .catalystDesktopFocusable()
                     .keyboardShortcut(.cancelAction)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
         }
         .padding(.horizontal)
+    }
+}
+
+// MARK: - Keyboard: search result cards (plain `Button` / `NavigationLink` need explicit focus)
+private extension View {
+    /// Include Mac Catalyst and iPad so Tab reaches grid tiles (e.g. Smart Keyboard / Full Keyboard Access).
+    @ViewBuilder
+    func searchResultsGridFocusable() -> some View {
+        #if targetEnvironment(macCatalyst)
+        self.focusable(true)
+        #elseif os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            self.focusable(true)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
     }
 }
 
@@ -543,6 +565,8 @@ struct SearchView: View {
                                             } label: {
                                                 resultCard(for: item)
                                             }
+                                            .buttonStyle(.plain)
+                                            .searchResultsGridFocusable()
                                         } else {
                                             Button {
                                                 openResult(item)
@@ -550,6 +574,7 @@ struct SearchView: View {
                                                 resultCard(for: item)
                                             }
                                             .buttonStyle(.plain)
+                                            .searchResultsGridFocusable()
                                         }
                                     }
                                 }
@@ -590,6 +615,11 @@ struct SearchView: View {
             .onAppear {
                 searchState.selectedScope = .all
                 refreshSearchBackdrop()
+            }
+            .onChange(of: navigationState.searchTabFocusPulse) { _, _ in
+                guard CatalystKeyboardNavigation.isDesktopKeyboardChrome else { return }
+                searchState.isSearching = true
+                searchBarFocused = true
             }
         }
     }

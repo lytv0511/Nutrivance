@@ -109,196 +109,234 @@ struct StrainRecoveryView: View {
         timeFilter == .day ? .week : timeFilter
     }
 
+    @ViewBuilder
+    private var strainRecoveryTimeAndSportFilters: some View {
+        HStack {
+            HStack(spacing: 8) {
+                ForEach(TimeFilter.allCases, id: \.self) { filter in
+                    strainRecoveryTimeFilterButton(filter)
+                }
+            }
+            if !MacCatalystHealthDataPolicy.isActive {
+                Spacer()
+                strainRecoverySportFilterMenu
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func strainRecoveryTimeFilterButton(_ filter: TimeFilter) -> some View {
+        Button {
+            selectTimeFilter(filter)
+        } label: {
+            Text(filter.rawValue)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(timeFilter == filter ? .orange : .orange.opacity(0.3))
+    }
+
+    @ViewBuilder
+    private var strainRecoverySportFilterMenu: some View {
+        Menu {
+            Button("All Sports") {
+                sportFilter = nil
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+            }
+            ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique, id: \.self) { sport in
+                Button(sport.capitalized) {
+                    sportFilter = sport
+                    let impact = UIImpactFeedbackGenerator(style: .medium)
+                    impact.impactOccurred()
+                }
+            }
+        } label: {
+            HStack {
+                Text(sportFilter?.capitalized ?? "All Sports")
+                Image(systemName: "chevron.down")
+            }
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .foregroundStyle(.orange)
+            .background(
+                Capsule()
+                    .fill(Color.orange.opacity(0.14))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var strainRecoveryCatalystNotice: some View {
+        if MacCatalystHealthDataPolicy.isActive {
+            Text(MacCatalystHealthDataPolicy.historyNotice)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private var strainRecoveryAISummaryBlock: some View {
+        StrainRecoveryAISummarySection(
+            engine: engine,
+            timeFilter: timeFilter,
+            sportFilter: sportFilter,
+            anchorDate: coachSummaryAnchorDate,
+            aggressiveCachingController: aggressiveCachingController
+        )
+    }
+
+    @ViewBuilder
+    private var strainRecoveryTrainingLoadSection: some View {
+        if MacCatalystHealthDataPolicy.isActive {
+            MetricSectionGroup(title: "Training Load") {
+                StrainRecoveryCatalystInfoCard(title: "Workout Insights") {
+                    Text("Workout analytics are unavailable on Mac Catalyst.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            MetricSectionGroup(title: "Training Load") {
+                StrainRecoveryMathSection(
+                    engine: engine,
+                    headlineTimeFilter: timeFilter,
+                    chartTimeFilter: graphTimeFilter,
+                    anchorDate: selectedDate
+                )
+                WorkoutContributionsSection(
+                    engine: engine,
+                    headlineTimeFilter: timeFilter,
+                    chartTimeFilter: graphTimeFilter,
+                    anchorDate: selectedDate,
+                    sportFilter: nil
+                )
+                METAggregatesSection(
+                    engine: engine,
+                    headlineTimeFilter: timeFilter,
+                    chartTimeFilter: graphTimeFilter,
+                    sportFilter: sportFilter,
+                    anchorDate: selectedDate
+                )
+                TrainingScheduleSection(
+                    engine: engine,
+                    sportFilter: sportFilter,
+                    headlineTimeFilter: timeFilter,
+                    chartTimeFilter: graphTimeFilter,
+                    anchorDate: selectedDate
+                )
+                VO2AggregatesSection(
+                    engine: engine,
+                    headlineTimeFilter: timeFilter,
+                    chartTimeFilter: graphTimeFilter,
+                    sportFilter: sportFilter,
+                    anchorDate: selectedDate
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var strainRecoveryRecoverySection: some View {
+        MetricSectionGroup(title: "Recovery") {
+            RecoveryScoreSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            ReadinessScoreSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            HRVSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            RestingHeartRateSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            HRRAggregatesSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                sportFilter: sportFilter,
+                anchorDate: selectedDate
+            )
+            RespiratoryRateSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            WristTemperatureSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            SpO2Section(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var strainRecoverySleepSection: some View {
+        MetricSectionGroup(title: "Sleep") {
+            SleepRecoverySection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            SleepConsistencySection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+            SleepHeartRateSection(
+                engine: engine,
+                headlineTimeFilter: timeFilter,
+                chartTimeFilter: graphTimeFilter,
+                anchorDate: selectedDate
+            )
+        }
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
                 ZStack {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 28) {
-                    // Time and Sport Filters
-                    HStack {
-                        HStack(spacing: 8) {
-                            ForEach(Array(TimeFilter.allCases.enumerated()), id: \.element) { index, filter in
-                                Button {
-                                    selectTimeFilter(filter)
-                                } label: {
-                                    Text(filter.rawValue)
-                                        .font(.subheadline.weight(.semibold))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 8)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(timeFilter == filter ? .orange : .orange.opacity(0.3))
-                            }
-                        }
-                        if !MacCatalystHealthDataPolicy.isActive {
-                            Spacer()
-                            Menu {
-                                Button("All Sports") { sportFilter = nil
-                                    let impact = UIImpactFeedbackGenerator(style: .medium)
-                                    impact.impactOccurred()}
-                                ForEach(engine.workoutAnalytics.map { $0.workout.workoutActivityType.name }.unique, id: \.self) { sport in
-                                    Button(sport.capitalized) { sportFilter = sport
-                                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                                        impact.impactOccurred()}
-                                }
-                            } label: {
-                                HStack {
-                                    Text(sportFilter?.capitalized ?? "All Sports")
-                                    Image(systemName: "chevron.down")
-                                }
-                                .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
-                                .foregroundStyle(.orange)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.orange.opacity(0.14))
-                                )
-                                .overlay(
-                                    Capsule()
-                                        .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal)
-
-                    if MacCatalystHealthDataPolicy.isActive {
-                        Text(MacCatalystHealthDataPolicy.historyNotice)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal)
-                    }
-
-                        StrainRecoveryAISummarySection(
-                            engine: engine,
-                            timeFilter: timeFilter,
-                            sportFilter: sportFilter,
-                            anchorDate: coachSummaryAnchorDate,
-                            aggressiveCachingController: aggressiveCachingController
-                        )
-
-                    if MacCatalystHealthDataPolicy.isActive {
-                        MetricSectionGroup(title: "Training Load") {
-                            MetricCard(title: "Workout Insights") {
-                                Text("Workout analytics are unavailable on Mac Catalyst.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } else {
-                        MetricSectionGroup(title: "Training Load") {
-                            StrainRecoveryMathSection(
-                                engine: engine,
-                                headlineTimeFilter: timeFilter,
-                                chartTimeFilter: graphTimeFilter,
-                                anchorDate: selectedDate
-                            )
-                            WorkoutContributionsSection(
-                                engine: engine,
-                                headlineTimeFilter: timeFilter,
-                                chartTimeFilter: graphTimeFilter,
-                                anchorDate: selectedDate,
-                                sportFilter: nil
-                            )
-                            METAggregatesSection(
-                                engine: engine,
-                                headlineTimeFilter: timeFilter,
-                                chartTimeFilter: graphTimeFilter,
-                                sportFilter: sportFilter,
-                                anchorDate: selectedDate
-                            )
-                            TrainingScheduleSection(
-                                engine: engine,
-                                sportFilter: sportFilter,
-                                headlineTimeFilter: timeFilter,
-                                chartTimeFilter: graphTimeFilter,
-                                anchorDate: selectedDate
-                            )
-                            VO2AggregatesSection(
-                                engine: engine,
-                                headlineTimeFilter: timeFilter,
-                                chartTimeFilter: graphTimeFilter,
-                                sportFilter: sportFilter,
-                                anchorDate: selectedDate
-                            )
-                        }
-                    }
-
-                    MetricSectionGroup(title: "Recovery") {
-                        RecoveryScoreSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        ReadinessScoreSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        HRVSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        RestingHeartRateSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        HRRAggregatesSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            sportFilter: sportFilter,
-                            anchorDate: selectedDate
-                        )
-                        RespiratoryRateSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        WristTemperatureSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        SpO2Section(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                    }
-
-                    MetricSectionGroup(title: "Sleep") {
-                        SleepRecoverySection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        SleepConsistencySection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                        SleepHeartRateSection(
-                            engine: engine,
-                            headlineTimeFilter: timeFilter,
-                            chartTimeFilter: graphTimeFilter,
-                            anchorDate: selectedDate
-                        )
-                    }
+                            strainRecoveryTimeAndSportFilters
+                            strainRecoveryCatalystNotice
+                            strainRecoveryAISummaryBlock
+                            strainRecoveryTrainingLoadSection
+                            strainRecoveryRecoverySection
+                            strainRecoverySleepSection
                         }
                         .frame(maxWidth: max(0, geometry.size.width - 32), alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2244,7 +2282,7 @@ private struct StrainRecoverySummarySettingsView: View {
                 }
 
                 Section("Primary Device") {
-                    Toggle("Use This Device As Default Primary", isOn: Binding(
+                    CatalystAccessibleToggle("Use This Device As Default Primary", isOn: Binding(
                         get: {
                             settings.primaryDeviceID == currentDevice.id
                         },
@@ -2274,6 +2312,7 @@ private struct StrainRecoverySummarySettingsView: View {
                             Text(selection.title).tag(selection)
                         }
                     }
+                    .catalystDesktopFocusable()
                     .disabled(!deviceSupportsAppleIntelligence())
                     .onChange(of: temporarySelection) { _, newValue in
                         settings.temporaryPrimaryDeviceID = newValue == .off ? nil : currentDevice.id
@@ -2556,6 +2595,27 @@ private func standardDeviation(_ values: [Double]) -> Double? {
     let mean = values.reduce(0, +) / Double(values.count)
     let variance = values.map { pow($0 - mean, 2) }.reduce(0, +) / Double(values.count)
     return sqrt(variance)
+}
+
+/// Titled material card for Mac Catalyst-only placeholders (separate from StressView.MetricCard).
+private struct StrainRecoveryCatalystInfoCard<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 18)
+        .padding(.horizontal, 18)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.ultraThinMaterial)
+        )
+    }
 }
 
 struct MetricSectionGroup<Content: View>: View {
@@ -3208,6 +3268,7 @@ private struct StrainRecoveryAISummarySection: View {
             .foregroundColor(.orange)
         }
         .buttonStyle(.plain)
+        .catalystDesktopFocusable()
     }
 
     @MainActor
@@ -3254,6 +3315,7 @@ private struct StrainRecoveryAISummarySection: View {
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.borderedProminent)
                     .tint(.orange)
+                    .catalystDesktopFocusable()
                 }
                 if !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button(isSavingToJournal ? "Saved" : "Save To Journal") {
@@ -3264,6 +3326,7 @@ private struct StrainRecoveryAISummarySection: View {
                     .tint(.orange)
                     .shadow(color: Color.purple.opacity(0.18), radius: 12, x: 0, y: 0)
                     .disabled(isSavingToJournal)
+                    .catalystDesktopFocusable()
                 }
                 if isLoading {
                     ProgressView()

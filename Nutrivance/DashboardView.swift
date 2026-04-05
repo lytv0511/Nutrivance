@@ -2,6 +2,37 @@ import SwiftUI
 import Charts
 import HealthKit
 
+// MARK: - Keyboard focus (Mac Catalyst + iPad)
+private enum DashboardKeyboardFocus {
+    static var isEnabled: Bool {
+        #if targetEnvironment(macCatalyst)
+        true
+        #elseif os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        false
+        #endif
+    }
+}
+
+private extension View {
+    /// Tab / Full Keyboard Access on Mac Catalyst and iPad. Uses default `FocusInteractions` (`.automatic`), not `.activate` alone — restricting interactions to only `.activate` drops keyboard traversal so Tab skips controls inside `ScrollView`.
+    @ViewBuilder
+    func dashboardKeyboardFocusable() -> some View {
+        #if targetEnvironment(macCatalyst)
+        self.catalystDesktopFocusable()
+        #elseif os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            self.focusable(true)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+}
+
 // MARK: - BlurView for Liquid Glass Effect
 import UIKit
 
@@ -409,6 +440,7 @@ struct DashboardView: View {
                     dashboardItemsSection()
                 }
                 .padding(.top)
+                .coordinateSpace(name: "dashboardBase")
             }
             .background(
                 GradientBackgrounds()
@@ -450,12 +482,16 @@ struct DashboardView: View {
                         Image(systemName: "gearshape")
                             .foregroundColor(.orange)
                     }
+                    .accessibilityLabel("Display units")
+                    .dashboardKeyboardFocusable()
                     Button(action: { showArrangementSheet = true
                         let impact = UIImpactFeedbackGenerator(style: .medium)
                         impact.impactOccurred()}) {
                         Image(systemName: "slider.horizontal.3")
                             .foregroundColor(.orange)
                     }
+                    .accessibilityLabel("Arrange dashboard")
+                    .dashboardKeyboardFocusable()
                 }
             }
             .sheet(isPresented: $showArrangementSheet) {
@@ -556,6 +592,8 @@ struct DashboardView: View {
                                         .foregroundColor(.orange)
                                 }
                             }
+                            .buttonStyle(.plain)
+                            .dashboardKeyboardFocusable()
                             Spacer()
                         }
                         .padding(.horizontal)
@@ -639,6 +677,7 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
+                    .dashboardKeyboardFocusable()
                     .background(
                         Capsule()
                             .fill(selectedChartRange == range ? Color.orange : Color.orange.opacity(0.16))
@@ -709,11 +748,28 @@ struct DashboardView: View {
                 .chartYScale(domain: 0...(maxValue * 1.18))
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
-                        trainingLoadSelectionOverlay(
-                            proxy: proxy,
-                            geometry: geometry,
-                            points: chartPoints
-                        )
+                        let plotFrame = geometry[proxy.plotAreaFrame]
+
+                        ZStack {
+                            ZStack {
+                                trainingLoadSelectionOverlay(
+                                    proxy: proxy,
+                                    geometry: geometry,
+                                    points: chartPoints
+                                )
+
+                                trainingLoadChartPointFocusLayer(
+                                    proxy: proxy,
+                                    geometry: geometry,
+                                    points: chartPoints
+                                )
+                            }
+                            .frame(width: plotFrame.width, height: plotFrame.height)
+                            .position(
+                                x: plotFrame.midX,
+                                y: plotFrame.midY
+                            )
+                        }
                     }
                 }
                 .frame(height: 200)
@@ -812,6 +868,7 @@ struct DashboardView: View {
                 }
             }
             .buttonStyle(.plain)
+            .dashboardKeyboardFocusable()
 
             workoutPreviewGroup(title: "Today", workouts: workoutsForPreview(dayOffset: 0))
             workoutPreviewGroup(title: "Yesterday", workouts: workoutsForPreview(dayOffset: -1))
@@ -854,6 +911,7 @@ struct DashboardView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .dashboardKeyboardFocusable()
                 }
             }
         }
@@ -912,8 +970,10 @@ struct DashboardView: View {
             .shadow(radius: 2)
             .padding(.horizontal)
         }
+        .buttonStyle(.plain)
+        .dashboardKeyboardFocusable()
         .navigationDestination(isPresented: Binding(
-            get: { 
+            get: {
                 if case .feelGood = activeDetailView { return true } else { return false }
             },
             set: { if !$0 { activeDetailView = .none } }
@@ -1030,6 +1090,7 @@ struct DashboardView: View {
             .shadow(radius: 2)
         }
         .buttonStyle(PlainButtonStyle())
+        .dashboardKeyboardFocusable()
     }
 
     // Chart Data Filter
@@ -1113,6 +1174,47 @@ struct DashboardView: View {
         selectedTrainingLoadPoint = nearestPoint
         if previousSelectionDate != nearestPoint.date {
             UISelectionFeedbackGenerator().selectionChanged()
+        }
+    }
+
+    /// Invisible hit targets at each plotted day so Tab / Full Keyboard Access can move the training load selection (Catalyst + iPad).
+    @ViewBuilder
+    private func trainingLoadChartPointFocusLayer(
+        proxy: ChartProxy,
+        geometry: GeometryProxy,
+        points: [TrainingLoadChartPoint]
+    ) -> some View {
+        if DashboardKeyboardFocus.isEnabled {
+            let plotFrame = geometry[proxy.plotAreaFrame]
+            ForEach(points, id: \.date) { point in
+                if let rawX = proxy.position(forX: point.date),
+                   let rawY = proxy.position(forY: point.value) {
+
+                    let plotFrame = geometry[proxy.plotAreaFrame]
+                    let px = rawX - plotFrame.origin.x
+                    let py = rawY - plotFrame.origin.y
+                    Button {
+                        selectedTrainingLoadPoint = point
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } label: {
+                        Circle()
+                            .fill(Color.clear)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
+                            .overlay(
+                                Circle()
+                                    .stroke(
+                                        selectedTrainingLoadPoint?.date == point.date ? Color.orange : Color.orange.opacity(0.45),
+                                        lineWidth: selectedTrainingLoadPoint?.date == point.date ? 2.5 : 1
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Training load, \(point.date.formatted(date: .abbreviated, time: .omitted))")
+                    .dashboardKeyboardFocusable()
+                    .position(x: px, y: py)
+                }
+            }
         }
     }
 
@@ -1712,24 +1814,28 @@ struct UnitSettingsView: View {
                             Text(option.title).tag(option)
                         }
                     }
+                    .catalystDesktopFocusable()
 
                     Picker("Speed", selection: $unitPreferences.speed) {
                         ForEach(SpeedUnitPreference.allCases) { option in
                             Text(option.title).tag(option)
                         }
                     }
+                    .catalystDesktopFocusable()
 
                     Picker("Pace", selection: $unitPreferences.pace) {
                         ForEach(PaceUnitPreference.allCases) { option in
                             Text(option.title).tag(option)
                         }
                     }
+                    .catalystDesktopFocusable()
 
                     Picker("Elevation", selection: $unitPreferences.elevation) {
                         ForEach(ElevationUnitPreference.allCases) { option in
                             Text(option.title).tag(option)
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
 
                 Section("Temperature") {
@@ -1738,6 +1844,7 @@ struct UnitSettingsView: View {
                             Text(option.title).tag(option)
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
 
                 Section("Reset") {
@@ -1745,6 +1852,7 @@ struct UnitSettingsView: View {
                         unitPreferences.resetToAutomatic()
                     }
                     .foregroundStyle(.orange)
+                    .catalystDesktopFocusable()
                 }
             }
             .navigationTitle("Display Units")
@@ -1755,6 +1863,7 @@ struct UnitSettingsView: View {
                         isPresented = false
                     }
                     .foregroundColor(.orange)
+                    .catalystDesktopFocusable()
                 }
             }
         }

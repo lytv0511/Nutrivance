@@ -55,6 +55,7 @@ struct StressView: View {
         timeFilter = filter
         selectedSession = nil
         updateAggregatedData()
+        syncSelectedSessionToDate()
         let impact = UIImpactFeedbackGenerator(style: .light)
         impact.impactOccurred()
     }
@@ -94,6 +95,23 @@ struct StressView: View {
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
     }
+
+    /// Keeps week/month charts aligned to calendar days when a day has no HRV samples (`sdnn` is 0 for placeholders).
+    private func stressPlaceholderSession(startOfDay: Date) -> HRVSession {
+        HRVSession(
+            date: startOfDay,
+            sdnn: 0,
+            rmssd: 0,
+            combinedHRV: 0,
+            lfHfProxy: 1.0,
+            coefficientOfVariation: 0,
+            adjustedHRV: 0,
+            stress: 50,
+            energy: 50,
+            nervousBalance: 100,
+            baselineEMA: 50
+        )
+    }
     
     var body: some View {
         NavigationStack {
@@ -110,8 +128,21 @@ struct StressView: View {
                             FilterButtonGroup(
                                 timeFilter: $timeFilter,
                                 selectedSession: $selectedSession,
-                                onFilterChange: updateAggregatedData
+                                onFilterChange: {
+                                    updateAggregatedData()
+                                    syncSelectedSessionToDate()
+                                }
                             )
+
+                            #if targetEnvironment(macCatalyst)
+                            if MacCatalystHealthDataPolicy.isActive {
+                                Text(MacCatalystHealthDataPolicy.stressHistoryNotice)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal)
+                            }
+                            #endif
                             
                             // Calendar picker for specific date
                             DatePicker(
@@ -122,11 +153,13 @@ struct StressView: View {
                             .datePickerStyle(.compact)
                             .onChange(of: selectedDate) { _ in
                                 updateAggregatedData()
+                                syncSelectedSessionToDate()
                                 let impact = UIImpactFeedbackGenerator(style: .medium)
                                 impact.impactOccurred()
                             }
                             .padding(.horizontal)
                             .buttonStyle(.glass)
+                            .catalystDesktopFocusable()
                             
                             // Chart View
                             if aggregatedData.count > 0 {
@@ -234,6 +267,17 @@ struct StressView: View {
                     .onAppear {
                         loadStressMetrics()
                     }
+                    #if targetEnvironment(macCatalyst)
+                    .refreshable {
+                        await HealthStateEngine.shared.refreshSyncedHealthDataFromICloud()
+                        await MainActor.run {
+                            applyCatalystStressFromEngineSnapshot()
+                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+                        loadStressMetrics()
+                    }
+                    #endif
                     .onChange(of: aggregatedData) { _ in
                         // Sync the selected session whenever aggregated data changes
                         syncSelectedSessionToDate()
@@ -251,6 +295,7 @@ struct StressView: View {
                             .font(.system(.caption, design: .rounded))
                             .fontWeight(.semibold)
                     }
+                    .catalystDesktopFocusable()
                 }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button(action: {
@@ -259,6 +304,7 @@ struct StressView: View {
                         Image(systemName: "chevron.left")
                             .font(.system(.body, design: .rounded))
                     }
+                    .catalystDesktopFocusable()
                     
                     Button(action: {
                         stepSelectedDate(by: 1)
@@ -266,6 +312,7 @@ struct StressView: View {
                         Image(systemName: "chevron.right")
                             .font(.system(.body, design: .rounded))
                     }
+                    .catalystDesktopFocusable()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlToday)) { _ in
@@ -571,8 +618,93 @@ struct StressView: View {
         }
         
         // MARK: - Load HRV Data
+
+        #if targetEnvironment(macCatalyst)
+        /// Call `await HealthStateEngine.shared.refreshSyncedHealthDataFromICloud()` first when you need the latest KVS snapshot.
+        private func applyCatalystStressFromEngineSnapshot() {
+            let engine = HealthStateEngine.shared
+            let tuples: [(Date, Double)]
+            if !engine.hrvSampleHistory.isEmpty {
+                tuples = engine.hrvSampleHistory.map { ($0.date, $0.value) }.sorted { $0.0 < $1.0 }
+            } else if !engine.dailyHRV.isEmpty {
+                tuples = engine.dailyHRV.map { ($0.date, $0.average) }.sorted { $0.0 < $1.0 }
+            } else {
+                hrvHistory = []
+                aggregatedData = []
+                loading = false
+                return
+            }
+
+            var hrvSessions: [HRVSession] = []
+            var sdnnValues: [Double] = []
+            var baselineEMA: Double?
+            var prevHRVs: [Double] = []
+            let alpha = 0.3
+            for (date, sdnn) in tuples {
+                sdnnValues.append(sdnn)
+                let window = Array(sdnnValues.suffix(10))
+                let baselineForOutlier = computeBaseline(window)
+                let cleaned = removeOutliers(window, baseline: baselineForOutlier)
+                let baseline = baselineEMA ?? computeBaseline(cleaned)
+                if let prev = baselineEMA {
+                    baselineEMA = alpha * sdnn + (1 - alpha) * prev
+                } else {
+                    baselineEMA = sdnn
+                }
+                prevHRVs.append(sdnn)
+                if prevHRVs.count > 10 { prevHRVs.removeFirst() }
+                let combinedCurrentHRV = combinedHRV(current: sdnn, baseline: baseline)
+                let adjustedCurrentHRV = combinedCurrentHRV * (1 - coefficientOfVariation(cleaned))
+                let combinedBaselineHRV = combinedHRV(current: baseline, baseline: baseline)
+                let currentRMSSD = estimateRMSSD(from: sdnn)
+                let baselineRMSSD = estimateRMSSD(from: baseline)
+                let lfHfProxy = pow(baselineRMSSD / max(currentRMSSD, 1e-5), 0.7)
+                let stress = calculateStress(current: adjustedCurrentHRV, baseline: combinedBaselineHRV, lfHfProxy: lfHfProxy)
+                let energy = calculateEnergy(current: adjustedCurrentHRV, baseline: combinedBaselineHRV, values: cleaned)
+                let balance = calculateNervousBalance(current: combinedCurrentHRV, baseline: combinedBaselineHRV)
+                let cv = coefficientOfVariation(cleaned)
+                let session = HRVSession(
+                    date: date,
+                    sdnn: sdnn,
+                    rmssd: currentRMSSD,
+                    combinedHRV: combinedCurrentHRV,
+                    lfHfProxy: lfHfProxy,
+                    coefficientOfVariation: cv,
+                    adjustedHRV: adjustedCurrentHRV,
+                    stress: stress,
+                    energy: energy,
+                    nervousBalance: balance,
+                    baselineEMA: baselineEMA ?? baseline
+                )
+                hrvSessions.append(session)
+            }
+
+            let calendar = Calendar.current
+            let morningSessions = hrvSessions.filter { session in
+                let hour = calendar.component(.hour, from: session.date)
+                return hour >= 4 && hour <= 11
+            }
+            let dashboardSession = morningSessions.last ?? hrvSessions.last
+            hrvHistory = hrvSessions
+            if let dash = dashboardSession {
+                stressScore = dash.stress
+                energyScore = dash.energy
+                nervousBalance = dash.nervousBalance
+            }
+            updateAggregatedData()
+            syncSelectedSessionToDate()
+            loading = false
+        }
+        #endif
         
         func loadStressMetrics() {
+            #if targetEnvironment(macCatalyst)
+            Task { @MainActor in
+                await HealthStateEngine.shared.refreshSyncedHealthDataFromICloud()
+                applyCatalystStressFromEngineSnapshot()
+            }
+            return
+            #endif
             // Fetch all-time HRV SDNN samples from HealthKit
             let healthStore = HKHealthStore()
             guard let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else {
@@ -663,8 +795,8 @@ struct StressView: View {
                         self.energyScore = dash.energy
                         self.nervousBalance = dash.nervousBalance
                     }
-                    self.selectedDate = Date()
                     self.updateAggregatedData()
+                    self.syncSelectedSessionToDate()
                     self.loading = false
                 }
             }
@@ -683,8 +815,9 @@ struct StressView: View {
                 aggregateByMonth()
             }
             
-            // Calculate average
-            averageValue = aggregatedData.map { $0.combinedHRV }.reduce(0, +) / Double(max(aggregatedData.count, 1))
+            // Ignore placeholder days (no samples) so sparse weeks/months don't skew the average toward 0.
+            let measurable = aggregatedData.filter { $0.sdnn > 0.001 }
+            averageValue = measurable.isEmpty ? 0 : measurable.map { $0.combinedHRV }.reduce(0, +) / Double(measurable.count)
         }
         
         func aggregateByHour() {
@@ -695,6 +828,12 @@ struct StressView: View {
             let dayData = hrvHistory.filter { session in
                 return session.date >= startOfDay && session.date < endOfDay
             }
+
+            #if targetEnvironment(macCatalyst)
+            // Watch HRV is sparse (~few samples/day). Hourly buckets drop most hours and look “empty”; show every synced sample for the selected day.
+            aggregatedData = dayData.sorted { $0.date < $1.date }
+            return
+            #endif
             
             var hourlyData: [HRVSession] = []
             
@@ -762,7 +901,9 @@ struct StressView: View {
                 
                 let daySamples = weekData.filter { $0.date >= startOfDay && $0.date < endOfDay }
                 
-                if !daySamples.isEmpty {
+                if daySamples.isEmpty {
+                    dailyData.append(stressPlaceholderSession(startOfDay: startOfDay))
+                } else {
                     let avgSDNN = daySamples.map { $0.sdnn }.reduce(0, +) / Double(daySamples.count)
                     let avgRMSSD = daySamples.map { $0.rmssd }.reduce(0, +) / Double(daySamples.count)
                     let avgCombined = daySamples.map { $0.combinedHRV }.reduce(0, +) / Double(daySamples.count)
@@ -829,7 +970,9 @@ struct StressView: View {
                 
                 let daySamples = monthData.filter { $0.date >= startOfDay && $0.date < endOfDay }
                 
-                if !daySamples.isEmpty {
+                if daySamples.isEmpty {
+                    dailyData.append(stressPlaceholderSession(startOfDay: startOfDay))
+                } else {
                     let avgSDNN = daySamples.map { $0.sdnn }.reduce(0, +) / Double(daySamples.count)
                     let avgRMSSD = daySamples.map { $0.rmssd }.reduce(0, +) / Double(daySamples.count)
                     let avgCombined = daySamples.map { $0.combinedHRV }.reduce(0, +) / Double(daySamples.count)
@@ -870,34 +1013,27 @@ struct StressView: View {
             
             switch timeFilter {
             case .hourly24:
-                // For hourly view, select the latest available data point
-                if let last = aggregatedData.last {
-                    selectedSession = last
-                    selectedDate = last.date
-                }
+                // Keep the user's selected calendar day; only move the highlighted sample (never overwrite selectedDate).
+                selectedSession = aggregatedData.last
                 
             case .dailyWeek:
-                // For weekly view, find the data point that matches the selected date
                 let selectedDayStart = calendar.startOfDay(for: selectedDate)
                 if let matchingSession = aggregatedData.first(where: { session in
                     calendar.startOfDay(for: session.date) == selectedDayStart
                 }) {
                     selectedSession = matchingSession
                 } else {
-                    // If no exact match, select the first available
-                    selectedSession = aggregatedData.first
+                    selectedSession = nil
                 }
                 
             case .dailyMonth:
-                // For monthly view, find the data point that matches the selected date
                 let selectedDayStart = calendar.startOfDay(for: selectedDate)
                 if let matchingSession = aggregatedData.first(where: { session in
                     calendar.startOfDay(for: session.date) == selectedDayStart
                 }) {
                     selectedSession = matchingSession
                 } else {
-                    // If no exact match, select the first available
-                    selectedSession = aggregatedData.first
+                    selectedSession = nil
                 }
             }
         }
@@ -1166,6 +1302,7 @@ struct FilterButton: View {
         }
         .background(FilterButtonBackground(isSelected: isSelected))
         .buttonStyle(.glass)
+        .catalystDesktopFocusable()
     }
 }
 

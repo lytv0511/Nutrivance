@@ -223,19 +223,12 @@ struct TrainingCalendarView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 12) {
                         Button {
-                            Task {
-                                isLoadingMonth = true
-                                if engine.hasNewDataAvailable {
-                                    await engine.replaceWorkoutCacheWithNewData(days: 3650)
-                                } else {
-                                    await engine.forceRefreshWorkoutAnalytics(days: 3650)
-                                }
-                                isLoadingMonth = false
-                            }
+                            refreshTrainingCalendarFromEngine()
                         } label: {
                             Image(systemName: "arrow.clockwise")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
 
                         Button {
                             jumpToToday()
@@ -243,6 +236,7 @@ struct TrainingCalendarView: View {
                             Image(systemName: "scope")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
 
                         Button {
                             showMonthPicker = true
@@ -250,6 +244,7 @@ struct TrainingCalendarView: View {
                             Image(systemName: "calendar")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
 
                         Menu {
                             Button("All Sports") { sportFilter = nil }
@@ -260,6 +255,7 @@ struct TrainingCalendarView: View {
                             Image(systemName: "line.horizontal.3.decrease.circle")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
 
                         Button {
                             showHRZoneSettings = true
@@ -267,6 +263,7 @@ struct TrainingCalendarView: View {
                             Image(systemName: "gear")
                                 .foregroundColor(.orange)
                         }
+                        .catalystDesktopFocusable()
                     }
                 }
             }
@@ -286,11 +283,13 @@ struct TrainingCalendarView: View {
                         )
                         .datePickerStyle(.graphical)
                         .padding()
+                        .catalystDesktopFocusable()
 
                         Button("Done") {
                             showMonthPicker = false
                         }
                         .foregroundColor(.orange)
+                        .catalystDesktopFocusable()
                     }
                     .navigationTitle("Select Month")
                     .navigationBarTitleDisplayMode(.inline)
@@ -341,6 +340,41 @@ struct TrainingCalendarView: View {
                 guard hasLoadedPersistedHRZoneSettings else { return }
                 HRZoneSettingsPersistence.save(newValue)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlTrainingCalendarToday)) { _ in
+                jumpToToday()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlTrainingCalendarPreviousDay)) { _ in
+                stepSelectedDay(by: -1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlTrainingCalendarNextDay)) { _ in
+                stepSelectedDay(by: 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlTrainingCalendarRefresh)) { _ in
+                refreshTrainingCalendarFromEngine()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlTrainingCalendarHRZoneSettings)) { _ in
+                showHRZoneSettings = true
+            }
+        }
+    }
+
+    private func refreshTrainingCalendarFromEngine() {
+        Task {
+            isLoadingMonth = true
+            await engine.refreshSyncedHealthDataFromICloud()
+            isLoadingMonth = false
+        }
+    }
+
+    private func stepSelectedDay(by days: Int) {
+        let today = calendar.startOfDay(for: Date())
+        guard let raw = calendar.date(byAdding: .day, value: days, to: selectedDay) else { return }
+        let normalized = calendar.startOfDay(for: raw)
+        if days > 0, normalized > today { return }
+        selectedDay = normalized
+        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: normalized)) ?? normalized
+        if !calendar.isDate(monthStart, equalTo: selectedMonthStart, toGranularity: .month) {
+            selectedMonth = monthStart
         }
     }
 

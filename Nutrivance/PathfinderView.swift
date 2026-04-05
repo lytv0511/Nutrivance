@@ -1022,6 +1022,9 @@ struct PathfinderView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 store.load()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlPathfinderLogEmotion)) { _ in
+                showAddSheet = true
+            }
         }
     }
 
@@ -1382,6 +1385,7 @@ struct AddCorrelationSheet: View {
                             .tag(e)
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
 
                 Section("Valence") {
@@ -1409,6 +1413,7 @@ struct AddCorrelationSheet: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .catalystDesktopFocusable()
 
                     let associations = NutrivanceAssociation.associations(for: selectedMode)
                     Picker("Category", selection: $selectedAssociation) {
@@ -1420,6 +1425,7 @@ struct AddCorrelationSheet: View {
                             .tag(assoc)
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
 
                 Section("Notes") {
@@ -1432,6 +1438,10 @@ struct AddCorrelationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .catalystDesktopFocusable()
+                        #if targetEnvironment(macCatalyst)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        #endif
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
@@ -1446,6 +1456,7 @@ struct AddCorrelationSheet: View {
                         onSave(correlation)
                         dismiss()
                     }
+                    .catalystDesktopFocusable()
                 }
             }
         }
@@ -1478,6 +1489,7 @@ struct EditCorrelationSheet: View {
                             .tag(e)
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
 
                 Section("Valence") {
@@ -1504,6 +1516,7 @@ struct EditCorrelationSheet: View {
                             .tag(assoc)
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
 
                 Section("Notes") {
@@ -1516,12 +1529,17 @@ struct EditCorrelationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .catalystDesktopFocusable()
+                        #if targetEnvironment(macCatalyst)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        #endif
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         onSave(correlation)
                         dismiss()
                     }
+                    .catalystDesktopFocusable()
                 }
             }
         }
@@ -2176,6 +2194,7 @@ struct PathPickerSheet: View {
                                 .overlay(Capsule().stroke(isSelected ? selectedChoice.accentColor.opacity(0.4) : Color.clear, lineWidth: 1))
                             }
                             .buttonStyle(.plain)
+                            .catalystDesktopFocusable()
                         }
                     }
                 }
@@ -2184,13 +2203,20 @@ struct PathPickerSheet: View {
             .navigationTitle("New Path")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .catalystDesktopFocusable()
+                        #if targetEnvironment(macCatalyst)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        #endif
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Commit") {
                         onCommit(selectedChoice, Array(selectedAreas))
                         dismiss()
                     }
                     .disabled(selectedAreas.isEmpty)
+                    .catalystDesktopFocusable()
                 }
             }
         }

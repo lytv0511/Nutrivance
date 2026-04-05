@@ -158,6 +158,9 @@ enum JournalPersistence {
     }
 
     static func loadEntries() -> [JournalEntry] {
+        // Pull latest from the ubiquitous daemon into the in-memory cache before reading.
+        // Without this, Mac Catalyst often shows an empty or stale journal until much later.
+        _ = NSUbiquitousKeyValueStore.default.synchronize()
         let localEntries = loadLocalEntries()
         let cloudEntries = loadCloudEntries()
         let merged = merge(localEntries: localEntries, cloudEntries: cloudEntries)
@@ -210,9 +213,17 @@ enum JournalPersistence {
             let data = try JSONEncoder().encode(entries)
             let cloudStore = NSUbiquitousKeyValueStore.default
             cloudStore.set(data, forKey: cloudStorageKey)
+            _ = cloudStore.synchronize()
         } catch {
             print("Failed to save journal entries to iCloud:", error)
         }
+    }
+
+    /// Async refresh for pull-to-refresh on Mac Catalyst (KVS may still update shortly after `synchronize()` returns).
+    static func refreshJournalFromICloud() async {
+        await Task { @MainActor in
+            _ = NSUbiquitousKeyValueStore.default.synchronize()
+        }.value
     }
 
     private static func merge(localEntries: [JournalEntry], cloudEntries: [JournalEntry]) -> [JournalEntry] {
@@ -596,7 +607,19 @@ struct JournalView: View {
                 backgroundView
 
                 if filteredEntries.isEmpty {
+                    #if targetEnvironment(macCatalyst)
+                    ScrollView {
+                        JournalEmptyState(filter: filter, searchText: searchText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 80)
+                    }
+                    .refreshable {
+                        await JournalPersistence.refreshJournalFromICloud()
+                        loadEntries()
+                    }
+                    #else
                     JournalEmptyState(filter: filter, searchText: searchText)
+                    #endif
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 22) {
@@ -622,6 +645,12 @@ struct JournalView: View {
                         .padding(.horizontal)
                         .padding(.bottom, 32)
                     }
+                    #if targetEnvironment(macCatalyst)
+                    .refreshable {
+                        await JournalPersistence.refreshJournalFromICloud()
+                        loadEntries()
+                    }
+                    #endif
                 }
             }
             .navigationTitle("Journal")
@@ -635,9 +664,19 @@ struct JournalView: View {
                     }
                 }
             }
-            .onAppear {
+            .task {
+                #if targetEnvironment(macCatalyst)
+                await JournalPersistence.refreshJournalFromICloud()
+                #endif
                 loadEntries()
             }
+            #if targetEnvironment(macCatalyst)
+            #if canImport(UIKit)
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                loadEntries()
+            }
+            #endif
+            #endif
             .fullScreenCover(isPresented: $showingEditor) {
                 JournalEditorView(
                     entry: $currentEntry,
@@ -3914,6 +3953,10 @@ struct JournalEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .catalystDesktopFocusable()
+                        #if targetEnvironment(macCatalyst)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        #endif
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -3936,6 +3979,7 @@ struct JournalEditorView: View {
                         dismiss()
                     }
                     .fontWeight(.semibold)
+                    .catalystDesktopFocusable()
                 }
 
                 ToolbarItemGroup(placement: .bottomBar) {

@@ -1152,6 +1152,9 @@ extension Notification.Name {
     static let nutrivanceViewControlSleepWakeAlarms = Notification.Name("nutrivance.viewControl.sleep.wakeAlarms")
     static let nutrivanceViewControlLogNewQuest = Notification.Name("nutrivance.viewControl.logNewQuest")
     static let nutrivanceViewControlNewJournalEntry = Notification.Name("nutrivance.viewControl.newJournalEntry")
+    static let nutrivanceViewControlPastQuestsPrevious = Notification.Name("nutrivance.viewControl.pastQuests.previous")
+    static let nutrivanceViewControlPastQuestsNext = Notification.Name("nutrivance.viewControl.pastQuests.next")
+    static let nutrivanceViewControlPathfinderLogEmotion = Notification.Name("nutrivance.viewControl.pathfinder.logEmotion")
     static let nutrivanceViewControlRefreshWorkouts = Notification.Name("nutrivance.viewControl.refreshWorkouts")
     static let nutrivanceViewControlChartRange7d = Notification.Name("nutrivance.viewControl.chartRange7d")
     static let nutrivanceViewControlChartRange30d = Notification.Name("nutrivance.viewControl.chartRange30d")
@@ -1160,6 +1163,14 @@ extension Notification.Name {
     static let nutrivanceViewControlArrangeDashboard = Notification.Name("nutrivance.viewControl.arrangeDashboard")
     static let nutrivanceViewControlWorkoutViews = Notification.Name("nutrivance.viewControl.workoutViews")
     static let nutrivanceViewControlWorkoutMetricLayout = Notification.Name("nutrivance.viewControl.workoutMetricLayout")
+    /// Training Calendar tab only (avoids Strain/Sleep listeners reacting on the same shortcuts).
+    static let nutrivanceViewControlTrainingCalendarToday = Notification.Name("nutrivance.viewControl.trainingCalendar.today")
+    static let nutrivanceViewControlTrainingCalendarPreviousDay = Notification.Name("nutrivance.viewControl.trainingCalendar.previousDay")
+    static let nutrivanceViewControlTrainingCalendarNextDay = Notification.Name("nutrivance.viewControl.trainingCalendar.nextDay")
+    static let nutrivanceViewControlTrainingCalendarRefresh = Notification.Name("nutrivance.viewControl.trainingCalendar.refresh")
+    static let nutrivanceViewControlTrainingCalendarHRZoneSettings = Notification.Name("nutrivance.viewControl.trainingCalendar.hrZoneSettings")
+    /// Workout History (and any other screen that should open shared HR zone settings).
+    static let nutrivanceViewControlHRZoneSettings = Notification.Name("nutrivance.viewControl.hrZoneSettings")
     /// userInfo["slot"]: Int — 0 = all sports, 1 = first sorted sport name, …, 9 = ninth sport
     static let nutrivanceViewControlHeartZonesSportSlot = Notification.Name("nutrivance.viewControl.heartZones.sportSlot")
     static let nutrivanceViewControlRecoveryScoreRefresh = Notification.Name("nutrivance.viewControl.recoveryScore.refresh")
@@ -1388,7 +1399,13 @@ class NavigationState: ObservableObject {
     @Published var tempFocus: AppFocus = .nutrition
     @Published var navigationPath = NavigationPath()
     @Published var isSearchBarFocused = false
-    
+    /// Incremented when the Search tab is selected so Search can move keyboard focus to the field (Mac Catalyst).
+    @Published var searchTabFocusPulse: Int = 0
+
+    func bumpSearchTabKeyboardFocus() {
+        searchTabFocusPulse &+= 1
+    }
+
     func setDismissAction(_ action: @escaping () -> Void) {
         dismissAction = action
         canGoBack = true
@@ -1940,7 +1957,7 @@ struct NutrivanceApp: App {
     
     private func hasContextualControls(for tab: RootTabSelection) -> Bool {
         switch tab {
-        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder, .heartZones, .recoveryScore, .readiness:
+        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder, .heartZones, .recoveryScore, .readiness, .trainingCalendar, .pathfinder:
             return true
         default:
             return false
@@ -2002,12 +2019,12 @@ struct NutrivanceApp: App {
                 Button("Today's Plan") {
                     navigate(focus: .fitness, view: "Today's Plan", tab: .todaysPlan)
                 }
-                .keyboardShortcut("T", modifiers: [.command, .shift])
+                .keyboardShortcut("P", modifiers: [.command, .shift])
 
                 Button("Training Calendar") {
                     navigate(focus: .fitness, view: "Training Calendar", tab: .trainingCalendar)
                 }
-                .keyboardShortcut("R", modifiers: [.command, .shift])
+                .keyboardShortcut("C", modifiers: [.command, .shift])
 
                 Button("Recovery Score") {
                     navigate(focus: .fitness, view: "Recovery Score", tab: .recoveryScore)
@@ -2017,7 +2034,7 @@ struct NutrivanceApp: App {
                 Button("Readiness") {
                     navigate(focus: .fitness, view: "Readiness", tab: .readiness)
                 }
-                .keyboardShortcut("N", modifiers: [.command, .shift])
+                .keyboardShortcut("I", modifiers: [.command, .shift])
 
                 Button("Strain vs Recovery") {
                     navigate(focus: .fitness, view: "Strain vs Recovery", tab: .strainRecovery)
@@ -2037,7 +2054,7 @@ struct NutrivanceApp: App {
                 Button("Past Quests") {
                     navigate(focus: .fitness, view: "Past Quests", tab: .pastQuests)
                 }
-                .keyboardShortcut("P", modifiers: [.command, .shift])
+                .keyboardShortcut("U", modifiers: [.command, .shift])
                 
                 Button("Program Builder") {
                     navigate(focus: .fitness, view: "Program Builder", tab: .programBuilder)
@@ -2047,12 +2064,12 @@ struct NutrivanceApp: App {
                 Button("Mindfulness Realm") {
                     navigate(focus: .mentalHealth, view: "Mindfulness Realm", tab: .mindfulnessRealm)
                 }
-                .keyboardShortcut("M", modifiers: [.command, .shift])
+                .keyboardShortcut("R", modifiers: [.command, .shift])
 
                 Button("Pathfinder") {
                     navigate(focus: .mentalHealth, view: "Pathfinder", tab: .pathfinder)
                 }
-                .keyboardShortcut("O", modifiers: [.command, .shift])
+                .keyboardShortcut("F", modifiers: [.command, .shift])
 
                 Button("Journal") {
                     navigate(focus: .mentalHealth, view: "Journal", tab: .journal)
@@ -2067,7 +2084,7 @@ struct NutrivanceApp: App {
                 Button("Stress") {
                     navigate(focus: .mentalHealth, view: "Stress", tab: .stress)
                 }
-                .keyboardShortcut("X", modifiers: [.command, .shift])
+                .keyboardShortcut("T", modifiers: [.command, .shift])
             }
             CommandMenu("Search") {
                 Button("Find") {
@@ -2218,6 +2235,16 @@ struct NutrivanceApp: App {
                         }
                         .keyboardShortcut("T", modifiers: [.command])
 
+                        Button("Previous") {
+                            postViewControl(.nutrivanceViewControlPastQuestsPrevious)
+                        }
+                        .keyboardShortcut(.leftArrow, modifiers: [.command])
+
+                        Button("Next") {
+                            postViewControl(.nutrivanceViewControlPastQuestsNext)
+                        }
+                        .keyboardShortcut(.rightArrow, modifiers: [.command])
+
                         Divider()
 
                         Button("7d") {
@@ -2240,14 +2267,21 @@ struct NutrivanceApp: App {
                         Button("Log New Quest") {
                             postViewControl(.nutrivanceViewControlLogNewQuest)
                         }
-                        .keyboardShortcut("N", modifiers: [.command])
+                        .keyboardShortcut("N", modifiers: [.command, .shift])
                     }
 
                     if navigationState.selectedRootTab == .journal {
                         Button("New Journal Entry") {
                             postViewControl(.nutrivanceViewControlNewJournalEntry)
                         }
-                        .keyboardShortcut("N", modifiers: [.command])
+                        .keyboardShortcut("N", modifiers: [.command, .shift])
+                    }
+
+                    if navigationState.selectedRootTab == .pathfinder {
+                        Button("Log Emotion") {
+                            postViewControl(.nutrivanceViewControlPathfinderLogEmotion)
+                        }
+                        .keyboardShortcut("N", modifiers: [.command, .shift])
                     }
 
                     if navigationState.selectedRootTab == .workoutHistory {
@@ -2255,6 +2289,11 @@ struct NutrivanceApp: App {
                             postViewControl(.nutrivanceViewControlRefreshWorkouts)
                         }
                         .keyboardShortcut("R", modifiers: [.command])
+
+                        Button("HR Zone Settings") {
+                            postViewControl(.nutrivanceViewControlHRZoneSettings)
+                        }
+                        .keyboardShortcut("U", modifiers: [.command])
                     }
 
                     if navigationState.selectedRootTab == .recoveryScore {
@@ -2317,16 +2356,45 @@ struct NutrivanceApp: App {
                         .keyboardShortcut("E", modifiers: [.command])
                     }
 
+                    if navigationState.selectedRootTab == .trainingCalendar {
+                        Button("Today") {
+                            postViewControl(.nutrivanceViewControlTrainingCalendarToday)
+                        }
+                        .keyboardShortcut("T", modifiers: [.command])
+
+                        Button("Previous Day") {
+                            postViewControl(.nutrivanceViewControlTrainingCalendarPreviousDay)
+                        }
+                        .keyboardShortcut(.leftArrow, modifiers: [.command])
+
+                        Button("Next Day") {
+                            postViewControl(.nutrivanceViewControlTrainingCalendarNextDay)
+                        }
+                        .keyboardShortcut(.rightArrow, modifiers: [.command])
+
+                        Divider()
+
+                        Button("Refresh Calendar") {
+                            postViewControl(.nutrivanceViewControlTrainingCalendarRefresh)
+                        }
+                        .keyboardShortcut("R", modifiers: [.command])
+
+                        Button("HR Zone Settings") {
+                            postViewControl(.nutrivanceViewControlTrainingCalendarHRZoneSettings)
+                        }
+                        .keyboardShortcut("U", modifiers: [.command])
+                    }
+
                     if navigationState.selectedRootTab == .programBuilder {
                         Button("Workout Views") {
                             postViewControl(.nutrivanceViewControlWorkoutViews)
                         }
-                        .keyboardShortcut("U", modifiers: [.command])
+                        .keyboardShortcut("E", modifiers: [.command])
 
                         Button("Workout Metric Layout") {
                             postViewControl(.nutrivanceViewControlWorkoutMetricLayout)
                         }
-                        .keyboardShortcut("E", modifiers: [.command])
+                        .keyboardShortcut("U", modifiers: [.command])
                     }
 
                     if navigationState.selectedRootTab == .heartZones {

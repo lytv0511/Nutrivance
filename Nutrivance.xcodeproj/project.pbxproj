@@ -39,7 +39,6 @@
 		1568143F2D5C0F2D003C861E /* ExerciseLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814212D5C0F2D003C861E /* ExerciseLibraryView.swift */; };
 		156814402D5C0F2D003C861E /* ReadinessCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814302D5C0F2D003C861E /* ReadinessCheckView.swift */; };
 		156814412D5C0F2D003C861E /* RecoveryScoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814312D5C0F2D003C861E /* RecoveryScoreView.swift */; };
-		B3C4D5E62F90000000000101 /* RecoveryReadinessPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C4D5E62F90000000000001 /* RecoveryReadinessPipeline.swift */; };
 		156814422D5C0F2D003C861E /* HydrationStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814252D5C0F2D003C861E /* HydrationStatusView.swift */; };
 		156814432D5C0F2D003C861E /* WorkoutGeneratorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156814382D5C0F2D003C861E /* WorkoutGeneratorView.swift */; };
 		156814452D5C0F2D003C861E /* MovementAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1568142A2D5C0F2D003C861E /* MovementAnalysisView.swift */; };
@@ -65,7 +64,7 @@
 		156E9FC32D089E3700CF4FCE /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156E9FC22D089E3700CF4FCE /* NutritionUnit.swift */; };
 		1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1570E2662D67B75300F42CB5 /* FuelCheckView.swift */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
-		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		157C20AA2D6E6D6800D1FA9A /* MindfulnessRealmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */; };
 		157C20AC2D6E6D8F00D1FA9A /* MoodTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AB2D6E6D8F00D1FA9A /* MoodTrackerView.swift */; };
 		157C20AE2D6E6DDA00D1FA9A /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157C20AD2D6E6DDA00D1FA9A /* JournalView.swift */; };
@@ -114,15 +113,9 @@
 		15FE8B902CE40B2F00495A2D /* CameraOCRView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15FE8B8F2CE40B2F00495A2D /* CameraOCRView.swift */; };
 		A2B3C4D52F80000000000101 /* HealthMetricCloudKitSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000001 /* HealthMetricCloudKitSchema.swift */; };
 		A2B3C4D52F80000000000102 /* HealthKitCloudSyncProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000002 /* HealthKitCloudSyncProducer.swift */; };
-		A2B3C4D52F80000000000103 /* HealthMetricCloudKitSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000001 /* HealthMetricCloudKitSchema.swift */; };
-		A2B3C4D52F80000000000104 /* CloudKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A70DB62CF119DE007FBC5D /* CloudKitManager.swift */; };
-		A2B3C4D52F80000000000105 /* NutrivanceMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000003 /* NutrivanceMacApp.swift */; };
-		A2B3C4D52F80000000000106 /* MacRootContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000004 /* MacRootContentView.swift */; };
-		A2B3C4D52F80000000000107 /* MacCachedHealthMetric.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000005 /* MacCachedHealthMetric.swift */; };
-		A2B3C4D52F80000000000108 /* MacHealthMetricsDataController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000006 /* MacHealthMetricsDataController.swift */; };
-		A2B3C4D52F80000000000109 /* MockHealthMetricInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000007 /* MockHealthMetricInjector.swift */; };
-		A2B3C4D52F8000000000010A /* MacAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F80000000000008 /* MacAppDelegate.swift */; };
-		A2B3C4D52F8000000000010B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2B3C4D52F8000000000000A /* Assets.xcassets */; };
+		B3C4D5E62F90000000000101 /* RecoveryReadinessPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C4D5E62F90000000000001 /* RecoveryReadinessPipeline.swift */; };
+		B3C4D5EC2FA1000000010202 /* MacCatalystHealthDataPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C4D5EC2FA1000000010201 /* MacCatalystHealthDataPolicy.swift */; };
+		CA7A1A012FA2000000010302 /* CatalystKeyboardNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7A1A012FA2000000010301 /* CatalystKeyboardNavigation.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -219,7 +212,6 @@
 		1568142F2D5C0F2D003C861E /* ProgramBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramBuilderView.swift; sourceTree = "<group>"; };
 		156814302D5C0F2D003C861E /* ReadinessCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadinessCheckView.swift; sourceTree = "<group>"; };
 		156814312D5C0F2D003C861E /* RecoveryScoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryScoreView.swift; sourceTree = "<group>"; };
-		B3C4D5E62F90000000000001 /* RecoveryReadinessPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryReadinessPipeline.swift; sourceTree = "<group>"; };
 		156814322D5C0F2D003C861E /* ShareWorkoutsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareWorkoutsView.swift; sourceTree = "<group>"; };
 		156814332D5C0F2D003C861E /* SleepAnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepAnalysisView.swift; sourceTree = "<group>"; };
 		156814342D5C0F2D003C861E /* StepCountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepCountView.swift; sourceTree = "<group>"; };
@@ -324,7 +316,9 @@
 		A2B3C4D52F80000000000008 /* MacAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppDelegate.swift; sourceTree = "<group>"; };
 		A2B3C4D52F80000000000009 /* NutrivanceMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NutrivanceMac.entitlements; sourceTree = "<group>"; };
 		A2B3C4D52F8000000000000A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A2B3C4D52F8000000000000B /* NutrivanceMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NutrivanceMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B3C4D5E62F90000000000001 /* RecoveryReadinessPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryReadinessPipeline.swift; sourceTree = "<group>"; };
+		B3C4D5EC2FA1000000010201 /* MacCatalystHealthDataPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCatalystHealthDataPolicy.swift; sourceTree = "<group>"; };
+		CA7A1A012FA2000000010301 /* CatalystKeyboardNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalystKeyboardNavigation.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -356,13 +350,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		15D7FFB62CD1426A0048E050 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A2B3C4D52F80000000000302 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -585,7 +572,6 @@
 				15D7FFAF2CD1426A0048E050 /* NutrivanceTests.xctest */,
 				15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */,
 				15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */,
-				A2B3C4D52F8000000000000B /* NutrivanceMac.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -640,6 +626,8 @@
 				156814262D5C0F2D003C861E /* LeaderboardsView.swift */,
 				156814272D5C0F2D003C861E /* LiveChallengesView.swift */,
 				15A70DA12CF0F5CC007FBC5D /* LogView.swift */,
+				CA7A1A012FA2000000010301 /* CatalystKeyboardNavigation.swift */,
+				B3C4D5EC2FA1000000010201 /* MacCatalystHealthDataPolicy.swift */,
 				156814282D5C0F2D003C861E /* MacroBalanceView.swift */,
 				157C20B12D6E6E5900D1FA9A /* MeditationView.swift */,
 				157C20A92D6E6D6800D1FA9A /* MindfulnessRealmView.swift */,
@@ -820,23 +808,6 @@
 			productReference = 15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
-		A2B3C4D52F80000000000304 /* NutrivanceMac */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = A2B3C4D52F80000000000310 /* Build configuration list for PBXNativeTarget "NutrivanceMac" */;
-			buildPhases = (
-				A2B3C4D52F80000000000301 /* Sources */,
-				A2B3C4D52F80000000000302 /* Frameworks */,
-				A2B3C4D52F80000000000303 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = NutrivanceMac;
-			productName = NutrivanceMac;
-			productReference = A2B3C4D52F8000000000000B /* NutrivanceMac.app */;
-			productType = "com.apple.product-type.application";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -862,9 +833,6 @@
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = 15D7FF9C2CD142690048E050;
 					};
-					A2B3C4D52F80000000000304 = {
-						CreatedOnToolsVersion = 16.0;
-					};
 				};
 			};
 			buildConfigurationList = 15D7FF982CD142690048E050 /* Build configuration list for PBXProject "Nutrivance" */;
@@ -883,7 +851,6 @@
 			projectRoot = "";
 			targets = (
 				15D7FF9C2CD142690048E050 /* Nutrivance */,
-				A2B3C4D52F80000000000304 /* NutrivanceMac */,
 				15D7FFAE2CD1426A0048E050 /* NutrivanceTests */,
 				15D7FFB82CD1426A0048E050 /* NutrivanceUITests */,
 				15753F9A2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */,
@@ -921,14 +888,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A2B3C4D52F80000000000303 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A2B3C4D52F8000000000010B /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1010,6 +969,8 @@
 				1525B1472F6495DA00E85899 /* HealthCard.swift in Sources */,
 				1568143D2D5C0F2D003C861E /* TrainingCalendarView.swift in Sources */,
 				157C20B22D6E6E5900D1FA9A /* MeditationView.swift in Sources */,
+				CA7A1A012FA2000000010302 /* CatalystKeyboardNavigation.swift in Sources */,
+				B3C4D5EC2FA1000000010202 /* MacCatalystHealthDataPolicy.swift in Sources */,
 				157C20BA2D715C1500D1FA9A /* WidgetType.swift in Sources */,
 				1568143E2D5C0F2D003C861E /* DistanceView.swift in Sources */,
 				1568143F2D5C0F2D003C861E /* ExerciseLibraryView.swift in Sources */,
@@ -1064,29 +1025,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		A2B3C4D52F80000000000301 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A2B3C4D52F80000000000105 /* NutrivanceMacApp.swift in Sources */,
-				A2B3C4D52F80000000000106 /* MacRootContentView.swift in Sources */,
-				A2B3C4D52F80000000000107 /* MacCachedHealthMetric.swift in Sources */,
-				A2B3C4D52F80000000000108 /* MacHealthMetricsDataController.swift in Sources */,
-				A2B3C4D52F80000000000109 /* MockHealthMetricInjector.swift in Sources */,
-				A2B3C4D52F8000000000010A /* MacAppDelegate.swift in Sources */,
-				A2B3C4D52F80000000000103 /* HealthMetricCloudKitSchema.swift in Sources */,
-				A2B3C4D52F80000000000104 /* CloudKitManager.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
 		15753FA42F74D9CA00007262 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			platformFilters = (
-				ios,
-			);
+			platformFilter = ios;
 			target = 15753F9A2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */;
 			targetProxy = 15753FA32F74D9CA00007262 /* PBXContainerItemProxy */;
 		};
@@ -1513,66 +1457,6 @@
 			};
 			name = Release;
 		};
-		A2B3C4D52F80000000000311 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = NutrivanceMac/NutrivanceMac.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 586BPLW3X9;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.mac;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
-		A2B3C4D52F80000000000312 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = NutrivanceMac/NutrivanceMac.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 586BPLW3X9;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = None.Nutrivance.mac;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1617,15 +1501,6 @@
 			buildConfigurations = (
 				15D7FFCA2CD1426A0048E050 /* Debug */,
 				15D7FFCB2CD1426A0048E050 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		A2B3C4D52F80000000000310 /* Build configuration list for PBXNativeTarget "NutrivanceMac" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A2B3C4D52F80000000000311 /* Debug */,
-				A2B3C4D52F80000000000312 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

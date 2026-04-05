@@ -23,6 +23,7 @@ struct CloudKitImportView_Mac: View {
                     )) {
                         Text("\(nutrient.name): \(nutrient.value) \(nutrient.unit)")
                     }
+                    .catalystDesktopFocusable()
                 }
             }
             .navigationTitle("Import to CloudKit")
@@ -36,11 +37,16 @@ struct CloudKitImportView_Mac: View {
                             }
                         }
                     }
+                    .catalystDesktopFocusable()
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .catalystDesktopFocusable()
+                    #if targetEnvironment(macCatalyst)
+                    .keyboardShortcut(.escape, modifiers: [])
+                    #endif
                 }
             }
         }
