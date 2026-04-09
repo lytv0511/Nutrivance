@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ReadinessCheckView: View {
     @EnvironmentObject private var navigationState: NavigationState
+    @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     @State private var animationPhase: Double = 0
     @State private var isLoading = false
     @State private var snapshot = ReadinessSnapshot.empty
@@ -33,8 +34,24 @@ struct ReadinessCheckView: View {
         snapshot.strainValue
     }
 
+    private var readinessTuning: NutrivanceTuningDisplayResult {
+        NutrivanceTuningEngine.display(base: readinessValue, metric: .readiness, store: tuningStore)
+    }
+
+    private var recoveryTuning: NutrivanceTuningDisplayResult {
+        NutrivanceTuningEngine.display(base: recoveryValue, metric: .recovery, store: tuningStore)
+    }
+
+    private var strainTuning: NutrivanceTuningDisplayResult {
+        NutrivanceTuningEngine.display(base: strainValue, metric: .strain, store: tuningStore)
+    }
+
+    private var displayedReadinessValue: Double { readinessTuning.adjusted }
+    private var displayedRecoveryValue: Double { recoveryTuning.adjusted }
+    private var displayedStrainValue: Double { strainTuning.adjusted }
+
     private var readinessClassification: ReadinessNarrative {
-        readinessNarrative(for: readinessValue)
+        readinessNarrative(for: displayedReadinessValue)
     }
 
     private var readinessSeries: [(Date, Double)] {
@@ -82,7 +99,7 @@ struct ReadinessCheckView: View {
     }
 
     private var readinessDirectiveTitle: String {
-        switch readinessValue {
+        switch displayedReadinessValue {
         case 85...:
             return "Push if the plan asks for it"
         case 70..<85:
@@ -95,7 +112,7 @@ struct ReadinessCheckView: View {
     }
 
     private var readinessDirectiveDetail: String {
-        switch readinessValue {
+        switch displayedReadinessValue {
         case 85...:
             return "Recovery is clearly covering the current load. Hard work is available if it matches your goal."
         case 70..<85:
@@ -121,7 +138,7 @@ struct ReadinessCheckView: View {
                             HealthCard(
                                 symbol: "bolt.heart.fill",
                                 title: "Readiness Score",
-                                value: String(format: "%.0f", readinessValue),
+                                value: String(format: "%.0f", displayedReadinessValue),
                                 unit: "/100",
                                 trend: "7d avg: \(String(format: "%.0f", readinessSeries.map(\.1).average ?? readinessValue))",
                                 color: readinessClassification.color,
@@ -161,7 +178,7 @@ struct ReadinessCheckView: View {
                             HealthCard(
                                 symbol: "heart.circle.fill",
                                 title: "Recovery Reserve",
-                                value: String(format: "%.0f", recoveryValue),
+                                value: String(format: "%.0f", displayedRecoveryValue),
                                 unit: "/100",
                                 trend: "Today’s base before strain drag",
                                 color: .green,
@@ -182,7 +199,7 @@ struct ReadinessCheckView: View {
                             HealthCard(
                                 symbol: "flame.fill",
                                 title: "Strain Drag",
-                                value: String(format: "%.1f", strainValue),
+                                value: String(format: "%.1f", displayedStrainValue),
                                 unit: "/21",
                                 trend: "Recent load cost applied to today",
                                 color: .orange,
@@ -274,12 +291,18 @@ struct ReadinessCheckView: View {
 
                 Spacer()
 
-                ReadinessOrb(score: readinessValue, tint: readinessClassification.color)
+                ReadinessOrb(score: displayedReadinessValue, tint: readinessClassification.color)
             }
 
+            NutrivanceTuningValueCaption(
+                result: readinessTuning,
+                unitSuffix: "/100",
+                format: { String(format: "%.0f", $0) }
+            )
+
             HStack(spacing: 12) {
-                ReadinessHeroPill(label: "Recovery", value: String(format: "%.0f/100", recoveryValue), tint: .green)
-                ReadinessHeroPill(label: "Strain", value: String(format: "%.1f/21", strainValue), tint: .orange)
+                ReadinessHeroPill(label: "Recovery", value: String(format: "%.0f/100", displayedRecoveryValue), tint: .green)
+                ReadinessHeroPill(label: "Strain", value: String(format: "%.1f/21", displayedStrainValue), tint: .orange)
                 ReadinessHeroPill(label: "Meaning", value: readinessClassification.title, tint: readinessClassification.color)
             }
         }

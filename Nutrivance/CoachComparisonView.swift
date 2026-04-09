@@ -297,15 +297,62 @@ private struct CoachTrendSegment {
     let normalizedStrength: Double
 }
 
+private enum CoachComparisonValidationState {
+    case supported
+    case flagged
+    case inconclusive
+
+    var title: String {
+        switch self {
+        case .supported:
+            return "Coach Claim Supported"
+        case .flagged:
+            return "Coach Claim Flagged"
+        case .inconclusive:
+            return "Coach Claim Inconclusive"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .supported:
+            return "checkmark.seal.fill"
+        case .flagged:
+            return "exclamationmark.triangle.fill"
+        case .inconclusive:
+            return "questionmark.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .supported:
+            return .green
+        case .flagged:
+            return .red
+        case .inconclusive:
+            return .orange
+        }
+    }
+}
+
+private struct CoachComparisonValidationSummary {
+    let state: CoachComparisonValidationState
+    let headline: String
+    let detail: String
+}
+
 private struct CoachComparisonChartAnalysis {
     let highlightedPoints: [(Date, Double)]
     let focusPresentations: [CoachComparisonFocusPresentation]
     let focusPresentationMap: [CoachComparisonFocusKind: CoachComparisonFocusPresentation]
+    let validationSummary: CoachComparisonValidationSummary?
 
     static let empty = CoachComparisonChartAnalysis(
         highlightedPoints: [],
         focusPresentations: [],
-        focusPresentationMap: [:]
+        focusPresentationMap: [:],
+        validationSummary: nil
     )
 }
 
@@ -363,7 +410,23 @@ enum CoachSummaryNLP {
             detectedMetrics = dedupedMetrics
 
             let hasRelationshipCue = relationshipMarkers.contains { lower.contains($0) }
-            guard detectedMetrics.count >= 2 || (detectedMetrics.count == 1 && hasRelationshipCue) else {
+            let analyticalCue = hasRelationshipCue
+                || lower.contains("trend")
+                || lower.contains("trending")
+                || lower.contains("rising")
+                || lower.contains("falling")
+                || lower.contains("higher")
+                || lower.contains("lower")
+                || lower.contains("peak")
+                || lower.contains("highest")
+                || lower.contains("lowest")
+                || lower.contains("spike")
+                || lower.contains("dip")
+                || lower.contains("average")
+                || lower.contains("baseline")
+                || lower.contains("total")
+                || lower.contains("cumulative")
+            guard detectedMetrics.count >= 2 || (detectedMetrics.count == 1 && analyticalCue) else {
                 continue
             }
 
@@ -466,7 +529,7 @@ enum CoachSummaryNLP {
         return result
     }
 
-    private static func detectDateBounds(
+    fileprivate static func detectDateBounds(
         in text: String,
         anchorDate: Date,
         timeFilter: StrainRecoveryView.TimeFilter
@@ -639,9 +702,7 @@ enum CoachSummaryNLP {
         let trendCues = ["trend", "trending", "moved", "move", "from", "to", "versus", "vs"]
 
         func nearbyCueScore(aliasRange: NSRange, cues: [String]) -> Int {
-            cues.reduce(0) { score, cue in
-                let cueRange = nsLower.range(of: cue)
-                guard cueRange.location != NSNotFound else { return score }
+            coachAffirmedCueRanges(in: lower, cues: cues).reduce(0) { score, cueRange in
                 let distance: Int
                 if cueRange.location > aliasRange.location {
                     distance = cueRange.location - NSMaxRange(aliasRange)
@@ -931,6 +992,7 @@ struct CoachComparisonView: View {
                                     CoachComparisonChartCard(
                                         series: series,
                                         insight: insight,
+                                        summaryText: summaryText,
                                         selectedDate: $selectedDate,
                                         floatingOverlays: $floatingOverlays,
                                         nextOverlayZOrder: $nextOverlayZOrder,
@@ -940,7 +1002,8 @@ struct CoachComparisonView: View {
                                         highlightWindow: highlightWindow,
                                         supportingText: comparisonSupportText,
                                         timeFilter: timeFilter,
-                                        snippet: insight.snippet
+                                        snippet: insight.snippet,
+                                        anchorDate: anchorDate
                                     )
                                 }
 
@@ -1049,6 +1112,7 @@ struct CoachComparisonView: View {
 private struct CoachComparisonChartCard: View {
     let series: CoachMetricSeries
     let insight: CoachSummaryInsight
+    let summaryText: String
     @Binding var selectedDate: Date?
     @Binding var floatingOverlays: [CoachMetricKey: CoachComparisonFloatingState]
     @Binding var nextOverlayZOrder: Int
@@ -1059,6 +1123,7 @@ private struct CoachComparisonChartCard: View {
     let supportingText: String
     let timeFilter: StrainRecoveryView.TimeFilter
     let snippet: String
+    let anchorDate: Date
 
     @State private var focusedKind: CoachComparisonFocusKind? = nil
     @State private var isInteractionPaletteExpanded = false
@@ -1096,6 +1161,27 @@ private struct CoachComparisonChartCard: View {
         snippet.lowercased()
     }
 
+    private var metricContextText: String {
+        let sentences = summaryText
+            .split(whereSeparator: { $0 == "." || $0 == "!" || $0 == "?" || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let relevant = sentences.filter { sentence in
+            let lower = sentence.lowercased()
+            if lower == snippetLowercased || lower.contains(snippetLowercased) { return true }
+            if lower.contains(series.title.lowercased()) { return true }
+            return series.id.aliases.contains { lower.contains($0) }
+        }
+        if relevant.isEmpty {
+            return snippet
+        }
+        return relevant.joined(separator: ". ")
+    }
+
+    private var coachEvidenceLowercased: String {
+        "\(snippet) \(metricContextText)".lowercased()
+    }
+
     private var numericMentions: [Double] {
         insight.numericMentions
     }
@@ -1118,25 +1204,68 @@ private struct CoachComparisonChartCard: View {
         return firstDate...lastDate
     }
 
+    private var dataValueSpan: Double {
+        max(0.001, dataMaxValue - dataMinValue)
+    }
+
     private var preferredHighlightZoomRange: ClosedRange<Date>? {
         guard let highlightRange else { return nil }
         return highlightRange
     }
 
+    private var hasAffirmedMaximumCue: Bool {
+        containsAffirmedCoachCue(
+            in: coachEvidenceLowercased,
+            cues: ["max", "maximum", "highest", "peak", "spike", "top"]
+        )
+    }
+
+    private var hasAffirmedMinimumCue: Bool {
+        containsAffirmedCoachCue(
+            in: coachEvidenceLowercased,
+            cues: ["lowest", "minimum", "bottom", "dip", "drop", "suppressed"]
+        )
+    }
+
+    private var usesSelectedDayFocusPresentation: Bool {
+        let activeRange = explicitCoachRange ?? highlightRange
+        guard let activeRange,
+              Calendar.current.isDate(activeRange.lowerBound, inSameDayAs: activeRange.upperBound) else {
+            return false
+        }
+        guard metricExtremumPreference == .neutral else { return false }
+        return !hasAffirmedMaximumCue && !hasAffirmedMinimumCue
+    }
+
     private var coachTrendIntent: CoachTrendDirection? {
-        if ["rising", "rose", "climbing", "uptrend", "higher", "up", "increase", "increasing"].contains(where: snippetLowercased.contains) {
+        if containsAffirmedCoachCue(
+            in: coachEvidenceLowercased,
+            cues: ["rising", "rose", "climbing", "uptrend", "higher", "up", "increase", "increasing", "building"]
+        ) {
             return .up
         }
-        if ["falling", "declining", "dropping", "downtrend", "lower", "suppressed", "down", "decrease", "decreasing"].contains(where: snippetLowercased.contains) {
+        if containsAffirmedCoachCue(
+            in: coachEvidenceLowercased,
+            cues: ["falling", "declining", "dropping", "downtrend", "lower", "suppressed", "down", "decrease", "decreasing", "fading"]
+        ) {
             return .down
         }
-        if ["stable", "flat", "holding", "steady", "balanced"].contains(where: snippetLowercased.contains) {
+        if containsAffirmedCoachCue(
+            in: coachEvidenceLowercased,
+            cues: ["stable", "flat", "holding", "steady", "balanced", "plateau"]
+        ) {
             return .flat
         }
-        if ["improving", "improved", "better", "healthier", "cleaner", "stronger"].contains(where: snippetLowercased.contains) {
+        if containsAffirmedCoachCue(
+            in: coachEvidenceLowercased,
+            cues: ["improving", "improved", "better", "healthier", "cleaner", "stronger"]
+        ) {
             return series.id.beneficialTrendDirection
         }
-        if ["worsening", "worse", "poorer", "fatigued", "elevated"].contains(where: snippetLowercased.contains) {
+        if containsAffirmedCoachCue(
+            in: coachEvidenceLowercased,
+            cues: ["worsening", "worse", "poorer", "fatigued", "elevated"]
+        ) {
             switch series.id.beneficialTrendDirection {
             case .up:
                 return .down
@@ -1149,6 +1278,32 @@ private struct CoachComparisonChartCard: View {
         return nil
     }
 
+    private var explicitCoachRange: ClosedRange<Date>? {
+        if let highlightRange, let clamped = clampedRange(highlightRange, to: fullDomain) {
+            return clamped
+        }
+        guard let detectedBounds = CoachSummaryNLP.detectDateBounds(
+            in: metricContextText,
+            anchorDate: anchorDate,
+            timeFilter: timeFilter
+        ) else {
+            return nil
+        }
+        return clampedRange(detectedBounds.0...detectedBounds.1, to: fullDomain)
+    }
+
+    private var trendSearchRange: ClosedRange<Date> {
+        if let explicitCoachRange,
+           points(in: explicitCoachRange).count >= 2 {
+            return explicitCoachRange
+        }
+        return fullDomain
+    }
+
+    private var preferredPrimaryFocus: CoachComparisonFocusKind {
+        resolvedFocusKinds().first ?? .trend
+    }
+
     var body: some View {
         let focusPresentations = analysis.focusPresentations
         let focusPresentationMap = analysis.focusPresentationMap
@@ -1156,6 +1311,7 @@ private struct CoachComparisonChartCard: View {
         let maximumPresentation = focusPresentationMap[.maximum]
         let totalPresentation = focusPresentationMap[.total]
         let trendPresentation = focusPresentationMap[.trend]
+        let validationSummary = analysis.validationSummary
         let activePresentation = focusedKind.flatMap { focusPresentationMap[$0] }
         let chartDomain = activePresentation?.zoomRange ?? fullDomain
         let currentSelection = self.currentSelection
@@ -1166,11 +1322,32 @@ private struct CoachComparisonChartCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(series.title)
                         .font(.headline)
-                    Text("Tap a focus chip to zoom into what the coach likely means, or scrub the chart to inspect the exact day.")
+                    Text("The first coach sentence leads here. The chart only confirms, refines, or flags that claim against the HealthKit-backed series.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 Spacer()
+            }
+
+            if let validationSummary {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: validationSummary.state.symbolName)
+                        .foregroundColor(validationSummary.state.tint)
+                        .font(.subheadline.weight(.semibold))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(validationSummary.headline)
+                            .font(.caption.weight(.semibold))
+                        Text(validationSummary.detail)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(12)
+                .background(validationSummary.state.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(validationSummary.state.tint.opacity(0.24), lineWidth: 1)
+                )
             }
 
             if !focusPresentations.isEmpty {
@@ -1596,10 +1773,15 @@ private struct CoachComparisonChartCard: View {
         hasher.combine(series.id)
         hasher.combine(timeFilter.rawValue)
         hasher.combine(snippet)
+        hasher.combine(summaryText)
+        hasher.combine(metricContextText)
+        hasher.combine(coachEvidenceLowercased)
         hasher.combine(highlightRange?.lowerBound.timeIntervalSinceReferenceDate.bitPattern)
         hasher.combine(highlightRange?.upperBound.timeIntervalSinceReferenceDate.bitPattern)
         hasher.combine(highlightWindow?.start.timeIntervalSinceReferenceDate.bitPattern)
         hasher.combine(highlightWindow?.end.timeIntervalSinceReferenceDate.bitPattern)
+        hasher.combine(explicitCoachRange?.lowerBound.timeIntervalSinceReferenceDate.bitPattern)
+        hasher.combine(explicitCoachRange?.upperBound.timeIntervalSinceReferenceDate.bitPattern)
         hasher.combine(insight.numericMentions)
         hasher.combine(insight.numericComparison)
         for metric in CoachMetricKey.allCases {
@@ -1618,10 +1800,15 @@ private struct CoachComparisonChartCard: View {
         let highlightedPoints = computeHighlightedPoints()
         let focusKinds = resolvedFocusKinds()
         let focusPresentations = focusKinds.compactMap { focusPresentation(for: $0, highlightedPoints: highlightedPoints) }
+        let focusPresentationMap = Dictionary(uniqueKeysWithValues: focusPresentations.map { ($0.kind, $0) })
         analysis = CoachComparisonChartAnalysis(
             highlightedPoints: highlightedPoints,
             focusPresentations: focusPresentations,
-            focusPresentationMap: Dictionary(uniqueKeysWithValues: focusPresentations.map { ($0.kind, $0) })
+            focusPresentationMap: focusPresentationMap,
+            validationSummary: validationSummary(
+                for: preferredPrimaryFocus,
+                highlightedPoints: highlightedPoints
+            )
         )
         if let focusedKind, analysis.focusPresentationMap[focusedKind] == nil {
             self.focusedKind = nil
@@ -1683,11 +1870,14 @@ private struct CoachComparisonChartCard: View {
         case .maximum:
             return false
         default:
-            return isMinimumCue(in: snippetLowercased)
+            return isMinimumCue(in: coachEvidenceLowercased)
         }
     }
 
     private func computeHighlightedPoints() -> [(Date, Double)] {
+        if let explicitCoachRange {
+            return points(in: explicitCoachRange)
+        }
         guard let highlightWindow else { return [] }
         let calendar = Calendar.current
         return dataPoints.filter { point in
@@ -1697,13 +1887,23 @@ private struct CoachComparisonChartCard: View {
 
     private func resolvedFocusKinds() -> [CoachComparisonFocusKind] {
         let explicitKinds = detectedFocusKinds(
-            in: snippetLowercased,
+            in: coachEvidenceLowercased,
             supportsTotal: series.id.supportsTotalComparison,
-            highlightRange: highlightRange,
+            highlightRange: explicitCoachRange ?? highlightRange,
             numericComparison: numericComparison
         )
         if !explicitKinds.isEmpty {
             return explicitKinds
+        }
+
+        if coachTrendIntent != nil {
+            if series.id.supportsTotalComparison {
+                return [.trend, .average, .total]
+            }
+            return [.trend, .average]
+        }
+        if metricExtremumPreference == .maximum || metricExtremumPreference == .minimum {
+            return [.maximum, .trend]
         }
 
         switch timeFilter {
@@ -1743,7 +1943,13 @@ private struct CoachComparisonChartCard: View {
                 trendDirection: nil
             )
         case .maximum:
-            let candidateData = highlightedPoints.isEmpty ? dataPoints : highlightedPoints
+            let candidateData: [(Date, Double)]
+            if let explicitCoachRange {
+                let explicitPoints = points(in: explicitCoachRange)
+                candidateData = explicitPoints.isEmpty ? (highlightedPoints.isEmpty ? dataPoints : highlightedPoints) : explicitPoints
+            } else {
+                candidateData = highlightedPoints.isEmpty ? dataPoints : highlightedPoints
+            }
             let mentionedTarget = nearestPointMatchingMentionedValue(in: candidateData)
             guard let targetPoint = mentionedTarget ?? (
                 prefersMinimumCue
@@ -1752,7 +1958,12 @@ private struct CoachComparisonChartCard: View {
             ) else {
                 return nil
             }
-            let title = prefersMinimumCue ? "Lowest Point" : "Peak Point"
+            let title: String
+            if usesSelectedDayFocusPresentation {
+                title = "Selected Day"
+            } else {
+                title = prefersMinimumCue ? "Lowest Point" : "Peak Point"
+            }
             return CoachComparisonFocusPresentation(
                 kind: .maximum,
                 title: title,
@@ -1762,7 +1973,7 @@ private struct CoachComparisonChartCard: View {
                     point: targetPoint,
                     highlightedPoints: highlightedPoints
                 ),
-                zoomRange: preferredHighlightZoomRange ?? contextualZoomRange(around: targetPoint.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5),
+                zoomRange: explicitCoachRange ?? preferredHighlightZoomRange ?? contextualZoomRange(around: targetPoint.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5),
                 averageValue: nil,
                 targetPoint: targetPoint,
                 totalValue: nil,
@@ -1770,8 +1981,8 @@ private struct CoachComparisonChartCard: View {
             )
         case .total:
             guard series.id.supportsTotalComparison else { return nil }
-            let totalValue = series.data.map(\.1).reduce(0, +)
-            let range = highlightRange ?? fullDomain
+            let range = explicitCoachRange ?? highlightRange ?? fullDomain
+            let totalValue = points(in: range).map(\.1).reduce(0, +)
             return CoachComparisonFocusPresentation(
                 kind: .total,
                 title: "\(timeFilter.rawValue) Total",
@@ -1793,7 +2004,7 @@ private struct CoachComparisonChartCard: View {
                 title: "\(timeFilter.rawValue) Trend",
                 chipValueText: signedValueString(for: segment.delta),
                 explanation: trendExplanation(for: segment),
-                zoomRange: preferredHighlightZoomRange ?? (dataPoints[segment.startIndex].0...dataPoints[segment.endIndex].0),
+                zoomRange: explicitCoachRange ?? preferredHighlightZoomRange ?? (dataPoints[segment.startIndex].0...dataPoints[segment.endIndex].0),
                 averageValue: nil,
                 targetPoint: nil,
                 totalValue: nil,
@@ -1803,6 +2014,10 @@ private struct CoachComparisonChartCard: View {
     }
 
     private func bestAverageRange() -> ClosedRange<Date>? {
+        if let explicitCoachRange,
+           points(in: explicitCoachRange).count >= 2 {
+            return explicitCoachRange
+        }
         if let preferredHighlightZoomRange {
             return preferredHighlightZoomRange
         }
@@ -1819,7 +2034,7 @@ private struct CoachComparisonChartCard: View {
         guard let zoomRange else {
             return "The coach cue reads \(series.title.lowercased()) as averaging around \(valueString(for: averageValue)) across this \(timeFilter.rawValue) window."
         }
-        let mentionedText = averageTargetValue().map { " The NLP layer spotted a coach reference near \(valueString(for: $0)), so the zoom is centered on the range whose average is closest to that number." } ?? ""
+        let mentionedText = averageTargetValue().map { " The first coach referenced roughly \(valueString(for: $0)), so the range centers on the closest matching average in the HealthKit-backed series." } ?? ""
         return "The coach is describing \(series.title.lowercased()) averaging around \(valueString(for: averageValue)) from \(zoomRange.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(zoomRange.upperBound.formatted(date: .abbreviated, time: .omitted)). That implies this metric was holding near that level across the highlighted range, not just on one day.\(mentionedText)"
     }
 
@@ -1828,6 +2043,9 @@ private struct CoachComparisonChartCard: View {
         point: (Date, Double),
         highlightedPoints: [(Date, Double)]
     ) -> String {
+        if usesSelectedDayFocusPresentation {
+            return "The comparison centers on \(point.0.formatted(date: .abbreviated, time: .omitted)) because that is the selected day the first coach is referencing. No explicit peak-or-low claim was detected in the coach wording, so this point is being shown as the anchor day rather than an extremum verdict."
+        }
         let surroundingRange = contextualZoomRange(around: point.0, preferredVisiblePoints: timeFilter == .month ? 9 : 5)
         let rangeText: String
         if let surroundingRange {
@@ -1836,7 +2054,7 @@ private struct CoachComparisonChartCard: View {
             rangeText = ""
         }
         let mentionText = nearestPointMatchingMentionedValue(in: highlightedPoints.isEmpty ? dataPoints : highlightedPoints) != nil
-            ? " The NLP layer used the number mentioned in the coach text to pick this point."
+            ? " The first coach mentioned a value close to this point, so the validation layer used that as an anchor instead of guessing a different peak."
             : ""
         return "\(title) lands on \(point.0.formatted(date: .abbreviated, time: .omitted)) at \(valueString(for: point.1)). That means this was the sharpest expression of the coach's point inside the emphasized range.\(mentionText)\(rangeText)"
     }
@@ -1854,14 +2072,14 @@ private struct CoachComparisonChartCard: View {
         let coachMatchText: String
         if let coachTrendIntent {
             coachMatchText = coachTrendIntent == segment.direction
-                ? "That matches the coach wording."
-                : "This is the closest matching segment to the coach wording in the displayed data."
+                ? "That matches the first coach's wording."
+                : "The first coach's wording does not fully match this HealthKit-backed segment, so this trend is being shown as a flagged comparison rather than a replacement claim."
         } else {
-            coachMatchText = "This is the clearest trend segment in the displayed data."
+            coachMatchText = "This is the clearest directional segment in the displayed data."
         }
         let comparisonText: String
         if numericComparison.count == 2 {
-            comparisonText = " The NLP layer also detected a numeric move from \(valueString(for: numericComparison[0])) to \(valueString(for: numericComparison[1])), and this segment is the closest chart match."
+            comparisonText = " The first coach also described a move from \(valueString(for: numericComparison[0])) to \(valueString(for: numericComparison[1])), so the comparison layer validated against that exact numeric claim."
         } else {
             comparisonText = ""
         }
@@ -1869,63 +2087,68 @@ private struct CoachComparisonChartCard: View {
     }
 
     private func bestTrendSegment() -> CoachTrendSegment? {
-        guard series.data.count >= 3 else { return nil }
+        guard series.data.count >= 2 else { return nil }
+        let recentPreference = ["improving", "improved", "better", "recently", "lately", "this week", "past week", "last week"].contains(where: coachEvidenceLowercased.contains)
+        let allowedIndices = dataPoints.indices.filter { trendSearchRange.contains(dataPoints[$0].0) }
+        guard allowedIndices.count >= 2 else { return nil }
 
-        let minSegmentLength = min(3, series.data.count)
-        let maxSegmentLength = min(series.data.count, timeFilter == .month ? 14 : 7)
-        let valueSpan = max(0.0001, dataMaxValue - dataMinValue)
-        let recentPreference = ["improving", "improved", "better", "recently", "lately", "this week", "past week", "last week"].contains(where: snippetLowercased.contains)
+        if let explicitCoachRange {
+            let explicitPoints = points(in: explicitCoachRange)
+            if explicitPoints.count >= 2,
+               let startIndex = nearestIndex(to: explicitPoints.first?.0 ?? explicitCoachRange.lowerBound),
+               let endIndex = nearestIndex(to: explicitPoints.last?.0 ?? explicitCoachRange.upperBound),
+               startIndex < endIndex {
+                return makeTrendSegment(startIndex: startIndex, endIndex: endIndex)
+            }
+        }
+
         var best: CoachTrendSegment?
         var bestScore = -Double.infinity
 
-        for length in minSegmentLength...maxSegmentLength {
-            for startIndex in 0...(dataPoints.count - length) {
-                let endIndex = startIndex + length - 1
-                let startValue = dataPoints[startIndex].1
-                let endValue = dataPoints[endIndex].1
-                let delta = endValue - startValue
-                let normalizedStrength = abs(delta) / valueSpan
-                let direction: CoachTrendDirection
-                if normalizedStrength < 0.06 {
-                    direction = .flat
-                } else {
-                    direction = delta > 0 ? .up : .down
+        for startOffset in 0..<(allowedIndices.count - 1) {
+            for endOffset in (startOffset + 1)..<allowedIndices.count {
+                let startIndex = allowedIndices[startOffset]
+                let endIndex = allowedIndices[endOffset]
+                let segmentLength = endIndex - startIndex + 1
+                let hasExplicitPairClaim = numericComparison.count == 2
+                let maxSegmentLength = min(series.data.count, timeFilter == .month ? 14 : 7)
+                guard hasExplicitPairClaim || (segmentLength >= 3 && segmentLength <= maxSegmentLength) else {
+                    continue
                 }
 
-                var score = normalizedStrength
+                let segment = makeTrendSegment(startIndex: startIndex, endIndex: endIndex)
+                var score = segment.normalizedStrength
                 if let coachTrendIntent {
-                    score += coachTrendIntent == direction ? 0.9 : -0.45
+                    if coachTrendIntent == segment.direction {
+                        score += 1.1
+                    } else if segment.direction == .flat {
+                        score -= 0.5
+                    } else {
+                        score -= 0.85
+                    }
                 }
                 if numericComparison.count == 2 {
-                    let startMatch = abs(startValue - numericComparison[0])
-                    let endMatch = abs(endValue - numericComparison[1])
-                    let reverseStartMatch = abs(startValue - numericComparison[1])
-                    let reverseEndMatch = abs(endValue - numericComparison[0])
-                    let bestPairMatch = min(startMatch + endMatch, reverseStartMatch + reverseEndMatch)
-                    score += max(0, 1.1 - (bestPairMatch / max(1, valueSpan)))
+                    let startValue = dataPoints[startIndex].1
+                    let endValue = dataPoints[endIndex].1
+                    let directMatch = abs(startValue - numericComparison[0]) + abs(endValue - numericComparison[1])
+                    let reverseMatch = abs(startValue - numericComparison[1]) + abs(endValue - numericComparison[0])
+                    let bestPairMatch = min(directMatch, reverseMatch)
+                    score += max(0, 1.4 - (bestPairMatch / max(1, dataValueSpan)))
                 }
                 let endRecency = Double(endIndex + 1) / Double(series.data.count)
-                let startRecency = Double(startIndex + 1) / Double(series.data.count)
                 score += endRecency * (recentPreference ? 0.4 : 0.12)
-                score += startRecency * 0.05
-                if recentPreference && timeFilter == .month && length <= 9 {
+                if recentPreference && timeFilter == .month && segmentLength <= 9 {
                     score += 0.15
                 }
-                if let highlightRange {
+                if let explicitCoachRange {
                     let segmentRange = dataPoints[startIndex].0...dataPoints[endIndex].0
-                    if rangesOverlap(segmentRange, highlightRange) {
+                    if rangesOverlap(segmentRange, explicitCoachRange) {
                         score += 1.1
                     }
                 }
                 if score > bestScore {
                     bestScore = score
-                    best = CoachTrendSegment(
-                        startIndex: startIndex,
-                        endIndex: endIndex,
-                        direction: direction,
-                        delta: delta,
-                        normalizedStrength: normalizedStrength
-                    )
+                    best = segment
                 }
             }
         }
@@ -1934,7 +2157,7 @@ private struct CoachComparisonChartCard: View {
     }
 
     private func averageTargetValue() -> Double? {
-        if snippetLowercased.contains("average") || snippetLowercased.contains("avg") || snippetLowercased.contains("baseline") {
+        if coachEvidenceLowercased.contains("average") || coachEvidenceLowercased.contains("avg") || coachEvidenceLowercased.contains("baseline") {
             if numericComparison.count == 2 {
                 return (numericComparison[0] + numericComparison[1]) / 2
             }
@@ -1945,6 +2168,10 @@ private struct CoachComparisonChartCard: View {
 
     private func bestAverageRange(closestTo target: Double) -> ClosedRange<Date>? {
         guard series.data.count >= 3 else { return nil }
+        if let explicitCoachRange,
+           points(in: explicitCoachRange).count >= 2 {
+            return explicitCoachRange
+        }
         let minLength = min(3, series.data.count)
         let maxLength = min(dataPoints.count, timeFilter == .month ? 14 : 7)
         var bestRange: ClosedRange<Date>?
@@ -1974,6 +2201,197 @@ private struct CoachComparisonChartCard: View {
             let rhsDistance = mentionPool.map { abs(rhs.1 - $0) }.min() ?? .infinity
             return lhsDistance < rhsDistance
         }
+    }
+
+    private func claimTolerance(for mentionedValue: Double? = nil) -> Double {
+        let spanTolerance = max(0.5, dataValueSpan * 0.15)
+        guard let mentionedValue else { return spanTolerance }
+        return max(0.5, min(spanTolerance * 1.5, abs(mentionedValue) * 0.12 + 0.5))
+    }
+
+    private func points(in range: ClosedRange<Date>) -> [(Date, Double)] {
+        dataPoints.filter { range.contains($0.0) }
+    }
+
+    private func clampedRange(_ range: ClosedRange<Date>, to domain: ClosedRange<Date>) -> ClosedRange<Date>? {
+        let lowerBound = max(range.lowerBound, domain.lowerBound)
+        let upperBound = min(range.upperBound, domain.upperBound)
+        guard lowerBound <= upperBound else { return nil }
+        return lowerBound...upperBound
+    }
+
+    private func makeTrendSegment(startIndex: Int, endIndex: Int) -> CoachTrendSegment {
+        let delta = dataPoints[endIndex].1 - dataPoints[startIndex].1
+        let normalizedStrength = abs(delta) / dataValueSpan
+        let direction: CoachTrendDirection
+        if normalizedStrength < 0.05 {
+            direction = .flat
+        } else {
+            direction = delta > 0 ? .up : .down
+        }
+        return CoachTrendSegment(
+            startIndex: startIndex,
+            endIndex: endIndex,
+            direction: direction,
+            delta: delta,
+            normalizedStrength: normalizedStrength
+        )
+    }
+
+    private func validationSummary(
+        for kind: CoachComparisonFocusKind,
+        highlightedPoints: [(Date, Double)]
+    ) -> CoachComparisonValidationSummary? {
+        switch kind {
+        case .trend:
+            guard let segment = bestTrendSegment() else {
+                return CoachComparisonValidationSummary(
+                    state: .inconclusive,
+                    headline: CoachComparisonValidationState.inconclusive.title,
+                    detail: "There is not enough dated \(series.title.lowercased()) signal in the current HealthKit-backed window to verify a directional claim yet."
+                )
+            }
+            return trendValidationSummary(segment: segment)
+        case .maximum:
+            let candidateData = highlightedPoints.isEmpty ? dataPoints : highlightedPoints
+            let targetPoint = nearestPointMatchingMentionedValue(in: candidateData)
+                ?? (prefersMinimumCue
+                    ? candidateData.min(by: { $0.1 < $1.1 })
+                    : candidateData.max(by: { $0.1 < $1.1 }))
+            guard let targetPoint else { return nil }
+            return maximumValidationSummary(point: targetPoint, candidateData: candidateData)
+        case .average:
+            let averageRange = bestAverageRange()
+            let averageData = averageRange.map { points(in: $0) } ?? dataPoints
+            guard let averageValue = averageData.map(\.1).average else { return nil }
+            return averageValidationSummary(averageValue: averageValue, range: averageRange)
+        case .total:
+            let range = explicitCoachRange ?? highlightRange ?? fullDomain
+            let totalData = points(in: range)
+            let totalValue = totalData.map(\.1).reduce(0, +)
+            return totalValidationSummary(totalValue: totalValue, range: range)
+        }
+    }
+
+    private func trendValidationSummary(segment: CoachTrendSegment) -> CoachComparisonValidationSummary {
+        let startDate = dataPoints[segment.startIndex].0
+        let endDate = dataPoints[segment.endIndex].0
+        if let coachTrendIntent {
+            if coachTrendIntent == .flat {
+                if segment.direction == .flat {
+                    return CoachComparisonValidationSummary(
+                        state: .supported,
+                        headline: CoachComparisonValidationState.supported.title,
+                        detail: "The first coach described a flat pattern, and the HealthKit-backed series stays essentially level from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted))."
+                    )
+                }
+                return CoachComparisonValidationSummary(
+                    state: .flagged,
+                    headline: CoachComparisonValidationState.flagged.title,
+                    detail: "The first coach described a flat pattern, but \(series.title.lowercased()) actually moves \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted))."
+                )
+            }
+
+            if segment.direction != coachTrendIntent || segment.normalizedStrength < 0.04 {
+                return CoachComparisonValidationSummary(
+                    state: .flagged,
+                    headline: CoachComparisonValidationState.flagged.title,
+                    detail: "The first coach suggests a \(coachTrendIntent.title.lowercased()) in \(series.title.lowercased()), but the HealthKit-backed series reads \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted))."
+                )
+            }
+        }
+
+        if numericComparison.count == 2 {
+            let startValue = dataPoints[segment.startIndex].1
+            let endValue = dataPoints[segment.endIndex].1
+            let directMatch = abs(startValue - numericComparison[0]) + abs(endValue - numericComparison[1])
+            let reverseMatch = abs(startValue - numericComparison[1]) + abs(endValue - numericComparison[0])
+            let bestPairMatch = min(directMatch, reverseMatch)
+            if bestPairMatch > claimTolerance(for: numericComparison[0]) + claimTolerance(for: numericComparison[1]) {
+                return CoachComparisonValidationSummary(
+                    state: .flagged,
+                    headline: CoachComparisonValidationState.flagged.title,
+                    detail: "The first coach named a move near \(valueString(for: numericComparison[0])) to \(valueString(for: numericComparison[1])), but the dated series does not support that pair cleanly in this window."
+                )
+            }
+        }
+
+        if segment.normalizedStrength < 0.04 {
+            return CoachComparisonValidationSummary(
+                state: .inconclusive,
+                headline: CoachComparisonValidationState.inconclusive.title,
+                detail: "There is a visible segment from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted)), but the move is too small to call a confident \(segment.direction.title.lowercased()) from data alone."
+            )
+        }
+
+        return CoachComparisonValidationSummary(
+            state: .supported,
+            headline: CoachComparisonValidationState.supported.title,
+            detail: "The first coach's trend claim is supported by the HealthKit-backed series: \(series.title.lowercased()) moves \(segment.direction.title.lowercased()) from \(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted))."
+        )
+    }
+
+    private func maximumValidationSummary(
+        point: (Date, Double),
+        candidateData: [(Date, Double)]
+    ) -> CoachComparisonValidationSummary {
+        if usesSelectedDayFocusPresentation {
+            return CoachComparisonValidationSummary(
+                state: .supported,
+                headline: CoachComparisonValidationState.supported.title,
+                detail: "This card is anchored on the selected day, not on a claimed peak or low. The first coach referenced this date, and the HealthKit-backed series is showing the exact \(series.title.lowercased()) value for \(point.0.formatted(date: .abbreviated, time: .omitted))."
+            )
+        }
+        let mention = nearestPointMatchingMentionedValue(in: candidateData).map(\.1)
+        if let mention, abs(point.1 - mention) > claimTolerance(for: mention) {
+            return CoachComparisonValidationSummary(
+                state: .flagged,
+                headline: CoachComparisonValidationState.flagged.title,
+                detail: "The first coach points to a \(prefersMinimumCue ? "low" : "peak") near \(valueString(for: mention)), but the dated series is strongest at \(valueString(for: point.1)) on \(point.0.formatted(date: .abbreviated, time: .omitted))."
+            )
+        }
+        return CoachComparisonValidationSummary(
+            state: .supported,
+            headline: CoachComparisonValidationState.supported.title,
+            detail: "The first coach's \(prefersMinimumCue ? "low-point" : "peak-point") claim is supported: \(series.title.lowercased()) reaches \(valueString(for: point.1)) on \(point.0.formatted(date: .abbreviated, time: .omitted))."
+        )
+    }
+
+    private func averageValidationSummary(
+        averageValue: Double,
+        range: ClosedRange<Date>?
+    ) -> CoachComparisonValidationSummary {
+        if let target = averageTargetValue(),
+           abs(averageValue - target) > claimTolerance(for: target) {
+            return CoachComparisonValidationSummary(
+                state: .flagged,
+                headline: CoachComparisonValidationState.flagged.title,
+                detail: "The first coach references an average near \(valueString(for: target)), but the dated series averages closer to \(valueString(for: averageValue)) in the relevant window."
+            )
+        }
+        if let range {
+            return CoachComparisonValidationSummary(
+                state: .supported,
+                headline: CoachComparisonValidationState.supported.title,
+                detail: "The first coach's average-level read is supported from \(range.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(range.upperBound.formatted(date: .abbreviated, time: .omitted))."
+            )
+        }
+        return CoachComparisonValidationSummary(
+            state: .inconclusive,
+            headline: CoachComparisonValidationState.inconclusive.title,
+            detail: "The average signal is present, but the first coach did not give enough dated context to pin a tighter validation window."
+        )
+    }
+
+    private func totalValidationSummary(
+        totalValue: Double,
+        range: ClosedRange<Date>
+    ) -> CoachComparisonValidationSummary {
+        CoachComparisonValidationSummary(
+            state: .supported,
+            headline: CoachComparisonValidationState.supported.title,
+            detail: "The first coach is describing cumulative load, and the HealthKit-backed total from \(range.lowerBound.formatted(date: .abbreviated, time: .omitted)) to \(range.upperBound.formatted(date: .abbreviated, time: .omitted)) sums to \(valueString(for: totalValue))."
+        )
     }
 
     private func contextualZoomRange(around centerDate: Date?, preferredVisiblePoints: Int) -> ClosedRange<Date>? {
@@ -2272,16 +2690,16 @@ private func detectedFocusKinds(
     let totalKeywords = ["total", "sum", "overall", "accumulated", "cumulative", "combined"]
     let trendKeywords = ["trend", "trending", "rising", "climbing", "improving", "dropping", "falling", "declining", "stable", "flat", "holding", "direction"]
 
-    if averageKeywords.contains(where: snippet.contains) {
+    if containsAffirmedCoachCue(in: snippet, cues: averageKeywords) {
         kinds.append(.average)
     }
-    if maxKeywords.contains(where: snippet.contains) {
+    if containsAffirmedCoachCue(in: snippet, cues: maxKeywords) {
         kinds.append(.maximum)
     }
-    if supportsTotal && totalKeywords.contains(where: snippet.contains) {
+    if supportsTotal && containsAffirmedCoachCue(in: snippet, cues: totalKeywords) {
         kinds.append(.total)
     }
-    if trendKeywords.contains(where: snippet.contains) {
+    if containsAffirmedCoachCue(in: snippet, cues: trendKeywords) {
         kinds.append(.trend)
     }
     if numericComparison.count == 2 {
@@ -2308,7 +2726,63 @@ private func detectedFocusKinds(
 }
 
 private func isMinimumCue(in snippet: String) -> Bool {
-    ["lowest", "minimum", "bottom", "dip", "drop", "suppressed"].contains(where: snippet.contains)
+    containsAffirmedCoachCue(
+        in: snippet,
+        cues: ["lowest", "minimum", "bottom", "dip", "drop", "suppressed"]
+    )
+}
+
+private func containsAffirmedCoachCue(in text: String, cues: [String]) -> Bool {
+    !coachAffirmedCueRanges(in: text, cues: cues).isEmpty
+}
+
+private func coachAffirmedCueRanges(in text: String, cues: [String]) -> [NSRange] {
+    guard !text.isEmpty, !cues.isEmpty else { return [] }
+    let pattern = "(?<![A-Za-z0-9])(?:" + cues
+        .map { NSRegularExpression.escapedPattern(for: $0) }
+        .joined(separator: "|") + ")(?![A-Za-z0-9])"
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    let nsRange = NSRange(location: 0, length: (text as NSString).length)
+    return regex.matches(in: text, range: nsRange)
+        .map(\.range)
+        .filter { !coachCueIsNegated(in: text, cueRange: $0) }
+}
+
+private func coachCueIsNegated(in text: String, cueRange: NSRange) -> Bool {
+    let nsText = text as NSString
+    let prefixStart = max(0, cueRange.location - 80)
+    let prefixRange = NSRange(location: prefixStart, length: cueRange.location - prefixStart)
+    let prefix = nsText.substring(with: prefixRange)
+    let suffixStart = NSMaxRange(cueRange)
+    let suffixEnd = min(nsText.length, suffixStart + 28)
+    let suffixRange = NSRange(location: suffixStart, length: suffixEnd - suffixStart)
+    let suffix = nsText.substring(with: suffixRange)
+
+    let directPrefixPatterns = [
+        #"\b(?:no|not|without|never)\b(?:\W+\w+){0,2}\W*$"#,
+        #"\b(?:lack|lacks|lacking|absence)\s+of(?:\W+\w+){0,3}\W*$"#,
+        #"\bno\s+(?:signs?|evidence|indication|signal|signals)\s+of(?:\W+\w+){0,4}\W*$"#,
+        #"\b(?:does|did|is|are|was|were|has|have|had)\s+not(?:\W+\w+){0,3}\W*$"#,
+        #"\b(?:isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't|don't|doesn't|didn't)\b(?:\W+\w+){0,3}\W*$"#
+    ]
+    if directPrefixPatterns.contains(where: { pattern in
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(location: 0, length: (prefix as NSString).length)
+        return regex.firstMatch(in: prefix, range: range) != nil
+    }) {
+        return true
+    }
+
+    let directSuffixPatterns = [
+        #"^\W*(?:is|are|was|were|did|does|has|have|had)\s+not\b"#,
+        #"^\W*(?:isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't|don't|doesn't|didn't)\b"#,
+        #"^\W*not\b"#
+    ]
+    return directSuffixPatterns.contains(where: { pattern in
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(location: 0, length: (suffix as NSString).length)
+        return regex.firstMatch(in: suffix, range: range) != nil
+    })
 }
 
 private func derivedTrendDirection(for data: [(Date, Double)]) -> CoachTrendDirection {

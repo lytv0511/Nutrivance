@@ -8245,6 +8245,7 @@ private func localFallbackSummary(
 
 struct StrainRecoveryMathSection: View {
     @ObservedObject var engine: HealthStateEngine
+    @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     let headlineTimeFilter: StrainRecoveryView.TimeFilter
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
@@ -8330,10 +8331,16 @@ struct StrainRecoveryMathSection: View {
                 return (periodStrainConsistencyState.title, periodStrainConsistencyState.color)
             }
         }()
+        let strainTuning = NutrivanceTuningEngine.display(
+            base: headlineStrainValue,
+            metric: .strain,
+            store: tuningStore
+        )
+        let displayedHeadlineStrain = strainTuning.adjusted
         HealthCard(
             symbol: "flame.fill",
             title: "Strain",
-            value: String(Int(headlineStrainValue.rounded())),
+            value: String(Int(displayedHeadlineStrain.rounded())),
             unit: "/21",
             valueContext: metricValueContext(
                 for: headlineTimeFilter,
@@ -8357,6 +8364,11 @@ struct StrainRecoveryMathSection: View {
             },
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
+                    NutrivanceTuningValueCaption(
+                        result: strainTuning,
+                        unitSuffix: "/21",
+                        format: { String(format: "%.1f", $0) }
+                    )
                     Text("Strain uses weighted heart-rate-zone load plus a small base-load term, then log-scales that day and nudges it up only when acute load clearly outruns chronic load.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
@@ -8400,6 +8412,7 @@ struct StrainRecoveryMathSection: View {
 
 struct RecoveryScoreSection: View {
     @ObservedObject var engine: HealthStateEngine
+    @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     let headlineTimeFilter: StrainRecoveryView.TimeFilter
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
@@ -8484,11 +8497,17 @@ struct RecoveryScoreSection: View {
     var body: some View {
         let averageRecovery = average(recoveryData.map(\.1)) ?? selectedRecoveryScore
         let headlineRecoveryValue = headlineTimeFilter == .day ? selectedRecoveryScore : averageRecovery
+        let recoveryTuning = NutrivanceTuningEngine.display(
+            base: headlineRecoveryValue,
+            metric: .recovery,
+            store: tuningStore
+        )
+        let displayedHeadlineRecovery = recoveryTuning.adjusted
         let recoveryState = recoveryClassification(for: selectedRecoveryScore)
         HealthCard(
             symbol: "heart.circle.fill",
             title: "Recovery Score",
-            value: selectedRecoveryInputsAreInconclusive ? "Inconclusive" : String(format: "%.0f", headlineRecoveryValue),
+            value: selectedRecoveryInputsAreInconclusive ? "Inconclusive" : String(format: "%.0f", displayedHeadlineRecovery),
             unit: "/100",
             valueContext: selectedRecoveryInputsAreInconclusive
                 ? nil
@@ -8510,6 +8529,13 @@ struct RecoveryScoreSection: View {
             },
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
+                    if !selectedRecoveryInputsAreInconclusive {
+                        NutrivanceTuningValueCaption(
+                            result: recoveryTuning,
+                            unitSuffix: "/100",
+                            format: { String(format: "%.0f", $0) }
+                        )
+                    }
                     Text("Recovery starts from Effect HRV, a momentum-smoothed sleep-anchored HRV signal, plus basal sleeping heart rate against your own baseline.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)

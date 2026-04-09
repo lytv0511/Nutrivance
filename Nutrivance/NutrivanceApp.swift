@@ -1353,6 +1353,7 @@ enum RootTabSelection: Hashable {
     case workoutHistory
     case activityRings
     case heartZones
+    case nutrivanceLabs
     case pastQuests
     case mindfulnessRealm
     case pathfinder
@@ -1535,7 +1536,7 @@ class NavigationState: ObservableObject {
         case .fitness:
             // Coach + Activity Rings tabs commented out in ContentView_iPad_alt.
             switch tab {
-            case .dashboard, .programBuilder, .todaysPlan, .trainingCalendar, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .heartZones, .pastQuests:
+            case .dashboard, .programBuilder, .todaysPlan, .trainingCalendar, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .heartZones, .nutrivanceLabs, .pastQuests:
                 return true
             default:
                 return false
@@ -1582,6 +1583,7 @@ class NavigationState: ObservableObject {
         case .journal: return .journal
         case .sleep: return .sleep
         case .stress: return .stress
+        case .nutrivanceLabs: return nil
         case .dashboard, .search, .home, .playground: return nil
         }
     }
@@ -1597,7 +1599,7 @@ class NavigationState: ObservableObject {
         #if os(iOS)
         if UIDevice.current.userInterfaceIdiom == .phone {
             switch tab {
-            case .dashboard, .programBuilder, .search, .playground, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .stress:
+            case .dashboard, .programBuilder, .search, .playground, .recoveryScore, .readiness, .strainRecovery, .workoutHistory, .stress, .nutrivanceLabs:
                 selectedRootTab = tab
                 presentedDestination = nil
             default:

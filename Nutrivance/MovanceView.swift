@@ -47,7 +47,7 @@ struct MovanceView: View {
     var filteredItems: [String] {
         let fitnessItems = [
             "Program Builder", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
-            "Recovery Score", "Readiness", "Strain vs Recovery", "Past Quests", "Heart Zones"
+            "Recovery Score", "Readiness", "Strain vs Recovery", "Nutrivance Labs", "Past Quests", "Heart Zones"
         ]
         if searchState.searchText.isEmpty {
             return fitnessItems
@@ -128,6 +128,8 @@ struct MovanceView: View {
                                             ReadinessCheckView()
                                         case "Strain vs Recovery":
                                             StrainRecoveryView()
+                                        case "Nutrivance Labs":
+                                            NutrivanceLabsView()
                                         case "Past Quests":
                                             PastQuestsView()
                                         case "Heart Zones":
@@ -224,6 +226,8 @@ struct MovanceView: View {
             return AnyView(ReadinessCheckView())
         case "Strain vs Recovery":
             return AnyView(StrainRecoveryView())
+        case "Nutrivance Labs":
+            return AnyView(NutrivanceLabsView())
         case "Activity Rings":
             return AnyView(ActivityRingsView())
         case "Heart Zones":
@@ -459,7 +463,8 @@ private func getIconName(for item: String) -> String {
     case "Sleep Analysis": return "moon.zzz.fill"
     case "Mobility Test": return "figure.walk.arrival"
     case "Readiness", "Readiness Check": return "checkmark.seal.fill"
-    case "Strain vs Recovery": return "arrow.left.arrow.right"
+        case "Strain vs Recovery": return "arrow.left.arrow.right"
+        case "Nutrivance Labs": return "slider.horizontal.3"
     
     // Metrics
     case "Activity Rings": return "circle.circle.fill"

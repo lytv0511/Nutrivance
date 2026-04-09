@@ -37,6 +37,7 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
     case strainRecovery
     case pastQuests
     case heartZones
+    case nutrivanceLabs
     case mindfulnessRealm
     case pathfinder
     case journal
@@ -56,6 +57,7 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
         case .strainRecovery: return "Strain vs Recovery"
         case .pastQuests: return "Past Quests"
         case .heartZones: return "Heart Zones"
+        case .nutrivanceLabs: return "Nutrivance Labs"
         case .mindfulnessRealm: return "Mindfulness Realm"
         case .pathfinder: return "Pathfinder"
         case .journal: return "Journal"
@@ -85,6 +87,7 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
         case .strainRecovery: return "figure.strengthtraining.traditional"
         case .pastQuests: return "trophy.fill"
         case .heartZones: return "heart.circle.fill"
+        case .nutrivanceLabs: return "slider.horizontal.3"
         case .mindfulnessRealm: return "sparkles"
         case .pathfinder: return "point.topleft.down.curvedto.point.bottomright.up"
         case .journal: return "book.fill"
@@ -107,6 +110,7 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
         case .strainRecovery: return .strainRecovery
         case .pastQuests: return .pastQuests
         case .heartZones: return .heartZones
+        case .nutrivanceLabs: return .nutrivanceLabs
         case .mindfulnessRealm: return .mindfulnessRealm
         case .pathfinder: return .pathfinder
         case .journal: return .journal
@@ -2076,6 +2080,7 @@ struct ContentView_iPad: View {
         case .strainRecovery: return .orange
         case .pastQuests: return .yellow
         case .heartZones: return .red
+        case .nutrivanceLabs: return .orange
         case .mindfulnessRealm: return .purple
         case .pathfinder: return .mint
         case .journal: return .indigo
@@ -2153,6 +2158,8 @@ struct ContentView_iPad: View {
             gradients.boldGradient(animationPhase: $animationPhase)
         case .heartZones:
             gradients.boldGradient(animationPhase: $animationPhase)
+        case .nutrivanceLabs:
+            gradients.programBuilderMeshBackground()
         case .mindfulnessRealm:
             gradients.realmGradient(animationPhase: $animationPhase)
         case .pathfinder:
@@ -2847,6 +2854,7 @@ private struct BrowserSearchResult: Identifiable, Hashable {
         .init(page: .strainRecovery, aliases: ["strain", "load", "recovery"]),
         .init(page: .pastQuests, aliases: ["quests", "past", "records"]),
         .init(page: .heartZones, aliases: ["zones", "heart rate", "hr"]),
+        .init(page: .nutrivanceLabs, aliases: ["labs", "tuning", "personalization", "nudge"]),
         .init(page: .mindfulnessRealm, aliases: ["mindfulness", "meditation"]),
         .init(page: .pathfinder, aliases: ["pathfinder", "emotion"]),
         .init(page: .journal, aliases: ["journal", "notes"]),
@@ -3311,6 +3319,8 @@ private struct BrowserPageHost: View {
                 PastQuestsView()
             case .heartZones:
                 HeartZonesView()
+            case .nutrivanceLabs:
+                NutrivanceLabsView()
             case .mindfulnessRealm:
                 MindfulnessRealmView()
             case .pathfinder:

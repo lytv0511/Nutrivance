@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RecoveryScoreView: View {
+    @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     @State private var animationPhase: Double = 0
     @State private var isLoading = false
     @State private var timeFilter: RecoveryFocusTimeFilter = .day
@@ -56,8 +57,17 @@ struct RecoveryScoreView: View {
         snapshot.recoveryValue
     }
 
+    private var recoveryTuning: NutrivanceTuningDisplayResult {
+        NutrivanceTuningEngine.display(base: recoveryValue, metric: .recovery, store: tuningStore)
+    }
+
+    /// Display value after optional Nutrivance Labs nudges.
+    private var displayedRecoveryValue: Double {
+        recoveryTuning.adjusted
+    }
+
     private var recoveryState: RecoveryFocusState {
-        recoveryFocusState(for: recoveryValue)
+        recoveryFocusState(for: displayedRecoveryValue)
     }
 
     private var effectHRVToday: Double? {
@@ -139,7 +149,7 @@ struct RecoveryScoreView: View {
                             HealthCard(
                                 symbol: "heart.text.square.fill",
                                 title: "Recovery Score",
-                                value: String(format: "%.0f", recoveryValue),
+                                value: String(format: "%.0f", displayedRecoveryValue),
                                 unit: "/100",
                                 trend: "\(timeFilter.rawValue) avg: \(String(format: "%.0f", recoverySeries.map(\.1).average ?? recoveryValue))",
                                 color: recoveryState.color,
@@ -348,8 +358,14 @@ struct RecoveryScoreView: View {
 
                 Spacer()
 
-                RecoveryHalo(score: recoveryValue, tint: recoveryState.color)
+                RecoveryHalo(score: displayedRecoveryValue, tint: recoveryState.color)
             }
+
+            NutrivanceTuningValueCaption(
+                result: recoveryTuning,
+                unitSuffix: "/100",
+                format: { String(format: "%.0f", $0) }
+            )
 
             HStack(spacing: 12) {
                 RecoveryHeroPill(label: "State", value: recoveryState.title, tint: recoveryState.color)

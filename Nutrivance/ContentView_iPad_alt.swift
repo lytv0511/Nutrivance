@@ -123,6 +123,13 @@ struct ContentView_iPad_alt: View {
                 }
                 .customizationID("iPad.tab.heartZones")
                 .defaultVisibility(.hidden, for: .tabBar)
+                Tab("Nutrivance Labs", systemImage: "slider.horizontal.3", value: RootTabSelection.nutrivanceLabs) {
+                    NavigationStack {
+                        NutrivanceLabsView()
+                    }
+                }
+                .customizationID("iPad.tab.nutrivanceLabs")
+                .defaultVisibility(.hidden, for: .tabBar)
             }
             .defaultVisibility(.hidden, for: .tabBar)
             TabSection("Mental Health") {

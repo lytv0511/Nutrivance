@@ -33,6 +33,9 @@ struct NutrivanceSceneRoot: View {
                 HealthStateEngine.shared.handleScenePhaseChange(newPhase)
                 StrainRecoveryAggressiveCachingController.shared.handleScenePhaseChange(newPhase)
                 WatchDashboardSyncBridge.shared.handleScenePhaseChange(newPhase)
+                if newPhase == .active {
+                    NutrivanceTuningStore.shared.syncOnAppForeground()
+                }
 #if canImport(UIKit)
                 #if DEBUG
                 NutrivanceSceneMenuRouter.emitFocusDebug("[SceneRoot] scenePhase -> \(newPhase) sceneID=\(windowScenePersistentIdentifier ?? "nil") \(NutrivanceSceneMenuRouter.focusDebugDescription(for: windowScene))")

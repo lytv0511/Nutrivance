@@ -169,7 +169,7 @@ struct SearchView: View {
 
     private let fitnessItems = [
         "Program Builder", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
-        "Recovery Score", "Readiness", "Strain vs Recovery", "Past Quests", "Heart Zones"
+        "Recovery Score", "Readiness", "Strain vs Recovery", "Nutrivance Labs", "Past Quests", "Heart Zones"
     ]
 
     let mentalHealthItems = ["Mindfulness Realm", "Pathfinder", "Journal", "Sleep", "Stress"]
@@ -222,7 +222,8 @@ struct SearchView: View {
         "strain": ["strain vs recovery", "strain", "hrv"],
         "readiness": ["readiness check", "readiness", "assessment", "hrv"],
         "mindfulness": ["mindfulness realm", "mindfulness", "meditation", "breathing exercises", "stress reduction", "mental health"],
-        "workout history": ["workout history", "history", "workouts", "log", "record"]
+        "workout history": ["workout history", "history", "workouts", "log", "record"],
+        "nutrivance labs": ["nutrivance labs", "labs", "tuning", "personalization", "nudge", "scores"]
     ]
     
     var filteredItems: [String] {
@@ -307,7 +308,7 @@ struct SearchView: View {
             gradients.forestGradient(animationPhase: $animationPhase)
         case "Heart Zones":
             gradients.burningGradientFull(animationPhase: $animationPhase)
-        case "Program Builder", "Pathfinder", "Past Quests":
+        case "Program Builder", "Pathfinder", "Past Quests", "Nutrivance Labs":
             gradients.programBuilderMeshBackground()
         case "Today's Plan":
             gradients.warmGradientFull(animationPhase: $animationPhase)
@@ -413,6 +414,8 @@ struct SearchView: View {
             return (.fitness, "Strain vs Recovery", .strainRecovery)
         case "Workout History":
             return (.fitness, "Workout History", .workoutHistory)
+        case "Nutrivance Labs":
+            return (.fitness, "Nutrivance Labs", .nutrivanceLabs)
         // case "Activity Rings":
         //     return (.fitness, "Activity Rings", .activityRings)
         case "Heart Zones":
@@ -656,6 +659,8 @@ struct SearchView: View {
             return AnyView(ProgramBuilderView())
         case "Workout Generator":
             return AnyView(WorkoutGeneratorView())
+        case "Nutrivance Labs":
+            return AnyView(NutrivanceLabsView())
         case "Recovery Score":
             return AnyView(RecoveryScoreView())
         case "Sleep Analysis":
@@ -794,7 +799,7 @@ struct SearchView: View {
             }
             
             Section(header: Text("Recovery")) {
-                ForEach(["Recovery Score", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery"], id: \.self) { item in
+                ForEach(["Recovery Score", "Nutrivance Labs", "Sleep Analysis", "Mobility Test", "Readiness Check", "Strain vs Recovery"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -948,6 +953,7 @@ private func getIconName(for item: String) -> String {
     case "Distance": return "location.fill"
     case "Calories Burned": return "flame.circle.fill"
     case "Past Quests": return "trophy.fill"
+    case "Nutrivance Labs": return "slider.horizontal.3"
     
     // Nutrition Timing
     case "Pre-Workout Timing": return "timer"
