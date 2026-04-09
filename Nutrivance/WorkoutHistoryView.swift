@@ -3,6 +3,11 @@ import HealthKit
 import Charts
 import MapKit
 import CoreLocation
+#if canImport(MLXLLM) && canImport(MLX)
+import MLX
+import MLXLLM
+import MLXLMCommon
+#endif
 
 enum HRZoneConfigurationMode: String, CaseIterable, Identifiable {
     case intelligent
@@ -805,6 +810,296 @@ private func workoutElapsedTimeText(_ seconds: TimeInterval) -> String {
     }
 }
 
+struct WorkoutCoachRenderedSummary: Equatable {
+    let paragraph: String
+    let bullets: [String]
+}
+
+enum WorkoutDetailCoachError: LocalizedError {
+    case simulatorUnsupported
+    case mlxLLMUnavailableInBuild
+    case failedToDownloadModel(String)
+    case failedToLoadModel(String)
+    case failedToGenerate(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .simulatorUnsupported:
+            return "Coach AI with MLX is unavailable on Simulator. Run on a physical device."
+        case .mlxLLMUnavailableInBuild:
+            return "MLX LLM modules are unavailable in this build configuration. Ensure the app target includes MLXLLM and MLXLMCommon from mlx-swift."
+        case .failedToDownloadModel(let message):
+            return "Model download failed. \(message)"
+        case .failedToLoadModel(let message):
+            return "Model load failed. \(message)"
+        case .failedToGenerate(let message):
+            return "Summary generation failed. \(message)"
+        }
+    }
+}
+
+#if canImport(MLXLLM) && canImport(MLX)
+@MainActor
+enum WorkoutDetailMLXModelSelection {
+    struct Choice: Sendable {
+        let key: String
+        let configuration: ModelConfiguration
+    }
+
+    private static let gb: UInt64 = 1024 * 1024 * 1024
+
+    static var current: Choice {
+        let ram = ProcessInfo.processInfo.physicalMemory
+        let idiom = UIDevice.current.userInterfaceIdiom
+        let onMac = ProcessInfo.processInfo.isiOSAppOnMac || idiom == .mac
+        return choose(ram: ram, idiom: idiom, isMac: onMac)
+    }
+
+    private static func choose(ram: UInt64, idiom: UIUserInterfaceIdiom, isMac: Bool) -> Choice {
+        if isMac {
+            if ram >= 24 * gb {
+                return .init(key: "qwen3_8b", configuration: LLMRegistry.qwen3_8b_4bit)
+            }
+            if ram >= 12 * gb {
+                return .init(key: "qwen3_4b", configuration: LLMRegistry.qwen3_4b_4bit)
+            }
+            return .init(key: "llama32_3b", configuration: LLMRegistry.llama3_2_3B_4bit)
+        }
+
+        if idiom == .pad {
+            if ram >= 12 * gb {
+                return .init(key: "qwen3_8b", configuration: LLMRegistry.qwen3_8b_4bit)
+            }
+            if ram >= 8 * gb {
+                return .init(key: "qwen3_4b", configuration: LLMRegistry.qwen3_4b_4bit)
+            }
+            return .init(key: "llama32_3b", configuration: LLMRegistry.llama3_2_3B_4bit)
+        }
+
+        if idiom == .phone {
+            if ram >= 12 * gb {
+                return .init(key: "qwen3_4b", configuration: LLMRegistry.qwen3_4b_4bit)
+            }
+            if ram >= 8 * gb {
+                return .init(key: "qwen3_1_7b", configuration: LLMRegistry.qwen3_1_7b_4bit)
+            }
+            return .init(key: "llama32_1b", configuration: LLMRegistry.llama3_2_1B_4bit)
+        }
+
+        return .init(key: "llama32_1b", configuration: LLMRegistry.llama3_2_1B_4bit)
+    }
+}
+
+@MainActor
+enum WorkoutDetailMLXCoach {
+    private static var cachedContainer: ModelContainer?
+    private static var cachedSelectionKey: String?
+    private static var loadTask: Task<ModelContainer, Error>?
+
+    static func quickSummary(
+        payload: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void = { _ in }
+    ) async throws -> WorkoutCoachRenderedSummary {
+        try await analyze(payload: payload, withContext: false, downloadProgress: downloadProgress)
+    }
+
+    static func contextualSummary(
+        payload: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void = { _ in }
+    ) async throws -> WorkoutCoachRenderedSummary {
+        try await analyze(payload: payload, withContext: true, downloadProgress: downloadProgress)
+    }
+
+    private static func analyze(
+        payload: String,
+        withContext: Bool,
+        downloadProgress: @escaping @Sendable (Double) -> Void
+    ) async throws -> WorkoutCoachRenderedSummary {
+        #if targetEnvironment(simulator)
+        throw WorkoutDetailCoachError.simulatorUnsupported
+        #else
+        let container = try await ensureModelContainer(downloadProgress: downloadProgress)
+        let session = ChatSession(
+            container,
+            instructions: withContext ? contextualSystemInstructions : quickSystemInstructions,
+            generateParameters: GenerateParameters(maxTokens: 520, temperature: 0.35)
+        )
+        do {
+            let raw = try await session.respond(to: payload)
+            return renderSummary(from: raw)
+        } catch {
+            throw WorkoutDetailCoachError.failedToGenerate(error.localizedDescription)
+        }
+        #endif
+    }
+
+    private static func ensureModelContainer(
+        downloadProgress: @escaping @Sendable (Double) -> Void
+    ) async throws -> ModelContainer {
+        let choice = WorkoutDetailMLXModelSelection.current
+        if cachedSelectionKey != choice.key {
+            cachedContainer = nil
+            cachedSelectionKey = nil
+            loadTask = nil
+        }
+        if let cachedContainer {
+            return cachedContainer
+        }
+        if let loadTask {
+            return try await loadTask.value
+        }
+        Memory.cacheLimit = memoryCacheLimitBytes(forSelectionKey: choice.key)
+        let task = Task {
+            try await loadModelContainer(
+                configuration: choice.configuration,
+                progressHandler: { progress in
+                    downloadProgress(progress.fractionCompleted)
+                }
+            )
+        }
+        loadTask = task
+        do {
+            let loaded = try await task.value
+            cachedContainer = loaded
+            cachedSelectionKey = choice.key
+            loadTask = nil
+            return loaded
+        } catch {
+            loadTask = nil
+            let message = error.localizedDescription
+            if message.localizedCaseInsensitiveContains("download")
+                || message.localizedCaseInsensitiveContains("network")
+                || message.localizedCaseInsensitiveContains("offline") {
+                throw WorkoutDetailCoachError.failedToDownloadModel(message)
+            }
+            throw WorkoutDetailCoachError.failedToLoadModel(message)
+        }
+    }
+
+    private static func memoryCacheLimitBytes(forSelectionKey key: String) -> Int {
+        switch key {
+        case "llama32_1b":
+            return 640 * 1024 * 1024
+        case "qwen3_1_7b", "llama32_3b":
+            return 1200 * 1024 * 1024
+        case "qwen3_4b":
+            return 1700 * 1024 * 1024
+        case "qwen3_8b":
+            return 2600 * 1024 * 1024
+        default:
+            return 768 * 1024 * 1024
+        }
+    }
+
+    private static func renderSummary(from text: String) -> WorkoutCoachRenderedSummary {
+        let stripped = sanitizeVisibleOutput(text)
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = stripped
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var paragraph = ""
+        var bullets: [String] = []
+        for line in lines {
+            if line.hasPrefix("- ") || line.hasPrefix("• ") {
+                bullets.append(String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+            } else if paragraph.isEmpty {
+                paragraph = line
+            } else if bullets.isEmpty {
+                paragraph += " " + line
+            }
+        }
+        if paragraph.isEmpty {
+            paragraph = stripped.replacingOccurrences(of: "\n", with: " ")
+        }
+        if bullets.count > 3 {
+            bullets = Array(bullets.prefix(3))
+        }
+        return WorkoutCoachRenderedSummary(paragraph: paragraph, bullets: bullets)
+    }
+
+    /// Remove chain-of-thought style blocks/tags so only user-facing output is shown.
+    private static func sanitizeVisibleOutput(_ text: String) -> String {
+        var s = text
+
+        // Common hidden-reasoning tags used by some local models.
+        s = s.replacingOccurrences(
+            of: "<think>[\\s\\S]*?</think>",
+            with: "",
+            options: .regularExpression
+        )
+        s = s.replacingOccurrences(
+            of: "<analysis>[\\s\\S]*?</analysis>",
+            with: "",
+            options: .regularExpression
+        )
+
+        let lines = s.components(separatedBy: .newlines)
+        var kept: [String] = []
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let lower = line.lowercased()
+            if lower.hasPrefix("think:") || lower.hasPrefix("thinking:") || lower.hasPrefix("analysis:") || lower.hasPrefix("reasoning:") {
+                continue
+            }
+            kept.append(rawLine)
+        }
+
+        s = kept.joined(separator: "\n")
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let quickSystemInstructions = """
+    You are Coach AI running on-device in a fitness app using workout raw data and classifications.
+    Write naturally as a coach speaking to an athlete using "you" naturally, but avoid repetitive sentence starts.
+    Geek out on workout metrics and signal quality, intensity structure, and execution details.
+
+    Output rules:
+    - First, output exactly one dense paragraph.
+    - Then, if there are clear extra insights, output 2-3 bullet lines prefixed with "- ".
+    - Use only facts from provided payload and never invent numbers.
+    - No markdown headings, no chain-of-thought, no medical advice.
+    """
+
+    private static let contextualSystemInstructions = """
+    You are Coach AI running on-device in a fitness app using workout raw data and explicit context windows.
+    The payload includes SAME_TYPE_7D_CONTEXT and SAME_TYPE_28D_CONTEXT blocks with raw lines and classifications.
+    Treat 7d as short-term trend and 28d as longer-term trend, and explicitly compare the current workout against both when possible.
+    Write naturally as a coach speaking to an athlete using "you" naturally, but avoid repetitive sentence starts.
+    Geek out on metrics and trends.
+
+    Output rules:
+    - First, output exactly one dense paragraph.
+    - Then, if there are clear extra insights, output 2-3 bullet lines prefixed with "- ".
+    - Use only facts from provided payload and never invent numbers.
+    - No markdown headings, no chain-of-thought, no medical advice.
+    """
+}
+#else
+@MainActor
+enum WorkoutDetailMLXCoach {
+    static func quickSummary(
+        payload: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void = { _ in }
+    ) async throws -> WorkoutCoachRenderedSummary {
+        _ = payload
+        _ = downloadProgress
+        throw WorkoutDetailCoachError.mlxLLMUnavailableInBuild
+    }
+
+    static func contextualSummary(
+        payload: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void = { _ in }
+    ) async throws -> WorkoutCoachRenderedSummary {
+        _ = payload
+        _ = downloadProgress
+        throw WorkoutDetailCoachError.mlxLLMUnavailableInBuild
+    }
+}
+#endif
+
 struct WorkoutDetailView: View {
     @EnvironmentObject private var unitPreferences: UnitPreferencesStore
     let analytics: WorkoutAnalytics
@@ -829,9 +1124,33 @@ struct WorkoutDetailView: View {
     @State private var localSelectedScrubbedDate: Date? = nil
     @State private var showMapDetail = false
     @State private var showExpandedMap = false
+    @State private var quickCoachSummary: WorkoutCoachRenderedSummary? = nil
+    @State private var quickCoachError: String? = nil
+    @State private var isGeneratingQuickCoachSummary = false
+    @State private var hasRequestedQuickCoachSummary = false
+    @State private var deepCoachSummary: WorkoutCoachRenderedSummary? = nil
+    @State private var deepCoachError: String? = nil
+    @State private var isGeneratingDeepCoachSummary = false
+    @State private var coachModelDownloadProgress: Double? = nil
 
     private var activeDuration: TimeInterval {
         analytics.workout.duration
+    }
+
+    private var isDurationEligibleForCoachSummary: Bool {
+        activeDuration >= 15 * 60
+    }
+
+    private var sameTypeWorkoutCountInPast7d: Int {
+        sameTypeWorkoutsBeforeCurrent(withinDays: 7).count
+    }
+
+    private var sameTypeWorkoutCountInPast28d: Int {
+        sameTypeWorkoutsBeforeCurrent(withinDays: 28).count
+    }
+
+    private var isEligibleForContextualCoachSummary: Bool {
+        sameTypeWorkoutCountInPast28d >= 14 || sameTypeWorkoutCountInPast7d >= 3
     }
 
     private var selectedScrubbedDate: Date? {
@@ -1324,8 +1643,125 @@ struct WorkoutDetailView: View {
         return updatedZones
     }
 
+    @ViewBuilder
+    private var coachSummarySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Label("Coach AI", systemImage: "brain.head.profile")
+                    .font(.subheadline.bold())
+                Spacer()
+                Text("MLX on-device")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if isGeneratingQuickCoachSummary {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let coachModelDownloadProgress {
+                        ProgressView(value: coachModelDownloadProgress, total: 1.0) {
+                            Text("Downloading coach model...")
+                                .font(.caption)
+                        } currentValueLabel: {
+                            Text("\(Int((coachModelDownloadProgress * 100).rounded()))%")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        ProgressView("Generating workout summary...")
+                            .font(.caption)
+                    }
+                }
+            } else if let quickCoachSummary {
+                Text(quickCoachSummary.paragraph)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !quickCoachSummary.bullets.isEmpty {
+                    ForEach(quickCoachSummary.bullets, id: \.self) { bullet in
+                        Text("• \(bullet)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else if let quickCoachError {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(quickCoachError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Retry summary") {
+                        Task { await generateQuickCoachSummary() }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .font(.caption.weight(.semibold))
+                    .catalystDesktopFocusable()
+                }
+            }
+
+            if isEligibleForContextualCoachSummary {
+                Button {
+                    Task { await generateContextualCoachSummaryIfNeeded(forceRefresh: true) }
+                } label: {
+                    HStack {
+                        if isGeneratingDeepCoachSummary {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .scaleEffect(0.8)
+                        }
+                        Text(deepCoachSummary == nil ? "Show me more" : "Refresh deep analysis")
+                            .font(.caption.weight(.semibold))
+                        Spacer()
+                        Text("7d + 28d context")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .disabled(isGeneratingDeepCoachSummary)
+                .catalystDesktopFocusable()
+            } else {
+                Text("Need at least 3 same-type workouts in 7d or 14 in 28d for trend context.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let deepCoachSummary {
+                Divider()
+                Text(deepCoachSummary.paragraph)
+                    .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !deepCoachSummary.bullets.isEmpty {
+                    ForEach(deepCoachSummary.bullets, id: \.self) { bullet in
+                        Text("• \(bullet)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else if let deepCoachError {
+                Text(deepCoachError)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: showsSummaryContent ? 16 : 12) {
+            if showsSummaryContent && isDurationEligibleForCoachSummary {
+                coachSummarySection
+            }
+
             if showsMapSection, !coloredSegments.isEmpty {
                 RouteMapView(
                     segments: coloredSegments,
@@ -2263,6 +2699,7 @@ struct WorkoutDetailView: View {
             if showsMapSection {
                 loadRoute()
             }
+            triggerQuickCoachSummaryIfNeeded()
         }
         .task(id: analytics.workout.startDate) {
             await loadHistoricalZoneProfile()
@@ -2281,6 +2718,200 @@ struct WorkoutDetailView: View {
                 highlightedCoordinate: selectedRouteLocation?.coordinate
             )
         }
+    }
+
+    private func sameTypeWorkoutsBeforeCurrent(withinDays days: Int) -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        let engine = HealthStateEngine.shared
+        let current = analytics.workout
+        let calendar = Calendar.current
+        let windowStart = calendar.date(byAdding: .day, value: -days, to: current.startDate) ?? current.startDate
+        return engine.workoutAnalytics.filter { pair in
+            let candidate = pair.workout
+            return candidate.uuid != current.uuid
+                && candidate.workoutActivityType == current.workoutActivityType
+                && candidate.startDate >= windowStart
+                && candidate.startDate < current.startDate
+        }
+        .sorted { $0.workout.startDate > $1.workout.startDate }
+    }
+
+    private func seriesLine(_ title: String, data: [(Date, Double)], unit: String, maxCount: Int = 160) -> String {
+        guard !data.isEmpty else { return "\(title): none" }
+        let sorted = data.sorted { $0.0 < $1.0 }
+        let step = max(1, sorted.count / maxCount)
+        let sampled = sorted.enumerated().compactMap { idx, entry -> String? in
+            guard idx % step == 0 else { return nil }
+            return "\(entry.0.timeIntervalSince1970)|\(String(format: "%.2f", entry.1))\(unit)"
+        }
+        return "\(title): [\(sampled.joined(separator: ", "))]"
+    }
+
+    private func hrZonesClassificationLine() -> String {
+        guard !heartRateZoneBreakdown.isEmpty else { return "HR_ZONES: unavailable" }
+        let total = heartRateZoneBreakdown.reduce(0.0) { $0 + $1.time }
+        guard total > 0 else { return "HR_ZONES: unavailable" }
+        let parts = heartRateZoneBreakdown.map { zone in
+            let ratio = (zone.time / total) * 100
+            return "\(zone.name)=\(String(format: "%.1f", ratio))%"
+        }
+        return "HR_ZONES: \(parts.joined(separator: ", "))"
+    }
+
+    private func workoutRawBlock() -> String {
+        let workout = analytics.workout
+        let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0
+        let distanceMeters = workout.totalDistance?.doubleValue(for: .meter()) ?? 0
+        let header = """
+        WORKOUT_RAW:
+        type=\(workout.workoutActivityType.name)
+        start=\(workout.startDate.ISO8601Format())
+        end=\(workout.endDate.ISO8601Format())
+        activeDurationSec=\(Int(workout.duration))
+        totalEnergyKcal=\(String(format: "%.1f", kcal))
+        totalDistanceMeters=\(String(format: "%.1f", distanceMeters))
+        """
+        let lines = [
+            seriesLine("heartRateSeries", data: analytics.heartRates, unit: "bpm"),
+            seriesLine("metSeries", data: analytics.metSeries, unit: ""),
+            seriesLine("speedSeries", data: analytics.speedSeries, unit: "mps"),
+            seriesLine("powerSeries", data: analytics.powerSeries, unit: "W"),
+            seriesLine("cadenceSeries", data: analytics.cadenceSeries, unit: "rpm"),
+            seriesLine("elevationSeries", data: analytics.elevationSeries, unit: "m")
+        ]
+        return ([header] + lines).joined(separator: "\n")
+    }
+
+    private func workoutClassificationBlock() -> String {
+        let avgHR = avgHeartRate ?? 0
+        let maxHR = maxHeartRate ?? 0
+        let avgPace = formattedAvgPaceMetric.map { "\($0.value) \($0.unit)" } ?? "n/a"
+        let avgSpeed = formattedAvgSpeedMetric.map { "\($0.value) \($0.unit)" } ?? "n/a"
+        let distance = formattedDistanceMetric.map { "\($0.value) \($0.unit)" } ?? "n/a"
+        return """
+        WORKOUT_CLASSIFICATIONS:
+        avgHeartRateBpm=\(String(format: "%.1f", avgHR))
+        maxHeartRateBpm=\(String(format: "%.1f", maxHR))
+        avgPace=\(avgPace)
+        avgSpeed=\(avgSpeed)
+        distance=\(distance)
+        \(hrZonesClassificationLine())
+        """
+    }
+
+    private func contextBlock(for days: Int, label: String) -> String {
+        let workouts = sameTypeWorkoutsBeforeCurrent(withinDays: days)
+        let entries = workouts.map { pair -> String in
+            let w = pair.workout
+            let a = pair.analytics
+            let kcal = w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0
+            let avgHR = a.heartRates.map(\.1).average ?? 0
+            let maxHR = a.heartRates.map(\.1).max() ?? 0
+            let distance = w.totalDistance?.doubleValue(for: .meter()) ?? 0
+            return "date=\(w.startDate.ISO8601Format()) durationSec=\(Int(w.duration)) energyKcal=\(String(format: "%.1f", kcal)) distanceMeters=\(String(format: "%.1f", distance)) avgHR=\(String(format: "%.1f", avgHR)) maxHR=\(String(format: "%.1f", maxHR))"
+        }
+        let classification = """
+        sameTypeCount=\(workouts.count)
+        avgDurationSec=\(String(format: "%.1f", workouts.map { $0.workout.duration }.average ?? 0))
+        avgEnergyKcal=\(String(format: "%.1f", workouts.map { $0.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0 }.average ?? 0))
+        avgAvgHR=\(String(format: "%.1f", workouts.map { $0.analytics.heartRates.map(\.1).average ?? 0 }.average ?? 0))
+        """
+        return """
+        \(label)_RAW:
+        \(entries.isEmpty ? "none" : entries.joined(separator: "\n"))
+
+        \(label)_CLASSIFICATIONS:
+        \(classification)
+        """
+    }
+
+    private func quickSummaryPayload() -> String {
+        [
+            workoutRawBlock(),
+            "",
+            workoutClassificationBlock()
+        ].joined(separator: "\n")
+    }
+
+    private func deepSummaryPayload() -> String {
+        [
+            workoutRawBlock(),
+            "",
+            workoutClassificationBlock(),
+            "",
+            contextBlock(for: 7, label: "SAME_TYPE_7D_CONTEXT"),
+            "",
+            contextBlock(for: 28, label: "SAME_TYPE_28D_CONTEXT")
+        ].joined(separator: "\n")
+    }
+
+    private func triggerQuickCoachSummaryIfNeeded() {
+        guard isDurationEligibleForCoachSummary else { return }
+        guard !hasRequestedQuickCoachSummary else { return }
+        hasRequestedQuickCoachSummary = true
+        Task { await generateQuickCoachSummary() }
+    }
+
+    private func generateQuickCoachSummary() async {
+        guard !isGeneratingQuickCoachSummary else { return }
+        isGeneratingQuickCoachSummary = true
+        coachModelDownloadProgress = nil
+        quickCoachError = nil
+        defer {
+            isGeneratingQuickCoachSummary = false
+            coachModelDownloadProgress = nil
+        }
+        do {
+            let summary = try await WorkoutDetailMLXCoach.quickSummary(
+                payload: quickSummaryPayload(),
+                downloadProgress: { progress in
+                    Task { @MainActor in
+                        coachModelDownloadProgress = progress
+                    }
+                }
+            )
+            quickCoachSummary = summary
+        } catch {
+            quickCoachError = coachErrorMessage(from: error, fallback: "Coach summary unavailable right now.")
+        }
+    }
+
+    private func generateContextualCoachSummaryIfNeeded(forceRefresh: Bool = false) async {
+        guard isEligibleForContextualCoachSummary else { return }
+        if !forceRefresh, deepCoachSummary != nil {
+            return
+        }
+        guard !isGeneratingDeepCoachSummary else { return }
+        isGeneratingDeepCoachSummary = true
+        coachModelDownloadProgress = nil
+        deepCoachError = nil
+        defer {
+            isGeneratingDeepCoachSummary = false
+            coachModelDownloadProgress = nil
+        }
+        do {
+            let summary = try await WorkoutDetailMLXCoach.contextualSummary(
+                payload: deepSummaryPayload(),
+                downloadProgress: { progress in
+                    Task { @MainActor in
+                        coachModelDownloadProgress = progress
+                    }
+                }
+            )
+            deepCoachSummary = summary
+        } catch {
+            deepCoachError = coachErrorMessage(from: error, fallback: "Could not generate deeper trend analysis right now.")
+        }
+    }
+
+    private func coachErrorMessage(from error: Error, fallback: String) -> String {
+        if let detailed = (error as? LocalizedError)?.errorDescription, !detailed.isEmpty {
+            return detailed
+        }
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !message.isEmpty, message != "The operation couldn’t be completed." {
+            return "\(fallback) (\(message))"
+        }
+        return fallback
     }
 
     private func loadHistoricalZoneProfile() async {

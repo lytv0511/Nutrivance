@@ -1434,8 +1434,9 @@ struct JournalSavedNudge: Identifiable, Codable, Equatable, Hashable {
 
 /// Stable across launches and devices so cached assistant UI can rehydrate after iCloud journal sync.
 enum JournalAssistantFingerprint {
-    static func combine(content: String, inspiration: String) -> UInt64 {
-        let s = content + "\u{1e}" + inspiration
+    /// Includes optional stat-card payload so assistant cache invalidates when logged metrics change.
+    static func combine(content: String, inspiration: String, statCardsSignature: String = "") -> UInt64 {
+        let s = content + "\u{1e}" + inspiration + "\u{1e}" + statCardsSignature
         let utf8 = Array(s.utf8)
         var hash: UInt64 = 1_469_958_103_934_665_603
         let prime: UInt64 = 1_099_511_628_211
@@ -3466,6 +3467,22 @@ struct JournalEditorView: View {
 
     private var isFitnessReport: Bool { entry.kind == "workout_report" }
 
+    /// Stable signature for assistant cache + correlation analysis when stat cards change.
+    private var journalStatCardsSignature: String {
+        entry.statCards.map { "\($0.id.uuidString)|\($0.title)|\($0.value)|\($0.subtitle)" }.joined(separator: "\u{1f}")
+    }
+
+    /// Human-readable block appended for correlation detection (nutrient/symptom context from logged cards).
+    private func journalStatCardsCorrelationContext() -> String {
+        guard !entry.statCards.isEmpty else { return "" }
+        let lines = entry.statCards.map { card in
+            let sub = card.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let subPart = sub.isEmpty ? "" : " — \(sub)"
+            return "• \(card.title): \(card.value)\(subPart)"
+        }
+        return "\n\n[Logged stat cards]\n" + lines.joined(separator: "\n")
+    }
+
     /// Writes inline suggestions, nudges, outline, people, and quick checks into the entry for sync / instant reopen.
     private func saveJournalAssistantCacheToEntry(force: Bool = false) {
         let now = Date()
@@ -3473,7 +3490,7 @@ struct JournalEditorView: View {
             return
         }
         lastJournalAssistantCachePersist = now
-        let fp = JournalAssistantFingerprint.combine(content: entry.content, inspiration: entry.inspiration)
+        let fp = JournalAssistantFingerprint.combine(content: entry.content, inspiration: entry.inspiration, statCardsSignature: journalStatCardsSignature)
         let outlineSnaps = suggestionEngine.backboneOutline.map { sec in
             JournalAssistantOutlineSnapshot(
                 id: sec.id,
@@ -3498,7 +3515,7 @@ struct JournalEditorView: View {
 
     private func hydrateJournalAssistantCacheIfNeeded() {
         guard let cache = entry.assistantCache else { return }
-        let fp = JournalAssistantFingerprint.combine(content: entry.content, inspiration: entry.inspiration)
+        let fp = JournalAssistantFingerprint.combine(content: entry.content, inspiration: entry.inspiration, statCardsSignature: journalStatCardsSignature)
         guard cache.contentFingerprint == fp else { return }
         suggestionEngine.restoreAssistantCache(cache, text: entry.content, inspiration: entry.inspiration)
         correlationEngine.restoreFromAssistantCache(
@@ -4154,7 +4171,8 @@ struct JournalEditorView: View {
                                             journalContent: text,
                                             journalInspiration: entry.inspiration,
                                             journalEntryID: entry.id,
-                                            referenceDate: referenceDate
+                                            referenceDate: referenceDate,
+                                            statCardsContext: journalStatCardsCorrelationContext()
                                         )
                                     }
                                 }
@@ -4185,7 +4203,8 @@ struct JournalEditorView: View {
                                             journalContent: newValue,
                                             journalInspiration: entry.inspiration,
                                             journalEntryID: entry.id,
-                                            referenceDate: referenceDate
+                                            referenceDate: referenceDate,
+                                            statCardsContext: journalStatCardsCorrelationContext()
                                         )
                                     }
                                 #endif
@@ -4250,7 +4269,8 @@ struct JournalEditorView: View {
                                             journalContent: entry.content,
                                             journalInspiration: text,
                                             journalEntryID: entry.id,
-                                            referenceDate: referenceDate
+                                            referenceDate: referenceDate,
+                                            statCardsContext: journalStatCardsCorrelationContext()
                                         )
                                     }
                                 }
@@ -4281,7 +4301,8 @@ struct JournalEditorView: View {
                                             journalContent: entry.content,
                                             journalInspiration: newValue,
                                             journalEntryID: entry.id,
-                                            referenceDate: referenceDate
+                                            referenceDate: referenceDate,
+                                            statCardsContext: journalStatCardsCorrelationContext()
                                         )
                                     }
                                 #endif
@@ -4528,8 +4549,19 @@ struct JournalEditorView: View {
                     journalContent: entry.content,
                     journalInspiration: entry.inspiration,
                     journalEntryID: entry.id,
-                    referenceDate: referenceDate
+                    referenceDate: referenceDate,
+                    statCardsContext: journalStatCardsCorrelationContext()
                 )
+            }
+            .onChange(of: entry.statCards) { _, _ in
+                correlationEngine.analyzeText(
+                    journalContent: entry.content,
+                    journalInspiration: entry.inspiration,
+                    journalEntryID: entry.id,
+                    referenceDate: referenceDate,
+                    statCardsContext: journalStatCardsCorrelationContext()
+                )
+                saveJournalAssistantCacheToEntry(force: true)
             }
             .onChange(of: suggestionEngine.pinnedNudge?.id) { _, newID in
                 if newID != nil { journalNudgesAssistantExpanded = true }
@@ -4783,29 +4815,44 @@ struct JournalEditorView: View {
     }
 
     private func applyClarifierAnswer(_ clarifier: JournalCorrelationClarifier, choiceIndex: Int) {
-        guard choiceIndex < clarifier.associationKeys.count else { return }
+        guard choiceIndex < clarifier.choices.count, choiceIndex < clarifier.associationKeys.count else { return }
         let key = clarifier.associationKeys[choiceIndex]
-        guard key != "skip", let assoc = NutrivanceAssociation(rawValue: key) else { return }
-
-        for corrID in clarifier.targetCorrelationIDs {
-            if let idx = correlationEngine.detectedCorrelations.firstIndex(where: { $0.id == corrID }) {
-                correlationEngine.detectedCorrelations[idx].association = assoc
-            }
-            entry.correlationAssociationOverrides[corrID] = key
-        }
-
-        if let person = clarifier.linkedPersonName?.lowercased(), !person.isEmpty {
-            let roleMap: [String: String] = ["friends": "friend", "family": "family", "partner": "partner", "work": "coworker", "education": "teacher"]
-            if let role = roleMap[key] {
-                entry.personRelationshipHints[person] = role
-                var profile = entry.personProfiles[person] ?? JournalPersonProfile(name: clarifier.linkedPersonName ?? person, relationship: role)
-                profile.relationship = role
-                if !clarifier.linkedContextHint.isEmpty {
-                    profile.disambiguationNote = clarifier.linkedContextHint
+        let choiceLabel = clarifier.choices[choiceIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        if key != "skip", let assoc = NutrivanceAssociation(rawValue: key) {
+            for corrID in clarifier.targetCorrelationIDs {
+                if let idx = correlationEngine.detectedCorrelations.firstIndex(where: { $0.id == corrID }) {
+                    correlationEngine.detectedCorrelations[idx].association = assoc
                 }
-                entry.personProfiles[person] = profile
+                entry.correlationAssociationOverrides[corrID] = key
             }
         }
+
+        guard let rawName = clarifier.linkedPersonName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty else { return }
+        let personKey = rawName.lowercased()
+
+        let roleFromAssociation: [String: String] = [
+            "friends": "friend",
+            "family": "family",
+            "partner": "partner",
+            "work": "professional or work contact",
+            "education": "teacher or school context",
+            "community": "community or networking",
+            "goalsDirection": "project or collaboration contact",
+            "inputsInfluences": "advisor or expert",
+            "habitsSystems": "peer or routine",
+            "dating": "dating",
+            "skip": "unspecified"
+        ]
+
+        let role = roleFromAssociation[key] ?? "contact"
+        var profile = entry.personProfiles[personKey] ?? JournalPersonProfile(name: rawName, relationship: role)
+        profile.relationship = role
+        var noteParts: [String] = []
+        if !clarifier.linkedContextHint.isEmpty { noteParts.append(clarifier.linkedContextHint) }
+        if !choiceLabel.isEmpty { noteParts.append(choiceLabel) }
+        profile.disambiguationNote = noteParts.joined(separator: " — ")
+        entry.personProfiles[personKey] = profile
+        entry.personRelationshipHints[personKey] = role
     }
 
     // MARK: - Editor Background

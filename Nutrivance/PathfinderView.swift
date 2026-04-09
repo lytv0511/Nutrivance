@@ -370,14 +370,14 @@ struct DetectedCorrelationItem {
 }
 
 @available(iOS 26.0, *)
-@Generable(description: "A named person mentioned in the journal (not generic groups).")
+@Generable(description: "A named person or identifiable group (e.g. Endure therapists). mentionContext: 1–2 short phrases from the entry describing HOW they appear (role-in-story), not a generic relationship label—e.g. sports therapists you met about your app, not just therapist.")
 struct DetectedPersonItem {
     var name: String
     var mentionContext: String
 }
 
 @available(iOS 26.0, *)
-@Generable(description: "A short follow-up to disambiguate people or life areas. choiceAssociationKeys must parallel choiceLabels; use skip when that choice should not change correlation buckets.")
+@Generable(description: "Follow-up to disambiguate people or life areas. Provide 5–8 choiceLabels when the situation needs nuance. Include options like: Collaborator on a project, Professional / expert contact (brief), Networking or one-time meeting, Advisor on a product or app, Acquaintance, Community contact—not only Friend, Family, Coworker, Teacher. choiceAssociationKeys must parallel choiceLabels (friends, family, partner, work, education, community, goalsDirection, inputsInfluences, habitsSystems, skip). linkedContextHint: paste an 8–48 character VERBATIM phrase from the journal that identifies THIS person/situation. linkedPersonName: person or team name if known.")
 struct FollowUpClarifierItem {
     var question: String
     var choiceLabels: [String]
@@ -450,6 +450,285 @@ struct JournalCorrelationClarifier: Identifiable, Hashable, Codable {
     }
 }
 
+// MARK: - Paragraph & professional context (study vs collaboration; therapist ≠ self-care)
+
+/// Corrects cross-paragraph bleed and “therapist” keyword → self-care when the story is professional/product collaboration.
+private enum JournalCorrelationContextCorrector {
+    /// Splits the journal into labeled sections so the model keeps separate emotions per paragraph.
+    static func paragraphAnnotated(_ raw: String) -> String {
+        let parts = raw.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard parts.count > 1 else { return raw }
+        return parts.enumerated().map { idx, paragraph in
+            "### Section \(idx + 1)\n\(paragraph)"
+        }.joined(separator: "\n\n")
+    }
+
+    static func adjustAssociations(_ correlations: [EmotionCorrelation], fullText: String) -> [EmotionCorrelation] {
+        let lower = fullText.lowercased()
+        return correlations.map { adjustOne($0, fullLower: lower) }
+    }
+
+    private static func adjustOne(_ c: EmotionCorrelation, fullLower: String) -> EmotionCorrelation {
+        var cc = c
+        let ctx = c.contextNotes.lowercased()
+
+        if JournalCorrelationHeuristics.hasBodySymptomCue(ctx), cc.association == .health || cc.association == .bodyAwareness {
+            return cc
+        }
+
+        let studyCue = ["study", "studying", "studied", "unmotivated", "lecture", "exam", "homework", "assignment", "class", "course", "school", "session", "textbook", "essay"].contains { ctx.contains($0) }
+        if studyCue, cc.association == .selfCare {
+            cc.association = .education
+        }
+
+        let entryMentionsTherapist = ["therapist", "therapists", "physio", "physiotherapist", "chiropractor"].contains { fullLower.contains($0) }
+        let entrySuggestsProfessionalCollaboration = [
+            "collaborat", " my app", "health app", "passion project", "product", "startup", "build ", "building ",
+            "network", "advisor", "advice", "meet ", " met ", "work with", "working with", "endure",
+            "expressed interest", "help with", "briefly", "project"
+        ].contains { fullLower.contains($0) }
+
+        guard entryMentionsTherapist && entrySuggestsProfessionalCollaboration else { return cc }
+
+        let summaryMatchesTherapistThread = [
+            "therapist", "physio", "endure", "sports", "collaborat", "app", "passion", "wonderful", "great time",
+            "enjoyed", "networking", "meet", "project"
+        ].contains { ctx.contains($0) }
+
+        guard summaryMatchesTherapistThread else { return cc }
+
+        if cc.association == .selfCare || (cc.association == .health && !JournalCorrelationHeuristics.hasBodySymptomCue(ctx)) {
+            if fullLower.contains("app") || fullLower.contains("product") || fullLower.contains("project") || fullLower.contains("passion") {
+                cc.association = .goalsDirection
+            } else {
+                cc.association = .community
+            }
+        }
+        return cc
+    }
+}
+
+// MARK: - Journal correlation heuristics (food ↔ body, intensity / frequency gating)
+
+/// Reduces false positives for food–symptom “correlations” and aligns intensity scales with symptom detection.
+private enum JournalCorrelationHeuristics {
+    private static let symptomLexicon: [String] = [
+        "headache", "migraine", "nausea", "bloat", "bloating", "cramp", "cramps", "rash", "hives",
+        "eczema", "acne", "stomach", "belly", "abdomen", "nauseous", "dizzy", "vertigo", "fatigue",
+        "pain", "aching", "ache", "symptom", "flare", "breakout", "complexion", "itchy", "heartburn",
+        "constipation", "diarrhea", "ibs", "reflux", "migraines"
+    ]
+
+    private static let nutrientDeltaCue: [String] = [
+        "more ", "less ", "increased", "decreased", "cut out", "cut back", "stopped eating", "started eating",
+        "eliminated", "introduced", "added ", "removed ", "fiber", "gluten", "dairy", "lactose", "sugar",
+        "sodium", "salt", "whole grain", "processed", "fried", "alcohol", "caffeine", "supplement",
+        "nutrient", "macros", "protein", "carb", "carbs", "omega"
+    ]
+
+    private static let foodCue: [String] = [
+        "meal", "meals", "food", "ate", "eating", "snack", "dinner", "lunch", "breakfast", "restaurant",
+        "drank", "coffee", "grain", "wheat", "oats", "oatmeal", "rice", "bread", "pasta"
+    ]
+
+    private static func containsAny(_ text: String, phrases: [String]) -> Bool {
+        phrases.contains { text.contains($0) }
+    }
+
+    /// “Bad” or “very bad” (and close synonyms) on an intensity scale — treat as symptom-level signal when tied to body/food/frequency context.
+    static func hasDefiniteBadOrVeryBadIntensity(_ text: String) -> Bool {
+        let t = text.lowercased()
+        if t.contains("very bad") || t.contains("verybad") { return true }
+        if t.range(of: #"\bbad\b"#, options: .regularExpression) != nil {
+            if t.contains("not bad") || t.contains("wasn't bad") || t.contains("wasnt bad") { return false }
+            let badAnchors = [
+                "how intense", "intensity", "frequent", "frequency", "rating", "scale", "felt", "symptom",
+                "pain", "rash", "skin", "headache", "stomach", "nausea", "bloat", "meal", "food", "ate",
+                "snack", "breakfast", "lunch", "dinner", "logged"
+            ]
+            if badAnchors.contains(where: { t.contains($0) }) || symptomLexicon.contains(where: { t.contains($0) }) {
+                return true
+            }
+        }
+        if t.contains("terrible") || t.contains("awful") || t.contains("severe") || (t.contains("extreme") && t.contains("pain")) {
+            return true
+        }
+        return false
+    }
+
+    /// Worse than “good” / “fine” for pairing with symptom language (includes moderate discomfort).
+    static func intensityGreaterThanGood(_ text: String) -> Bool {
+        let t = text.lowercased()
+        if hasDefiniteBadOrVeryBadIntensity(t) { return true }
+        let softBad = ["moderate", "uncomfortable", "pretty bad", "somewhat bad", "not great", "worse", "off"]
+        if softBad.contains(where: { t.contains($0) }) { return true }
+        if t.contains("okay") || t.contains("so-so") || t.contains("so so") {
+            return symptomLexicon.contains { t.contains($0) }
+        }
+        return false
+    }
+
+    static func hasBodySymptomCue(_ text: String) -> Bool {
+        containsAny(text.lowercased(), phrases: symptomLexicon)
+    }
+
+    static func hasNutrientStrongIndicator(_ text: String) -> Bool {
+        containsAny(text.lowercased(), phrases: nutrientDeltaCue)
+    }
+
+    /// Stricter than “any food + any mood”: needs bad/very bad intensity, or nutrient change + body cue, or high frequency + enough intensity + body cue.
+    static func passesStrictFoodBodyCorrelationGate(_ text: String) -> Bool {
+        let t = text.lowercased()
+        if hasDefiniteBadOrVeryBadIntensity(t) { return true }
+        if hasNutrientStrongIndicator(t) && hasBodySymptomCue(t) { return true }
+        let freqHigh = ["always", "often", "every time", "everytime", "daily", "constantly", "frequently", "keeps happening"].contains { t.contains($0) }
+        let intenseEnough = hasDefiniteBadOrVeryBadIntensity(t)
+            || t.contains("moderate")
+            || t.contains("uncomfortable")
+            || t.contains("pretty bad")
+        return freqHigh && intenseEnough && hasBodySymptomCue(t)
+    }
+
+    static func refine(_ correlations: [EmotionCorrelation], fullText: String) -> [EmotionCorrelation] {
+        let lower = fullText.lowercased()
+        let mapped = correlations.compactMap { c -> EmotionCorrelation? in
+            if shouldDropAsSpuriousSelfCareFood(c, fullLower: lower) { return nil }
+            return adjustForSymptomIntensity(c, fullLower: lower)
+        }
+        return dedupeCorrelations(mapped)
+    }
+
+    private static func shouldDropAsSpuriousSelfCareFood(_ c: EmotionCorrelation, fullLower: String) -> Bool {
+        guard c.association == .selfCare else { return false }
+        let ctx = (c.contextNotes + " " + c.emotionLabel).lowercased()
+        let foodMentioned = containsAny(fullLower, phrases: foodCue) || containsAny(ctx, phrases: foodCue)
+        guard foodMentioned else { return false }
+        if c.estimatedValence < -0.05 { return false }
+        if passesStrictFoodBodyCorrelationGate(fullLower) { return false }
+        if hasBodySymptomCue(fullLower) || hasNutrientStrongIndicator(fullLower) { return false }
+        return true
+    }
+
+    private static func adjustForSymptomIntensity(_ c: EmotionCorrelation, fullLower: String) -> EmotionCorrelation {
+        var out = c
+        let notesLower = c.contextNotes.lowercased()
+        let physical = hasBodySymptomCue(fullLower) || symptomLexicon.contains { notesLower.contains($0) }
+        if physical && intensityGreaterThanGood(fullLower) {
+            if out.association == .selfCare || out.association == .health {
+                out.association = .bodyAwareness
+            }
+            let label = out.emotionLabel.lowercased()
+            if hasDefiniteBadOrVeryBadIntensity(fullLower), label.contains("content") || label.contains("happy") {
+                out.emotionLabel = "Symptom"
+                out.estimatedValence = min(out.estimatedValence, -0.45)
+            }
+        }
+        if hasDefiniteBadOrVeryBadIntensity(fullLower), physical {
+            out.emotionLabel = out.emotionLabel.lowercased().contains("symptom") ? out.emotionLabel : "Symptom"
+            out.estimatedValence = min(out.estimatedValence, -0.5)
+        }
+        return out
+    }
+
+    private static func dedupeCorrelations(_ items: [EmotionCorrelation]) -> [EmotionCorrelation] {
+        var seen: Set<String> = []
+        var out: [EmotionCorrelation] = []
+        for c in items {
+            let key = "\(c.emotionLabel.lowercased())|\(c.association.rawValue)|\(c.contextNotes.lowercased().prefix(80))"
+            if seen.insert(key).inserted {
+                out.append(c)
+            }
+        }
+        return out
+    }
+
+    /// Regex path: extra symptom–nutrient bridges when the stricter gate passes.
+    static func supplementRegexCorrelations(
+        text: String,
+        journalEntryID: UUID?,
+        referenceDate: Date,
+        existing: [EmotionCorrelation]
+    ) -> [EmotionCorrelation] {
+        let lower = text.lowercased()
+        guard passesStrictFoodBodyCorrelationGate(lower) || (hasDefiniteBadOrVeryBadIntensity(lower) && hasBodySymptomCue(lower)) else {
+            return existing
+        }
+        var results = existing
+        let sentences = text.components(separatedBy: CharacterSet(charactersIn: ".!?\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        for sentence in sentences {
+            let sl = sentence.lowercased()
+            guard hasBodySymptomCue(sl) else { continue }
+            let foodHere = containsAny(sl, phrases: foodCue) || containsAny(sl, phrases: nutrientDeltaCue)
+            guard foodHere || hasNutrientStrongIndicator(lower) else { continue }
+            guard hasDefiniteBadOrVeryBadIntensity(sl) || hasNutrientStrongIndicator(sl) || intensityGreaterThanGood(sl) else { continue }
+            let note = sentence.count > 90 ? String(sentence.prefix(87)) + "…" : sentence
+            let candidate = EmotionCorrelation(
+                journalEntryID: journalEntryID,
+                date: referenceDate,
+                emotionLabel: hasDefiniteBadOrVeryBadIntensity(sl) ? "Symptom" : "Physical discomfort",
+                estimatedValence: hasDefiniteBadOrVeryBadIntensity(sl) ? -0.72 : -0.42,
+                association: .bodyAwareness,
+                contextNotes: note,
+                source: .aiDetected
+            )
+            if !results.contains(where: { $0.contextNotes.lowercased() == note.lowercased() }) {
+                results.append(candidate)
+            }
+            if results.count >= 5 { break }
+        }
+        return Array(results.prefix(5))
+    }
+
+    static func supplementClarifiers(
+        _ existing: [JournalCorrelationClarifier],
+        fullText: String,
+        correlations: [EmotionCorrelation]
+    ) -> [JournalCorrelationClarifier] {
+        let t = fullText.lowercased()
+        var out = existing
+        var keys = Set(existing.map(\.stableKey))
+
+        func appendGrain(_ block: () -> JournalCorrelationClarifier) {
+            let c = block()
+            if keys.insert(c.stableKey).inserted { out.append(c) }
+        }
+
+        let grainHit = ["whole grain", "wholegrain", "brown rice", "oatmeal", "oats ", " wheat", "bran", "quinoa"].contains { t.contains($0) }
+        let skinHit = ["skin", "complexion", "rash", "acne", "eczema", "breakout", "hives", "itchy"].contains { t.contains($0) }
+        let digestionHit = ["bloat", "digest", "stomach", "gut", "fiber", "gluten"].contains { t.contains($0) }
+
+        if grainHit || digestionHit {
+            appendGrain {
+                JournalCorrelationClarifier(
+                    question: "Did this involve a recent change in whole grains (amount or type)?",
+                    choices: ["More whole grains", "Less / cut back", "Switched types", "About the same", "Not sure"],
+                    associationKeys: ["inputsInfluences", "inputsInfluences", "experiments", "skip", "skip"],
+                    linkedPersonName: nil,
+                    linkedContextHint: "whole grains",
+                    targetCorrelationIDs: correlations.map(\.id),
+                    stableKey: "clarifier::whole_grains::v1"
+                )
+            }
+        }
+
+        if skinHit {
+            appendGrain {
+                JournalCorrelationClarifier(
+                    question: "For skin appearance, what shifted most around the same time?",
+                    choices: ["Diet change", "New product / topical", "Sleep / stress", "Hormonal cycle", "Not sure"],
+                    associationKeys: ["inputsInfluences", "selfCare", "recovery", "health", "skip"],
+                    linkedPersonName: nil,
+                    linkedContextHint: "skin",
+                    targetCorrelationIDs: correlations.map(\.id),
+                    stableKey: "clarifier::skin_appearance::v1"
+                )
+            }
+        }
+
+        return out
+    }
+}
+
 @MainActor
 final class JournalCorrelationEngine: ObservableObject {
     @Published var detectedCorrelations: [EmotionCorrelation] = []
@@ -475,11 +754,11 @@ final class JournalCorrelationEngine: ObservableObject {
         assistantRestoredContentFingerprint = contentFingerprint
     }
 
-    func analyzeText(journalContent: String, journalInspiration: String, journalEntryID: UUID?, referenceDate: Date) {
+    func analyzeText(journalContent: String, journalInspiration: String, journalEntryID: UUID?, referenceDate: Date, statCardsContext: String = "") {
         analysisTask?.cancel()
-        let combined = journalContent + " " + journalInspiration
+        let combined = journalContent + " " + journalInspiration + " " + statCardsContext
         let trimmed = combined.trimmingCharacters(in: .whitespacesAndNewlines)
-        let stableFP = JournalAssistantFingerprint.combine(content: journalContent, inspiration: journalInspiration)
+        let stableFP = JournalAssistantFingerprint.combine(content: journalContent, inspiration: journalInspiration, statCardsSignature: statCardsContext)
         if assistantRestoredContentFingerprint != nil, assistantRestoredContentFingerprint != stableFP {
             assistantRestoredContentFingerprint = nil
         }
@@ -515,17 +794,32 @@ final class JournalCorrelationEngine: ObservableObject {
             }
             #endif
 
-            if results.isEmpty {
-                results = analyzeWithRegex(text: trimmed, journalEntryID: journalEntryID, referenceDate: referenceDate)
+            results = JournalCorrelationContextCorrector.adjustAssociations(results, fullText: trimmed)
+            let refinedFM = JournalCorrelationHeuristics.refine(results, fullText: trimmed)
+            if refinedFM.isEmpty {
+                let regexRaw = analyzeWithRegex(text: trimmed, journalEntryID: journalEntryID, referenceDate: referenceDate)
+                results = JournalCorrelationContextCorrector.adjustAssociations(regexRaw, fullText: trimmed)
+                results = JournalCorrelationHeuristics.refine(results, fullText: trimmed)
+            } else {
+                results = refinedFM
             }
+
+            results = JournalCorrelationHeuristics.supplementRegexCorrelations(
+                text: trimmed,
+                journalEntryID: journalEntryID,
+                referenceDate: referenceDate,
+                existing: results
+            )
+
             if people.isEmpty {
                 people = extractPeopleHeuristic(from: trimmed)
             }
             clarifiers = Self.resolveClarifierTargets(clarifiers, correlations: results)
+            clarifiers = JournalCorrelationHeuristics.supplementClarifiers(clarifiers, fullText: trimmed, correlations: results)
 
             guard !Task.isCancelled else { return }
 
-            let fpNow = JournalAssistantFingerprint.combine(content: journalContent, inspiration: journalInspiration)
+            let fpNow = JournalAssistantFingerprint.combine(content: journalContent, inspiration: journalInspiration, statCardsSignature: statCardsContext)
             if results.isEmpty && people.isEmpty && clarifiers.isEmpty,
                assistantRestoredContentFingerprint == fpNow {
                 onAnalysisFinished?()
@@ -583,21 +877,39 @@ final class JournalCorrelationEngine: ObservableObject {
                 School, class, teacher, professor, homework, lecture, exam, study session → associationKey education (not work). Job, boss, office, deadline without school context → work.
                 Only extract emotions clearly present. At most 5 correlations.
 
-                mentionedPeople: Proper names and titled names (e.g. Frank, Mr. Hale). Skip vague "someone". mentionContext: short phrase showing how they appear (≤120 chars).
+                PARAGRAPHS AND SEPARATE CONTEXTS (critical):
+                - The journal may use blank lines between paragraphs. Each ### Section in the prompt is a separate block. Do NOT merge or relabel emotions across sections.
+                - If one section is about study/school and another is about different people or activities, output SEPARATE correlations with contextSummary text taken from THAT section only. Preserve the unmotivated/education correlation even if a later section mentions health professionals.
+                - Do NOT let keywords from a later paragraph overwrite the association for an earlier paragraph’s correlation.
 
-                followUpClarifiers: 2–6 quick checks the app will show as multiple choice. Include:
-                - For each important person: "Who is [Name] to you?" (or similar) with choices like Friend, Family, Teacher/professor, Coworker, Partner, Not sure.
-                - When school vs work could be confused (e.g. "Mr. Hale's class", "meeting about grades"): ask which bucket fits with 3–5 choices (Education, Work, Friends/social, Other, Not sure).
-                - When a relationship affects how to read the entry, add one disambiguation question.
-                choiceLabels: 3–5 short options (≤6 words each). choiceAssociationKeys must parallel choiceLabels: use friends, family, partner, work, education, skip. Use skip for "Not sure" or when picking that option should not set a life-area bucket. Use education for teacher/classmate/study; work for job/coworker; friends for friend/social.
-                linkedPersonName: the person's name if the question is about them, else empty string.
-                linkedContextHint: a distinctive substring from the entry that identifies which sentence/clause this question clarifies (so the app can match correlations); empty string if not needed.
+                THERAPISTS, COACHES, CLINICIANS, “SPORTS THERAPISTS” (do NOT default to selfCare):
+                - Words like therapist, physio, or clinic do NOT mean selfCare unless the author is clearly receiving personal care, treatment for wellbeing, or therapy as a client/patient.
+                - If therapists or experts appear in a collaboration, product, app, startup, networking, “met and discussed”, passion project, or professional-advice context, use work, community, goalsDirection, or inputsInfluences—not selfCare.
+                - selfCare is for rest, routines, personal wellness activities, or self-kindness—not for meeting professionals about a project.
+
+                FOOD, NUTRIENTS, SYMPTOMS, AND INTENSITY (tighten false positives):
+                - Propose a diet/food-linked correlation only when there is a plausible physical symptom, skin/gut reaction, or a clear change in intake (more/less/cut/added/switched) tied to how the author felt.
+                - If the author describes symptom intensity as bad or very bad (or clearly severe), treat that as a symptom signal: prefer associationKey bodyAwareness or health with negative valence—not a generic “selfCare” meal mood.
+                - “How frequent?” and “How intense?” matter: do not infer a nutrient correlation from a one-off pleasant meal; prefer correlations when frequency is high and/or intensity is at least moderate—or when specific nutrients or foods changed.
+                - Optional [Logged stat cards] lines may appear at the end: treat them as structured answers (titles/values/subtitles) alongside the prose.
+
+                mentionedPeople: Proper names, orgs, or identifiable groups (e.g. Endure, sports therapists from Endure). Skip vague "someone". mentionContext MUST reflect the scene from the text (what you did together or why they appear)—≤120 chars—not a single-word role guess.
+
+                followUpClarifiers: 2–8 quick checks as multiple choice. Include:
+                - For each important person or group: ask how they fit the author’s life with 5–8 options when Friend/Family/Coworker/Teacher is too narrow—e.g. Collaborator on a project, Professional contact (brief meeting), Networking / one-time contact, Advisor on app or product, Community or sport org, Acquaintance, Friend, Family, Work colleague, Teacher, Not sure / skip.
+                - Each question MUST reference the situation (e.g. “the people from Endure you mentioned”) so context is not lost.
+                - When school vs work could be confused: disambiguate with enough options.
+                - If whole grains, oats, wheat, fiber, or gluten appear with digestion or energy symptoms, include a clarifier about recent whole-grain changes (more/less/different kinds).
+                - If skin, complexion, rash, acne, or breakouts appear, include a clarifier about what else shifted (diet, topical product, sleep/stress).
+                choiceLabels: up to 8 short options (≤7 words each). choiceAssociationKeys must parallel choiceLabels: friends, family, partner, work, education, community, goalsDirection, inputsInfluences, habitsSystems, skip.
+                linkedPersonName: the person's or team’s name if the question is about them, else empty string.
+                linkedContextHint: REQUIRED when asking about someone—copy 8–48 consecutive characters from the journal (verbatim) that anchor that person or scene; empty only for non-person questions.
                 """
             )
 
-            let truncated = String(text.prefix(2000))
+            let truncated = JournalCorrelationContextCorrector.paragraphAnnotated(String(text.prefix(4000)))
             let userTurn = """
-            Journal entry (first-person author — keep them as the emotional subject in every contextSummary; other names are only context):
+            Journal entry (first-person author — keep them as the emotional subject in every contextSummary; other names are only context). Respect ### Section boundaries as separate scenes.
 
             \(truncated)
             """
@@ -637,7 +949,7 @@ final class JournalCorrelationEngine: ObservableObject {
 
     private static func clarifierFromModelItem(_ item: FollowUpClarifierItem) -> JournalCorrelationClarifier? {
         let labels = item.choiceLabels.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        guard labels.count >= 2, labels.count <= 6 else { return nil }
+        guard labels.count >= 2, labels.count <= 8 else { return nil }
 
         var keys = item.choiceAssociationKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         while keys.count < labels.count { keys.append("skip") }
@@ -655,7 +967,7 @@ final class JournalCorrelationEngine: ObservableObject {
 
         return JournalCorrelationClarifier(
             question: q,
-            choices: Array(labels.prefix(6)),
+            choices: Array(labels.prefix(8)),
             associationKeys: Array(keys.prefix(labels.count)),
             linkedPersonName: person.isEmpty ? nil : person,
             linkedContextHint: hint,
@@ -681,6 +993,10 @@ final class JournalCorrelationEngine: ObservableObject {
         var ids: [UUID] = []
         if hint.count >= 3 {
             ids = correlations.filter { $0.contextNotes.localizedCaseInsensitiveContains(hint) }.map(\.id)
+            if ids.isEmpty, hint.count >= 8 {
+                let prefix = String(hint.prefix(24))
+                ids = correlations.filter { $0.contextNotes.localizedCaseInsensitiveContains(prefix) }.map(\.id)
+            }
         }
         if ids.isEmpty, person.count >= 2 {
             ids = correlations.filter { $0.contextNotes.localizedCaseInsensitiveContains(person) }.map(\.id)
@@ -717,10 +1033,24 @@ final class JournalCorrelationEngine: ObservableObject {
 
     // MARK: - Regex Fallback
 
+    /// Prefer education / project associations when “therapist” appears in a collaboration story (not spa self-care).
+    private static func applyRegexAssociationOverrides(sentLower: String, assoc: NutrivanceAssociation) -> NutrivanceAssociation {
+        var a = assoc
+        if ["study", "studying", "unmotivated", "lecture", "homework", "exam", "class", "session", "school", "assignment", "essay"].contains(where: { sentLower.contains($0) }) {
+            if a == .selfCare { a = .education }
+        }
+        let therapist = ["therapist", "therapists", "physio", "physiotherapist"].contains { sentLower.contains($0) }
+        let collab = ["collaborat", "app", "product", "project", "passion", "network", "meet ", " met ", "work with", "working with", "endure", "advisor", "build ", "health app"].contains { sentLower.contains($0) }
+        if therapist && collab && (a == .selfCare || a == .health) {
+            a = .goalsDirection
+        }
+        return a
+    }
+
     private func analyzeWithRegex(text: String, journalEntryID: UUID?, referenceDate: Date) -> [EmotionCorrelation] {
-        let sentences = text.components(separatedBy: CharacterSet(charactersIn: ".!?\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let paragraphBlocks = text.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let segments = paragraphBlocks.count > 1 ? paragraphBlocks : [text]
         var results: [EmotionCorrelation] = []
-        var usedAssociations: Set<NutrivanceAssociation> = []
 
         let emotionPatterns: [(keywords: [String], emotion: String, valence: Double)] = [
             (["wonderful", "amazing", "fantastic", "incredible", "awesome"], "joyful", 0.9),
@@ -779,6 +1109,10 @@ final class JournalCorrelationEngine: ObservableObject {
             (["eating", "food", "meal", "restaurant", "dining", "lunch", "dinner", "breakfast"], .selfCare),
         ]
 
+        for segment in segments {
+            var usedAssociations: Set<NutrivanceAssociation> = []
+            let sentences = segment.components(separatedBy: CharacterSet(charactersIn: ".!?\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+
         for sentence in sentences {
             let sentLower = sentence.lowercased()
             let hasNegation = sentLower.contains(" not ")
@@ -808,6 +1142,8 @@ final class JournalCorrelationEngine: ObservableObject {
                 }
             }
 
+            assoc = Self.applyRegexAssociationOverrides(sentLower: sentLower, assoc: assoc)
+
             guard !usedAssociations.contains(assoc) || assocScore > 1 else { continue }
             usedAssociations.insert(assoc)
 
@@ -827,11 +1163,19 @@ final class JournalCorrelationEngine: ObservableObject {
             if results.count >= 5 { break }
         }
 
-        return results
+            if results.count >= 5 { break }
+        }
+
+        return Array(results.prefix(5))
     }
 
     private func guessAssociation(from text: String) -> NutrivanceAssociation {
         let lower = text.lowercased()
+        let therapistWord = ["therapist", "therapists", "physio", "physiotherapist"].contains { lower.contains($0) }
+        let professionalCollab = ["collaborat", " my app", "app ", "product", "startup", "passion project", "network", "advisor", "meet ", " met ", "work with", "endure", "build "].contains { lower.contains($0) }
+        if therapistWord && professionalCollab {
+            return lower.contains("app") || lower.contains("product") || lower.contains("passion") ? .goalsDirection : .community
+        }
         let quickMap: [(String, NutrivanceAssociation)] = [
             ("friend", .friends), ("family", .family), ("work", .work),
             ("fitness", .fitness), ("exercise", .fitness), ("workout", .fitness),
@@ -845,7 +1189,7 @@ final class JournalCorrelationEngine: ObservableObject {
         if lower.contains("think") || lower.contains("loop") || lower.contains("mind") {
             return .thoughtLoops
         }
-        return .selfCare
+        return .learning
     }
 
     private func normalizeEmotionLabel(_ raw: String) -> String {
