@@ -11,7 +11,7 @@ struct NutrivanceSceneRoot: View {
     @Environment(\.scenePhase) private var scenePhase
 #if canImport(UIKit)
     @State private var windowScene: UIWindowScene?
-    @State private var cachedIsMultiWindow: Bool = false
+    @State private var windowScenePersistentIdentifier: String?
 #endif
 
     var body: some View {
@@ -22,46 +22,37 @@ struct NutrivanceSceneRoot: View {
             .background(NutrivanceSceneKeyWindowResolver(
                 navigationState: navigationState,
                 searchState: searchState,
-                onResolveScene: { windowScene = $0 }
+                onResolveScene: { resolvedScene in
+                    guard let resolvedScene else { return }
+                    windowScene = resolvedScene
+                    windowScenePersistentIdentifier = NutrivanceSceneMenuRouter.scenePersistentIdentifier(resolvedScene)
+                }
             ))
 #endif
             .onChange(of: scenePhase) { _, newPhase in
                 HealthStateEngine.shared.handleScenePhaseChange(newPhase)
                 StrainRecoveryAggressiveCachingController.shared.handleScenePhaseChange(newPhase)
                 WatchDashboardSyncBridge.shared.handleScenePhaseChange(newPhase)
+#if canImport(UIKit)
+                #if DEBUG
+                NutrivanceSceneMenuRouter.emitFocusDebug("[SceneRoot] scenePhase -> \(newPhase) sceneID=\(windowScenePersistentIdentifier ?? "nil") \(NutrivanceSceneMenuRouter.focusDebugDescription(for: windowScene))")
+                #endif
+                if newPhase == .active,
+                   windowScenePersistentIdentifier == NutrivanceSceneMenuRouter.targetScenePersistentIdentifierForMenuCommand() {
+                    NutrivanceMenuStateBinder.shared.activateScene(persistentIdentifier: windowScenePersistentIdentifier)
+                }
+#endif
             }
             .onReceive(NotificationCenter.default.publisher(for: .nutrivanceCatalystMainMenuCommand)) { output in
                 guard let command = output.userInfo?["command"] as? String else { return }
 #if canImport(UIKit)
-                let postedScene = output.object as? UIWindowScene
-                let myScene = windowScene
-                
-                // Determine if this command is for this window
-                if cachedIsMultiWindow != (UIApplication.shared.connectedScenes.count > 1) {
-                    cachedIsMultiWindow = UIApplication.shared.connectedScenes.count > 1
-                }
-                let isMultiWindow = cachedIsMultiWindow
-                
-                let isForThisWindow: Bool
-                if let myScene = myScene {
-                    if let postedScene = postedScene {
-                        isForThisWindow = myScene === postedScene
-                    } else if isMultiWindow {
-                        isForThisWindow = false
-                    } else {
-                        isForThisWindow = true
-                    }
-                } else {
-                    if let postedScene = postedScene {
-                        isForThisWindow = false
-                    } else {
-                        isForThisWindow = !isMultiWindow
-                    }
-                }
-                
-                guard isForThisWindow else { return }
-#else
-                return
+                // Use shared routing so ⌘ menu targets match `targetSceneForMenuCommand()` even when
+                // scene pointers differ (`scenesMatch`) or the notification has no object (key window).
+                guard NutrivanceSceneMenuRouter.shouldHandleSceneTargetedNotification(
+                    object: output.object,
+                    windowScene: windowScene,
+                    windowScenePersistentIdentifier: windowScenePersistentIdentifier
+                ) else { return }
 #endif
                 handleMainMenuCommand(command)
             }
@@ -129,6 +120,8 @@ private struct NutrivanceSceneKeyWindowResolver: UIViewControllerRepresentable {
     final class Coordinator: NSObject {
         weak var lastNotifiedScene: UIWindowScene?
         weak var lastKeyRoutingScene: UIWindowScene?
+        var lastKeyRoutingScenePersistentIdentifier: String?
+        var lastResolvedScenePersistentIdentifier: String?
         var didScheduleNilWindowRetry = false
         weak var observedViewController: UIViewController?
         var keyWindowObserver: NSObjectProtocol?
@@ -198,30 +191,47 @@ private struct NutrivanceSceneKeyWindowResolver: UIViewControllerRepresentable {
         coordinator.searchStateCapture = searchState
         coordinator.onResolveSceneCapture = onResolveScene
 
-        let scene = vc.view.window?.windowScene
+        let scene = resolvedScene(for: vc)
+        let scenePersistentIdentifier = NutrivanceSceneMenuRouter.scenePersistentIdentifier(scene)
+            ?? coordinator.lastResolvedScenePersistentIdentifier
         let windowIsKey = vc.view.window?.isKeyWindow == true
+
+        #if DEBUG
+        NutrivanceSceneMenuRouter.emitFocusDebug("[SceneRoot] resolveScene windowIsKey=\(windowIsKey) sceneID=\(scenePersistentIdentifier ?? "nil") resolved=\(NutrivanceSceneMenuRouter.focusDebugDescription(for: scene))")
+        #endif
+
+        if let scenePersistentIdentifier {
+            coordinator.lastResolvedScenePersistentIdentifier = scenePersistentIdentifier
+        }
+
+        NutrivanceMenuStateBinder.shared.registerScene(
+            persistentIdentifier: scenePersistentIdentifier,
+            scene: scene,
+            navigationState: navigationState,
+            searchState: searchState
+        )
 
         if coordinator.lastNotifiedScene === scene {
             applySizeRestrictionsIfNeeded(to: scene)
             routeMenusIfKey(
-                navigationState: navigationState,
-                searchState: searchState,
                 scene: scene,
+                scenePersistentIdentifier: scenePersistentIdentifier,
                 windowIsKey: windowIsKey,
                 coordinator: coordinator
             )
+            syncBinderIfFocused(scene: scene, scenePersistentIdentifier: scenePersistentIdentifier)
             return
         }
         coordinator.lastNotifiedScene = scene
         onResolveScene(scene)
         applySizeRestrictionsIfNeeded(to: scene)
         routeMenusIfKey(
-            navigationState: navigationState,
-            searchState: searchState,
             scene: scene,
+            scenePersistentIdentifier: scenePersistentIdentifier,
             windowIsKey: windowIsKey,
             coordinator: coordinator
         )
+        syncBinderIfFocused(scene: scene, scenePersistentIdentifier: scenePersistentIdentifier)
 
         if scene == nil, !coordinator.didScheduleNilWindowRetry {
             coordinator.didScheduleNilWindowRetry = true
@@ -239,25 +249,67 @@ private struct NutrivanceSceneKeyWindowResolver: UIViewControllerRepresentable {
         }
     }
 
-    private static func routeMenusIfKey(
-        navigationState: NavigationState,
-        searchState: SearchState,
+    private static func resolvedScene(for vc: UIViewController) -> UIWindowScene? {
+        if let scene = vc.view.window?.windowScene {
+            return scene
+        }
+
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.first { scene in
+            scene.windows.contains { window in
+                var current: UIView? = vc.view
+                while let view = current {
+                    if view === window {
+                        return true
+                    }
+                    current = view.superview
+                }
+                return false
+            }
+        }
+    }
+
+    private static func syncBinderIfFocused(
         scene: UIWindowScene?,
+        scenePersistentIdentifier: String?
+    ) {
+        guard let scenePersistentIdentifier,
+              let targetScenePersistentIdentifier = NutrivanceSceneMenuRouter.targetScenePersistentIdentifierForMenuCommand(),
+              scenePersistentIdentifier == targetScenePersistentIdentifier else { return }
+        #if DEBUG
+        let targetScene = NutrivanceSceneMenuRouter.connectedScene(matchingPersistentIdentifier: targetScenePersistentIdentifier)
+        NutrivanceSceneMenuRouter.emitFocusDebug("[SceneRoot] syncBinderIfFocused sceneID=\(scenePersistentIdentifier) scene=\(NutrivanceSceneMenuRouter.focusDebugDescription(for: scene)) target=\(NutrivanceSceneMenuRouter.focusDebugDescription(for: targetScene))")
+        #endif
+        NutrivanceMenuStateBinder.shared.activateScene(persistentIdentifier: scenePersistentIdentifier)
+    }
+
+    private static func routeMenusIfKey(
+        scene: UIWindowScene?,
+        scenePersistentIdentifier: String?,
         windowIsKey: Bool,
         coordinator: Coordinator
     ) {
-        guard let scene else { return }
+        guard let scenePersistentIdentifier else { return }
         if windowIsKey {
-            if coordinator.lastKeyRoutingScene !== scene {
+            if coordinator.lastKeyRoutingScenePersistentIdentifier != scenePersistentIdentifier
+                || coordinator.lastKeyRoutingScene !== scene {
                 coordinator.lastKeyRoutingScene = scene
-                NutrivanceSceneMenuRouter.registerFocusedScene(scene)
-                NutrivanceMenuStateBinder.shared.bindActiveScene(
-                    navigationState: navigationState,
-                    searchState: searchState
-                )
+                coordinator.lastKeyRoutingScenePersistentIdentifier = scenePersistentIdentifier
+                #if DEBUG
+                NutrivanceSceneMenuRouter.emitFocusDebug("[SceneRoot] routeMenusIfKey set sceneID=\(scenePersistentIdentifier) -> \(NutrivanceSceneMenuRouter.focusDebugDescription(for: scene))")
+                #endif
+                if let scene {
+                    NutrivanceSceneMenuRouter.registerFocusedScene(scene, reason: "resolverKeyWindow")
+                } else {
+                    NutrivanceSceneMenuRouter.registerFocusedScenePersistentIdentifier(scenePersistentIdentifier, reason: "resolverKeyWindowRetainedID")
+                }
             }
-        } else if coordinator.lastKeyRoutingScene === scene {
+        } else if coordinator.lastKeyRoutingScenePersistentIdentifier == scenePersistentIdentifier {
+            #if DEBUG
+            NutrivanceSceneMenuRouter.emitFocusDebug("[SceneRoot] routeMenusIfKey cleared sceneID=\(scenePersistentIdentifier) -> \(NutrivanceSceneMenuRouter.focusDebugDescription(for: scene))")
+            #endif
             coordinator.lastKeyRoutingScene = nil
+            coordinator.lastKeyRoutingScenePersistentIdentifier = nil
         }
     }
 

@@ -316,11 +316,25 @@ private struct OpenQuicklyDuplicateChoice {
 /// Last scene whose window became key (`NutrivanceSceneMenuRouter` updates this from `UIWindow.didBecomeKeyNotification`).
 final class BrowserFocusedSceneTracker {
     static let shared = BrowserFocusedSceneTracker()
-    private(set) weak var focusedScene: UIWindowScene?
+    private var focusedScenePersistentIdentifier: String?
     private init() {}
 
     func adoptKeyScene(_ scene: UIWindowScene?) {
-        focusedScene = scene
+        adoptKeyScenePersistentIdentifier(NutrivanceSceneMenuRouter.scenePersistentIdentifier(scene))
+    }
+
+    func adoptKeyScenePersistentIdentifier(_ persistentIdentifier: String?) {
+        guard let persistentIdentifier else { return }
+        focusedScenePersistentIdentifier = persistentIdentifier
+    }
+
+    func clearScenePersistentIdentifier(_ persistentIdentifier: String) {
+        guard focusedScenePersistentIdentifier == persistentIdentifier else { return }
+        focusedScenePersistentIdentifier = nil
+    }
+
+    var focusedScene: UIWindowScene? {
+        NutrivanceSceneMenuRouter.connectedScene(matchingPersistentIdentifier: focusedScenePersistentIdentifier)
     }
 }
 #endif
@@ -370,6 +384,7 @@ struct ContentView_iPad: View {
     @State private var openQuicklyFieldFocused = false
 #if canImport(UIKit)
     @State private var windowScene: UIWindowScene?
+    @State private var windowScenePersistentIdentifier: String?
 #endif
 
     private static let splitResizeHandleWidth: CGFloat = 10
@@ -771,7 +786,9 @@ struct ContentView_iPad: View {
 #if canImport(UIKit)
         view
             .background(WindowSceneResolver {
-                windowScene = $0
+                guard let resolvedScene = $0 else { return }
+                windowScene = resolvedScene
+                windowScenePersistentIdentifier = NutrivanceSceneMenuRouter.scenePersistentIdentifier(resolvedScene)
             })
             .background(BrowserKeyCommandCaptureView())
 #else
@@ -792,7 +809,11 @@ struct ContentView_iPad: View {
 
     private func shouldHandleBrowserNotification(_ object: Any?) -> Bool {
 #if canImport(UIKit)
-        return NutrivanceSceneMenuRouter.shouldHandleSceneTargetedNotification(object: object, windowScene: windowScene)
+        return NutrivanceSceneMenuRouter.shouldHandleSceneTargetedNotification(
+            object: object,
+            windowScene: windowScene,
+            windowScenePersistentIdentifier: windowScenePersistentIdentifier
+        )
 #else
         return false
 #endif
@@ -1906,6 +1927,7 @@ struct ContentView_iPad: View {
     private func closeWindow() {
         #if canImport(UIKit)
         let targetScene = windowScene
+            ?? NutrivanceSceneMenuRouter.connectedScene(matchingPersistentIdentifier: windowScenePersistentIdentifier)
             ?? NutrivanceSceneMenuRouter.targetSceneForMenuCommand()
             ?? BrowserFocusedSceneTracker.shared.focusedScene
 
@@ -2459,14 +2481,61 @@ private struct BrowserAllTabsGridView: View {
 private struct WindowSceneResolver: UIViewControllerRepresentable {
     var onResolve: (UIWindowScene?) -> Void
 
+    final class Coordinator: NSObject {
+        weak var lastNotifiedScene: UIWindowScene?
+        var didScheduleNilWindowRetry = false
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIViewController(context: Context) -> UIViewController {
         UIViewController()
     }
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        let scene = uiViewController.view.window?.windowScene
-        if scene != nil {
-            onResolve(scene)
+        resolve(from: uiViewController, coordinator: context.coordinator)
+    }
+
+    private func resolve(from vc: UIViewController, coordinator: Coordinator) {
+        if let scene = vc.view.window?.windowScene {
+            if coordinator.lastNotifiedScene !== scene {
+                coordinator.lastNotifiedScene = scene
+                onResolve(scene)
+            }
+            coordinator.didScheduleNilWindowRetry = false
+            return
+        }
+
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let owningScene = scenes.first(where: { scene in
+            scene.windows.contains { window in
+                var current: UIView? = vc.view
+                while let view = current {
+                    if view === window {
+                        return true
+                    }
+                    current = view.superview
+                }
+                return false
+            }
+        }) {
+            if coordinator.lastNotifiedScene !== owningScene {
+                coordinator.lastNotifiedScene = owningScene
+                onResolve(owningScene)
+            }
+            coordinator.didScheduleNilWindowRetry = false
+            return
+        }
+
+        if !coordinator.didScheduleNilWindowRetry {
+            coordinator.didScheduleNilWindowRetry = true
+            DispatchQueue.main.async { [weak vc] in
+                coordinator.didScheduleNilWindowRetry = false
+                guard let vc else { return }
+                resolve(from: vc, coordinator: coordinator)
+            }
         }
     }
 }

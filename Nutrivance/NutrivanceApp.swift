@@ -1214,24 +1214,25 @@ extension Notification.Name {
 #if canImport(UIKit)
 /// Routes SwiftUI `CommandMenu` browser actions to the same window as the Catalyst menu (`NutrivanceSceneMenuRouter`).
 private func nutrivancePostIPadBrowserCommand(_ name: Notification.Name) {
-    let scene = NutrivanceSceneMenuRouter.targetSceneForMenuCommand()
+    let scenePersistentIdentifier = NutrivanceSceneMenuRouter.targetScenePersistentIdentifierForMenuCommand()
         ?? UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive }
-    NotificationCenter.default.post(name: name, object: scene)
+            .flatMap(NutrivanceSceneMenuRouter.scenePersistentIdentifier)
+    NotificationCenter.default.post(name: name, object: scenePersistentIdentifier)
 }
 
 /// SwiftUI `CommandMenu("View Controls")` — same routing as Catalyst `vcKey` / scene-targeted posts.
 fileprivate func nutrivancePostViewControlForKeyWindow(_ name: Notification.Name) {
-    let scene = NutrivanceSceneMenuRouter.targetSceneForMenuCommand()
-    NotificationCenter.default.post(name: name, object: scene)
+    let scenePersistentIdentifier = NutrivanceSceneMenuRouter.targetScenePersistentIdentifierForMenuCommand()
+    NotificationCenter.default.post(name: name, object: scenePersistentIdentifier)
 }
 
 fileprivate func nutrivancePostHeartZonesSportSlotForKeyWindow(_ slot: Int) {
-    let scene = NutrivanceSceneMenuRouter.targetSceneForMenuCommand()
+    let scenePersistentIdentifier = NutrivanceSceneMenuRouter.targetScenePersistentIdentifierForMenuCommand()
     NotificationCenter.default.post(
         name: .nutrivanceViewControlHeartZonesSportSlot,
-        object: scene,
+        object: scenePersistentIdentifier,
         userInfo: ["slot": slot]
     )
 }
@@ -2513,106 +2514,106 @@ struct NutrivanceApp: App {
                 }
             }
             #endif
-            #if targetEnvironment(macCatalyst)
-            #if canImport(UIKit)
-            CommandGroup(replacing: .saveItem) {
-                Button("New Tab") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserNewTab)
-                    #endif
-                }
-                .keyboardShortcut("T", modifiers: [.command])
-
-                Button("Close Tab") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserCloseTab)
-                    #endif
-                }
-                .keyboardShortcut("W", modifiers: [.command])
-
-                Button("Close Other Tabs") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserCloseOtherTabs)
-                    #endif
-                }
-                .keyboardShortcut("W", modifiers: [.command, .option])
-
-                Button("Close Window") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserCloseWindow)
-                    #endif
-                }
-                .keyboardShortcut("W", modifiers: [.command, .shift])
-
-                Divider()
-
-                Button("Split Assign Left") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserSplitAssignLeft)
-                    #endif
-                }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
-
-                Button("Split Assign Right") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserSplitAssignRight)
-                    #endif
-                }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
-
-                Button("Swap with Last Interacted Tab") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserSwapWithLastInteracted)
-                    #endif
-                }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .control, .shift])
-
-                Divider()
-
-                Button("Show All Tabs") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserShowAllTabs)
-                    #endif
-                }
-                .keyboardShortcut("\\", modifiers: [.command, .shift])
-
-                Button("Open Quickly") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserOpenQuickly)
-                    #endif
-                }
-                .keyboardShortcut("O", modifiers: [.command, .shift])
-
-                Button("Full Screen Page") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserToggleFullscreen)
-                    #endif
-                }
-                .keyboardShortcut("F", modifiers: [.command, .shift])
-
-                Button("Focus Address Bar") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserFocusAddressBar)
-                    #endif
-                }
-                .keyboardShortcut("L", modifiers: [.command])
-
-                Button("Previous Tab") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserPreviousTab)
-                    #endif
-                }
-                .keyboardShortcut("[", modifiers: [.command, .shift])
-
-                Button("Next Tab") {
-                    #if canImport(UIKit)
-                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserNextTab)
-                    #endif
-                }
-                .keyboardShortcut("]", modifiers: [.command, .shift])
-            }
-            #endif
-            #endif
+//            #if targetEnvironment(macCatalyst)
+//            #if canImport(UIKit)
+//            CommandGroup(replacing: .saveItem) {
+//                Button("New Tab") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserNewTab)
+//                    #endif
+//                }
+//                .keyboardShortcut("T", modifiers: [.command])
+//
+//                Button("Close Tab") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserCloseTab)
+//                    #endif
+//                }
+//                .keyboardShortcut("W", modifiers: [.command])
+//
+//                Button("Close Other Tabs") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserCloseOtherTabs)
+//                    #endif
+//                }
+//                .keyboardShortcut("W", modifiers: [.command, .option])
+//
+//                Button("Close Window") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserCloseWindow)
+//                    #endif
+//                }
+//                .keyboardShortcut("W", modifiers: [.command, .shift])
+//
+//                Divider()
+//
+//                Button("Split Assign Left") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserSplitAssignLeft)
+//                    #endif
+//                }
+//                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+//
+//                Button("Split Assign Right") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserSplitAssignRight)
+//                    #endif
+//                }
+//                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+//
+//                Button("Swap with Last Interacted Tab") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserSwapWithLastInteracted)
+//                    #endif
+//                }
+//                .keyboardShortcut(.leftArrow, modifiers: [.command, .control, .shift])
+//
+//                Divider()
+//
+//                Button("Show All Tabs") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserShowAllTabs)
+//                    #endif
+//                }
+//                .keyboardShortcut("\\", modifiers: [.command, .shift])
+//
+//                Button("Open Quickly") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserOpenQuickly)
+//                    #endif
+//                }
+//                .keyboardShortcut("O", modifiers: [.command, .shift])
+//
+//                Button("Full Screen Page") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserToggleFullscreen)
+//                    #endif
+//                }
+//                .keyboardShortcut("F", modifiers: [.command, .shift])
+//
+//                Button("Focus Address Bar") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserFocusAddressBar)
+//                    #endif
+//                }
+//                .keyboardShortcut("L", modifiers: [.command])
+//
+//                Button("Previous Tab") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserPreviousTab)
+//                    #endif
+//                }
+//                .keyboardShortcut("[", modifiers: [.command, .shift])
+//
+//                Button("Next Tab") {
+//                    #if canImport(UIKit)
+//                    nutrivancePostIPadBrowserCommand(.nutrivanceBrowserNextTab)
+//                    #endif
+//                }
+//                .keyboardShortcut("]", modifiers: [.command, .shift])
+//            }
+//            #endif
+//            #endif
         }
     }
 }

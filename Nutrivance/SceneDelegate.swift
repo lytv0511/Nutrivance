@@ -23,9 +23,22 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidActivate(_ scene: UIScene) {
+        if let windowScene = scene as? UIWindowScene {
+            NutrivanceSceneMenuRouter.noteSceneDidActivate(windowScene)
+            NutrivanceMenuStateBinder.shared.activateScene(
+                persistentIdentifier: NutrivanceSceneMenuRouter.scenePersistentIdentifier(windowScene)
+            )
+        }
         #if targetEnvironment(macCatalyst)
-        // Focus + menu routing follow the key window from `NutrivanceSceneKeyWindowResolver` / `targetSceneForMenuCommand()`.
+        // Focus + menu routing are still refined by key-window notifications, but scene activation is the best
+        // scene-level signal we get from UIKit when the user switches windows.
         UIMenuSystem.main.setNeedsRevalidate()
+        UIMenuSystem.main.setNeedsRebuild()
         #endif
+    }
+
+    func sceneDidDisconnect(_ scene: UIScene) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+        NutrivanceSceneMenuRouter.noteSceneDidDisconnect(windowScene)
     }
 }

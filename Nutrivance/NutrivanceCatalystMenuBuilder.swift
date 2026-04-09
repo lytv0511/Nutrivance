@@ -31,10 +31,10 @@ extension UIApplication {
     func nutrivanceCatalystPostNotificationForActiveScene(_ sender: Any?) {
         guard let command = sender as? UICommand,
               let raw = command.propertyList as? String else { return }
-        let targetScene = NutrivanceSceneMenuRouter.targetSceneForMenuCommand()
+        let targetScenePersistentIdentifier = NutrivanceSceneMenuRouter.targetScenePersistentIdentifierForMenuCommand()
         NotificationCenter.default.post(
             name: Notification.Name(rawValue: raw),
-            object: targetScene
+            object: targetScenePersistentIdentifier
         )
     }
 
@@ -42,10 +42,10 @@ extension UIApplication {
     func nutrivanceCatalystHeartZonesSportSlot(_ sender: Any?) {
         guard let command = sender as? UICommand,
               let number = command.propertyList as? NSNumber else { return }
-        let targetScene = NutrivanceSceneMenuRouter.targetSceneForMenuCommand()
+        let targetScenePersistentIdentifier = NutrivanceSceneMenuRouter.targetScenePersistentIdentifierForMenuCommand()
         NotificationCenter.default.post(
             name: .nutrivanceViewControlHeartZonesSportSlot,
-            object: targetScene,
+            object: targetScenePersistentIdentifier,
             userInfo: ["slot": number.intValue]
         )
     }
@@ -89,7 +89,8 @@ enum NutrivanceCatalystMenuBuilder {
             identifier: UIMenu.Identifier("com.nutrivance.menu.navigation"),
             options: [],
             children: [
-                navKey("Back", input: "[", cmdShift, plist: "back"),
+                // Matches `NutrivanceApp` / system back: ⌘[ (not ⌘⇧[).
+                navKey("Back", input: "[", cmd, plist: "back"),
                 navKey("Program Builder", input: "b", cmdShift, plist: "programBuilder"),
                 navKey("Dashboard", input: "d", cmdShift, plist: "dashboard"),
                 navKey("Mindfulness Realm", input: "r", cmdShift, plist: "mindfulnessRealm"),
@@ -98,8 +99,8 @@ enum NutrivanceCatalystMenuBuilder {
                 navKey("Workout History", input: "h", cmdShift, plist: "workoutHistory"),
                 navKey("Recovery Score", input: "y", cmdShift, plist: "recoveryScore"),
                 navKey("Readiness Score", input: "i", cmdShift, plist: "readiness"),
-                navKey("Strain vs Recovery", input: "s", cmdShift, plist: "strainRecovery"),
-                navKey("Past Quests", input: "q", cmdShift, plist: "pastQuests"),
+                navKey("Strain vs Recovery", input: "v", cmdShift, plist: "strainRecovery"),
+                navKey("Past Quests", input: "u", cmdShift, plist: "pastQuests"),
                 navKey("Heart Zones", input: "z", cmdShift, plist: "heartZones"),
                 navKey("Pathfinder", input: "k", cmdShift, plist: "pathfinder"),
                 navKey("Journal", input: "j", cmdShift, plist: "journal"),

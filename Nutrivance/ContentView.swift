@@ -95,7 +95,7 @@ struct ContentView: View {
                 #if targetEnvironment(macCatalyst)
                 // Must not rely on `UIDevice.current.userInterfaceIdiom == .mac` alone: some Catalyst / OS
                 // combinations stopped reporting `.mac`, which left **no** branch selected (blank window).
-                ContentView_iPad()
+                ContentView_iPad_alt()
                 #else
                 switch UIDevice.current.userInterfaceIdiom {
                 case .pad:
@@ -103,7 +103,7 @@ struct ContentView: View {
                 case .phone:
                     ContentView_iPhone_alt()
                 case .mac:
-                    ContentView_iPad()
+                    ContentView_iPad_alt()
                 default:
                     ContentView_iPad_alt()
                 }
