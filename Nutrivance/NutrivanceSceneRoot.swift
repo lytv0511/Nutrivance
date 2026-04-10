@@ -99,6 +99,8 @@ struct NutrivanceSceneRoot: View {
             navigationState.navigate(focus: .fitness, view: "Past Quests", tab: .pastQuests)
         case "heartZones":
             navigationState.navigate(focus: .fitness, view: "Heart Zones", tab: .heartZones)
+        case "nutrivanceLabs":
+            navigationState.navigate(focus: .fitness, view: "Nutrivance Labs", tab: .nutrivanceLabs)
         case "pathfinder":
             navigationState.navigate(focus: .mentalHealth, view: "Pathfinder", tab: .pathfinder)
         case "journal":

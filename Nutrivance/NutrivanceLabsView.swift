@@ -35,7 +35,7 @@ struct NutrivanceLabsView: View {
             }
             .padding()
         }
-        .background(Color.black.opacity(0.02))
+        .background(GradientBackgrounds().programBuilderMeshBackground())
         .navigationTitle("Nutrivance Labs")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -70,6 +70,9 @@ struct NutrivanceLabsView: View {
                 },
                 onCancel: { showAddSheet = false }
             )
+        }
+        .onReceiveViewControl(.nutrivanceViewControlNutrivanceLabsNewEntry) {
+            showAddSheet = true
         }
     }
 

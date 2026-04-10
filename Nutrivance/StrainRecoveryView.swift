@@ -2126,7 +2126,15 @@ private func aggressiveCachingLiveStatusText(
     source: SummarySourceKind
 ) -> String {
     let deviceName = StrainRecoverySummaryDevice.current.name
-    let sourceText = source == .appleIntelligence ? "Apple Intelligence" : "local metric rules"
+    let sourceText: String
+    switch source {
+    case .appleIntelligence:
+        sourceText = "Apple Intelligence"
+    case .mlx:
+        sourceText = "On-Device (MLX)"
+    case .localFallback:
+        sourceText = "local metric rules"
+    }
     switch generationMode {
     case .live:
         return "Generated live on \(deviceName) using \(sourceText). Saved to cache and iCloud."
@@ -2148,16 +2156,21 @@ private func summaryRequestID(
     timeFilter: StrainRecoveryView.TimeFilter,
     scopedSport: String?,
     anchorDate: Date,
-    suggestionID: String
+    suggestionID: String,
+    backend: SummaryBackend = .appleIntelligence
 ) -> String {
     let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
-    return [
+    var components = [
         strainRecoverySummaryRequestVersion,
         timeFilter.rawValue,
         scopedSport ?? "all",
         String(period.canonicalAnchorDate.timeIntervalSince1970),
         suggestionID
-    ].joined(separator: "|")
+    ]
+    if backend != .appleIntelligence {
+        components.append(backend.rawValue)
+    }
+    return components.joined(separator: "|")
 }
 
 private func siblingTimeFilterContexts(
@@ -2356,6 +2369,28 @@ private struct StrainRecoverySummarySettingsView: View {
                     LabeledContent("Role") {
                         Text(isCurrentDevicePrimary ? "Primary" : "Secondary")
                             .foregroundColor(isCurrentDevicePrimary ? .orange : .secondary)
+                    }
+                }
+
+                Section("Summary Engine") {
+                    Picker("Summary Engine", selection: Binding(
+                        get: { settings.selectedSummaryBackend },
+                        set: { newValue in
+                            settings.selectedSummaryBackend = newValue
+                            StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                        }
+                    )) {
+                        ForEach(SummaryBackend.allCases) { backend in
+                            Text(backend.displayName)
+                                .tag(backend)
+                                .disabled(backend == .mlx && !isMLXSummaryBackendAvailable())
+                        }
+                    }
+
+                    if !isMLXSummaryBackendAvailable() {
+                        Text("MLX summaries are unavailable on Simulator. Apple Intelligence remains available when supported.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -2571,6 +2606,10 @@ private struct StrainRecoverySummarySettingsView: View {
             }
             .onAppear {
                 settings = StrainRecoverySummaryPersistence.loadSyncSettings()
+                if !isMLXSummaryBackendAvailable(), settings.selectedSummaryBackend == .mlx {
+                    settings.selectedSummaryBackend = .appleIntelligence
+                    StrainRecoverySummaryPersistence.saveSyncSettings(settings)
+                }
                 if settings.intensiveFetchingEnabled {
                     settings.intensiveFetchingEnabled = false
                     StrainRecoverySummaryPersistence.saveSyncSettings(settings)
@@ -2696,9 +2735,54 @@ struct MetricSectionGroup<Content: View>: View {
     }
 }
 
+private enum SummaryBackend: String, Codable, CaseIterable, Identifiable {
+    case appleIntelligence
+    case mlx
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .appleIntelligence:
+            return "Apple Intelligence"
+        case .mlx:
+            return "On-Device (MLX)"
+        }
+    }
+
+    var sourceKind: SummarySourceKind {
+        switch self {
+        case .appleIntelligence:
+            return .appleIntelligence
+        case .mlx:
+            return .mlx
+        }
+    }
+}
+
 private enum SummarySourceKind: String, Codable {
     case appleIntelligence
+    case mlx
     case localFallback
+
+    var backend: SummaryBackend? {
+        switch self {
+        case .appleIntelligence:
+            return .appleIntelligence
+        case .mlx:
+            return .mlx
+        case .localFallback:
+            return nil
+        }
+    }
+}
+
+private func isMLXSummaryBackendAvailable() -> Bool {
+    #if targetEnvironment(simulator)
+    return false
+    #else
+    return true
+    #endif
 }
 
 private func deviceSupportsAppleIntelligence() -> Bool {
@@ -2794,6 +2878,22 @@ private struct StrainRecoveryAISummarySection: View {
             ?? suggestions.first
     }
 
+    private var selectedBackend: SummaryBackend {
+        let preferred = syncSettingsSnapshot.selectedSummaryBackend
+        if preferred == .mlx, !isMLXSummaryBackendAvailable() {
+            return .appleIntelligence
+        }
+        return preferred
+    }
+
+    private var selectedAISource: SummarySourceKind {
+        selectedBackend.sourceKind
+    }
+
+    private var selectedBackendDisplayName: String {
+        selectedBackend.displayName
+    }
+
     private var trainingFocusReport: TrainingFocusReportPayload? {
         guard let selectedSuggestion, selectedSuggestion.id.contains("sport-") else { return nil }
         let reportPeriod = summaryReportPeriod(for: timeFilter, requestedDate: Calendar.current.startOfDay(for: anchorDate))
@@ -2883,7 +2983,8 @@ private struct StrainRecoveryAISummarySection: View {
             timeFilter: timeFilter,
             scopedSport: selectedSuggestion?.scopedSport ?? sportFilter,
             anchorDate: anchorDate,
-            suggestionID: selectedSuggestion?.id ?? SummarySuggestion.defaultSuggestion.id
+            suggestionID: selectedSuggestion?.id ?? SummarySuggestion.defaultSuggestion.id,
+            backend: selectedBackend
         )
     }
 
@@ -2902,9 +3003,10 @@ private struct StrainRecoveryAISummarySection: View {
                 timeFilter: timeFilter,
                 scopedSport: suggestion.scopedSport ?? sportFilter,
                 anchorDate: anchorDate,
-                suggestionID: suggestion.id
+                suggestionID: suggestion.id,
+                backend: selectedBackend
             )
-            let hasAISummary = cacheSnapshot[suggestionRequestID]?.source == .appleIntelligence
+            let hasAISummary = cacheSnapshot[suggestionRequestID]?.source == selectedAISource
             states[suggestion.id] = (hasAISummary, priorityIDs.contains(suggestion.id))
         }
 
@@ -2928,18 +3030,19 @@ private struct StrainRecoveryAISummarySection: View {
                 anchorDate: anchorDate,
                 intentText: suggestion.queryText,
                 selectedSuggestion: suggestion,
-                refreshVersion: refreshVersions[suggestion.id, default: 0]
+                refreshVersion: refreshVersions[suggestion.id, default: 0],
+                backend: selectedBackend
             )
 
             if let cachedEntry = cacheSnapshot[request.requestID],
-               cachedEntry.source == .appleIntelligence {
+               cachedEntry.source == selectedAISource {
                 persistedEntry = cachedEntry
                 summaryText = cachedEntry.summaryText
                 statusText = cachedEntry.cacheStatusText(currentDeviceID: StrainRecoverySummaryDevice.current.id)
                 displayedRequestID = cachedEntry.requestID
                 requestedRequestID = cachedEntry.requestID
             } else {
-                statusText = "Generating \(suggestion.title) with Apple Intelligence for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
+                statusText = "Generating \(suggestion.title) with \(selectedBackendDisplayName) for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
                 await generateSummary(
                     for: request,
                     requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
@@ -3080,7 +3183,7 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var shouldRequireAppleIntelligenceByDefault: Bool {
-        deviceSupportsAppleIntelligence()
+        selectedBackend == .appleIntelligence && deviceSupportsAppleIntelligence()
     }
 
     private var suggestionsContextID: String {
@@ -3129,7 +3232,7 @@ private struct StrainRecoveryAISummarySection: View {
         persistedEntry = nil
         summaryText = ""
         isLoading = false
-        statusText = "Preparing the next AI coach summary for this date and filter."
+        statusText = "Preparing the next \(selectedBackendDisplayName) coach summary for this date and filter."
     }
 
     @MainActor
@@ -3154,9 +3257,10 @@ private struct StrainRecoveryAISummarySection: View {
                 anchorDate: anchorDate,
                 intentText: intentText.isEmpty ? selectedSuggestion.queryText : intentText,
                 selectedSuggestion: selectedSuggestion,
-                refreshVersion: refreshVersions[selectedSuggestion.id, default: 0]
+                refreshVersion: refreshVersions[selectedSuggestion.id, default: 0],
+                backend: selectedBackend
             )
-            statusText = "Generating \(selectedSuggestion.title) with Apple Intelligence for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
+            statusText = "Generating \(selectedSuggestion.title) with \(selectedBackendDisplayName) for \(anchorDate.formatted(date: .abbreviated, time: .omitted)) in the \(timeFilter.rawValue) view."
             await generateSummary(
                 for: request,
                 requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
@@ -3202,7 +3306,7 @@ private struct StrainRecoveryAISummarySection: View {
         guard let entry = cacheSnapshot[requestID] else {
             return false
         }
-        guard !shouldRequireAppleIntelligenceByDefault || entry.source == .appleIntelligence else {
+        guard entry.source == selectedAISource || entry.source == .localFallback else {
             return false
         }
 
@@ -3230,14 +3334,15 @@ private struct StrainRecoveryAISummarySection: View {
                 anchorDate: anchorDate,
                 intentText: intentText,
                 selectedSuggestion: selectedSuggestion,
-                refreshVersion: refreshVersions[key, default: 0]
+                refreshVersion: refreshVersions[key, default: 0],
+                backend: selectedBackend
             )
             clearPersistedSummary(for: request)
             await generateSummary(
                 for: request,
                 forceRefresh: true,
-                requireAppleIntelligence: true,
-                allowLocalRefreshFallback: false
+                requireAppleIntelligence: selectedBackend == .appleIntelligence,
+                allowLocalRefreshFallback: selectedBackend != .appleIntelligence
             )
         }
     }
@@ -3624,7 +3729,8 @@ private struct StrainRecoveryAISummarySection: View {
                         anchorDate: anchorDate,
                         intentText: intentText.isEmpty ? selectedSuggestion.queryText : intentText,
                         selectedSuggestion: selectedSuggestion,
-                        refreshVersion: refreshVersions[selectedSuggestion.id, default: 0]
+                        refreshVersion: refreshVersions[selectedSuggestion.id, default: 0],
+                        backend: selectedBackend
                     )
                     await generateSummary(
                         for: request,
@@ -3674,6 +3780,14 @@ private struct StrainRecoveryAISummarySection: View {
             refreshLocalSnapshots(forceReload: true)
             scheduleAutoSummaryLoad()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .strainRecoverySummarySettingsDidChange)) { _ in
+            refreshLocalSnapshots(forceReload: true)
+            refreshSuggestionsSnapshot()
+            if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
+                resetSummaryForNavigation()
+                scheduleAutoSummaryLoad()
+            }
+        }
         .onChange(of: aggressiveCachingController.pendingAction) { _, action in
             guard let action else { return }
             switch action {
@@ -3711,10 +3825,10 @@ private struct StrainRecoveryAISummarySection: View {
             }
             return
         }
-        guard !shouldRequireAppleIntelligenceByDefault || entry.source == .appleIntelligence else {
+        guard entry.source == selectedAISource || entry.source == .localFallback else {
             persistedEntry = nil
             summaryText = ""
-            statusText = "Preparing Apple Intelligence summary..."
+            statusText = "Preparing \(selectedBackendDisplayName) summary..."
             return
         }
         persistedEntry = entry
@@ -3739,12 +3853,12 @@ private struct StrainRecoveryAISummarySection: View {
         displayedRequestID = entry.requestID
         requestedRequestID = entry.requestID
 
-        if entry.source == .appleIntelligence {
-            statusText = "Apple Intelligence refresh used the synced AI summary from \(entry.createdByDeviceName)."
+        if entry.source == selectedAISource {
+            statusText = "\(selectedBackendDisplayName) refresh used the synced AI summary from \(entry.createdByDeviceName)."
         } else {
             statusText = fallbackStatus
         }
-        return entry.source == .appleIntelligence
+        return entry.source == selectedAISource
     }
 
     @MainActor
@@ -3793,7 +3907,7 @@ private struct StrainRecoveryAISummarySection: View {
         }
         if displayedRequestID == request.requestID {
             summaryText = ""
-            statusText = "Refreshing with Apple Intelligence..."
+            statusText = "Refreshing with \(selectedBackendDisplayName)..."
             displayedRequestID = nil
         }
     }
@@ -3834,7 +3948,8 @@ private struct StrainRecoveryAISummarySection: View {
             anchorDate: entry.anchorDate,
             intentText: suggestion.queryText,
             selectedSuggestion: suggestion,
-            refreshVersion: 0
+            refreshVersion: 0,
+            backend: entry.source.backend ?? .appleIntelligence
         )
     }
 
@@ -3849,6 +3964,8 @@ private struct StrainRecoveryAISummarySection: View {
     ) async {
         let requireAppleIntelligence = requireAppleIntelligence || shouldRequireAppleIntelligenceByDefault
         let allowLocalRefreshFallback = shouldRequireAppleIntelligenceByDefault ? false : allowLocalRefreshFallback
+        let backend = selectedBackend
+        let backendSource = backend.sourceKind
         if updateDisplayed {
             cancelBackgroundGeneration()
             requestedRequestID = request.requestID
@@ -3894,86 +4011,33 @@ private struct StrainRecoveryAISummarySection: View {
             activeRequestKey = nil
         }
 
-        #if canImport(FoundationModels)
-        if #available(iOS 26.0, *) {
-            let model = SystemLanguageModel(useCase: .general)
-            let worstCaseRetry = coachRetryInstruction(
-                forAttempt: 1,
-                refreshVersion: request.refreshVersion,
-                previousSummary: forceRefresh ? persistedEntry?.summaryText ?? summaryText : nil
-            )
-            let rawPrompt = promptWithSiblingTimeFilterContext(
-                for: request,
-                cache: StrainRecoverySummaryPersistence.load()
-            )
-            print("[CoachAI][summary] requestID=\(request.requestID) filter=\(request.timeFilter.rawValue) suggestion=\(request.selectedSuggestionTitle) rawPromptChars=\(rawPrompt.count) rawPromptEmpty=\(rawPrompt.isEmpty)")
-            let generationPrompt = enforceCoachPromptBudget(
-                rawPrompt,
-                timeFilter: request.timeFilter,
-                instructions: strainRecoverySessionInstructions,
-                retryText: worstCaseRetry
-            )
-            print("[CoachAI][summary] generationPromptChars=\(generationPrompt.count) generationPromptEmpty=\(generationPrompt.isEmpty)")
+        let worstCaseRetry = coachRetryInstruction(
+            forAttempt: 1,
+            refreshVersion: request.refreshVersion,
+            previousSummary: forceRefresh ? persistedEntry?.summaryText ?? summaryText : nil
+        )
+        let rawPrompt = promptWithSiblingTimeFilterContext(
+            for: request,
+            cache: StrainRecoverySummaryPersistence.load()
+        )
+        print("[CoachAI][summary] requestID=\(request.requestID) filter=\(request.timeFilter.rawValue) suggestion=\(request.selectedSuggestionTitle) backend=\(backend.rawValue) rawPromptChars=\(rawPrompt.count) rawPromptEmpty=\(rawPrompt.isEmpty)")
+        let generationPrompt = enforceCoachPromptBudget(
+            rawPrompt,
+            timeFilter: request.timeFilter,
+            instructions: strainRecoverySessionInstructions,
+            retryText: worstCaseRetry
+        )
+        print("[CoachAI][summary] generationPromptChars=\(generationPrompt.count) generationPromptEmpty=\(generationPrompt.isEmpty)")
 
-            guard model.isAvailable else {
-                if requireAppleIntelligence {
-                    guard updateDisplayed else { return }
-                    if updateDisplayed {
-                        let fallbackMessage = "Apple Intelligence is unavailable on this device, and no synced AI summary is available yet."
-                        let restoredAI = restorePreferredCachedSummary(
-                            for: request,
-                            fallbackStatus: fallbackMessage
-                        )
-                        if restoredAI || !allowLocalRefreshFallback {
-                            if !restoredAI {
-                                markUnresolvedAppleIntelligenceState(
-                                    appleIntelligenceFailureMessage(
-                                        base: fallbackMessage,
-                                        error: nil,
-                                        prompt: generationPrompt
-                                    ),
-                                    for: request
-                                )
-                            }
-                            return
-                        }
-                    }
-                }
-                let resolvedSummary = request.fallbackSummary
-                let resolvedStatus = request.unavailableStatusText(for: model.availability)
-                if updateDisplayed {
-                    summaryText = resolvedSummary
-                    statusText = liveStatusText(for: generationMode, source: .localFallback)
-                }
-                savePersistedSummary(
-                    buildCacheEntry(
-                        for: request,
-                        summaryText: resolvedSummary,
-                        statusText: resolvedStatus,
-                        source: .localFallback,
-                        generationMode: generationMode,
-                        isRefreshOverride: forceRefresh
-                    ),
-                    updateDisplayed: updateDisplayed
-                )
-                return
-            }
-
-            do {
-                let cleaned = try await generateValidatedModelSummary(
-                    model: model,
-                    prompt: generationPrompt,
-                    refreshVersion: request.refreshVersion,
-                    previousSummary: forceRefresh ? persistedEntry?.summaryText ?? summaryText : nil
-                )
-
-                let resolvedSummary: String
-                let resolvedStatus: String
-                if cleaned.isEmpty {
+        if backend == .appleIntelligence {
+            #if canImport(FoundationModels)
+            if #available(iOS 26.0, *) {
+                let model = SystemLanguageModel(useCase: .general)
+                guard model.isAvailable else {
                     if requireAppleIntelligence {
                         guard updateDisplayed else { return }
                         if updateDisplayed {
-                            let fallbackMessage = "Apple Intelligence did not return a usable summary, and no synced AI summary is available yet."
+                            let fallbackMessage = "Apple Intelligence is unavailable on this device, and no synced AI summary is available yet."
                             let restoredAI = restorePreferredCachedSummary(
                                 for: request,
                                 fallbackStatus: fallbackMessage
@@ -3993,12 +4057,155 @@ private struct StrainRecoveryAISummarySection: View {
                             }
                         }
                     }
+                    let resolvedSummary = request.fallbackSummary
+                    let resolvedStatus = request.unavailableStatusText(for: model.availability)
+                    if updateDisplayed {
+                        summaryText = resolvedSummary
+                        statusText = liveStatusText(for: generationMode, source: .localFallback)
+                    }
+                    savePersistedSummary(
+                        buildCacheEntry(
+                            for: request,
+                            summaryText: resolvedSummary,
+                            statusText: resolvedStatus,
+                            source: .localFallback,
+                            generationMode: generationMode,
+                            isRefreshOverride: forceRefresh
+                        ),
+                        updateDisplayed: updateDisplayed
+                    )
+                    return
+                }
+
+                do {
+                    let cleaned = try await generateValidatedModelSummary(
+                        model: model,
+                        prompt: generationPrompt,
+                        refreshVersion: request.refreshVersion,
+                        previousSummary: forceRefresh ? persistedEntry?.summaryText ?? summaryText : nil
+                    )
+
+                    let resolvedSummary: String
+                    let resolvedStatus: String
+                    if cleaned.isEmpty {
+                        if requireAppleIntelligence {
+                            guard updateDisplayed else { return }
+                            if updateDisplayed {
+                                let fallbackMessage = "Apple Intelligence did not return a usable summary, and no synced AI summary is available yet."
+                                let restoredAI = restorePreferredCachedSummary(
+                                    for: request,
+                                    fallbackStatus: fallbackMessage
+                                )
+                                if restoredAI || !allowLocalRefreshFallback {
+                                    if !restoredAI {
+                                        markUnresolvedAppleIntelligenceState(
+                                            appleIntelligenceFailureMessage(
+                                                base: fallbackMessage,
+                                                error: nil,
+                                                prompt: generationPrompt
+                                            ),
+                                            for: request
+                                        )
+                                    }
+                                    return
+                                }
+                            }
+                        }
+                        resolvedSummary = request.fallbackSummary
+                        resolvedStatus = "Model returned an unusable response, so this summary is using local metric rules."
+                    } else {
+                        resolvedSummary = cleaned
+                        resolvedStatus = liveStatusText(for: generationMode, source: backendSource)
+                    }
+                    if updateDisplayed {
+                        summaryText = resolvedSummary
+                        statusText = resolvedStatus
+                    }
+                    savePersistedSummary(
+                        buildCacheEntry(
+                            for: request,
+                            summaryText: resolvedSummary,
+                            statusText: resolvedStatus,
+                            source: cleaned.isEmpty ? .localFallback : backendSource,
+                            generationMode: forceRefresh ? .refresh : generationMode,
+                            isRefreshOverride: forceRefresh
+                        ),
+                        updateDisplayed: updateDisplayed
+                    )
+                    return
+                } catch {
+                    print("[CoachAI] Apple Intelligence generation failed",
+                          "requestID=\(request.requestID)",
+                          "filter=\(request.timeFilter.rawValue)",
+                          "suggestion=\(request.selectedSuggestionTitle)",
+                          "promptChars=\(generationPrompt.count)",
+                          "error=\(String(describing: error))")
+                    if requireAppleIntelligence {
+                        guard updateDisplayed else { return }
+                        if updateDisplayed {
+                            let fallbackMessage = appleIntelligenceFailureMessage(
+                                base: "Apple Intelligence summary generation failed, and no synced AI summary is available yet.",
+                                error: error,
+                                prompt: generationPrompt
+                            )
+                            let restoredAI = restorePreferredCachedSummary(
+                                for: request,
+                                fallbackStatus: fallbackMessage
+                            )
+                            if restoredAI || !allowLocalRefreshFallback {
+                                if !restoredAI {
+                                    markUnresolvedAppleIntelligenceState(fallbackMessage, for: request)
+                                }
+                                return
+                            }
+                        }
+                    }
+                    let resolvedSummary = request.fallbackSummary
+                    let resolvedStatus = liveStatusText(for: generationMode, source: .localFallback)
+                    if updateDisplayed {
+                        summaryText = resolvedSummary
+                        statusText = resolvedStatus
+                    }
+                    savePersistedSummary(
+                        buildCacheEntry(
+                            for: request,
+                            summaryText: resolvedSummary,
+                            statusText: resolvedStatus,
+                            source: .localFallback,
+                            generationMode: generationMode,
+                            isRefreshOverride: forceRefresh
+                        ),
+                        updateDisplayed: updateDisplayed
+                    )
+                    return
+                }
+            }
+            #endif
+        } else {
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                let rendered = try await WorkoutDetailMLXCoach.contextualSummary(
+                    payload: compactCoachGenerationPrompt(generationPrompt, for: request.timeFilter)
+                )
+                let bulletBlock = rendered.bullets
+                    .prefix(3)
+                    .map { "- \($0)" }
+                    .joined(separator: "\n")
+                let cleaned = bulletBlock.isEmpty
+                    ? rendered.paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : "\(rendered.paragraph.trimmingCharacters(in: .whitespacesAndNewlines))\n\n\(bulletBlock)"
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let resolvedSummary: String
+                let resolvedStatus: String
+                if cleaned.isEmpty {
                     resolvedSummary = request.fallbackSummary
-                    resolvedStatus = "Model returned an unusable response, so this summary is using local metric rules."
+                    resolvedStatus = "MLX did not return a usable summary, so this summary is using local metric rules."
                 } else {
                     resolvedSummary = cleaned
-                    resolvedStatus = liveStatusText(for: generationMode, source: .appleIntelligence)
+                    resolvedStatus = liveStatusText(for: generationMode, source: backendSource)
                 }
+
                 if updateDisplayed {
                     summaryText = resolvedSummary
                     statusText = resolvedStatus
@@ -4008,7 +4215,7 @@ private struct StrainRecoveryAISummarySection: View {
                         for: request,
                         summaryText: resolvedSummary,
                         statusText: resolvedStatus,
-                        source: cleaned.isEmpty ? .localFallback : .appleIntelligence,
+                        source: cleaned.isEmpty ? .localFallback : backendSource,
                         generationMode: forceRefresh ? .refresh : generationMode,
                         isRefreshOverride: forceRefresh
                     ),
@@ -4016,32 +4223,12 @@ private struct StrainRecoveryAISummarySection: View {
                 )
                 return
             } catch {
-                print("[CoachAI] Apple Intelligence generation failed",
+                print("[CoachAI] MLX generation failed",
                       "requestID=\(request.requestID)",
                       "filter=\(request.timeFilter.rawValue)",
                       "suggestion=\(request.selectedSuggestionTitle)",
                       "promptChars=\(generationPrompt.count)",
                       "error=\(String(describing: error))")
-                if requireAppleIntelligence {
-                    guard updateDisplayed else { return }
-                    if updateDisplayed {
-                        let fallbackMessage = appleIntelligenceFailureMessage(
-                            base: "Apple Intelligence summary generation failed, and no synced AI summary is available yet.",
-                            error: error,
-                            prompt: generationPrompt
-                        )
-                        let restoredAI = restorePreferredCachedSummary(
-                            for: request,
-                            fallbackStatus: fallbackMessage
-                        )
-                        if restoredAI || !allowLocalRefreshFallback {
-                            if !restoredAI {
-                                markUnresolvedAppleIntelligenceState(fallbackMessage, for: request)
-                            }
-                            return
-                        }
-                    }
-                }
                 let resolvedSummary = request.fallbackSummary
                 let resolvedStatus = liveStatusText(for: generationMode, source: .localFallback)
                 if updateDisplayed {
@@ -4062,7 +4249,6 @@ private struct StrainRecoveryAISummarySection: View {
                 return
             }
         }
-        #endif
 
         if requireAppleIntelligence {
             guard updateDisplayed else { return }
@@ -4374,7 +4560,15 @@ private struct StrainRecoveryAISummarySection: View {
         source: SummarySourceKind
     ) -> String {
         let deviceName = StrainRecoverySummaryDevice.current.name
-        let sourceText = source == .appleIntelligence ? "Apple Intelligence" : "local metric rules"
+        let sourceText: String
+        switch source {
+        case .appleIntelligence:
+            sourceText = "Apple Intelligence"
+        case .mlx:
+            sourceText = "On-Device (MLX)"
+        case .localFallback:
+            sourceText = "local metric rules"
+        }
         switch generationMode {
         case .live:
             return "Generated live on \(deviceName) using \(sourceText). Saved to cache and iCloud."
@@ -4599,7 +4793,8 @@ private struct StrainRecoverySummaryRequest {
         anchorDate: Date,
         intentText: String,
         selectedSuggestion: SummarySuggestion?,
-        refreshVersion: Int
+        refreshVersion: Int,
+        backend: SummaryBackend = .appleIntelligence
     ) async -> Self {
         let calendar = Calendar.current
         let requestedDay = calendar.startOfDay(for: anchorDate)
@@ -4726,13 +4921,13 @@ private struct StrainRecoverySummaryRequest {
                 spo2Data: spo2Data
             )
 
-        let requestID = [
-            strainRecoverySummaryRequestVersion,
-            timeFilter.rawValue,
-            scopedSport ?? "all",
-            String(reportPeriod.canonicalAnchorDate.timeIntervalSince1970),
-            effectiveSuggestion.id
-        ].joined(separator: "|")
+        let requestID = summaryRequestID(
+            timeFilter: timeFilter,
+            scopedSport: scopedSport,
+            anchorDate: reportPeriod.canonicalAnchorDate,
+            suggestionID: effectiveSuggestion.id,
+            backend: backend
+        )
 
         let expiresAt = summaryExpirationDate(
             anchorDate: reportPeriod.canonicalAnchorDate,
@@ -4878,7 +5073,15 @@ private struct StrainRecoverySummaryCacheEntry: Codable, Equatable {
         case .refresh:
             sourceMode = "generated from refresh"
         }
-        let sourceLabel = source == .appleIntelligence ? "Apple Intelligence" : "local metric rules"
+        let sourceLabel: String
+        switch source {
+        case .appleIntelligence:
+            sourceLabel = "Apple Intelligence"
+        case .mlx:
+            sourceLabel = "On-Device (MLX)"
+        case .localFallback:
+            sourceLabel = "local metric rules"
+        }
         return "Loaded from cache. Originally \(sourceMode) on \(sourceDevice) using \(sourceLabel)."
     }
 }
@@ -5002,7 +5205,7 @@ private enum StrainRecoverySummaryPersistence {
         for (key, value) in cache {
             if let forceOverwriteRequestID, forceOverwriteRequestID == key {
                 resolved[key] = value
-            } else if value.source == .appleIntelligence {
+            } else if value.source.backend != nil {
                 resolved[key] = value
             } else if let existing = resolved[key] {
                 resolved[key] = preferredEntry(
@@ -5100,6 +5303,7 @@ private enum StrainRecoverySummaryPersistence {
         UserDefaults.standard.set(encoded, forKey: settingsKey)
         let cloudStore = NSUbiquitousKeyValueStore.default
         cloudStore.set(encoded, forKey: settingsKey)
+        NotificationCenter.default.post(name: .strainRecoverySummarySettingsDidChange, object: nil)
     }
 
     static func invalidateInMemoryState() {
@@ -5163,10 +5367,10 @@ private enum StrainRecoverySummaryPersistence {
     ) -> StrainRecoverySummaryCacheEntry {
         if existing.isExpired { return incoming }
         if incoming.isExpired { return existing }
-        if incoming.source == .appleIntelligence && existing.source != .appleIntelligence {
+        if incoming.source.backend != nil && existing.source.backend == nil {
             return incoming
         }
-        if existing.source == .appleIntelligence && incoming.source != .appleIntelligence {
+        if existing.source.backend != nil && incoming.source.backend == nil {
             return existing
         }
         if incoming.isRefreshOverride && incoming.generatedAt >= existing.generatedAt {
@@ -5177,10 +5381,10 @@ private enum StrainRecoverySummaryPersistence {
         }
 
         if existing.source != incoming.source {
-            if incoming.source == .appleIntelligence {
+            if incoming.source.backend != nil {
                 return incoming
             }
-            if existing.source == .appleIntelligence {
+            if existing.source.backend != nil {
                 return existing
             }
         }
@@ -5202,6 +5406,10 @@ private enum StrainRecoverySummaryPersistence {
     }
 }
 
+private extension Notification.Name {
+    static let strainRecoverySummarySettingsDidChange = Notification.Name("strainRecoverySummarySettingsDidChange")
+}
+
 private struct StrainRecoverySummaryDevice {
     let id: String
     let name: String
@@ -5221,6 +5429,7 @@ private struct StrainRecoverySummaryDevice {
 }
 
 private struct StrainRecoverySummarySyncSettings: Codable {
+    var selectedSummaryBackend: SummaryBackend
     var primaryDeviceID: String?
     var temporaryPrimaryDeviceID: String?
     var temporaryPrimaryUntil: Date?
@@ -5233,6 +5442,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
     var passivePrioritySuggestionIDs: [String]
 
     enum CodingKeys: String, CodingKey {
+        case selectedSummaryBackend
         case primaryDeviceID
         case temporaryPrimaryDeviceID
         case temporaryPrimaryUntil
@@ -5246,6 +5456,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
     }
 
     static let defaultValue = StrainRecoverySummarySyncSettings(
+        selectedSummaryBackend: .appleIntelligence,
         primaryDeviceID: nil,
         temporaryPrimaryDeviceID: nil,
         temporaryPrimaryUntil: nil,
@@ -5259,6 +5470,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
     )
 
     init(
+        selectedSummaryBackend: SummaryBackend,
         primaryDeviceID: String?,
         temporaryPrimaryDeviceID: String?,
         temporaryPrimaryUntil: Date?,
@@ -5270,6 +5482,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
         aggressiveSyncSelectedSuggestionID: String?,
         passivePrioritySuggestionIDs: [String]
     ) {
+        self.selectedSummaryBackend = selectedSummaryBackend
         self.primaryDeviceID = primaryDeviceID
         self.temporaryPrimaryDeviceID = temporaryPrimaryDeviceID
         self.temporaryPrimaryUntil = temporaryPrimaryUntil
@@ -5284,6 +5497,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedSummaryBackend = try container.decodeIfPresent(SummaryBackend.self, forKey: .selectedSummaryBackend) ?? .appleIntelligence
         primaryDeviceID = try container.decodeIfPresent(String.self, forKey: .primaryDeviceID)
         temporaryPrimaryDeviceID = try container.decodeIfPresent(String.self, forKey: .temporaryPrimaryDeviceID)
         temporaryPrimaryUntil = try container.decodeIfPresent(Date.self, forKey: .temporaryPrimaryUntil)
@@ -5298,6 +5512,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(selectedSummaryBackend, forKey: .selectedSummaryBackend)
         try container.encodeIfPresent(primaryDeviceID, forKey: .primaryDeviceID)
         try container.encodeIfPresent(temporaryPrimaryDeviceID, forKey: .temporaryPrimaryDeviceID)
         try container.encodeIfPresent(temporaryPrimaryUntil, forKey: .temporaryPrimaryUntil)
@@ -5318,6 +5533,7 @@ private struct StrainRecoverySummarySyncSettings: Codable {
     func resolved() -> Self {
         if let until = temporaryPrimaryUntil, until < Date() {
             return StrainRecoverySummarySyncSettings(
+                selectedSummaryBackend: selectedSummaryBackend,
                 primaryDeviceID: primaryDeviceID,
                 temporaryPrimaryDeviceID: nil,
                 temporaryPrimaryUntil: nil,

@@ -1183,6 +1183,7 @@ extension Notification.Name {
     static let nutrivanceViewControlRecoveryScoreFilter1M = Notification.Name("nutrivance.viewControl.recoveryScore.filter1M")
     static let nutrivanceViewControlReadinessRefresh = Notification.Name("nutrivance.viewControl.readiness.refresh")
     static let nutrivanceViewControlStrainRecoverySettings = Notification.Name("nutrivance.viewControl.strainRecovery.settings")
+    static let nutrivanceViewControlNutrivanceLabsNewEntry = Notification.Name("nutrivance.viewControl.nutrivanceLabs.newEntry")
 
     // iPad browser window / tab commands (`ContentView_iPad`, Catalyst File & Window menus). `object` is often the posting `UIWindowScene`.
     static let nutrivanceBrowserNewTab = Notification.Name("nutrivance.browser.newTab")
@@ -1395,6 +1396,7 @@ enum AppDestination: String, CaseIterable, Hashable, Identifiable {
     case journal
     case sleep
     case stress
+    case nutrivanceLabs
 
     var id: String { rawValue }
 }
@@ -1583,7 +1585,7 @@ class NavigationState: ObservableObject {
         case .journal: return .journal
         case .sleep: return .sleep
         case .stress: return .stress
-        case .nutrivanceLabs: return nil
+        case .nutrivanceLabs: return .nutrivanceLabs
         case .dashboard, .search, .home, .playground: return nil
         }
     }
@@ -2007,7 +2009,7 @@ struct NutrivanceApp: App {
 
     private func hasContextualControls(for tab: RootTabSelection) -> Bool {
         switch tab {
-        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder, .heartZones, .recoveryScore, .readiness, .trainingCalendar, .pathfinder:
+        case .strainRecovery, .stress, .sleep, .pastQuests, .journal, .workoutHistory, .dashboard, .programBuilder, .heartZones, .recoveryScore, .readiness, .trainingCalendar, .pathfinder, .nutrivanceLabs:
             return true
         default:
             return false
@@ -2071,7 +2073,12 @@ struct NutrivanceApp: App {
                 Button("Heart Zones") {
                     NutrivanceSceneMenuRouter.postMainMenuCommand("heartZones")
                 }
-                .keyboardShortcut("Z", modifiers: [.command, .shift])
+                .keyboardShortcut("O", modifiers: [.command, .shift])
+
+                Button("Nutrivance Labs") {
+                    NutrivanceSceneMenuRouter.postMainMenuCommand("nutrivanceLabs")
+                }
+                .keyboardShortcut("L", modifiers: [.command, .shift])
 
                 Button("Past Quests") {
                     NutrivanceSceneMenuRouter.postMainMenuCommand("pastQuests")
@@ -2101,7 +2108,7 @@ struct NutrivanceApp: App {
                 Button("Sleep") {
                     NutrivanceSceneMenuRouter.postMainMenuCommand("sleep")
                 }
-                .keyboardShortcut("L", modifiers: [.command, .shift])
+                .keyboardShortcut("E", modifiers: [.command, .shift])
 
                 Button("Stress") {
                     NutrivanceSceneMenuRouter.postMainMenuCommand("stress")
@@ -2509,6 +2516,13 @@ struct NutrivanceApp: App {
                             nutrivancePostHeartZonesSportSlotForKeyWindow(9)
                         }
                         .keyboardShortcut("0", modifiers: [.option])
+                    }
+
+                    if nav.selectedRootTab == .nutrivanceLabs {
+                        Button("New Entry") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsNewEntry)
+                        }
+                        .keyboardShortcut("N", modifiers: [.command, .shift])
                     }
                 } else {
                     Button("No View Controls Available") {}

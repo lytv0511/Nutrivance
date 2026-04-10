@@ -84,6 +84,8 @@ struct ContentView_iPhone_alt: View {
             SleepView()
         case .stress:
             StressView()
+        case .nutrivanceLabs:
+            NutrivanceLabsView()
         }
     }
     

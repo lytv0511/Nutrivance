@@ -63,6 +63,7 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
         case .journal: return "Journal"
         case .sleep: return "Sleep"
         case .stress: return "Stress"
+        case .nutrivanceLabs: return "Nutrivance Labs"
         }
     }
 
@@ -87,12 +88,12 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
         case .strainRecovery: return "figure.strengthtraining.traditional"
         case .pastQuests: return "trophy.fill"
         case .heartZones: return "heart.circle.fill"
-        case .nutrivanceLabs: return "slider.horizontal.3"
         case .mindfulnessRealm: return "sparkles"
         case .pathfinder: return "point.topleft.down.curvedto.point.bottomright.up"
         case .journal: return "book.fill"
         case .sleep: return "moon.zzz.fill"
         case .stress: return "waveform.path.ecg"
+        case .nutrivanceLabs: return "slider.horizontal.3"
         }
     }
 
@@ -110,12 +111,12 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
         case .strainRecovery: return .strainRecovery
         case .pastQuests: return .pastQuests
         case .heartZones: return .heartZones
-        case .nutrivanceLabs: return .nutrivanceLabs
         case .mindfulnessRealm: return .mindfulnessRealm
         case .pathfinder: return .pathfinder
         case .journal: return .journal
         case .sleep: return .sleep
         case .stress: return .stress
+        case .nutrivanceLabs: return .nutrivanceLabs
         }
     }
 }
@@ -2170,6 +2171,8 @@ struct ContentView_iPad: View {
             gradients.sleepGradient(animationPhase: $animationPhase)
         case .stress:
             gradients.boldGradient(animationPhase: $animationPhase)
+        case .nutrivanceLabs:
+            gradients.programBuilderGradient(animationPhase: $animationPhase)
         }
     }
 }
@@ -3331,6 +3334,8 @@ private struct BrowserPageHost: View {
                 SleepView()
             case .stress:
                 StressView()
+            case .nutrivanceLabs:
+                NutrivanceLabsView()
             }
         }
     }
