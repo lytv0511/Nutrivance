@@ -8,6 +8,9 @@ import MLX
 import MLXLLM
 import MLXLMCommon
 #endif
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 enum HRZoneConfigurationMode: String, CaseIterable, Identifiable {
     case intelligent
@@ -922,7 +925,7 @@ enum WorkoutDetailMLXCoach {
         let session = ChatSession(
             container,
             instructions: withContext ? contextualSystemInstructions : quickSystemInstructions,
-            generateParameters: GenerateParameters(maxTokens: 520, temperature: 0.35)
+            generateParameters: GenerateParameters(temperature: 0.4)
         )
         do {
             let raw = try await session.respond(to: payload)
@@ -1014,67 +1017,171 @@ enum WorkoutDetailMLXCoach {
         if paragraph.isEmpty {
             paragraph = stripped.replacingOccurrences(of: "\n", with: " ")
         }
+        paragraph = truncateToSentences(paragraph, maxSentences: 100)
         if bullets.count > 3 {
             bullets = Array(bullets.prefix(3))
         }
         return WorkoutCoachRenderedSummary(paragraph: paragraph, bullets: bullets)
     }
 
+    private static func truncateToSentences(_ text: String, maxSentences: Int = 100) -> String {
+        guard !text.isEmpty else { return text }
+        let sentences = text.components(separatedBy: CharacterSet(charactersIn: ".!?"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let truncated = sentences.prefix(maxSentences)
+        var result = truncated.joined(separator: ". ")
+        if !result.isEmpty && !".!?".contains(result.last!) {
+            result += "."
+        }
+        return result
+    }
+
     /// Remove chain-of-thought style blocks/tags so only user-facing output is shown.
     private static func sanitizeVisibleOutput(_ text: String) -> String {
         var s = text
 
-        // Common hidden-reasoning tags used by some local models.
+        // Remove <think> / <thinking> / <thought> blocks and their closing tags
         s = s.replacingOccurrences(
             of: "<think>[\\s\\S]*?</think>",
             with: "",
-            options: .regularExpression
+            options: [.regularExpression, .caseInsensitive]
+        )
+        s = s.replacingOccurrences(
+            of: "<think>[\\s\\S]*?",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        s = s.replacingOccurrences(
+            of: "<think[ing]*>[\\s\\S]*?</think[ing]*>",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        s = s.replacingOccurrences(
+            of: "<thought>[\\s\\S]*?</thought>",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        // Remove other thinking block formats
+        s = s.replacingOccurrences(
+            of: "<thinking>[\\s\\S]*?</thinking>",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        s = s.replacingOccurrences(
+            of: "<reasoning>[\\s\\S]*?</reasoning>",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
         )
         s = s.replacingOccurrences(
             of: "<analysis>[\\s\\S]*?</analysis>",
             with: "",
-            options: .regularExpression
+            options: [.regularExpression, .caseInsensitive]
         )
+        s = s.replacingOccurrences(
+            of: "<hidden>[\\s\\S]*?</hidden>",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        s = s.replacingOccurrences(
+            of: "<scratch>[\\s\\S]*?</scratch>",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+
+        // Remove reasoning-style openings that leak internal thinking
+        let patterns = [
+            #"(?i)^hmm[,\s].*?(?=\s{2,}|$)"#,
+            #"(?i)^maybe[,\s].*?(?=\s{2,}|$)"#,
+            #"(?i)^hmm[,\s].*?\n"#,
+            #"(?i)^maybe[,\s].*?\n"#,
+            #"(?i)hmm[,\s].*?discrepancy.*?\n"#,
+            #"(?i)i should stick to.*?\n"#,
+            #"(?i)that suggests.*?\n"#,
+            #"(?i)the user (wants|mentioned|emphasized).*?\n"#,
+            #"(?i)so i should.*?\n"#,
+            #"(?i)so the athlete.*?\n"#,
+            #"(?i)the main focus is on.*?\n"#,
+            #"(?i)which is a.*?\n"#,
+            #"(?i)based on the (fact|data|numbers|metrics).*?\n"#,
+            #"(?i)looking at the (fact|data|numbers).*?\n"#,
+            #"(?i)let me (check|think|look|figure).*?\n"#,
+            #"(?i)okay so.*?\n"#,
+            #"(?i)^wait[,\s].*?\n"#,
+            #"(?i)^actually[,\s].*?\n"#,
+        ]
+
+        for pattern in patterns {
+            s = s.replacingOccurrences(
+                of: pattern,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
 
         let lines = s.components(separatedBy: .newlines)
         var kept: [String] = []
         for rawLine in lines {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             let lower = line.lowercased()
-            if lower.hasPrefix("think:") || lower.hasPrefix("thinking:") || lower.hasPrefix("analysis:") || lower.hasPrefix("reasoning:") {
+            // Skip lines that are thinking/reasoning prefixes
+            if lower.hasPrefix("think:") || lower.hasPrefix("thinking:") || lower.hasPrefix("analysis:") || lower.hasPrefix("reasoning:") || lower.hasPrefix("note:") {
+                continue
+            }
+            // Skip lines that are just the thinking marker alone
+            if lower == "" || lower == "thinking:" || lower == "thought:" || lower == "analysis:" || lower == "reasoning:" || lower == "note:" {
+                continue
+            }
+            // Skip lines that look like pure reasoning preamble (short, self-referential)
+            let reasoningFirstWords = ["hmm", "maybe", "wait", "actually", "let me", "okay so", "i should", "i need", "i notice", "i see", "so i", "that suggests", "this implies", "the user", "the issue"]
+            if reasoningFirstWords.contains(where: { lower.hasPrefix($0) }) {
                 continue
             }
             kept.append(rawLine)
         }
 
         s = kept.joined(separator: "\n")
+        
+        // Final cleanup: remove any remaining multiple newlines from removed blocks
+        while s.contains("\n\n\n") {
+            s = s.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static let quickSystemInstructions = """
-    You are Coach AI running on-device in a fitness app using workout raw data and classifications.
-    Write naturally as a coach speaking to an athlete using "you" naturally, but avoid repetitive sentence starts.
-    Geek out on workout metrics and signal quality, intensity structure, and execution details.
+    You are an elite fitness coach. Output ONLY the final coaching insight.
 
-    Output rules:
-    - First, output exactly one dense paragraph.
-    - Then, if there are clear extra insights, output 2-3 bullet lines prefixed with "- ".
-    - Use only facts from provided payload and never invent numbers.
-    - No markdown headings, no chain-of-thought, no medical advice.
+    Do NOT include any internal reasoning, chain-of-thought, or meta-commentary in your output.
+    Never write phrases like: "hmm", "let me think", "I should", "maybe", "it seems",
+    "I notice", "looking at", "the user wants", "based on", "that suggests",
+    "okay so", "the issue is", "wait", "actually", or any self-referential analysis.
+    Never reconcile or mention data discrepancies or conflicting numbers.
+
+    Given workout data:
+    - Analyze the metrics silently
+    - Output a 3-6 sentence paragraph with direct coaching insight
+    - Add bullet points only if truly warranted
+
+    Output ONLY the final insight — no reasoning, no commentary about the data.
     """
 
     private static let contextualSystemInstructions = """
-    You are Coach AI running on-device in a fitness app using workout raw data and explicit context windows.
-    The payload includes SAME_TYPE_7D_CONTEXT and SAME_TYPE_28D_CONTEXT blocks with raw lines and classifications.
-    Treat 7d as short-term trend and 28d as longer-term trend, and explicitly compare the current workout against both when possible.
-    Write naturally as a coach speaking to an athlete using "you" naturally, but avoid repetitive sentence starts.
-    Geek out on metrics and trends.
+    You are an elite fitness coach. Output ONLY the final coaching insight with trend comparison.
 
-    Output rules:
-    - First, output exactly one dense paragraph.
-    - Then, if there are clear extra insights, output 2-3 bullet lines prefixed with "- ".
-    - Use only facts from provided payload and never invent numbers.
-    - No markdown headings, no chain-of-thought, no medical advice.
+    Do NOT include any internal reasoning, chain-of-thought, or meta-commentary in your output.
+    Never write phrases like: "hmm", "let me think", "I should", "maybe", "it seems",
+    "I notice", "looking at", "the user wants", "based on", "that suggests",
+    "okay so", "the issue is", "wait", "actually", or any self-referential analysis.
+    Never reconcile or mention data discrepancies or conflicting numbers.
+
+    Given workout + historical data:
+    - Compare against 7-day and 28-day trends silently
+    - Output a 4-8 sentence paragraph with direct coaching insight
+    - Add bullet points only if truly warranted
+
+    Output ONLY the final insight — no reasoning, no commentary about the data.
     """
 }
 #else
@@ -1099,6 +1206,77 @@ enum WorkoutDetailMLXCoach {
     }
 }
 #endif
+
+enum CoachBackend: String, CaseIterable, Identifiable {
+    case mlx
+    case appleIntelligence
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .mlx:
+            return "MLX (On-Device)"
+        case .appleIntelligence:
+            return "Apple Intelligence"
+        }
+    }
+
+    var isAvailable: Bool {
+        switch self {
+        case .mlx:
+            return isMLXAvailable()
+        case .appleIntelligence:
+            return isAppleIntelligenceAvailable()
+        }
+    }
+}
+
+private enum WorkoutCoachError: LocalizedError {
+    case mlxUnavailable
+    case appleIntelligenceUnavailable
+    case generationFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .mlxUnavailable:
+            return "MLX is not available. Run on a physical device."
+        case .appleIntelligenceUnavailable:
+            return "Apple Intelligence is not available on this device."
+        case .generationFailed(let message):
+            return message
+        }
+    }
+}
+
+private func isMLXAvailable() -> Bool {
+    #if targetEnvironment(simulator)
+    return false
+    #else
+    #if canImport(MLXLLM) && canImport(MLX)
+    return true
+    #else
+    return false
+    #endif
+    #endif
+}
+
+private func isAppleIntelligenceAvailable() -> Bool {
+    #if canImport(FoundationModels)
+    if #available(iOS 26.0, *) {
+        let model = SystemLanguageModel(useCase: .general)
+        switch model.availability {
+        case .available, .unavailable(.modelNotReady), .unavailable(.appleIntelligenceNotEnabled):
+            return true
+        case .unavailable(.deviceNotEligible):
+            return false
+        @unknown default:
+            return false
+        }
+    }
+    #endif
+    return false
+}
 
 struct WorkoutDetailView: View {
     @EnvironmentObject private var unitPreferences: UnitPreferencesStore
@@ -1132,6 +1310,7 @@ struct WorkoutDetailView: View {
     @State private var deepCoachError: String? = nil
     @State private var isGeneratingDeepCoachSummary = false
     @State private var coachModelDownloadProgress: Double? = nil
+    @State private var selectedCoachBackend: CoachBackend = .mlx
 
     private var activeDuration: TimeInterval {
         analytics.workout.duration
@@ -1650,14 +1829,50 @@ struct WorkoutDetailView: View {
                 Label("Coach AI", systemImage: "brain.head.profile")
                     .font(.subheadline.bold())
                 Spacer()
-                Text("MLX on-device")
+                Text(selectedCoachBackend == .mlx ? "MLX on-device" : "Apple Intelligence")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
+            if quickCoachSummary == nil && quickCoachError == nil && !isGeneratingQuickCoachSummary {
+                Menu {
+                    ForEach(CoachBackend.allCases) { backend in
+                        Button {
+                            selectedCoachBackend = backend
+                        } label: {
+                            HStack {
+                                Text(backend.title)
+                                if backend.isAvailable {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                        .disabled(!backend.isAvailable)
+                    }
+                } label: {
+                    HStack {
+                        Text("Generate Summary")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Image(systemName: "sparkle")
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.orange.opacity(0.15))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
+                }
+                .buttonStyle(.plain)
+                .catalystDesktopFocusable()
+            }
+
             if isGeneratingQuickCoachSummary {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let coachModelDownloadProgress {
+                    if let coachModelDownloadProgress, selectedCoachBackend == .mlx {
                         ProgressView(value: coachModelDownloadProgress, total: 1.0) {
                             Text("Downloading coach model...")
                                 .font(.caption)
@@ -1697,6 +1912,21 @@ struct WorkoutDetailView: View {
                     .font(.caption.weight(.semibold))
                     .catalystDesktopFocusable()
                 }
+            }
+
+            if quickCoachSummary != nil || quickCoachError != nil {
+                Button {
+                    Task { await generateQuickCoachSummary() }
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Regenerate")
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
+                .catalystDesktopFocusable()
             }
 
             if isEligibleForContextualCoachSummary {
@@ -2699,7 +2929,6 @@ struct WorkoutDetailView: View {
             if showsMapSection {
                 loadRoute()
             }
-            triggerQuickCoachSummaryIfNeeded()
         }
         .task(id: analytics.workout.startDate) {
             await loadHistoricalZoneProfile()
@@ -2761,24 +2990,60 @@ struct WorkoutDetailView: View {
         let workout = analytics.workout
         let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0
         let distanceMeters = workout.totalDistance?.doubleValue(for: .meter()) ?? 0
-        let header = """
-        WORKOUT_RAW:
+        let durationMin = workout.duration / 60
+        
+        let hrAvg = analytics.heartRates.map(\.1).average ?? 0
+        let hrMax = analytics.heartRates.map(\.1).max() ?? 0
+        let hrMin = analytics.heartRates.map(\.1).min() ?? 0
+        
+        let metAvg = analytics.metSeries.map(\.1).average ?? 0
+        let metMax = analytics.metSeries.map(\.1).max() ?? 0
+        
+        let speedAvg = analytics.speedSeries.map(\.1).average ?? 0
+        let speedMax = analytics.speedSeries.map(\.1).max() ?? 0
+        
+        let powerAvg = analytics.powerSeries.map(\.1).average ?? 0
+        let powerMax = analytics.powerSeries.map(\.1).max() ?? 0
+        
+        let cadenceAvg = analytics.cadenceSeries.map(\.1).average ?? 0
+        
+        let elevationGain = calculateElevationGain(analytics.elevationSeries)
+        
+        return """
+        WORKOUT_SUMMARY:
         type=\(workout.workoutActivityType.name)
-        start=\(workout.startDate.ISO8601Format())
-        end=\(workout.endDate.ISO8601Format())
-        activeDurationSec=\(Int(workout.duration))
-        totalEnergyKcal=\(String(format: "%.1f", kcal))
-        totalDistanceMeters=\(String(format: "%.1f", distanceMeters))
+        durationMin=\(String(format: "%.1f", durationMin))
+        kcal=\(String(format: "%.0f", kcal))
+        distanceKm=\(String(format: "%.2f", distanceMeters / 1000))
+        
+        heartRateAvgBpm=\(String(format: "%.0f", hrAvg))
+        heartRateMaxBpm=\(String(format: "%.0f", hrMax))
+        heartRateMinBpm=\(String(format: "%.0f", hrMin))
+        
+        metAvg=\(String(format: "%.1f", metAvg))
+        metMax=\(String(format: "%.1f", metMax))
+        
+        speedAvgKph=\(String(format: "%.1f", speedAvg * 3.6))
+        speedMaxKph=\(String(format: "%.1f", speedMax * 3.6))
+        
+        powerAvgWatts=\(String(format: "%.0f", powerAvg))
+        powerMaxWatts=\(String(format: "%.0f", powerMax))
+        
+        cadenceAvgRpm=\(String(format: "%.0f", cadenceAvg))
+        
+        elevationGainM=\(String(format: "%.0f", elevationGain))
         """
-        let lines = [
-            seriesLine("heartRateSeries", data: analytics.heartRates, unit: "bpm"),
-            seriesLine("metSeries", data: analytics.metSeries, unit: ""),
-            seriesLine("speedSeries", data: analytics.speedSeries, unit: "mps"),
-            seriesLine("powerSeries", data: analytics.powerSeries, unit: "W"),
-            seriesLine("cadenceSeries", data: analytics.cadenceSeries, unit: "rpm"),
-            seriesLine("elevationSeries", data: analytics.elevationSeries, unit: "m")
-        ]
-        return ([header] + lines).joined(separator: "\n")
+    }
+    
+    private func calculateElevationGain(_ series: [(Date, Double)]) -> Double {
+        guard series.count > 1 else { return 0 }
+        var gain: Double = 0
+        let sorted = series.sorted { $0.0 < $1.0 }
+        for i in 1..<sorted.count {
+            let diff = sorted[i].1 - sorted[i-1].1
+            if diff > 0 { gain += diff }
+        }
+        return gain
     }
 
     private func workoutClassificationBlock() -> String {
@@ -2800,48 +3065,59 @@ struct WorkoutDetailView: View {
 
     private func contextBlock(for days: Int, label: String) -> String {
         let workouts = sameTypeWorkoutsBeforeCurrent(withinDays: days)
-        let entries = workouts.map { pair -> String in
-            let w = pair.workout
-            let a = pair.analytics
-            let kcal = w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0
-            let avgHR = a.heartRates.map(\.1).average ?? 0
-            let maxHR = a.heartRates.map(\.1).max() ?? 0
-            let distance = w.totalDistance?.doubleValue(for: .meter()) ?? 0
-            return "date=\(w.startDate.ISO8601Format()) durationSec=\(Int(w.duration)) energyKcal=\(String(format: "%.1f", kcal)) distanceMeters=\(String(format: "%.1f", distance)) avgHR=\(String(format: "%.1f", avgHR)) maxHR=\(String(format: "%.1f", maxHR))"
+        guard !workouts.isEmpty else {
+            return "\(label)_STATS: no data"
         }
-        let classification = """
-        sameTypeCount=\(workouts.count)
-        avgDurationSec=\(String(format: "%.1f", workouts.map { $0.workout.duration }.average ?? 0))
-        avgEnergyKcal=\(String(format: "%.1f", workouts.map { $0.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0 }.average ?? 0))
-        avgAvgHR=\(String(format: "%.1f", workouts.map { $0.analytics.heartRates.map(\.1).average ?? 0 }.average ?? 0))
-        """
+        
+        let durations = workouts.map { $0.workout.duration }
+        let kcals = workouts.map { $0.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0 }
+        let avgHRs = workouts.map { $0.analytics.heartRates.map(\.1).average ?? 0 }
+        let maxHRs = workouts.map { $0.analytics.heartRates.map(\.1).max() ?? 0 }
+        let distances = workouts.map { $0.workout.totalDistance?.doubleValue(for: .meter()) ?? 0 }
+        
         return """
-        \(label)_RAW:
-        \(entries.isEmpty ? "none" : entries.joined(separator: "\n"))
-
-        \(label)_CLASSIFICATIONS:
-        \(classification)
+        \(label)_STATS:
+        count=\(workouts.count)
+        avgDurationMin=\(String(format: "%.1f", durations.average ?? 0))
+        totalDurationMin=\(String(format: "%.1f", durations.reduce(0, +)))
+        avgKcal=\(String(format: "%.0f", kcals.average ?? 0))
+        totalKcal=\(String(format: "%.0f", kcals.reduce(0, +)))
+        avgHRBpm=\(String(format: "%.0f", avgHRs.average ?? 0))
+        maxHRBpm=\(String(format: "%.0f", maxHRs.max() ?? 0))
+        avgDistanceKm=\(String(format: "%.2f", (distances.average ?? 0) / 1000))
         """
     }
 
     private func quickSummaryPayload() -> String {
-        [
-            workoutRawBlock(),
-            "",
-            workoutClassificationBlock()
-        ].joined(separator: "\n")
+        """
+        COACHING REQUEST:
+        
+        Generate a sophisticated coaching summary for this workout.
+        
+        \(workoutRawBlock())
+        
+        \(workoutClassificationBlock())
+        
+        Provide insightful analysis showing genuine expertise in exercise physiology.
+        """
     }
 
     private func deepSummaryPayload() -> String {
-        [
-            workoutRawBlock(),
-            "",
-            workoutClassificationBlock(),
-            "",
-            contextBlock(for: 7, label: "SAME_TYPE_7D_CONTEXT"),
-            "",
-            contextBlock(for: 28, label: "SAME_TYPE_28D_CONTEXT")
-        ].joined(separator: "\n")
+        """
+        COACHING REQUEST:
+        
+        Generate a sophisticated coaching summary comparing this workout against recent trends.
+        
+        \(workoutRawBlock())
+        
+        \(workoutClassificationBlock())
+        
+        \(contextBlock(for: 7, label: "7_DAY"))
+        
+        \(contextBlock(for: 28, label: "28_DAY"))
+        
+        Provide insightful analysis with explicit trend comparisons showing genuine expertise.
+        """
     }
 
     private func triggerQuickCoachSummaryIfNeeded() {
@@ -2861,14 +3137,20 @@ struct WorkoutDetailView: View {
             coachModelDownloadProgress = nil
         }
         do {
-            let summary = try await WorkoutDetailMLXCoach.quickSummary(
-                payload: quickSummaryPayload(),
-                downloadProgress: { progress in
-                    Task { @MainActor in
-                        coachModelDownloadProgress = progress
+            let summary: WorkoutCoachRenderedSummary
+            switch selectedCoachBackend {
+            case .mlx:
+                summary = try await WorkoutDetailMLXCoach.quickSummary(
+                    payload: quickSummaryPayload(),
+                    downloadProgress: { progress in
+                        Task { @MainActor in
+                            coachModelDownloadProgress = progress
+                        }
                     }
-                }
-            )
+                )
+            case .appleIntelligence:
+                summary = try await generateAppleIntelligenceSummary(payload: quickSummaryPayload())
+            }
             quickCoachSummary = summary
         } catch {
             quickCoachError = coachErrorMessage(from: error, fallback: "Coach summary unavailable right now.")
@@ -2889,19 +3171,96 @@ struct WorkoutDetailView: View {
             coachModelDownloadProgress = nil
         }
         do {
-            let summary = try await WorkoutDetailMLXCoach.contextualSummary(
-                payload: deepSummaryPayload(),
-                downloadProgress: { progress in
-                    Task { @MainActor in
-                        coachModelDownloadProgress = progress
+            let summary: WorkoutCoachRenderedSummary
+            switch selectedCoachBackend {
+            case .mlx:
+                summary = try await WorkoutDetailMLXCoach.contextualSummary(
+                    payload: deepSummaryPayload(),
+                    downloadProgress: { progress in
+                        Task { @MainActor in
+                            coachModelDownloadProgress = progress
+                        }
                     }
-                }
-            )
+                )
+            case .appleIntelligence:
+                summary = try await generateAppleIntelligenceSummary(payload: deepSummaryPayload())
+            }
             deepCoachSummary = summary
         } catch {
             deepCoachError = coachErrorMessage(from: error, fallback: "Could not generate deeper trend analysis right now.")
         }
     }
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, *)
+    private func generateAppleIntelligenceSummary(payload: String) async throws -> WorkoutCoachRenderedSummary {
+        let model = SystemLanguageModel(useCase: .general)
+        guard model.isAvailable else {
+            throw WorkoutCoachError.appleIntelligenceUnavailable
+        }
+
+        let instructions = """
+        You are an elite fitness coach. Output ONLY the final coaching insight.
+
+        Do NOT include any internal reasoning, chain-of-thought, or meta-commentary in your output.
+        Never write phrases like: "hmm", "let me think", "I should", "maybe", "it seems",
+        "I notice", "looking at", "the user wants", "based on", "that suggests",
+        "okay so", "the issue is", "wait", "actually", or any self-referential analysis.
+
+        Given workout data:
+        - Analyze the metrics silently
+        - Output a 3-6 sentence paragraph with direct coaching insight
+        - Add bullet points only if truly warranted
+
+        Output ONLY the final insight — no reasoning, no commentary about the data.
+        """
+
+        let session = LanguageModelSession(
+            model: model,
+            instructions: instructions
+        )
+
+        let response = try await session.respond(
+            to: payload,
+            options: GenerationOptions(
+                sampling: .greedy,
+                temperature: 0,
+                maximumResponseTokens: 2048
+            )
+        )
+
+        return renderWorkoutCoachSummary(from: response.content)
+    }
+
+    private func renderWorkoutCoachSummary(from text: String) -> WorkoutCoachRenderedSummary {
+        let stripped = text
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = stripped
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var paragraph = ""
+        var bullets: [String] = []
+        for line in lines {
+            if line.hasPrefix("- ") || line.hasPrefix("• ") {
+                bullets.append(String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+            } else if paragraph.isEmpty {
+                paragraph = line
+            } else if bullets.isEmpty {
+                paragraph += " " + line
+            }
+        }
+        if paragraph.isEmpty {
+            paragraph = stripped.replacingOccurrences(of: "\n", with: " ")
+        }
+        if bullets.count > 3 {
+            bullets = Array(bullets.prefix(3))
+        }
+        return WorkoutCoachRenderedSummary(paragraph: paragraph, bullets: bullets)
+    }
+    #endif
 
     private func coachErrorMessage(from error: Error, fallback: String) -> String {
         if let detailed = (error as? LocalizedError)?.errorDescription, !detailed.isEmpty {

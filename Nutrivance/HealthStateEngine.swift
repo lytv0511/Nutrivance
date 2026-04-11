@@ -737,6 +737,28 @@ final class HealthStateEngine: ObservableObject {
         await pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: userInitiatedRefresh)
     }
 
+    /// Deferred CloudKit fetch that doesn't block initial UI render - runs in background
+    private func deferCloudKitMetricsFetch() {
+        // First apply local disk cache immediately without CloudKit
+        if hasHydratedCachedMetrics {
+            scheduleMetricsSnapshotSave()
+            return
+        }
+        
+        // Pull from iCloud KVS synchronously (fast, non-blocking)
+        NSUbiquitousKeyValueStore.default.synchronize()
+        hydrateMetricsFromCacheIfAvailable()
+        
+        // Then schedule CloudKit fetch as background task, not blocking
+        Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: 500_000_000)  // Wait 500ms after initial render
+            await self.pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: true)
+            self.scheduleScoresRefresh()
+            self.scheduleMetricsSnapshotSave()
+        }
+    }
+
     /// Load **time series** snapshots from CloudKit (`EngineSyncBlob`) written by iOS (required on Mac Catalyst; optional on other platforms when `allowOnNonCatalyst` is set for user refresh).
     private func pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: Bool = false) async {
         guard Self.usesAggregatedCloudHealthPath || allowOnNonCatalyst else { return }
@@ -2773,18 +2795,18 @@ final class HealthStateEngine: ObservableObject {
             guard let self else { return }
 
             // Let the app render its first frame before we kick off heavier health bootstrap work.
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            try? await Task.sleep(nanoseconds: 50_000_000)  // Reduced from 200ms to 50ms
             guard !Task.isCancelled else { return }
             self.initializeWithCachedData()
 
             // Stagger authorization-driven metric refresh slightly so launch feels responsive.
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(nanoseconds: 100_000_000)  // Reduced from 350ms to 100ms
             guard !Task.isCancelled else { return }
 
             if Self.usesAggregatedCloudHealthPath {
-                await self.reloadAggregatedHealthSnapshotFromICloud()
+                // Defer CloudKit fetch to not block initial render - background it instead
+                self.deferCloudKitMetricsFetch()
                 self.scheduleScoresRefresh()
-                self.scheduleMetricsSnapshotSave(delayNanoseconds: 400_000_000)
                 return
             }
 
@@ -3082,11 +3104,19 @@ final class HealthStateEngine: ObservableObject {
             if !cachedEntries.isEmpty {
                 self.lastCachedWorkoutDate = cachedEntries.map(\.workoutStartDate).max()
                 self.earliestRequestedWorkoutDate = cachedEntries.map(\.workoutStartDate).min()
-                self.workoutAnalytics = rebuildWorkoutAnalytics(from: cachedEntries)
-                self.workoutAnalyticsCacheTimestamp = Date()
+                
+                // Mark as initialized immediately to dismiss curtain - defer rebuild
                 self.requiresInitialFullSync = false
                 self.hasInitializedWorkoutAnalytics = true
-                self.scheduleScoresRefresh()
+                
+                // Defer expensive rebuild to next event loop (allows UI to render first)
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_000_000)  // 1ms delay to yield to UI
+                    guard let self else { return }
+                    self.workoutAnalytics = self.rebuildWorkoutAnalytics(from: cachedEntries)
+                    self.workoutAnalyticsCacheTimestamp = Date()
+                    self.scheduleScoresRefresh()
+                }
                 print("[Cache] Mac Catalyst: loaded \(cachedEntries.count) workouts from disk cache (HealthKit disabled).")
             } else {
                 self.requiresInitialFullSync = false
@@ -3118,12 +3148,19 @@ final class HealthStateEngine: ObservableObject {
         if !cachedSummaries.isEmpty {
             self.lastCachedWorkoutDate = cachedSummaries.map { $0.startDate }.max()
             self.earliestRequestedWorkoutDate = cachedSummaries.map { $0.startDate }.min()
-            self.workoutAnalytics = rebuildWorkoutAnalytics(from: cachedEntries)
-            self.workoutAnalyticsCacheTimestamp = Date()
+            
+            // Mark initialized - defer rebuild
             self.requiresInitialFullSync = false
             print("[Cache] ✅ Found cached data for \(cachedSummaries.count) workouts (latest: \(self.lastCachedWorkoutDate?.formatted() ?? "unknown"))")
             self.hasInitializedWorkoutAnalytics = true
-            self.scheduleScoresRefresh()
+            
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000)
+                guard let self else { return }
+                self.workoutAnalytics = self.rebuildWorkoutAnalytics(from: cachedEntries)
+                self.workoutAnalyticsCacheTimestamp = Date()
+                self.scheduleScoresRefresh()
+            }
         } else {
             self.requiresInitialFullSync = true
             print("[Cache] No cached workouts found, will fetch all from HealthKit")

@@ -5,7 +5,7 @@ struct TrainingCalendarView: View {
     @ObservedObject private var engine = HealthStateEngine.shared
     @EnvironmentObject private var navigationState: NavigationState
 
-    @State private var animationPhase: Double = 0
+    @State private var detectedWidth: CGFloat = 0
     @State private var sportFilter: String? = nil
     @State private var selectedMonth: Date
     @State private var selectedDay: Date
@@ -48,6 +48,10 @@ struct TrainingCalendarView: View {
     }
 
     private var calendar: Calendar { .current }
+
+    private var isCompactWidth: Bool {
+        detectedWidth < 600
+    }
 
     private var hrZoneSettings: HRZoneUserSettings {
         HRZoneUserSettings(
@@ -146,7 +150,6 @@ struct TrainingCalendarView: View {
         workoutDaySet.sorted()
     }
 
-    /// Bundled so hero, summary, and grid share one streak walk per layout pass.
     private var activeStreakState: (length: Int, highlight: (lower: Date, upper: Date)?) {
         let daySet = workoutDaySet
         let length = streakLength(anchoredAtToday: true, daySet: daySet)
@@ -196,7 +199,6 @@ struct TrainingCalendarView: View {
         selectedMonthStart.formatted(.dateTime.month(.wide).year())
     }
 
-    /// Split out of `body` so the compiler can type-check the main view graph in reasonable time.
     @ViewBuilder
     private var trainingCalendarToolbarTrailing: some View {
         HStack(spacing: 12) {
@@ -254,7 +256,6 @@ struct TrainingCalendarView: View {
         trainingCalendarMain
     }
 
-    /// Isolated from `body` to keep SwiftUI type-checking within a reasonable bound.
     private var trainingCalendarMain: some View {
         trainingCalendarStackWithLifecycleModifiers
     }
@@ -318,26 +319,27 @@ struct TrainingCalendarView: View {
     }
 
     private var trainingCalendarStackWithBurningBackground: some View {
-        trainingCalendarStackWithMapCover
-            .background(trainingCalendarBurningBackground)
+        GeometryReader { geo in
+            trainingCalendarStackWithMapCover
+                .background(trainingCalendarBurningBackground)
+                .onAppear {
+                    detectedWidth = geo.size.width
+                }
+                .onChange(of: geo.size.width) { _, newWidth in
+                    detectedWidth = newWidth
+                }
+        }
     }
 
     private var trainingCalendarBurningBackground: some View {
-        GradientBackgrounds().burningGradient(animationPhase: $animationPhase)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                    animationPhase = 20
-                }
-            }
-    }
-
-    private var trainingCalendarBurningBackgroundFull: some View {
-        GradientBackgrounds().burningGradientFull(animationPhase: $animationPhase)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                    animationPhase = 20
-                }
-            }
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            let period = 8.0
+            let s = sin((elapsed / period) * (2 * Double.pi))
+            let phase = (s + 1) * 0.5 * 20.0
+            GradientBackgrounds()
+                .burningGradient(animationPhase: .constant(phase))
+        }
     }
 
     private var trainingCalendarStackWithMapCover: some View {
@@ -402,11 +404,15 @@ struct TrainingCalendarView: View {
                 let streakState = activeStreakState
                 VStack(alignment: .leading, spacing: 22) {
                     calendarHero
-                    streakSummaryView(currentStreak: streakState.length)
-                    calendarGridView(streakHighlight: streakState.highlight)
+                    streakSummaryView(isCompact: isCompactWidth, currentStreak: streakState.length)
+                    if isCompactWidth {
+                        calendarListView(streakHighlight: streakState.highlight)
+                    } else {
+                        calendarGridView(streakHighlight: streakState.highlight)
+                    }
                     selectedDayTimeline
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, isCompactWidth ? 12 : 18)
                 .padding(.top, 18)
                 .padding(.bottom, 28)
             }
@@ -486,10 +492,10 @@ struct TrainingCalendarView: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Consistency compounds.")
-                        .font(.system(.title2, design: .rounded, weight: .bold))
+                        .font(.system(isCompactWidth ? .title3 : .title2, design: .rounded, weight: .bold))
                         .foregroundStyle(.primary)
                     Text("See streaks, session density, and every training block laid out like a real athlete's calendar.")
-                        .font(.subheadline)
+                        .font(isCompactWidth ? .caption : .subheadline)
                         .foregroundStyle(.secondary)
                 }
 
@@ -510,7 +516,7 @@ struct TrainingCalendarView: View {
 
                 VStack(spacing: 4) {
                     Text(monthTitle)
-                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .font(.system(isCompactWidth ? .title3 : .title3, design: .rounded, weight: .bold))
                     Text("\(monthWorkoutCount) workouts across \(monthCompletionCount) active days")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -534,7 +540,7 @@ struct TrainingCalendarView: View {
                 }
             }
         }
-        .padding(22)
+        .padding(isCompactWidth ? 16 : 22)
         .background(
             LinearGradient(
                 colors: [
@@ -545,20 +551,131 @@ struct TrainingCalendarView: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+            in: RoundedRectangle(cornerRadius: isCompactWidth ? 20 : 28, style: .continuous)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: isCompactWidth ? 20 : 28, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
     }
 
-    private func streakSummaryView(currentStreak streakLen: Int) -> some View {
-        HStack(spacing: 12) {
-            CalendarStatCard(title: "Current Streak", value: "\(streakLen)", subtitle: streakLen == 1 ? "day" : "days", tint: .orange)
-            CalendarStatCard(title: "Best Streak", value: "\(longestStreak)", subtitle: longestStreak == 1 ? "day" : "days", tint: .yellow)
-            CalendarStatCard(title: "Active Days", value: "\(monthCompletionCount)", subtitle: "this month", tint: .red)
+    private func streakSummaryView(isCompact: Bool, currentStreak streakLen: Int) -> some View {
+        Group {
+            if isCompact {
+                VStack(spacing: 10) {
+                    CalendarStatCard(title: "Current Streak", value: "\(streakLen)", subtitle: streakLen == 1 ? "day" : "days", tint: .orange, isCompact: true)
+                    CalendarStatCard(title: "Best Streak", value: "\(longestStreak)", subtitle: longestStreak == 1 ? "day" : "days", tint: .yellow, isCompact: true)
+                    CalendarStatCard(title: "Active Days", value: "\(monthCompletionCount)", subtitle: "this month", tint: .red, isCompact: true)
+                }
+            } else {
+                HStack(spacing: 12) {
+                    CalendarStatCard(title: "Current Streak", value: "\(streakLen)", subtitle: streakLen == 1 ? "day" : "days", tint: .orange, isCompact: false)
+                    CalendarStatCard(title: "Best Streak", value: "\(longestStreak)", subtitle: longestStreak == 1 ? "day" : "days", tint: .yellow, isCompact: false)
+                    CalendarStatCard(title: "Active Days", value: "\(monthCompletionCount)", subtitle: "this month", tint: .red, isCompact: false)
+                }
+            }
         }
+    }
+
+    private func calendarListView(streakHighlight: (lower: Date, upper: Date)?) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Training Month")
+                    .font(.headline)
+                Spacer()
+                if let sportFilter {
+                    Text(sportFilter.capitalized)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.orange.opacity(0.16), in: Capsule())
+                }
+            }
+
+            LazyVStack(spacing: 8) {
+                ForEach(monthDays.filter { $0.isInDisplayedMonth }) { slot in
+                    calendarCompactDayRow(
+                        slot: slot,
+                        isToday: calendar.isDateInToday(slot.date),
+                        isSelected: calendar.isDate(slot.date, inSameDayAs: selectedDay),
+                        isPartOfCurrentStreak: isStreakHighlightDay(slot.date, window: streakHighlight),
+                        onSelectDay: {
+                            selectedDay = slot.date
+                        }
+                    )
+                }
+            }
+        }
+        .padding(isCompactWidth ? 14 : 18)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+
+    private func calendarCompactDayRow(slot: CalendarDaySlot, isToday: Bool, isSelected: Bool, isPartOfCurrentStreak: Bool, onSelectDay: @escaping () -> Void) -> some View {
+        Button(action: onSelectDay) {
+            compactDayRowContent(slot: slot, isSelected: isSelected, isPartOfCurrentStreak: isPartOfCurrentStreak)
+        }
+        .buttonStyle(.plain)
+        .catalystFocusablePrimaryAction(onSelectDay)
+    }
+
+    @ViewBuilder
+    private func compactDayRowContent(slot: CalendarDaySlot, isSelected: Bool, isPartOfCurrentStreak: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(Calendar.current.component(.day, from: slot.date))")
+                    .font(.system(.body, design: .rounded, weight: .bold))
+                    .foregroundStyle(slot.isInDisplayedMonth ? Color.primary : Color.secondary.opacity(0.45))
+                Text(slot.date.formatted(.dateTime.weekday(.abbreviated)))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 44)
+
+            Spacer()
+
+            if slot.workouts.isEmpty {
+                Text("Rest")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("\(slot.workouts.count) workout\(slot.workouts.count == 1 ? "" : "s")")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(compactDayRowBackground(slot: slot, isSelected: isSelected, isPartOfCurrentStreak: isPartOfCurrentStreak))
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(compactDayRowOverlay(isSelected: isSelected, isPartOfCurrentStreak: isPartOfCurrentStreak))
+    }
+
+    @ViewBuilder
+    private func compactDayRowBackground(slot: CalendarDaySlot, isSelected: Bool, isPartOfCurrentStreak: Bool) -> some View {
+        if isSelected {
+            Color.orange.opacity(0.15)
+        } else if isPartOfCurrentStreak {
+            Color.yellow.opacity(0.1)
+        } else {
+            Color.clear
+        }
+    }
+
+    @ViewBuilder
+    private func compactDayRowOverlay(isSelected: Bool, isPartOfCurrentStreak: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(
+                isSelected ? Color.orange.opacity(0.5) : (isPartOfCurrentStreak ? Color.yellow.opacity(0.3) : Color.clear),
+                lineWidth: 1
+            )
     }
 
     private func calendarGridView(streakHighlight: (lower: Date, upper: Date)?) -> some View {
@@ -576,9 +693,9 @@ struct TrainingCalendarView: View {
                 }
             }
 
-            let columns = Self.weekdayGridColumns
+            let columns = adaptiveWeekdayGridColumns
 
-            LazyVGrid(columns: columns, spacing: 10) {
+            LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(orderedWeekdaySymbols, id: \.self) { symbol in
                     Text(symbol.uppercased())
                         .font(.caption2.weight(.bold))
@@ -592,6 +709,7 @@ struct TrainingCalendarView: View {
                         isToday: calendar.isDateInToday(slot.date),
                         isSelected: calendar.isDate(slot.date, inSameDayAs: selectedDay),
                         isPartOfCurrentStreak: isStreakHighlightDay(slot.date, window: streakHighlight),
+                        isCompact: false,
                         onSelectDay: {
                             selectedDay = slot.date
                         },
@@ -611,6 +729,10 @@ struct TrainingCalendarView: View {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
+    }
+
+    private var adaptiveWeekdayGridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 7)
     }
 
     private var selectedDayTimeline: some View {
@@ -645,48 +767,7 @@ struct TrainingCalendarView: View {
                             analytics: pair.analytics
                         )
                     } label: {
-                        HStack(alignment: .top, spacing: 12) {
-                            Circle()
-                                .fill(activityTint(for: pair.workout.workoutActivityType))
-                                .frame(width: 12, height: 12)
-                                .padding(.top, 5)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(pair.workout.workoutActivityType.name.capitalized)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-
-                                Text("\(pair.workout.startDate.formatted(.dateTime.hour().minute())) • \(Int(pair.workout.duration / 60)) min")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-
-                                HStack(spacing: 10) {
-                                    if let kcal = pair.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
-                                        calendarMetricPill(title: "\(Int(kcal)) kcal", tint: .orange)
-                                    }
-                                    if let avgHR = pair.analytics.heartRates.map({ $0.1 }).average {
-                                        calendarMetricPill(title: "\(Int(avgHR)) bpm", tint: .red)
-                                    }
-                                    if let distance = pair.workout.totalDistance?.doubleValue(for: .meter()) {
-                                        let km = distance / 1000
-                                        calendarMetricPill(title: String(format: "%.1f km", km), tint: .blue)
-                                    }
-                                }
-                            }
-
-                            Spacer()
-
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 4)
-                        }
-                        .padding(16)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(activityTint(for: pair.workout.workoutActivityType).opacity(0.18), lineWidth: 1)
-                        )
+                        compactWorkoutRow(pair: pair)
                     }
                     .buttonStyle(.plain)
                     .catalystFocusablePrimaryAction {
@@ -706,7 +787,50 @@ struct TrainingCalendarView: View {
         )
     }
 
-    private static let weekdayGridColumns = Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 7)
+    private func compactWorkoutRow(pair: (workout: HKWorkout, analytics: WorkoutAnalytics)) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(activityTint(for: pair.workout.workoutActivityType))
+                .frame(width: 12, height: 12)
+                .padding(.top, 5)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(pair.workout.workoutActivityType.name.capitalized)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Text("\(pair.workout.startDate.formatted(.dateTime.hour().minute())) • \(Int(pair.workout.duration / 60)) min")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    if let kcal = pair.workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                        calendarMetricPill(title: "\(Int(kcal)) kcal", tint: .orange)
+                    }
+                    if let avgHR = pair.analytics.heartRates.map({ $0.1 }).average {
+                        calendarMetricPill(title: "\(Int(avgHR)) bpm", tint: .red)
+                    }
+                    if let distance = pair.workout.totalDistance?.doubleValue(for: .meter()) {
+                        let km = distance / 1000
+                        calendarMetricPill(title: String(format: "%.1f km", km), tint: .blue)
+                    }
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(activityTint(for: pair.workout.workoutActivityType).opacity(0.18), lineWidth: 1)
+        )
+    }
 
     private func isStreakHighlightDay(_ date: Date, window: (lower: Date, upper: Date)?) -> Bool {
         guard let window else { return false }
@@ -818,24 +942,25 @@ private struct CalendarStatCard: View {
     let value: String
     let subtitle: String
     let tint: Color
+    let isCompact: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: isCompact ? 4 : 8) {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.system(.title2, design: .rounded, weight: .bold))
+                .font(.system(isCompact ? .title : .title2, design: .rounded, weight: .bold))
                 .foregroundStyle(tint)
             Text(subtitle.uppercased())
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(isCompact ? 10 : 14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: isCompact ? 14 : 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: isCompact ? 14 : 20, style: .continuous)
                 .stroke(tint.opacity(0.2), lineWidth: 1)
         )
         .catalystDesktopFocusable()
@@ -848,18 +973,19 @@ private struct TrainingCalendarDayCell: View {
     let isToday: Bool
     let isSelected: Bool
     let isPartOfCurrentStreak: Bool
+    let isCompact: Bool
     let onSelectDay: () -> Void
     let onSelectWorkout: ((workout: HKWorkout, analytics: WorkoutAnalytics)) -> Void
 
     private var visibleWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
-        Array(slot.workouts.prefix(3))
+        isCompact ? Array(slot.workouts.prefix(1)) : Array(slot.workouts.prefix(2))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: isCompact ? 4 : 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text("\(Calendar.current.component(.day, from: slot.date))")
-                    .font(.system(.body, design: .rounded, weight: .bold))
+                    .font(.system(isCompact ? .caption : .body, design: .rounded, weight: .bold))
                     .foregroundStyle(slot.isInDisplayedMonth ? Color.primary : Color.secondary.opacity(0.45))
 
                 Spacer()
@@ -881,18 +1007,18 @@ private struct TrainingCalendarDayCell: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pair.workout.startDate.formatted(.dateTime.hour().minute()))
-                                .font(.caption2.weight(.bold))
+                                .font(isCompact ? .caption2 : .caption2.weight(.bold))
                             Text("\(pair.workout.workoutActivityType.name.capitalized) • \(Int(pair.workout.duration / 60))m")
-                                .font(.caption2)
+                                .font(isCompact ? .caption2 : .caption2)
                                 .lineLimit(1)
                         }
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, isCompact ? 4 : 7)
+                        .padding(.vertical, isCompact ? 3 : 6)
                         .background(
                             activityTint(for: pair.workout.workoutActivityType).opacity(0.18),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
                     }
                     .buttonStyle(.plain)
@@ -918,14 +1044,14 @@ private struct TrainingCalendarDayCell: View {
                 }
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
-        .background(backgroundFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(isCompact ? 6 : 10)
+        .frame(maxWidth: .infinity, minHeight: isCompact ? 70 : 100, alignment: .topLeading)
+        .background(backgroundFill, in: RoundedRectangle(cornerRadius: isCompact ? 12 : 18, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: isCompact ? 12 : 18, style: .continuous)
                 .stroke(borderColor, lineWidth: isSelected ? 1.6 : 1)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: isCompact ? 12 : 18, style: .continuous))
         .onTapGesture(perform: onSelectDay)
         .catalystFocusablePrimaryAction(onSelectDay)
         .accessibilityLabel(

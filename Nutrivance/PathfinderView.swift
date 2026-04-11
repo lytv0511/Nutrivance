@@ -2868,50 +2868,33 @@ struct HarmonyGemSection: View {
 
     private var allCharged: Bool { !gems.isEmpty && gems.allSatisfy(\.isCharged) }
 
+    private let harmonyCircleSize: CGFloat = 120
+    private let compactThreshold: CGFloat = 500
+    private let fullWidthThreshold: CGFloat = 800
+
     var body: some View {
         VStack(spacing: 14) {
             Text("Harmony")
                 .font(.headline)
 
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 6)
-                    .frame(width: 120, height: 120)
+            GeometryReader { geo in
+                let width = geo.size.width
 
-                Circle()
-                    .trim(from: 0, to: averageCharge)
-                    .stroke(
-                        AngularGradient(colors: gemColors, center: .center),
-                        style: StrokeStyle(lineWidth: 6, lineCap: .round)
-                    )
-                    .frame(width: 120, height: 120)
-                    .rotationEffect(.degrees(-90))
-
-                if allCharged {
-                    Circle()
-                        .fill(
-                            RadialGradient(colors: [Color.orange.opacity(0.3), Color.clear], center: .center, startRadius: 20, endRadius: 70)
-                        )
-                        .frame(width: 140, height: 140)
-                        .scaleEffect(1 + pulsePhase * 0.08)
-                        .opacity(0.6 + pulsePhase * 0.4)
-                }
-
-                VStack(spacing: 2) {
-                    if allCharged {
-                        Image(systemName: "sparkle")
-                            .font(.title3)
-                            .foregroundStyle(.orange)
-                    }
-                    Text("\(Int(averageCharge * 100))%")
-                        .font(.system(.title3, design: .rounded, weight: .bold))
+                if width < compactThreshold {
+                    compactLayout
+                } else {
+                    expandedLayout(totalWidth: width)
                 }
             }
-            .onAppear {
-                if allCharged {
-                    withAnimation(.easeInOut(duration: 2).repeatForever(autoreverses: true)) { pulsePhase = 1 }
-                }
-            }
+            .frame(minHeight: harmonyCircleSize + 20)
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var compactLayout: some View {
+        VStack(spacing: 14) {
+            harmonyCircle
 
             HStack(spacing: 20) {
                 ForEach(gems) { gem in
@@ -2925,8 +2908,77 @@ struct HarmonyGemSection: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(14)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func expandedLayout(totalWidth: CGFloat) -> some View {
+        let showChargingHints = totalWidth >= fullWidthThreshold
+
+        return HStack(alignment: .top, spacing: 0) {
+            harmonyCircle
+                .frame(width: harmonyCircleSize + 20)
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(gems) { gem in
+                    ExpandedGemRow(
+                        gem: gem,
+                        showChargingHint: showChargingHints,
+                        maxBarWidth: showChargingHints ? 240 : 320
+                    )
+                }
+
+                if gems.isEmpty {
+                    Text("Commit to a path to activate gems.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
+                }
+            }
+            .padding(.leading, 20)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var harmonyCircle: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.08), lineWidth: 6)
+                .frame(width: harmonyCircleSize, height: harmonyCircleSize)
+
+            Circle()
+                .trim(from: 0, to: averageCharge)
+                .stroke(
+                    AngularGradient(colors: gemColors, center: .center),
+                    style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                )
+                .frame(width: harmonyCircleSize, height: harmonyCircleSize)
+                .rotationEffect(.degrees(-90))
+
+            if allCharged {
+                Circle()
+                    .fill(
+                        RadialGradient(colors: [Color.orange.opacity(0.3), Color.clear], center: .center, startRadius: 20, endRadius: 70)
+                    )
+                    .frame(width: 140, height: 140)
+                    .scaleEffect(1 + pulsePhase * 0.08)
+                    .opacity(0.6 + pulsePhase * 0.4)
+            }
+
+            VStack(spacing: 2) {
+                if allCharged {
+                    Image(systemName: "sparkle")
+                        .font(.title3)
+                        .foregroundStyle(.orange)
+                }
+                Text("\(Int(averageCharge * 100))%")
+                    .font(.system(.title3, design: .rounded, weight: .bold))
+            }
+        }
+        .onAppear {
+            if allCharged {
+                withAnimation(.easeInOut(duration: 2).repeatForever(autoreverses: true)) { pulsePhase = 1 }
+            }
+        }
     }
 
     private var averageCharge: Double {
@@ -2937,6 +2989,113 @@ struct HarmonyGemSection: View {
     private var gemColors: [Color] {
         gems.isEmpty ? [.gray] : gems.map { gem in
             gem.isCharged ? .orange : gem.association.mode.accentColor
+        }
+    }
+
+    private func gemChargingHint(for gem: PathfinderGem) -> String {
+        let assoc = gem.association
+        let area = assoc.displayName.lowercased()
+        switch gem.association.mode {
+        case .reflect:
+            return "Journal and reflect on \(area)"
+        case .optimize:
+            return "Log habits and track \(area)"
+        case .express:
+            return "Capture ideas and sparks around \(area)"
+        case .analyze:
+            return "Review patterns and decisions in \(area)"
+        }
+    }
+}
+
+struct ExpandedGemRow: View {
+    let gem: PathfinderGem
+    let showChargingHint: Bool
+    let maxBarWidth: CGFloat
+    @State private var glow: Double = 0
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            gemIcon
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(gem.label)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+
+                    Spacer()
+
+                    Text("\(Int(gem.charge * 100))%")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.1))
+                        Capsule().fill(gem.isCharged ? Color.orange : Color.white.opacity(0.4))
+                            .frame(width: max(0, geo.size.width * gem.charge), height: 6)
+                    }
+                }
+                .frame(height: 6)
+                .frame(maxWidth: maxBarWidth)
+            }
+            .frame(maxWidth: showChargingHint ? 300 : .infinity)
+
+            if showChargingHint {
+                Text(gemChargingHint(for: gem))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 200, alignment: .leading)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(gem.isCharged ? Color.orange.opacity(0.05) : Color.clear)
+        .cornerRadius(8)
+    }
+
+    private var gemIcon: some View {
+        ZStack {
+            Image(systemName: "diamond.fill")
+                .font(.title2)
+                .foregroundStyle(
+                    gem.isCharged
+                    ? AnyShapeStyle(LinearGradient(colors: [.orange, .yellow], startPoint: .top, endPoint: .bottom))
+                    : AnyShapeStyle(gem.association.mode.accentColor.opacity(0.4 + gem.charge * 0.5))
+                )
+                .shadow(color: gem.isCharged ? .orange.opacity(0.6) : .clear, radius: 8 + glow * 4)
+
+            if gem.isCharged {
+                Image(systemName: "sparkle")
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .offset(x: 8, y: -8)
+                    .opacity(glow)
+            }
+        }
+        .frame(width: 32, height: 32)
+        .onAppear {
+            if gem.isCharged {
+                withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) { glow = 1 }
+            }
+        }
+    }
+
+    private func gemChargingHint(for gem: PathfinderGem) -> String {
+        let assoc = gem.association
+        let area = assoc.displayName.lowercased()
+        switch gem.association.mode {
+        case .reflect:
+            return "Journal and reflect on \(area)"
+        case .optimize:
+            return "Log habits and track \(area)"
+        case .express:
+            return "Capture ideas and sparks around \(area)"
+        case .analyze:
+            return "Review patterns and decisions in \(area)"
         }
     }
 }
@@ -3153,10 +3312,4 @@ extension PathfinderView {
     var journalNudge: some View {
         JournalNudgeView(quest: PathQuestStore.shared.activeQuest)
     }
-}
-
-// MARK: - Preview
-
-#Preview {
-    PathfinderView()
 }

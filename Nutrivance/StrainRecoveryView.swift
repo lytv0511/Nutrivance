@@ -261,12 +261,14 @@ struct StrainRecoveryView: View {
         MetricSectionGroup(title: "Recovery") {
             RecoveryScoreSection(
                 engine: engine,
+                navigationState: navigationState,
                 headlineTimeFilter: timeFilter,
                 chartTimeFilter: graphTimeFilter,
                 anchorDate: selectedDate
             )
             ReadinessScoreSection(
                 engine: engine,
+                navigationState: navigationState,
                 headlineTimeFilter: timeFilter,
                 chartTimeFilter: graphTimeFilter,
                 anchorDate: selectedDate
@@ -2047,6 +2049,50 @@ private func extractLastSeriesEntry(_ line: String, prefix: String) -> String? {
     let numbers = extractSeriesNumbers(from: content)
     guard let lastVal = numbers.last else { return nil }
     return "\(prefix) latest \(formatted(lastVal, digits: 1))"
+}
+
+private func stripMLXThinkingPreamble(_ text: String) -> String {
+    let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    let delimiters = [
+        "\n\n",
+        "\n",
+        "Answer:",
+        "Response:",
+        "Here is",
+        "Here's",
+    ]
+
+    for delimiter in delimiters {
+        if let range = normalized.range(of: delimiter, options: .caseInsensitive) {
+            let afterDelimiter = String(normalized[range.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if afterDelimiter.count > 80 {
+                return afterDelimiter
+            }
+        }
+    }
+
+    let paragraphs = normalized
+        .components(separatedBy: "\n\n")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+    let reasoningMarkers = [
+        "the user wants", "the user mentioned", "the user emphasized",
+        "i should", "so i should", "that suggests", "which is a",
+        "so the athlete", "the main focus is on"
+    ]
+
+    for paragraph in paragraphs.reversed() {
+        let lower = paragraph.lowercased()
+        let looksLikeReasoning = reasoningMarkers.contains { lower.hasPrefix($0) }
+        if !looksLikeReasoning && paragraph.count > 100 {
+            return paragraph
+        }
+    }
+
+    return normalized
 }
 
 private func collapseToSingleParagraph(_ text: String) -> String {
@@ -4191,9 +4237,10 @@ private struct StrainRecoveryAISummarySection: View {
                     .prefix(3)
                     .map { "- \($0)" }
                     .joined(separator: "\n")
+                let rawParagraph = stripMLXThinkingPreamble(rendered.paragraph)
                 let cleaned = bulletBlock.isEmpty
-                    ? rendered.paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : "\(rendered.paragraph.trimmingCharacters(in: .whitespacesAndNewlines))\n\n\(bulletBlock)"
+                    ? rawParagraph.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : "\(rawParagraph.trimmingCharacters(in: .whitespacesAndNewlines))\n\n\(bulletBlock)"
                         .trimmingCharacters(in: .whitespacesAndNewlines)
 
                 let resolvedSummary: String
@@ -8629,10 +8676,12 @@ struct StrainRecoveryMathSection: View {
 struct RecoveryScoreSection: View {
     @ObservedObject var engine: HealthStateEngine
     @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
+    var navigationState: NavigationState
     let headlineTimeFilter: StrainRecoveryView.TimeFilter
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
     @State private var showTechnicalSheet = false
+    @State private var showRecoveryDetail = false
     @State private var cachedRecoveryData: [(Date, Double)] = []
     @State private var cachedRecoveryDataKey: String = ""
 
@@ -8762,13 +8811,20 @@ struct RecoveryScoreSection: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     Button("View more") {
-                        showTechnicalSheet = true
+                        if MacCatalystHealthDataPolicy.isActive {
+                            navigationState.selectedRootTab = .recoveryScore
+                        } else {
+                            showRecoveryDetail = true
+                        }
                     }
                     .buttonStyle(.bordered)
                     .tint(.green)
                 }
             }
         )
+        .fullScreenCover(isPresented: $showRecoveryDetail) {
+            RecoveryScoreView()
+        }
         .fullScreenCover(isPresented: $showTechnicalSheet) {
             RecoveryScoreTechnicalSheet(
                 selectedDay: selectedDay,
@@ -8795,9 +8851,12 @@ struct RecoveryScoreSection: View {
 @MainActor
 struct ReadinessScoreSection: View {
     @ObservedObject var engine: HealthStateEngine
+    @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
+    var navigationState: NavigationState
     let headlineTimeFilter: StrainRecoveryView.TimeFilter
     let chartTimeFilter: StrainRecoveryView.TimeFilter
     let anchorDate: Date
+    @State private var showReadinessDetail = false
     @State private var cachedLoadSnapshots: [WorkoutSummarySnapshot] = []
     @State private var cachedReadinessData: [(Date, Double)] = []
     @State private var cachedReadinessDataKey: String = ""
@@ -8864,12 +8923,18 @@ struct ReadinessScoreSection: View {
     var body: some View {
         let averageReadiness = average(readinessData.map(\.1)) ?? selectedReadinessScore
         let headlineReadiness = headlineTimeFilter == .day ? selectedReadinessScore : averageReadiness
+        let readinessTuning = NutrivanceTuningEngine.display(
+            base: headlineReadiness,
+            metric: .readiness,
+            store: tuningStore
+        )
+        let displayedHeadlineReadiness = readinessTuning.adjusted
         let readinessState = readinessClassification(for: selectedReadinessScore)
 
         HealthCard(
             symbol: "figure.run.circle.fill",
             title: "Readiness Score",
-            value: String(format: "%.0f", headlineReadiness),
+            value: String(format: "%.0f", displayedHeadlineReadiness),
             unit: "/100",
             valueContext: metricValueContext(for: headlineTimeFilter, dayLabel: "today", aggregateKind: "avg"),
             trend: "\(chartTimeFilter.rawValue) avg: " + String(format: "%.0f", averageReadiness),
@@ -8889,15 +8954,32 @@ struct ReadinessScoreSection: View {
             },
             expandedContent: {
                 VStack(alignment: .leading, spacing: 6) {
+                    NutrivanceTuningValueCaption(
+                        result: readinessTuning,
+                        unitSuffix: "/100",
+                        format: { String(format: "%.0f", $0) }
+                    )
                     Text("Readiness blends recovery reserve, HRV trend support, and strain drag into one training-day score.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     Text("For \(selectedDay.formatted(date: .abbreviated, time: .omitted)), readiness lands at \(formatted(selectedReadinessScore, digits: 1))/100 after recovery support and strain cost are combined.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    Button("View more") {
+                        if MacCatalystHealthDataPolicy.isActive {
+                            navigationState.selectedRootTab = .readiness
+                        } else {
+                            showReadinessDetail = true
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.cyan)
                 }
             }
         )
+        .fullScreenCover(isPresented: $showReadinessDetail) {
+            ReadinessCheckView()
+        }
     }
 }
 

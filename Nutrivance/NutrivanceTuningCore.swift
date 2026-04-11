@@ -100,7 +100,28 @@ struct NutrivanceTuningReport: Identifiable, Codable, Equatable {
     var userNote: String
     var shortAttributionLabel: String
     var effectiveStrength: Double
+    var decayRate: Double
+    var lastAppliedAt: Date?
+    var computedWeight: Double
     var isEnabled: Bool
+
+    static let defaultDecayRate: Double = 0.0035
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case createdAt
+        case metric
+        case factor
+        case userDirection
+        case nudgeLevel
+        case userNote
+        case shortAttributionLabel
+        case effectiveStrength
+        case decayRate
+        case lastAppliedAt
+        case computedWeight
+        case isEnabled
+    }
 
     init(
         id: UUID = UUID(),
@@ -112,8 +133,13 @@ struct NutrivanceTuningReport: Identifiable, Codable, Equatable {
         userNote: String,
         shortAttributionLabel: String,
         effectiveStrength: Double = 0.6,
+        decayRate: Double = NutrivanceTuningReport.defaultDecayRate,
+        lastAppliedAt: Date? = nil,
+        computedWeight: Double? = nil,
         isEnabled: Bool = true
     ) {
+        let clampedStrength = max(0, min(1, effectiveStrength))
+        let clampedDecayRate = max(0, min(1, decayRate))
         self.id = id
         self.createdAt = createdAt
         self.metric = metric
@@ -122,8 +148,107 @@ struct NutrivanceTuningReport: Identifiable, Codable, Equatable {
         self.nudgeLevel = nudgeLevel
         self.userNote = userNote
         self.shortAttributionLabel = shortAttributionLabel
-        self.effectiveStrength = max(0, min(1, effectiveStrength))
+        self.effectiveStrength = clampedStrength
+        self.decayRate = clampedDecayRate
+        self.lastAppliedAt = lastAppliedAt
+        self.computedWeight = max(0, min(1, computedWeight ?? Self.decayedWeight(
+            baseStrength: clampedStrength,
+            decayRate: clampedDecayRate,
+            anchorDate: Self.decayAnchorDate(createdAt: createdAt, lastAppliedAt: lastAppliedAt),
+            asOf: Date()
+        )))
         self.isEnabled = isEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        let createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        let metric = try container.decode(NutrivanceTuningMetric.self, forKey: .metric)
+        let factor = try container.decode(NutrivanceTuningFactor.self, forKey: .factor)
+        let userDirection = try container.decodeIfPresent(Double.self, forKey: .userDirection) ?? 1
+        let nudgeLevel = try container.decodeIfPresent(NutrivanceTuningNudgeLevel.self, forKey: .nudgeLevel) ?? .medium
+        let userNote = try container.decodeIfPresent(String.self, forKey: .userNote) ?? ""
+        let shortAttributionLabel = try container.decodeIfPresent(String.self, forKey: .shortAttributionLabel) ?? "Tuning"
+        let effectiveStrength = try container.decodeIfPresent(Double.self, forKey: .effectiveStrength) ?? 0.6
+        let decayRate = try container.decodeIfPresent(Double.self, forKey: .decayRate) ?? Self.defaultDecayRate
+        let lastAppliedAt = try container.decodeIfPresent(Date.self, forKey: .lastAppliedAt)
+        let computedWeight = try container.decodeIfPresent(Double.self, forKey: .computedWeight)
+        let isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+
+        self.init(
+            id: id,
+            createdAt: createdAt,
+            metric: metric,
+            factor: factor,
+            userDirection: userDirection,
+            nudgeLevel: nudgeLevel,
+            userNote: userNote,
+            shortAttributionLabel: shortAttributionLabel,
+            effectiveStrength: effectiveStrength,
+            decayRate: decayRate,
+            lastAppliedAt: lastAppliedAt,
+            computedWeight: computedWeight,
+            isEnabled: isEnabled
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(metric, forKey: .metric)
+        try container.encode(factor, forKey: .factor)
+        try container.encode(userDirection, forKey: .userDirection)
+        try container.encode(nudgeLevel, forKey: .nudgeLevel)
+        try container.encode(userNote, forKey: .userNote)
+        try container.encode(shortAttributionLabel, forKey: .shortAttributionLabel)
+        try container.encode(effectiveStrength, forKey: .effectiveStrength)
+        try container.encode(decayRate, forKey: .decayRate)
+        try container.encodeIfPresent(lastAppliedAt, forKey: .lastAppliedAt)
+        try container.encode(resolvedComputedWeight(), forKey: .computedWeight)
+        try container.encode(isEnabled, forKey: .isEnabled)
+    }
+
+    var decayAnchorDate: Date {
+        Self.decayAnchorDate(createdAt: createdAt, lastAppliedAt: lastAppliedAt)
+    }
+
+    func ageInDays(asOf date: Date = Date()) -> Double {
+        max(0, date.timeIntervalSince(decayAnchorDate) / 86_400)
+    }
+
+    func resolvedComputedWeight(asOf date: Date = Date()) -> Double {
+        Self.decayedWeight(
+            baseStrength: effectiveStrength,
+            decayRate: decayRate,
+            anchorDate: decayAnchorDate,
+            asOf: date
+        )
+    }
+
+    mutating func refreshComputedWeight(asOf date: Date = Date()) {
+        computedWeight = resolvedComputedWeight(asOf: date)
+    }
+
+    private static func decayAnchorDate(createdAt: Date, lastAppliedAt: Date?) -> Date {
+        if let lastAppliedAt, lastAppliedAt > createdAt {
+            return lastAppliedAt
+        }
+        return createdAt
+    }
+
+    private static func decayedWeight(
+        baseStrength: Double,
+        decayRate: Double,
+        anchorDate: Date,
+        asOf date: Date
+    ) -> Double {
+        let clampedStrength = max(0, min(1, baseStrength))
+        let clampedDecayRate = max(0, min(1, decayRate))
+        let ageInDays = max(0, date.timeIntervalSince(anchorDate) / 86_400)
+        let decayMultiplier = Foundation.exp(-clampedDecayRate * ageInDays)
+        return max(0, min(1, clampedStrength * decayMultiplier))
     }
 }
 
@@ -170,15 +295,52 @@ enum NutrivanceTuningEngine {
     private static let maxDeltaStrain: Double = 1.5
     private static let maxDeltaReadiness: Double = 6
 
+    static func maximumDelta(for metric: NutrivanceTuningMetric) -> Double {
+        switch metric {
+        case .recovery: return maxDeltaRecovery
+        case .strain: return maxDeltaStrain
+        case .readiness: return maxDeltaReadiness
+        }
+    }
+
+    static func reportSignal(for report: NutrivanceTuningReport, asOf date: Date = Date()) -> Double {
+        let sign = report.userDirection >= 0 ? 1.0 : -1.0
+        let magnitude = abs(report.userDirection) > 0.01 ? abs(report.userDirection) : 1.0
+        return sign * magnitude * report.nudgeLevel.scalar * report.resolvedComputedWeight(asOf: date)
+    }
+
+    static func reportDisplayDelta(
+        for report: NutrivanceTuningReport,
+        metric: NutrivanceTuningMetric,
+        asOf date: Date = Date()
+    ) -> Double {
+        reportSignal(for: report, asOf: date) * (maximumDelta(for: metric) / 3.0)
+    }
+
     static func display(
         base: Double,
         metric: NutrivanceTuningMetric,
         store: NutrivanceTuningStore
     ) -> NutrivanceTuningDisplayResult {
-        guard store.isMetricGloballyEnabled(metric) else {
+        display(
+            base: base,
+            metric: metric,
+            reports: store.reports,
+            isMetricEnabled: store.isMetricGloballyEnabled(metric)
+        )
+    }
+
+    static func display(
+        base: Double,
+        metric: NutrivanceTuningMetric,
+        reports: [NutrivanceTuningReport],
+        isMetricEnabled: Bool = true,
+        asOf date: Date = Date()
+    ) -> NutrivanceTuningDisplayResult {
+        guard isMetricEnabled else {
             return NutrivanceTuningDisplayResult(base: base, adjusted: base, delta: 0, contributingReports: [])
         }
-        let active = store.reports.filter { $0.isEnabled && $0.metric == metric }
+        let active = reports.filter { $0.isEnabled && $0.metric == metric }
         guard !active.isEmpty else {
             return NutrivanceTuningDisplayResult(base: base, adjusted: base, delta: 0, contributingReports: [])
         }
@@ -187,21 +349,11 @@ enum NutrivanceTuningEngine {
         var contributors: [NutrivanceTuningReport] = []
 
         for report in active.sorted(by: { $0.createdAt < $1.createdAt }) {
-            let sign = report.userDirection >= 0 ? 1.0 : -1.0
-            let mag = abs(report.userDirection) > 0.01 ? abs(report.userDirection) : 1.0
-            let perReport = sign * mag * report.nudgeLevel.scalar * report.effectiveStrength
-            sum += perReport
+            sum += reportSignal(for: report, asOf: date)
             contributors.append(report)
         }
 
-        let maxD: Double = {
-            switch metric {
-            case .recovery: return maxDeltaRecovery
-            case .strain: return maxDeltaStrain
-            case .readiness: return maxDeltaReadiness
-            }
-        }()
-
+        let maxD = maximumDelta(for: metric)
         let rawDelta = max(-maxD, min(maxD, sum * (maxD / 3.0)))
         let adjusted: Double = {
             switch metric {
@@ -238,6 +390,7 @@ final class NutrivanceTuningStore: ObservableObject {
     @Published var showTestingOverlay: Bool = false {
         didSet { UserDefaults.standard.set(showTestingOverlay, forKey: kTestingOverlayLocal) }
     }
+    @Published var canvasCardPositions: [String: CGPoint] = [:]
 
     /// Pending ops from Mac (also mirrored on Mac after enqueue) until iOS merges.
     @Published private(set) var pendingIOSOperations: [NutrivanceTuningPendingOperation] = []
@@ -271,9 +424,10 @@ final class NutrivanceTuningStore: ObservableObject {
     }
 
     func addReport(_ report: NutrivanceTuningReport) {
-        reports.append(report)
+        let normalized = refreshedReport(report, touchedAt: report.lastAppliedAt ?? Date())
+        reports.append(normalized)
         reinforceAllReportsInPlace()
-        let finalReport = reports.first(where: { $0.id == report.id }) ?? report
+        let finalReport = reports.first(where: { $0.id == report.id }) ?? normalized
         if NutrivanceTuningPlatformPolicy.isHandheldAuthoritativeWriter {
             persistAuthoritativeToICloud()
         } else {
@@ -285,11 +439,11 @@ final class NutrivanceTuningStore: ObservableObject {
 
     func updateReport(_ report: NutrivanceTuningReport) {
         guard let idx = reports.firstIndex(where: { $0.id == report.id }) else { return }
-        reports[idx] = report
+        reports[idx] = refreshedReport(report, touchedAt: Date())
         if NutrivanceTuningPlatformPolicy.isHandheldAuthoritativeWriter {
             persistAuthoritativeToICloud()
         } else {
-            pendingIOSOperations.append(.upsert(report))
+            pendingIOSOperations.append(.upsert(reports[idx]))
             persistPendingToICloud()
             mirrorLocalCache()
         }
@@ -309,6 +463,8 @@ final class NutrivanceTuningStore: ObservableObject {
     func setEffectiveStrength(id: UUID, strength: Double) {
         guard let idx = reports.firstIndex(where: { $0.id == id }) else { return }
         reports[idx].effectiveStrength = max(0, min(1, strength))
+        reports[idx].lastAppliedAt = Date()
+        reports[idx].refreshComputedWeight()
         let copy = reports[idx]
         if NutrivanceTuningPlatformPolicy.isHandheldAuthoritativeWriter {
             persistAuthoritativeToICloud()
@@ -329,6 +485,8 @@ final class NutrivanceTuningStore: ObservableObject {
                 delta += sameSign ? 0.04 : -0.06
             }
             r.effectiveStrength = max(0.15, min(1, r.effectiveStrength + delta))
+            r.lastAppliedAt = Date()
+            r.refreshComputedWeight()
             reports[i] = r
         }
     }
@@ -338,7 +496,7 @@ final class NutrivanceTuningStore: ObservableObject {
     private func loadLocalFirstThenCloud() {
         if let data = UserDefaults.standard.data(forKey: kLocalMirrorReports),
            let decoded = try? JSONDecoder().decode([NutrivanceTuningReport].self, from: data) {
-            reports = decoded
+            reports = refreshedReports(decoded)
         }
         if let data = UserDefaults.standard.data(forKey: kLocalMirrorMetrics),
            let decoded = try? JSONDecoder().decode([String: Bool].self, from: data) {
@@ -373,11 +531,11 @@ final class NutrivanceTuningStore: ObservableObject {
         applyMetricDict(auth.metricGloballyEnabled)
 
         if NutrivanceTuningPlatformPolicy.isHandheldAuthoritativeWriter {
-            reports = auth.reports
+            reports = refreshedReports(auth.reports)
         } else {
             // Mac: merge iCloud authoritative state with pending queue for immediate display.
             let merged = mergedReportsAndMetrics(authoritative: auth, pending: pending)
-            reports = merged.reports
+            reports = refreshedReports(merged.reports)
             applyMetricDict(merged.metrics)
         }
 
@@ -390,13 +548,13 @@ final class NutrivanceTuningStore: ObservableObject {
     }
 
     private func mergedReportsAndMetrics(authoritative: NutrivanceTuningAuthoritativeState, pending: [NutrivanceTuningPendingOperation]) -> (reports: [NutrivanceTuningReport], metrics: [String: Bool]) {
-        var map = Dictionary(uniqueKeysWithValues: authoritative.reports.map { ($0.id, $0) })
+        var map = Dictionary(uniqueKeysWithValues: refreshedReports(authoritative.reports).map { ($0.id, $0) })
         var metrics = authoritative.metricGloballyEnabled
 
         for op in pending {
             switch op {
             case .upsert(let r):
-                map[r.id] = r
+                map[r.id] = refreshedReport(r)
             case .delete(let id):
                 map[id] = nil
             case .metricToggle(let raw, let enabled):
@@ -417,6 +575,7 @@ final class NutrivanceTuningStore: ObservableObject {
     }
 
     private func persistAuthoritativeToICloud() {
+        reports = refreshedReports(reports)
         var dict: [String: Bool] = [:]
         for m in NutrivanceTuningMetric.allCases {
             dict[m.rawValue] = metricGloballyEnabled[m, default: true]
@@ -440,6 +599,7 @@ final class NutrivanceTuningStore: ObservableObject {
     }
 
     private func mirrorLocalCache() {
+        reports = refreshedReports(reports)
         if let data = try? JSONEncoder().encode(reports) {
             UserDefaults.standard.set(data, forKey: kLocalMirrorReports)
         }
@@ -466,7 +626,7 @@ final class NutrivanceTuningStore: ObservableObject {
         }
 
         let merged = mergedReportsAndMetrics(authoritative: auth, pending: pending)
-        reports = merged.reports
+        reports = refreshedReports(merged.reports)
         applyMetricDict(merged.metrics)
         pendingIOSOperations = []
 
@@ -480,6 +640,25 @@ final class NutrivanceTuningStore: ObservableObject {
     /// Call when the app becomes active so each device pulls latest KVS; handheld also merges Mac-queued ops inside `reloadFromICloud()`.
     func syncOnAppForeground() {
         reloadFromICloud()
+    }
+
+    private func refreshedReports(_ reports: [NutrivanceTuningReport], asOf date: Date = Date()) -> [NutrivanceTuningReport] {
+        reports.map { refreshedReport($0, asOf: date) }
+    }
+
+    private func refreshedReport(
+        _ report: NutrivanceTuningReport,
+        touchedAt: Date? = nil,
+        asOf date: Date = Date()
+    ) -> NutrivanceTuningReport {
+        var refreshed = report
+        refreshed.effectiveStrength = max(0, min(1, refreshed.effectiveStrength))
+        refreshed.decayRate = max(0, min(1, refreshed.decayRate))
+        if let touchedAt {
+            refreshed.lastAppliedAt = touchedAt
+        }
+        refreshed.refreshComputedWeight(asOf: date)
+        return refreshed
     }
 }
 
