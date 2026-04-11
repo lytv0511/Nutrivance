@@ -2487,6 +2487,10 @@ private struct ContainerView: View {
         return containerBounds.contains(center)
     }
     
+    private var shouldShowBoundingBox: Bool {
+        false
+    }
+    
     private var currentCenter: CGPoint {
         CGPoint(
             x: container.position.x + containerDragOffset.width,
@@ -2500,10 +2504,12 @@ private struct ContainerView: View {
             containerContent
         }
         .frame(width: activeWidth, height: activeHeight)
-        .background(Color.black.opacity(isDropTargeted ? 0.5 : 0.3))
+        .background(Color.black.opacity(isDropTargeted ? 0.5 : (shouldShowBoundingBox ? 0.3 : 0.0)))
         .overlay(
+            shouldShowBoundingBox ?
             RoundedRectangle(cornerRadius: 12)
                 .stroke(isDropTargeted ? accent : accent.opacity(0.4), lineWidth: isDropTargeted ? 4 : 2)
+            : nil
         )
         .shadow(
             color: isDropTargeted ? accent.opacity(0.5) : Color.black.opacity(0.3),
@@ -2700,15 +2706,109 @@ private struct ContainerView: View {
     
     @ViewBuilder
     private var containerContent: some View {
-        if container.isExpanded {
-            if container.layoutMode == .fan {
-                fanLayout
-            } else {
-                listLayout
+        unifiedCardLayer
+    }
+    
+    private var unifiedCardLayer: some View {
+        ZStack {
+            ForEach(Array(sortedCards.enumerated()), id: \.element.id) { index, report in
+                unifiedCardPosition(for: index, report: report)
             }
-        } else {
-            collapsedCardsLayer
+            
+            if !container.isExpanded && hasAppeared {
+                Text("\(cards.count)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .transition(.opacity)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAppeared)
+            }
         }
+        .animation(.spring(response: 0.5, dampingFraction: 0.75), value: container.isExpanded)
+        .animation(.spring(response: 0.5, dampingFraction: 0.75), value: container.layoutMode)
+    }
+    
+    private func unifiedCardPosition(for index: Int, report: NutrivanceTuningReport) -> some View {
+        let isExpanded = container.isExpanded
+        let isFan = container.layoutMode == .fan
+        
+        let targetX: CGFloat
+        let targetY: CGFloat
+        let cardWidth: CGFloat
+        let cardHeight: CGFloat
+        let scale: CGFloat
+        let opacity: Double
+        let rotation: Angle
+        
+        if !isExpanded {
+            targetX = activeWidth / 2 + cardOffsetX(for: index)
+            targetY = headerHeight + (activeHeight - headerHeight) / 2 + cardOffsetY(for: index)
+            cardWidth = collapsedCardWidth
+            cardHeight = collapsedCardHeight
+            scale = 0.92
+            opacity = index < 5 ? 1.0 - Double(index) * 0.12 : 0.0
+            rotation = cardRotation(for: index)
+        } else if isFan {
+            let fanCardWidth: CGFloat = 200
+            let fanCardHeight: CGFloat = 130
+            let overlap: CGFloat = 100
+            let leadingInset: CGFloat = 24
+            let totalWidth = fanCardWidth + CGFloat(max(cards.count - 1, 0)) * overlap + leadingInset * 2
+            let startX = leadingInset + fanCardWidth / 2
+            
+            targetX = startX + CGFloat(index) * overlap
+            targetY = headerHeight + fanCardHeight / 2 + 10
+            cardWidth = fanCardWidth
+            cardHeight = fanCardHeight
+            scale = 1.0
+            opacity = 1.0
+            let centeredIndex = Double(index) - Double(cards.count - 1) / 2
+            rotation = .degrees(centeredIndex * 5)
+        } else {
+            let listCardWidth = (containerWidth - horizontalPadding * 2 - 12) / 2
+            let listCardHeight: CGFloat = 140
+            let cols = 2
+            let row = index / cols
+            let col = index % cols
+            
+            targetX = horizontalPadding + listCardWidth / 2 + CGFloat(col) * (listCardWidth + 12)
+            targetY = headerHeight + verticalPadding + listCardHeight / 2 + CGFloat(row) * (listCardHeight + 12)
+            cardWidth = listCardWidth
+            cardHeight = listCardHeight
+            scale = 1.0
+            opacity = 1.0
+            rotation = .zero
+        }
+        
+        return ContainerCardView(
+            report: report,
+            metric: metric,
+            accent: accent,
+            colorScheme: colorScheme,
+            cardWidth: cardWidth,
+            isDragging: draggingCardId == report.id,
+            onTap: { onCardTap(report) },
+            onDragStarted: { center in
+                draggingCardInContainer = report.id
+                onCardDragStarted?(report.id, center)
+            },
+            onDragMoved: { center in
+                onCardDragMoved?(report.id, center)
+            },
+            onDragEnded: { center, offset in
+                handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
+                draggingCardInContainer = nil
+            },
+            cardHeight: cardHeight
+        )
+        .frame(width: cardWidth, height: cardHeight)
+        .scaleEffect(scale)
+        .opacity(opacity)
+        .rotationEffect(rotation)
+        .position(x: targetX, y: targetY)
+        .matchedGeometryEffect(id: report.id, in: containerNamespace)
     }
     
     private var listLayout: some View {
