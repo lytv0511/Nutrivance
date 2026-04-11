@@ -357,7 +357,7 @@ private struct MetricStackCard: View {
         return activeCount == 0 ? "\(reports.count) paused" : "\(activeCount) active"
     }
 
-    @State private var isOrganized = false
+    @State private var isOrganized = true
     @State private var hasAppeared = false
     @State private var cardOffsets: [UUID: CGSize] = [:]
 
@@ -403,11 +403,10 @@ private struct MetricStackCard: View {
         }
         .frame(maxWidth: .infinity)
         .onAppear {
-            guard !hasAppeared else { return }
-            hasAppeared = true
+            isOrganized = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 withAnimation(.spring(response: 0.6, dampingFraction: 0.7)) {
-                    isOrganized = true
+                    isOrganized = false
                 }
             }
         }
@@ -1264,6 +1263,11 @@ struct MetricStackDetailView: View {
     }
 }
 
+enum ContainerLayoutMode: String, CaseIterable, Codable {
+    case list
+    case fan
+}
+
 struct SmartContainerFilter: Equatable {
     enum FilterType: String, CaseIterable {
         case factor
@@ -1285,11 +1289,12 @@ struct CardContainer: Identifiable, Equatable {
     var position: CGPoint
     var cardIds: [UUID]
     var isExpanded: Bool = false
+    var layoutMode: ContainerLayoutMode = .list
     var isSmartContainer: Bool = false
     var smartFilter: SmartContainerFilter?
     
     static func == (lhs: CardContainer, rhs: CardContainer) -> Bool {
-        lhs.id == rhs.id && lhs.position == rhs.position && lhs.cardIds == rhs.cardIds && lhs.isExpanded == rhs.isExpanded && lhs.isSmartContainer == rhs.isSmartContainer && lhs.smartFilter == rhs.smartFilter
+        lhs.id == rhs.id && lhs.position == rhs.position && lhs.cardIds == rhs.cardIds && lhs.isExpanded == rhs.isExpanded && lhs.layoutMode == rhs.layoutMode && lhs.isSmartContainer == rhs.isSmartContainer && lhs.smartFilter == rhs.smartFilter
     }
     
     func matchingCards(from reports: [NutrivanceTuningReport]) -> [NutrivanceTuningReport] {
@@ -1404,6 +1409,7 @@ struct CodableCardContainer: Codable, Identifiable, Equatable {
     var position: CodablePoint
     var cardIds: [UUID]
     var isExpanded: Bool
+    var layoutMode: ContainerLayoutMode
     var isSmartContainer: Bool
     var smartFilter: CodableSmartFilter?
     
@@ -1412,6 +1418,7 @@ struct CodableCardContainer: Codable, Identifiable, Equatable {
         self.position = CodablePoint(container.position)
         self.cardIds = container.cardIds
         self.isExpanded = container.isExpanded
+        self.layoutMode = container.layoutMode
         self.isSmartContainer = container.isSmartContainer
         self.smartFilter = CodableSmartFilter(from: container.smartFilter)
     }
@@ -1422,6 +1429,7 @@ struct CodableCardContainer: Codable, Identifiable, Equatable {
             position: position.cgPoint,
             cardIds: cardIds,
             isExpanded: isExpanded,
+            layoutMode: layoutMode,
             isSmartContainer: isSmartContainer,
             smartFilter: smartFilter?.smartFilter
         )
@@ -2063,6 +2071,9 @@ private struct ZoomableCanvasContent: View {
                     onToggleExpand: {
                         cardContainers[container.id]?.isExpanded.toggle()
                     },
+                    onToggleLayoutMode: { mode in
+                        cardContainers[container.id]?.layoutMode = mode
+                    },
                     onDelete: {
                         cardContainers.removeValue(forKey: container.id)
                     },
@@ -2345,6 +2356,7 @@ private struct ContainerView: View {
     let cardWidth: CGFloat
     var onPositionChanged: (CGPoint) -> Void
     var onToggleExpand: () -> Void
+    var onToggleLayoutMode: (ContainerLayoutMode) -> Void
     var onDelete: () -> Void
     var onMakeSmart: (SmartContainerFilter) -> Void
     var onEditSmartFilter: (SmartContainerFilter) -> Void
@@ -2357,6 +2369,9 @@ private struct ContainerView: View {
     var draggingCardId: UUID?
     var draggingCardCenter: CGPoint?
     
+    @Namespace private var containerNamespace
+    @State private var hasAppeared = false
+    
     @GestureState private var containerDragOffset: CGSize = .zero
     @State private var isDraggingContainer: Bool = false
     @State private var showSmartConfig: Bool = false
@@ -2365,12 +2380,50 @@ private struct ContainerView: View {
     @State private var cardDragOffset: CGSize = .zero
     
     private let headerHeight: CGFloat = 36
-    private let containerCardWidth: CGFloat = 220
+    private let containerCardWidth: CGFloat = 260
     private let containerCardHeight: CGFloat = 160
-    private let cardsPerRow: Int = 2
-    private let containerWidth: CGFloat = 460
+    private let containerWidth: CGFloat = 560
     private let horizontalPadding: CGFloat = 12
     private let verticalPadding: CGFloat = 12
+    
+    private let collapsedWidth: CGFloat = 300
+    private let collapsedHeight: CGFloat = 200
+    private let collapsedCardWidth: CGFloat = 200
+    private let collapsedCardHeight: CGFloat = 120
+    private var collapsedCardAreaHeight: CGFloat { collapsedHeight - headerHeight }
+    
+    private func cardOffsetX(for index: Int) -> CGFloat {
+        switch index {
+        case 0: return -6
+        case 1: return 2
+        case 2: return 8
+        case 3: return -4
+        case 4: return 6
+        default: return 0
+        }
+    }
+    
+    private func cardOffsetY(for index: Int) -> CGFloat {
+        switch index {
+        case 0: return -8
+        case 1: return -2
+        case 2: return 6
+        case 3: return -4
+        case 4: return 4
+        default: return 0
+        }
+    }
+    
+    private func cardRotation(for index: Int) -> Angle {
+        switch index {
+        case 0: return .degrees(-3)
+        case 1: return .degrees(2)
+        case 2: return .degrees(5)
+        case 3: return .degrees(-1)
+        case 4: return .degrees(4)
+        default: return .zero
+        }
+    }
     
     private var sortedCards: [NutrivanceTuningReport] {
         let orderedIds = internalCardOrder.isEmpty ? cards.map { $0.id } : internalCardOrder
@@ -2378,22 +2431,51 @@ private struct ContainerView: View {
     }
     
     private var contentHeight: CGFloat {
-        let rowCount = max(1, (cards.count + cardsPerRow - 1) / cardsPerRow)
-        return CGFloat(rowCount) * (containerCardHeight + 8)
+        switch container.layoutMode {
+        case .list:
+            return min(CGFloat(max(cards.count, 1)) * (containerCardHeight + 12), 360)
+        case .fan:
+            return 220
+        }
     }
     
     private var totalHeight: CGFloat {
         headerHeight + contentHeight + verticalPadding * 2
     }
     
+    private var activeWidth: CGFloat {
+        if container.isExpanded {
+            if container.layoutMode == .fan {
+                let fanCardWidth: CGFloat = 230
+                let overlap: CGFloat = 120
+                let leadingInset: CGFloat = 24
+                return fanCardWidth + CGFloat(max(cards.count - 1, 0)) * overlap + leadingInset * 2 + horizontalPadding * 2
+            }
+            return containerWidth
+        }
+        return collapsedWidth
+    }
+    
+    private var activeHeight: CGFloat {
+        if container.isExpanded {
+            if container.layoutMode == .fan {
+                return headerHeight + 150 + verticalPadding * 2 + 20
+            }
+            return totalHeight
+        }
+        return collapsedHeight
+    }
+    
+    private let dropPadding: CGFloat = 30
+    
     private var containerBounds: CGRect {
         let centerX = container.position.x + containerDragOffset.width
         let centerY = container.position.y + containerDragOffset.height
         return CGRect(
-            x: centerX - containerWidth / 2,
-            y: centerY - totalHeight / 2,
-            width: containerWidth,
-            height: totalHeight
+            x: centerX - (activeWidth + dropPadding) / 2,
+            y: centerY - (activeHeight + dropPadding) / 2,
+            width: activeWidth + dropPadding,
+            height: activeHeight + dropPadding
         )
     }
     
@@ -2415,10 +2497,9 @@ private struct ContainerView: View {
     var body: some View {
         VStack(spacing: 0) {
             containerHeader
-            
             containerContent
         }
-        .frame(width: containerWidth, height: totalHeight)
+        .frame(width: activeWidth, height: activeHeight)
         .background(Color.black.opacity(isDropTargeted ? 0.5 : 0.3))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
@@ -2432,65 +2513,19 @@ private struct ContainerView: View {
         )
         .scaleEffect(isDropTargeted ? 1.05 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDropTargeted)
+        .animation(.spring(response: 0.5, dampingFraction: 0.75), value: container.isExpanded)
         .position(currentCenter)
-        .gesture(
-            DragGesture()
-                .onChanged { _ in
-                    if !isDraggingContainer {
-                        isDraggingContainer = true
-                    }
-                }
-                .updating($containerDragOffset) { value, state, _ in
-                    state = value.translation
-                }
-                .onEnded { value in
-                    let newPosition = CGPoint(
-                        x: container.position.x + value.translation.width,
-                        y: container.position.y + value.translation.height
-                    )
-                    onPositionChanged(newPosition)
-                    isDraggingContainer = false
-                }
-        )
+        .gesture(containerDragGesture)
         .onAppear {
             internalCardOrder = cards.map { $0.id }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                hasAppeared = true
+            }
         }
         .onChange(of: cards.map { $0.id }) { _, newValue in
             let existingOrder = internalCardOrder.filter { newValue.contains($0) }
             let newIds = newValue.filter { !existingOrder.contains($0) }
             internalCardOrder = existingOrder + newIds
-        }
-        .contextMenu {
-            Button {
-                onToggleExpand()
-            } label: {
-                Label(container.isExpanded ? "Collapse" : "Expand", systemImage: container.isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-            }
-            
-            Divider()
-            
-            if !container.isSmartContainer {
-                Button {
-                    showSmartConfig = true
-                } label: {
-                    Label("Make Smart Container", systemImage: "wand.and.stars")
-                }
-            } else {
-                Button {
-                    showSmartConfig = true
-                } label: {
-                    Label("Edit Smart Filter", systemImage: "pencil")
-                }
-                Label("Smart Container Active", systemImage: "checkmark.circle")
-            }
-            
-            Divider()
-            
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete Container", systemImage: "trash")
-            }
         }
         .sheet(isPresented: $showSmartConfig) {
             SmartContainerConfigView(
@@ -2506,14 +2541,116 @@ private struct ContainerView: View {
                 }
             )
         }
+        .contextMenu {
+            contextMenuContent
+        }
+    }
+    
+    private var collapsedCardsLayer: some View {
+        ZStack {
+            ForEach(Array(sortedCards.enumerated()), id: \.element.id) { index, report in
+                let targetX: CGFloat = collapsedWidth / 2 + cardOffsetX(for: index)
+                let targetY: CGFloat = headerHeight + collapsedCardAreaHeight / 2 + cardOffsetY(for: index)
+                let targetOpacity: Double = index < 5 ? 1.0 - Double(index) * 0.12 : 0.0
+                let targetRotation: Angle = cardRotation(for: index)
+                
+                ContainerCardView(
+                    report: report,
+                    metric: metric,
+                    accent: accent,
+                    colorScheme: colorScheme,
+                    cardWidth: collapsedCardWidth,
+                    isDragging: false,
+                    onTap: { onCardTap(report) },
+                    onDragStarted: { _ in },
+                    onDragMoved: { _ in },
+                    onDragEnded: { _, _ in },
+                    cardHeight: collapsedCardHeight
+                )
+                .frame(
+                    width: collapsedCardWidth,
+                    height: collapsedCardHeight
+                )
+                .scaleEffect(0.92)
+                .opacity(targetOpacity)
+                .rotationEffect(targetRotation)
+                .position(x: targetX, y: targetY)
+                .matchedGeometryEffect(id: report.id, in: containerNamespace)
+            }
+            
+            if hasAppeared {
+                Text("\(cards.count)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .transition(.opacity)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAppeared)
+            }
+        }
+    }
+
+    private var containerDragGesture: some Gesture {
+        DragGesture()
+            .onChanged { _ in
+                if !isDraggingContainer {
+                    isDraggingContainer = true
+                }
+            }
+            .updating($containerDragOffset) { value, state, _ in
+                state = value.translation
+            }
+            .onEnded { value in
+                let newPosition = CGPoint(
+                    x: container.position.x + value.translation.width,
+                    y: container.position.y + value.translation.height
+                )
+                onPositionChanged(newPosition)
+                isDraggingContainer = false
+            }
+    }
+    
+    @ViewBuilder
+    private var contextMenuContent: some View {
+        Button {
+            onToggleExpand()
+        } label: {
+            Label(container.isExpanded ? "Collapse" : "Expand", systemImage: container.isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+        }
+        
+        Divider()
+        
+        if !container.isSmartContainer {
+            Button {
+                showSmartConfig = true
+            } label: {
+                Label("Make Smart Container", systemImage: "wand.and.stars")
+            }
+        } else {
+            Button {
+                showSmartConfig = true
+            } label: {
+                Label("Edit Smart Filter", systemImage: "pencil")
+            }
+            Label("Smart Container Active", systemImage: "checkmark.circle")
+        }
+        
+        Divider()
+        
+        Button(role: .destructive) {
+            onDelete()
+        } label: {
+            Label("Delete Container", systemImage: "trash")
+        }
     }
     
     private var containerHeader: some View {
         HStack {
-            Image(systemName: container.isSmartContainer ? "wand.and.stars" : "folder")
+            Image(systemName: container.isSmartContainer ? "wand.and.stars" : "square.stack.3d.up")
                 .foregroundStyle(accent)
             
-            Text(container.isSmartContainer ? "Smart Container" : "Container")
+            Text(container.isSmartContainer ? "Smart" : "Stack")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
             
@@ -2522,6 +2659,26 @@ private struct ContainerView: View {
                 .foregroundStyle(.white.opacity(0.7))
             
             Spacer()
+            
+            if container.isExpanded && cards.count >= 2 {
+                Menu {
+                    Button {
+                        onToggleLayoutMode(.list)
+                    } label: {
+                        Label("List", systemImage: "list.bullet")
+                    }
+                    Button {
+                        onToggleLayoutMode(.fan)
+                    } label: {
+                        Label("Fan Deck", systemImage: "square.stack.3d.up")
+                    }
+                } label: {
+                    Image(systemName: container.layoutMode == .list ? "list.bullet" : "square.stack.3d.up")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .menuStyle(.borderlessButton)
+            }
             
             Button {
                 onToggleExpand()
@@ -2544,41 +2701,97 @@ private struct ContainerView: View {
     @ViewBuilder
     private var containerContent: some View {
         if container.isExpanded {
-            ScrollView {
-                LazyVGrid(columns: [
-                    GridItem(.fixed(containerCardWidth), spacing: 8),
-                    GridItem(.fixed(containerCardWidth), spacing: 8)
-                ], spacing: 8) {
-                    ForEach(Array(sortedCards.enumerated()), id: \.element.id) { index, report in
-                        ContainerCardView(
-                            report: report,
-                            metric: metric,
-                            accent: accent,
-                            colorScheme: colorScheme,
-                            cardWidth: containerCardWidth,
-                            isDragging: draggingCardId == report.id,
-                            onTap: {
-                                onCardTap(report)
-                            },
-                            onDragStarted: { center in
-                                draggingCardInContainer = report.id
-                                onCardDragStarted?(report.id, center)
-                            },
-                            onDragMoved: { center in
-                                onCardDragMoved?(report.id, center)
-                            },
-                            onDragEnded: { center, offset in
-                                handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
-                                draggingCardInContainer = nil
-                            },
-                            cardHeight: containerCardHeight
-                        )
-                    }
-                }
-                .padding(verticalPadding)
+            if container.layoutMode == .fan {
+                fanLayout
+            } else {
+                listLayout
             }
         } else {
-            collapsedContent
+            collapsedCardsLayer
+        }
+    }
+    
+    private var listLayout: some View {
+        ScrollView {
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 12),
+                GridItem(.flexible(), spacing: 12)
+            ], spacing: 12) {
+                ForEach(sortedCards, id: \.id) { report in
+                    ContainerCardView(
+                        report: report,
+                        metric: metric,
+                        accent: accent,
+                        colorScheme: colorScheme,
+                        cardWidth: (containerWidth - horizontalPadding * 2 - 12) / 2,
+                        isDragging: draggingCardId == report.id,
+                        onTap: {
+                            onCardTap(report)
+                        },
+                        onDragStarted: { center in
+                            draggingCardInContainer = report.id
+                            onCardDragStarted?(report.id, center)
+                        },
+                        onDragMoved: { center in
+                            onCardDragMoved?(report.id, center)
+                        },
+                        onDragEnded: { center, offset in
+                            handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
+                            draggingCardInContainer = nil
+                        },
+                        cardHeight: containerCardHeight
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+        }
+    }
+    
+    private var fanLayout: some View {
+        let fanCardWidth: CGFloat = 230
+        let fanCardHeight: CGFloat = 150
+        let overlap: CGFloat = 120
+        let leadingInset: CGFloat = 24
+        let contentWidth = fanCardWidth + CGFloat(max(cards.count - 1, 0)) * overlap + leadingInset * 2
+        
+        return ScrollView(.horizontal, showsIndicators: false) {
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(sortedCards.enumerated()), id: \.element.id) { index, report in
+                    let centeredIndex = Double(index) - Double(max(cards.count - 1, 0)) / 2
+                    ContainerCardView(
+                        report: report,
+                        metric: metric,
+                        accent: accent,
+                        colorScheme: colorScheme,
+                        cardWidth: fanCardWidth,
+                        isDragging: draggingCardId == report.id,
+                        onTap: {
+                            onCardTap(report)
+                        },
+                        onDragStarted: { center in
+                            draggingCardInContainer = report.id
+                            onCardDragStarted?(report.id, center)
+                        },
+                        onDragMoved: { center in
+                            onCardDragMoved?(report.id, center)
+                        },
+                        onDragEnded: { center, offset in
+                            handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
+                            draggingCardInContainer = nil
+                        },
+                        cardHeight: fanCardHeight
+                    )
+                    .frame(width: fanCardWidth, height: fanCardHeight)
+                    .rotationEffect(.degrees(centeredIndex * 4))
+                    .offset(x: leadingInset + CGFloat(index) * overlap, y: 12 + abs(centeredIndex) * 10)
+                    .zIndex(Double(index))
+                }
+            }
+            .frame(width: max(contentWidth, containerWidth - horizontalPadding * 2), height: contentHeight, alignment: .topLeading)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
         }
     }
     
@@ -2588,10 +2801,10 @@ private struct ContainerView: View {
         let distanceFromOrigin = sqrt(pow(dragOffset.width, 2) + pow(dragOffset.height, 2))
         
         let contentBounds = CGRect(
-            x: container.position.x + containerDragOffset.width - containerWidth / 2 + horizontalPadding,
-            y: container.position.y + containerDragOffset.height - totalHeight / 2 + headerHeight + verticalPadding,
-            width: containerWidth - horizontalPadding * 2,
-            height: totalHeight - headerHeight - verticalPadding * 2
+            x: container.position.x + containerDragOffset.width - activeWidth / 2 + horizontalPadding,
+            y: container.position.y + containerDragOffset.height - activeHeight / 2 + headerHeight + verticalPadding,
+            width: activeWidth - horizontalPadding * 2,
+            height: activeHeight - headerHeight - verticalPadding * 2
         )
         
         let isInsideContent = contentBounds.contains(center)
@@ -2603,27 +2816,6 @@ private struct ContainerView: View {
         onCardDragEnded?(reportId, center, dragOffset)
     }
     
-    private var collapsedContent: some View {
-        let previewCards: [NutrivanceTuningReport] = Array(cards.prefix(3))
-        return VStack(spacing: 4) {
-            ForEach(previewCards, id: \.id) { (report: NutrivanceTuningReport) in
-                HStack {
-                    Text(report.userNote.isEmpty ? "Untitled" : report.userNote)
-                        .font(.caption2)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .padding(.horizontal, 8)
-            }
-            if cards.count > 3 {
-                Text("+\(cards.count - 3) more")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-        }
-        .padding(8)
-    }
 }
 
 private struct ContainerCardView: View {
