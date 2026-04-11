@@ -1033,7 +1033,9 @@ struct MetricStackDetailView: View {
             getContainerCards: getContainerCards,
             handleCardDrop: handleCardDrop,
             handleContainerCardDrop: handleContainerCardDrop,
-            removeCardFromContainer: removeCardFromContainer,
+            removeCardFromContainer: { cardId, containerId, position in
+                removeCardFromContainer(cardId: cardId, containerId: containerId, atPosition: position)
+            },
             reorderCardInContainer: reorderCardInContainer
         )
         .overlay(alignment: .bottomTrailing) {
@@ -1210,7 +1212,7 @@ struct MetricStackDetailView: View {
             }
         }
         
-        removeCardFromContainer(cardId: cardId, containerId: sourceContainerId)
+        removeCardFromContainer(cardId: cardId, containerId: sourceContainerId, atPosition: center)
     }
     
     private func containerDropRect(for container: CardContainer) -> CGRect {
@@ -1235,12 +1237,19 @@ struct MetricStackDetailView: View {
         selectedCardIds.remove(cardId)
     }
     
-    private func removeCardFromContainer(cardId: UUID, containerId: UUID) {
+    private func removeCardFromContainer(cardId: UUID, containerId: UUID, atPosition: CGPoint? = nil) {
         guard var container = cardContainers[containerId] else { return }
         guard !container.isSmartContainer else { return }
         
         container.cardIds.removeAll { $0 == cardId }
         cardContainers[containerId] = container
+        
+        if let position = atPosition {
+            cardPositions[cardId] = CGPoint(
+                x: position.x - cardWidth / 2,
+                y: position.y - 140
+            )
+        }
     }
     
     private func reorderCardInContainer(cardId: UUID, newIndex: Int, containerId: UUID) {
@@ -1688,19 +1697,19 @@ private struct ZoomableCanvasView: View {
     var getContainerCards: (UUID) -> [NutrivanceTuningReport]
     var handleCardDrop: (UUID, CGPoint) -> Void
     var handleContainerCardDrop: (UUID, CGPoint, UUID) -> Void
-    var removeCardFromContainer: (UUID, UUID) -> Void
+    var removeCardFromContainer: (UUID, UUID, CGPoint?) -> Void
     var reorderCardInContainer: (UUID, Int, UUID) -> Void
-    
-    @GestureState private var magnifyBy: CGFloat = 1.0
-    
-    private var effectiveScale: CGFloat {
-        (scale * magnifyBy).clamped(to: minScale...maxScale)
-    }
     
     var body: some View {
         let canvasSize = computedCanvasSize
         
-        ScrollView([.horizontal, .vertical], showsIndicators: false) {
+        CanvasZoomScrollView(
+            canvasSize: canvasSize,
+            scale: $scale,
+            scrollOffset: $scrollOffset,
+            minScale: minScale,
+            maxScale: maxScale
+        ) {
             ZoomableCanvasContent(
                 computedCanvasWidth: canvasSize.width,
                 computedCanvasHeight: canvasSize.height,
@@ -1733,23 +1742,10 @@ private struct ZoomableCanvasView: View {
                 removeCardFromContainer: removeCardFromContainer,
                 reorderCardInContainer: reorderCardInContainer
             )
-            .frame(width: canvasSize.width, height: canvasSize.height)
-            .scaleEffect(effectiveScale, anchor: .topLeading)
-            .contentShape(Rectangle())
             .onTapGesture {
                 onDeselectAll()
             }
         }
-        .simultaneousGesture(
-            MagnificationGesture()
-                .updating($magnifyBy) { value, state, _ in
-                    state = value
-                }
-                .onEnded { value in
-                    scale = (scale * value).clamped(to: minScale...maxScale)
-                }
-        )
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: magnifyBy)
     }
     
     private var computedCanvasSize: CGSize {
@@ -1779,6 +1775,148 @@ private struct ZoomableCanvasView: View {
         let expandedHeight = max(maxY + edgeMargin, baseCanvasHeight + minExpansion)
         
         return CGSize(width: expandedWidth, height: expandedHeight)
+    }
+}
+
+private struct CanvasZoomScrollView<Content: View>: UIViewRepresentable {
+    let canvasSize: CGSize
+    @Binding var scale: CGFloat
+    @Binding var scrollOffset: CGPoint
+    let minScale: CGFloat
+    let maxScale: CGFloat
+    let content: Content
+    
+    init(
+        canvasSize: CGSize,
+        scale: Binding<CGFloat>,
+        scrollOffset: Binding<CGPoint>,
+        minScale: CGFloat,
+        maxScale: CGFloat,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.canvasSize = canvasSize
+        self._scale = scale
+        self._scrollOffset = scrollOffset
+        self.minScale = minScale
+        self.maxScale = maxScale
+        self.content = content()
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(scale: $scale, scrollOffset: $scrollOffset)
+    }
+    
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+        scrollView.delegate = context.coordinator
+        scrollView.minimumZoomScale = minScale
+        scrollView.maximumZoomScale = maxScale
+        scrollView.bouncesZoom = true
+        scrollView.alwaysBounceHorizontal = true
+        scrollView.alwaysBounceVertical = true
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.backgroundColor = .clear
+        scrollView.contentInsetAdjustmentBehavior = .never
+        
+        let hostingController = UIHostingController(
+            rootView: AnyView(content.frame(width: canvasSize.width, height: canvasSize.height))
+        )
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.frame = CGRect(origin: .zero, size: canvasSize)
+        
+        scrollView.addSubview(hostingController.view)
+        scrollView.contentSize = canvasSize
+        scrollView.zoomScale = scale.clamped(to: minScale...maxScale)
+        
+        context.coordinator.hostingController = hostingController
+        context.coordinator.lastCanvasSize = canvasSize
+        context.coordinator.updateInsets(for: scrollView)
+        
+        DispatchQueue.main.async {
+            guard !context.coordinator.isSyncingFromScrollView else { return }
+            scrollView.contentOffset = scrollOffset
+        }
+        
+        return scrollView
+    }
+    
+    func updateUIView(_ scrollView: UIScrollView, context: Context) {
+        context.coordinator.hostingController?.rootView = AnyView(
+            content.frame(
+                width: canvasSize.width,
+                height: canvasSize.height
+            )
+        )
+        
+        if context.coordinator.lastCanvasSize != canvasSize {
+            context.coordinator.hostingController?.view.frame = CGRect(origin: .zero, size: canvasSize)
+            scrollView.contentSize = canvasSize
+            context.coordinator.lastCanvasSize = canvasSize
+        }
+        
+        let clampedScale = scale.clamped(to: minScale...maxScale)
+        if abs(scrollView.zoomScale - clampedScale) > 0.001, !scrollView.isZooming {
+            context.coordinator.isSyncingFromBinding = true
+            scrollView.setZoomScale(clampedScale, animated: false)
+            context.coordinator.isSyncingFromBinding = false
+        }
+        
+        if !scrollView.isDragging && !scrollView.isDecelerating && !scrollView.isZooming {
+            let currentOffset = scrollView.contentOffset
+            if abs(currentOffset.x - scrollOffset.x) > 0.5 || abs(currentOffset.y - scrollOffset.y) > 0.5 {
+                context.coordinator.isSyncingFromBinding = true
+                scrollView.setContentOffset(scrollOffset, animated: false)
+                context.coordinator.isSyncingFromBinding = false
+            }
+        }
+        
+        context.coordinator.updateInsets(for: scrollView)
+    }
+    
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        @Binding var scale: CGFloat
+        @Binding var scrollOffset: CGPoint
+        var hostingController: UIHostingController<AnyView>?
+        var lastCanvasSize: CGSize = .zero
+        var isSyncingFromBinding = false
+        var isSyncingFromScrollView = false
+        
+        init(scale: Binding<CGFloat>, scrollOffset: Binding<CGPoint>) {
+            self._scale = scale
+            self._scrollOffset = scrollOffset
+        }
+        
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            hostingController?.view
+        }
+        
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            updateInsets(for: scrollView)
+            guard !isSyncingFromBinding else { return }
+            isSyncingFromScrollView = true
+            scale = scrollView.zoomScale
+            scrollOffset = scrollView.contentOffset
+            isSyncingFromScrollView = false
+        }
+        
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard !isSyncingFromBinding else { return }
+            isSyncingFromScrollView = true
+            scrollOffset = scrollView.contentOffset
+            isSyncingFromScrollView = false
+        }
+        
+        func updateInsets(for scrollView: UIScrollView) {
+            let horizontalInset = max((scrollView.bounds.width - scrollView.contentSize.width) * 0.5, 0)
+            let verticalInset = max((scrollView.bounds.height - scrollView.contentSize.height) * 0.5, 0)
+            scrollView.contentInset = UIEdgeInsets(
+                top: verticalInset,
+                left: horizontalInset,
+                bottom: verticalInset,
+                right: horizontalInset
+            )
+        }
     }
 }
 
@@ -1812,7 +1950,7 @@ private struct ZoomableCanvasContent: View {
     var getContainerCards: (UUID) -> [NutrivanceTuningReport]
     var handleCardDrop: (UUID, CGPoint) -> Void
     var handleContainerCardDrop: (UUID, CGPoint, UUID) -> Void
-    var removeCardFromContainer: (UUID, UUID) -> Void
+    var removeCardFromContainer: (UUID, UUID, CGPoint?) -> Void
     var reorderCardInContainer: (UUID, Int, UUID) -> Void
     
     @State private var originalPositions: [UUID: CGPoint] = [:]
@@ -1910,7 +2048,7 @@ private struct ZoomableCanvasContent: View {
                 .zIndex(isSelected ? 1000 : 1)
             }
             
-            ForEach(Array(cardContainers.values), id: \.id) { container in
+            ForEach(Array(cardContainers), id: \.key) { containerId, container in
                 let containerCards = getContainerCards(container.id)
                 ContainerView(
                     container: container,
@@ -1946,8 +2084,8 @@ private struct ZoomableCanvasContent: View {
                         draggingCardId = nil
                         draggingCardCenter = nil
                     },
-                    onCardRemoved: { cardId in
-                        removeCardFromContainer(cardId, container.id)
+                    onCardRemoved: { cardId, center in
+                        removeCardFromContainer(cardId, container.id, center)
                     },
                     onCardReordered: { cardId, newIndex in
                         reorderCardInContainer(cardId, newIndex, container.id)
@@ -2214,7 +2352,7 @@ private struct ContainerView: View {
     var onCardDragStarted: ((UUID, CGPoint) -> Void)?
     var onCardDragMoved: ((UUID, CGPoint) -> Void)?
     var onCardDragEnded: ((UUID, CGPoint, CGSize) -> Void)?
-    var onCardRemoved: ((UUID) -> Void)?
+    var onCardRemoved: ((UUID, CGPoint) -> Void)?
     var onCardReordered: ((UUID, Int) -> Void)?
     var draggingCardId: UUID?
     var draggingCardCenter: CGPoint?
@@ -2459,7 +2597,7 @@ private struct ContainerView: View {
         let isInsideContent = contentBounds.contains(center)
         
         if distanceFromOrigin > dragThreshold && !isInsideContent {
-            onCardRemoved?(reportId)
+            onCardRemoved?(reportId, center)
         }
         
         onCardDragEnded?(reportId, center, dragOffset)
