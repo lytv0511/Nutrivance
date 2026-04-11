@@ -513,9 +513,15 @@ struct MetricStackDetailView: View {
     @State private var lastScrollOffset: CGPoint = .zero
     @State private var scrollOffset: CGPoint = .zero
     @State private var isLoadingPersistedState: Bool = true
+    @State private var showSelectionPopup: Bool = false
     
     private var hasSelection: Bool { !selectedCardIds.isEmpty }
     private var selectedCount: Int { selectedCardIds.count }
+    
+    private var lastSelectedCardPosition: CGPoint? {
+        guard let lastId = selectedCardIds.first else { return nil }
+        return cardPositions[lastId]
+    }
     
     private func toggleCardSelection(_ cardId: UUID) {
         if selectedCardIds.contains(cardId) {
@@ -1013,6 +1019,7 @@ struct MetricStackDetailView: View {
             cardWidth: cardWidth,
             minScale: minScale,
             maxScale: maxScale,
+            lastSelectedCardPosition: lastSelectedCardPosition,
             hasSelection: hasSelection,
             selectedCount: selectedCount,
             onSelectReport: onSelectReport,
@@ -1667,6 +1674,7 @@ private struct ZoomableCanvasView: View {
     let cardWidth: CGFloat
     let minScale: CGFloat
     let maxScale: CGFloat
+    var lastSelectedCardPosition: CGPoint?
     var hasSelection: Bool
     var selectedCount: Int
     var onSelectReport: (NutrivanceTuningReport) -> Void
@@ -1708,6 +1716,7 @@ private struct ZoomableCanvasView: View {
                 scale: $scale,
                 cardsNotInContainers: cardsNotInContainers,
                 cardWidth: cardWidth,
+                lastSelectedCardPosition: lastSelectedCardPosition,
                 hasSelection: hasSelection,
                 selectedCount: selectedCount,
                 onSelectReport: onSelectReport,
@@ -1789,6 +1798,7 @@ private struct ZoomableCanvasContent: View {
     
     let cardsNotInContainers: [NutrivanceTuningReport]
     let cardWidth: CGFloat
+    var lastSelectedCardPosition: CGPoint?
     var hasSelection: Bool
     var selectedCount: Int
     var onSelectReport: (NutrivanceTuningReport) -> Void
@@ -1851,6 +1861,11 @@ private struct ZoomableCanvasContent: View {
                             }
                         }
                     },
+                    onDoubleTap: {
+                        if !isDrawingMode {
+                            onSelectReport(report)
+                        }
+                    },
                     onLongPress: {
                         if !isDrawingMode {
                             onSelectCard(report.id)
@@ -1893,37 +1908,6 @@ private struct ZoomableCanvasContent: View {
                     }
                 )
                 .zIndex(isSelected ? 1000 : 1)
-                .contextMenu {
-                    if selectedCount > 1 && selectedCardIds.contains(report.id) {
-                        Button {
-                            onCreateStackFromSelection()
-                        } label: {
-                            Label("Stack \(selectedCount) Papers", systemImage: "square.stack.3d.up")
-                        }
-                        Button {
-                            onCreateContainerFromSelection()
-                        } label: {
-                            Label("Container \(selectedCount) Papers", systemImage: "folder.badge.plus")
-                        }
-                    } else if selectedCount == 1 {
-                        Button {
-                            onOrganizeCardsByMetric(report.id)
-                        } label: {
-                            Label("Stack by Metric", systemImage: "square.stack.3d.up")
-                        }
-                        Button {
-                            onCreateContainerWithCard(report.id)
-                        } label: {
-                            Label("Create Container", systemImage: "folder.badge.plus")
-                        }
-                    } else {
-                        Button {
-                            onSelectCard(report.id)
-                        } label: {
-                            Label("Select", systemImage: "checkmark.circle")
-                        }
-                    }
-                }
             }
             
             ForEach(Array(cardContainers.values), id: \.id) { container in
@@ -1974,15 +1958,26 @@ private struct ZoomableCanvasContent: View {
                 .zIndex(50)
             }
             
-            if hasSelection && selectedCount > 0 {
+            if hasSelection && selectedCount > 0, let lastPos = lastSelectedCardPosition {
+                let toolbarY: CGFloat = {
+                    let toolbarHeight: CGFloat = 50
+                    let bottomThreshold: CGFloat = 300
+                    if lastPos.y > bottomThreshold {
+                        return lastPos.y - toolbarHeight - 20
+                    } else {
+                        return lastPos.y + 320
+                    }
+                }()
+                let toolbarX = lastPos.x + 150
                 SelectionToolbar(
                     selectedCount: selectedCount,
                     accent: snapshot.accent,
+                    position: lastPos,
                     onCreateStack: onCreateStackFromSelection,
                     onCreateContainer: onCreateContainerFromSelection,
                     onDeselect: onDeselectAll
                 )
-                .position(x: computedCanvasWidth / 2, y: 50)
+                .position(x: toolbarX, y: toolbarY)
             }
         }
     }
@@ -1991,9 +1986,21 @@ private struct ZoomableCanvasContent: View {
 private struct SelectionToolbar: View {
     let selectedCount: Int
     let accent: Color
+    var position: CGPoint
     var onCreateStack: () -> Void
     var onCreateContainer: () -> Void
     var onDeselect: () -> Void
+    
+    private var toolbarY: CGFloat {
+        let toolbarHeight: CGFloat = 50
+        let bottomThreshold: CGFloat = 300
+        
+        if position.y > bottomThreshold {
+            return position.y - toolbarHeight - 20
+        } else {
+            return position.y + 320
+        }
+    }
     
     var body: some View {
         HStack(spacing: 16) {
@@ -2055,6 +2062,7 @@ private struct SelectableLabPaperCard: View {
     var isSelected: Bool
     var position: CGPoint
     var onTap: () -> Void
+    var onDoubleTap: () -> Void
     var onLongPress: (() -> Void)?
     var onDragChanged: ((CGPoint, CGSize) -> Void)?
     var onDragEnded: (CGPoint, CGSize) -> Void
@@ -2131,6 +2139,9 @@ private struct SelectableLabPaperCard: View {
             y: resolvedPosition.y + 140
         )
         .gesture(cardDrag)
+        .onTapGesture(count: 2) {
+            onDoubleTap()
+        }
         .onTapGesture {
             if !isDragging {
                 onTap()
