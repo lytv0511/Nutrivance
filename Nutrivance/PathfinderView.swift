@@ -1408,7 +1408,12 @@ struct PathfinderView: View {
             }
         }
 
-        return synth
+        return synth.sorted { lhs, rhs in
+            if lhs.correlation.date != rhs.correlation.date {
+                return lhs.correlation.date > rhs.correlation.date
+            }
+            return lhs.correlation.id.uuidString < rhs.correlation.id.uuidString
+        }
     }
 
     private var statsCorrelations: [EmotionCorrelation] {
@@ -1637,7 +1642,12 @@ struct PathfinderView: View {
 
     private var topAssociationsSection: some View {
         let grouped = Dictionary(grouping: statsCorrelations, by: \.association)
-        let sorted = grouped.sorted { $0.value.count > $1.value.count }.prefix(5)
+        let sorted = grouped.sorted { lhs, rhs in
+            if lhs.value.count != rhs.value.count {
+                return lhs.value.count > rhs.value.count
+            }
+            return lhs.key.rawValue < rhs.key.rawValue
+        }.prefix(5)
         let total = Double(statsCorrelations.count)
 
         return VStack(alignment: .leading, spacing: 8) {
@@ -2922,7 +2932,7 @@ struct HarmonyGemSection: View {
                     ExpandedGemRow(
                         gem: gem,
                         showChargingHint: showChargingHints,
-                        maxBarWidth: showChargingHints ? 240 : 320
+                        totalWidth: totalWidth - harmonyCircleSize - 60 - (showChargingHints ? 200 : 0)
                     )
                 }
 
@@ -2937,6 +2947,7 @@ struct HarmonyGemSection: View {
 
             Spacer(minLength: 0)
         }
+        .frame(minHeight: max(harmonyCircleSize + 40, CGFloat(max(gems.count, 3)) * 50 + 20))
     }
 
     private var harmonyCircle: some View {
@@ -3011,8 +3022,12 @@ struct HarmonyGemSection: View {
 struct ExpandedGemRow: View {
     let gem: PathfinderGem
     let showChargingHint: Bool
-    let maxBarWidth: CGFloat
+    let totalWidth: CGFloat
     @State private var glow: Double = 0
+
+    private var availableWidth: CGFloat {
+        max(100, totalWidth)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -3039,9 +3054,9 @@ struct ExpandedGemRow: View {
                     }
                 }
                 .frame(height: 6)
-                .frame(maxWidth: maxBarWidth)
+                .frame(maxWidth: availableWidth)
             }
-            .frame(maxWidth: showChargingHint ? 300 : .infinity)
+            .frame(maxWidth: showChargingHint ? availableWidth : .infinity)
 
             if showChargingHint {
                 Text(gemChargingHint(for: gem))
@@ -3085,8 +3100,7 @@ struct ExpandedGemRow: View {
     }
 
     private func gemChargingHint(for gem: PathfinderGem) -> String {
-        let assoc = gem.association
-        let area = assoc.displayName.lowercased()
+        let area = gem.association.displayName.lowercased()
         switch gem.association.mode {
         case .reflect:
             return "Journal and reflect on \(area)"

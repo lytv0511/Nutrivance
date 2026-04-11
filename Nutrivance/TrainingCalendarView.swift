@@ -319,15 +319,19 @@ struct TrainingCalendarView: View {
     }
 
     private var trainingCalendarStackWithBurningBackground: some View {
-        GeometryReader { geo in
-            trainingCalendarStackWithMapCover
-                .background(trainingCalendarBurningBackground)
-                .onAppear {
-                    detectedWidth = geo.size.width
-                }
-                .onChange(of: geo.size.width) { _, newWidth in
-                    detectedWidth = newWidth
-                }
+        ZStack {
+            trainingCalendarBurningBackground
+                .ignoresSafeArea()
+            
+            GeometryReader { geo in
+                trainingCalendarStackWithMapCover
+                    .onAppear {
+                        detectedWidth = geo.size.width
+                    }
+                    .onChange(of: geo.size.width) { _, newWidth in
+                        detectedWidth = newWidth
+                    }
+            }
         }
     }
 
