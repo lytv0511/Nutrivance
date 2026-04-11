@@ -505,7 +505,7 @@ struct MetricStackDetailView: View {
     @State private var isDrawingMode: Bool = false
     @State private var canvasDrawing: [String: Data] = [:]
     @State private var isHeaderMinimized: Bool = false
-    @State private var selectedCardId: UUID? = nil
+    @State private var selectedCardIds: Set<UUID> = []
     @State private var cardContainers: [UUID: CardContainer] = [:]
     @State private var draggingCardCenter: CGPoint? = nil
     @State private var draggingCardId: UUID? = nil
@@ -513,6 +513,59 @@ struct MetricStackDetailView: View {
     @State private var lastScrollOffset: CGPoint = .zero
     @State private var scrollOffset: CGPoint = .zero
     @State private var isLoadingPersistedState: Bool = true
+    
+    private var hasSelection: Bool { !selectedCardIds.isEmpty }
+    private var selectedCount: Int { selectedCardIds.count }
+    
+    private func toggleCardSelection(_ cardId: UUID) {
+        if selectedCardIds.contains(cardId) {
+            selectedCardIds.remove(cardId)
+        } else {
+            selectedCardIds.insert(cardId)
+        }
+    }
+    
+    private func selectCard(_ cardId: UUID) {
+        selectedCardIds = [cardId]
+    }
+    
+    private func deselectAllCards() {
+        selectedCardIds.removeAll()
+    }
+    
+    private func createStackFromSelection() {
+        guard selectedCardIds.count > 1 else { return }
+        let selectedReports = sortedReports.filter { selectedCardIds.contains($0.id) }
+        guard let firstReport = selectedReports.first else { return }
+        
+        let basePosition = cardPositions[firstReport.id] ?? .zero
+        
+        for (index, report) in selectedReports.enumerated() {
+            cardPositions[report.id] = CGPoint(
+                x: basePosition.x + CGFloat(index) * 4,
+                y: basePosition.y + CGFloat(index) * 4
+            )
+        }
+        
+        deselectAllCards()
+    }
+    
+    private func createContainerFromSelection() {
+        guard selectedCardIds.count >= 1 else { return }
+        let selectedReports = sortedReports.filter { selectedCardIds.contains($0.id) }
+        guard let firstReport = selectedReports.first else { return }
+        
+        let containerId = UUID()
+        let position = cardPositions[firstReport.id] ?? CGPoint(x: 1500, y: 1000)
+        
+        cardContainers[containerId] = CardContainer(
+            id: containerId,
+            position: position,
+            cardIds: selectedCardIds.map { $0 }
+        )
+        
+        deselectAllCards()
+    }
     
     private let cardWidth: CGFloat = 300
     private let cardHeight: CGFloat = 280
@@ -939,46 +992,46 @@ struct MetricStackDetailView: View {
     }
 
     private var freeformCanvas: some View {
-        let canvasWidth: CGFloat = 3000
-        let canvasHeight: CGFloat = 2000
+        let baseCanvasWidth: CGFloat = 3000
+        let baseCanvasHeight: CGFloat = 2000
         
-        return ZStack {
-            ScrollView([.horizontal, .vertical], showsIndicators: false) {
-                ZoomableCanvasContent(
-                    canvasWidth: canvasWidth,
-                    canvasHeight: canvasHeight,
-                    metric: metric,
-                    snapshot: snapshot,
-                    isDrawingMode: isDrawingMode,
-                    canvasDrawing: $canvasDrawing,
-                    cardPositions: $cardPositions,
-                    selectedCardId: $selectedCardId,
-                    cardContainers: $cardContainers,
-                    draggingCardId: $draggingCardId,
-                    draggingCardCenter: $draggingCardCenter,
-                    scale: $canvasScale,
-                    cardsNotInContainers: cardsNotInContainers,
-                    cardWidth: cardWidth,
-                    onSelectReport: onSelectReport,
-                    onOrganizeCardsByMetric: organizeCardsByMetric,
-                    onCreateContainerWithCard: createContainerWithCard,
-                    getContainerCards: getContainerCards,
-                    handleCardDrop: handleCardDrop,
-                    handleContainerCardDrop: handleContainerCardDrop,
-                    removeCardFromContainer: removeCardFromContainer,
-                    reorderCardInContainer: reorderCardInContainer
-                )
-                .frame(width: canvasWidth, height: canvasHeight)
-            }
-            
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    zoomControls
-                        .padding()
-                }
-            }
+        return ZoomableCanvasView(
+            baseCanvasWidth: baseCanvasWidth,
+            baseCanvasHeight: baseCanvasHeight,
+            metric: metric,
+            snapshot: snapshot,
+            isDrawingMode: isDrawingMode,
+            canvasDrawing: $canvasDrawing,
+            cardPositions: $cardPositions,
+            selectedCardIds: $selectedCardIds,
+            cardContainers: $cardContainers,
+            draggingCardId: $draggingCardId,
+            draggingCardCenter: $draggingCardCenter,
+            scale: $canvasScale,
+            scrollOffset: $scrollOffset,
+            cardsNotInContainers: cardsNotInContainers,
+            cardWidth: cardWidth,
+            minScale: minScale,
+            maxScale: maxScale,
+            hasSelection: hasSelection,
+            selectedCount: selectedCount,
+            onSelectReport: onSelectReport,
+            onOrganizeCardsByMetric: organizeCardsByMetric,
+            onCreateContainerWithCard: createContainerWithCard,
+            onToggleSelection: toggleCardSelection,
+            onSelectCard: selectCard,
+            onDeselectAll: deselectAllCards,
+            onCreateStackFromSelection: createStackFromSelection,
+            onCreateContainerFromSelection: createContainerFromSelection,
+            getContainerCards: getContainerCards,
+            handleCardDrop: handleCardDrop,
+            handleContainerCardDrop: handleContainerCardDrop,
+            removeCardFromContainer: removeCardFromContainer,
+            reorderCardInContainer: reorderCardInContainer
+        )
+        .overlay(alignment: .bottomTrailing) {
+            zoomControls
+                .padding()
         }
         .background(Color.black.opacity(0.3))
     }
@@ -1049,7 +1102,7 @@ struct MetricStackDetailView: View {
             )
         }
         
-        selectedCardId = nil
+        selectedCardIds.removeAll()
     }
     
     private func createContainerWithCard(_ cardId: UUID) {
@@ -1062,7 +1115,7 @@ struct MetricStackDetailView: View {
             cardIds: [cardId]
         )
         
-        selectedCardId = nil
+        selectedCardIds.removeAll()
     }
     
     private func addNewContainer() {
@@ -1172,9 +1225,7 @@ struct MetricStackDetailView: View {
         container.cardIds.append(cardId)
         cardContainers[containerId] = container
         
-        if selectedCardId == cardId {
-            selectedCardId = nil
-        }
+        selectedCardIds.remove(cardId)
     }
     
     private func removeCardFromContainer(cardId: UUID, containerId: UUID) {
@@ -1597,25 +1648,35 @@ struct PencilKitCanvasView: UIViewRepresentable {
     }
 }
 
-private struct ZoomableCanvasContent: View {
-    let canvasWidth: CGFloat
-    let canvasHeight: CGFloat
+private struct ZoomableCanvasView: View {
+    let baseCanvasWidth: CGFloat
+    let baseCanvasHeight: CGFloat
     let metric: NutrivanceTuningMetric
     let snapshot: LabsMetricSnapshot
     let isDrawingMode: Bool
     @Binding var canvasDrawing: [String: Data]
     @Binding var cardPositions: [UUID: CGPoint]
-    @Binding var selectedCardId: UUID?
+    @Binding var selectedCardIds: Set<UUID>
     @Binding var cardContainers: [UUID: CardContainer]
     @Binding var draggingCardId: UUID?
     @Binding var draggingCardCenter: CGPoint?
     @Binding var scale: CGFloat
+    @Binding var scrollOffset: CGPoint
     
     let cardsNotInContainers: [NutrivanceTuningReport]
     let cardWidth: CGFloat
+    let minScale: CGFloat
+    let maxScale: CGFloat
+    var hasSelection: Bool
+    var selectedCount: Int
     var onSelectReport: (NutrivanceTuningReport) -> Void
     var onOrganizeCardsByMetric: (UUID) -> Void
     var onCreateContainerWithCard: (UUID) -> Void
+    var onToggleSelection: (UUID) -> Void
+    var onSelectCard: (UUID) -> Void
+    var onDeselectAll: () -> Void
+    var onCreateStackFromSelection: () -> Void
+    var onCreateContainerFromSelection: () -> Void
     var getContainerCards: (UUID) -> [NutrivanceTuningReport]
     var handleCardDrop: (UUID, CGPoint) -> Void
     var handleContainerCardDrop: (UUID, CGPoint, UUID) -> Void
@@ -1624,17 +1685,134 @@ private struct ZoomableCanvasContent: View {
     
     @GestureState private var magnifyBy: CGFloat = 1.0
     
-    private let minScale: CGFloat = 0.3
-    private let maxScale: CGFloat = 2.5
-    
     private var effectiveScale: CGFloat {
         (scale * magnifyBy).clamped(to: minScale...maxScale)
     }
     
     var body: some View {
+        let canvasSize = computedCanvasSize
+        
+        ScrollView([.horizontal, .vertical], showsIndicators: false) {
+            ZoomableCanvasContent(
+                computedCanvasWidth: canvasSize.width,
+                computedCanvasHeight: canvasSize.height,
+                metric: metric,
+                snapshot: snapshot,
+                isDrawingMode: isDrawingMode,
+                canvasDrawing: $canvasDrawing,
+                cardPositions: $cardPositions,
+                selectedCardIds: $selectedCardIds,
+                cardContainers: $cardContainers,
+                draggingCardId: $draggingCardId,
+                draggingCardCenter: $draggingCardCenter,
+                scale: $scale,
+                cardsNotInContainers: cardsNotInContainers,
+                cardWidth: cardWidth,
+                hasSelection: hasSelection,
+                selectedCount: selectedCount,
+                onSelectReport: onSelectReport,
+                onOrganizeCardsByMetric: onOrganizeCardsByMetric,
+                onCreateContainerWithCard: onCreateContainerWithCard,
+                onToggleSelection: onToggleSelection,
+                onSelectCard: onSelectCard,
+                onDeselectAll: onDeselectAll,
+                onCreateStackFromSelection: onCreateStackFromSelection,
+                onCreateContainerFromSelection: onCreateContainerFromSelection,
+                getContainerCards: getContainerCards,
+                handleCardDrop: handleCardDrop,
+                handleContainerCardDrop: handleContainerCardDrop,
+                removeCardFromContainer: removeCardFromContainer,
+                reorderCardInContainer: reorderCardInContainer
+            )
+            .frame(width: canvasSize.width, height: canvasSize.height)
+            .scaleEffect(effectiveScale, anchor: .topLeading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onDeselectAll()
+            }
+        }
+        .simultaneousGesture(
+            MagnificationGesture()
+                .updating($magnifyBy) { value, state, _ in
+                    state = value
+                }
+                .onEnded { value in
+                    scale = (scale * value).clamped(to: minScale...maxScale)
+                }
+        )
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: magnifyBy)
+    }
+    
+    private var computedCanvasSize: CGSize {
+        let edgeMargin: CGFloat = 600
+        let minExpansion: CGFloat = 500
+        
+        var minX: CGFloat = 0
+        var minY: CGFloat = 0
+        var maxX: CGFloat = baseCanvasWidth
+        var maxY: CGFloat = baseCanvasHeight
+        
+        for (_, position) in cardPositions {
+            minX = min(minX, position.x)
+            minY = min(minY, position.y)
+            maxX = max(maxX, position.x + cardWidth)
+            maxY = max(maxY, position.y + 280)
+        }
+        
+        for (_, container) in cardContainers {
+            minX = min(minX, container.position.x - 250)
+            minY = min(minY, container.position.y - 200)
+            maxX = max(maxX, container.position.x + 250)
+            maxY = max(maxY, container.position.y + 200)
+        }
+        
+        let expandedWidth = max(maxX + edgeMargin, baseCanvasWidth + minExpansion)
+        let expandedHeight = max(maxY + edgeMargin, baseCanvasHeight + minExpansion)
+        
+        return CGSize(width: expandedWidth, height: expandedHeight)
+    }
+}
+
+private struct ZoomableCanvasContent: View {
+    let computedCanvasWidth: CGFloat
+    let computedCanvasHeight: CGFloat
+    let metric: NutrivanceTuningMetric
+    let snapshot: LabsMetricSnapshot
+    let isDrawingMode: Bool
+    @Binding var canvasDrawing: [String: Data]
+    @Binding var cardPositions: [UUID: CGPoint]
+    @Binding var selectedCardIds: Set<UUID>
+    @Binding var cardContainers: [UUID: CardContainer]
+    @Binding var draggingCardId: UUID?
+    @Binding var draggingCardCenter: CGPoint?
+    @Binding var scale: CGFloat
+    
+    let cardsNotInContainers: [NutrivanceTuningReport]
+    let cardWidth: CGFloat
+    var hasSelection: Bool
+    var selectedCount: Int
+    var onSelectReport: (NutrivanceTuningReport) -> Void
+    var onOrganizeCardsByMetric: (UUID) -> Void
+    var onCreateContainerWithCard: (UUID) -> Void
+    var onToggleSelection: (UUID) -> Void
+    var onSelectCard: (UUID) -> Void
+    var onDeselectAll: () -> Void
+    var onCreateStackFromSelection: () -> Void
+    var onCreateContainerFromSelection: () -> Void
+    var getContainerCards: (UUID) -> [NutrivanceTuningReport]
+    var handleCardDrop: (UUID, CGPoint) -> Void
+    var handleContainerCardDrop: (UUID, CGPoint, UUID) -> Void
+    var removeCardFromContainer: (UUID, UUID) -> Void
+    var reorderCardInContainer: (UUID, Int, UUID) -> Void
+    
+    @State private var originalPositions: [UUID: CGPoint] = [:]
+    
+    private let cardHeight: CGFloat = 280
+    
+    var body: some View {
         ZStack(alignment: .topLeading) {
             InfiniteGridView()
-                .frame(width: canvasWidth, height: canvasHeight)
+                .frame(width: computedCanvasWidth, height: computedCanvasHeight)
                 .allowsHitTesting(false)
             
             if isDrawingMode {
@@ -1644,15 +1822,18 @@ private struct ZoomableCanvasContent: View {
                         set: { canvasDrawing[metric.rawValue] = $0 }
                     ),
                     isDrawingMode: .constant(isDrawingMode),
-                    selectedCardId: $selectedCardId,
+                    selectedCardId: Binding(
+                        get: { selectedCardIds.first },
+                        set: { newId in selectedCardIds = newId.map { [$0] } ?? [] }
+                    ),
                     cardPositions: cardPositions,
                     cardWidth: cardWidth
                 )
-                .frame(width: canvasWidth, height: canvasHeight)
+                .frame(width: computedCanvasWidth, height: computedCanvasHeight)
             }
             
             ForEach(cardsNotInContainers) { report in
-                let isSelected = selectedCardId == report.id
+                let isSelected = selectedCardIds.contains(report.id)
                 let position = cardPositions[report.id] ?? .zero
                 
                 SelectableLabPaperCard(
@@ -1666,26 +1847,83 @@ private struct ZoomableCanvasContent: View {
                     onTap: {
                         if !isDrawingMode {
                             withAnimation(.easeInOut(duration: 0.2)) {
-                                if selectedCardId == report.id {
-                                    selectedCardId = nil
-                                } else {
-                                    selectedCardId = report.id
-                                }
+                                onToggleSelection(report.id)
                             }
                         }
                     },
-                    onDragChanged: { cardCenter in
+                    onLongPress: {
+                        if !isDrawingMode {
+                            onSelectCard(report.id)
+                        }
+                    },
+                    onDragChanged: { cardCenter, dragOffset in
+                        if draggingCardId == nil {
+                            originalPositions = cardPositions
+                        }
                         draggingCardId = report.id
                         draggingCardCenter = cardCenter
+                        
+                        let otherSelectedIds = selectedCardIds.filter { $0 != report.id }
+                        for otherId in otherSelectedIds {
+                            if let originalPos = originalPositions[otherId] {
+                                cardPositions[otherId] = CGPoint(
+                                    x: originalPos.x + dragOffset.width,
+                                    y: originalPos.y + dragOffset.height
+                                )
+                            }
+                        }
                     },
-                    onDragEnded: { newPosition in
+                    onDragEnded: { newPosition, totalOffset in
                         cardPositions[report.id] = newPosition
+                        
+                        let otherSelectedIds = selectedCardIds.filter { $0 != report.id }
+                        for otherId in otherSelectedIds {
+                            if let originalPos = originalPositions[otherId] {
+                                cardPositions[otherId] = CGPoint(
+                                    x: originalPos.x + totalOffset.width,
+                                    y: originalPos.y + totalOffset.height
+                                )
+                            }
+                        }
+                        originalPositions.removeAll()
+                        
                         handleCardDrop(report.id, newPosition)
                         draggingCardId = nil
                         draggingCardCenter = nil
                     }
                 )
                 .zIndex(isSelected ? 1000 : 1)
+                .contextMenu {
+                    if selectedCount > 1 && selectedCardIds.contains(report.id) {
+                        Button {
+                            onCreateStackFromSelection()
+                        } label: {
+                            Label("Stack \(selectedCount) Papers", systemImage: "square.stack.3d.up")
+                        }
+                        Button {
+                            onCreateContainerFromSelection()
+                        } label: {
+                            Label("Container \(selectedCount) Papers", systemImage: "folder.badge.plus")
+                        }
+                    } else if selectedCount == 1 {
+                        Button {
+                            onOrganizeCardsByMetric(report.id)
+                        } label: {
+                            Label("Stack by Metric", systemImage: "square.stack.3d.up")
+                        }
+                        Button {
+                            onCreateContainerWithCard(report.id)
+                        } label: {
+                            Label("Create Container", systemImage: "folder.badge.plus")
+                        }
+                    } else {
+                        Button {
+                            onSelectCard(report.id)
+                        } label: {
+                            Label("Select", systemImage: "checkmark.circle")
+                        }
+                    }
+                }
             }
             
             ForEach(Array(cardContainers.values), id: \.id) { container in
@@ -1736,39 +1974,69 @@ private struct ZoomableCanvasContent: View {
                 .zIndex(50)
             }
             
-            if let selectedId = selectedCardId,
-               let selectedReport = cardsNotInContainers.first(where: { $0.id == selectedId }) {
-                let position = cardPositions[selectedId] ?? .zero
-                CardActionPopup(
-                    report: selectedReport,
+            if hasSelection && selectedCount > 0 {
+                SelectionToolbar(
+                    selectedCount: selectedCount,
                     accent: snapshot.accent,
-                    position: position,
-                    cardWidth: cardWidth,
-                    onDismiss: {
-                        withAnimation {
-                            selectedCardId = nil
-                        }
-                    },
-                    onOrganizeAsStack: {
-                        onOrganizeCardsByMetric(selectedId)
-                    },
-                    onCreateContainer: {
-                        onCreateContainerWithCard(selectedId)
-                    }
+                    onCreateStack: onCreateStackFromSelection,
+                    onCreateContainer: onCreateContainerFromSelection,
+                    onDeselect: onDeselectAll
                 )
+                .position(x: computedCanvasWidth / 2, y: 50)
             }
         }
-        .scaleEffect(effectiveScale)
-        .gesture(
-            MagnificationGesture()
-                .updating($magnifyBy) { value, state, _ in
-                    state = value
-                }
-                .onEnded { value in
-                    scale = (scale * value).clamped(to: minScale...maxScale)
-                }
-        )
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: magnifyBy)
+    }
+}
+
+private struct SelectionToolbar: View {
+    let selectedCount: Int
+    let accent: Color
+    var onCreateStack: () -> Void
+    var onCreateContainer: () -> Void
+    var onDeselect: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            Text("\(selectedCount) selected")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+            
+            Divider()
+                .frame(height: 20)
+            
+            Button {
+                onCreateStack()
+            } label: {
+                Label("Stack", systemImage: "square.stack.3d.up")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered)
+            .tint(accent)
+            
+            Button {
+                onCreateContainer()
+            } label: {
+                Label("Container", systemImage: "folder.badge.plus")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered)
+            .tint(accent)
+            
+            Divider()
+                .frame(height: 20)
+            
+            Button {
+                onDeselect()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 }
 
@@ -1787,14 +2055,16 @@ private struct SelectableLabPaperCard: View {
     var isSelected: Bool
     var position: CGPoint
     var onTap: () -> Void
-    var onDragChanged: ((CGPoint) -> Void)?
-    var onDragEnded: (CGPoint) -> Void
+    var onLongPress: (() -> Void)?
+    var onDragChanged: ((CGPoint, CGSize) -> Void)?
+    var onDragEnded: (CGPoint, CGSize) -> Void
 
     @GestureState private var dragTranslation: CGSize = .zero
     @State private var isDragging: Bool = false
+    @State private var isLongPressing: Bool = false
 
     private var effectiveScale: CGFloat {
-        isDragging ? 1.05 : 1.0
+        isDragging ? 1.08 : (isLongPressing ? 1.02 : 1.0)
     }
 
     private var resolvedPosition: CGPoint {
@@ -1802,6 +2072,39 @@ private struct SelectableLabPaperCard: View {
             x: position.x + dragTranslation.width,
             y: position.y + dragTranslation.height
         )
+    }
+
+    private var cardDrag: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                if !isDragging {
+                    isDragging = true
+                    if !isSelected {
+                        withAnimation(.easeInOut(duration: 0.1)) {
+                            isLongPressing = true
+                        }
+                        onLongPress?()
+                    }
+                }
+                let currentPos = CGPoint(
+                    x: position.x + value.translation.width,
+                    y: position.y + value.translation.height
+                )
+                onDragChanged?(currentPos, value.translation)
+            }
+            .updating($dragTranslation) { value, state, _ in
+                state = value.translation
+            }
+            .onEnded { value in
+                let finalPosition = CGPoint(
+                    x: position.x + value.translation.width,
+                    y: position.y + value.translation.height
+                )
+                onDragChanged?(finalPosition, value.translation)
+                onDragEnded(finalPosition, value.translation)
+                isDragging = false
+                isLongPressing = false
+            }
     }
 
     var body: some View {
@@ -1815,9 +2118,9 @@ private struct SelectableLabPaperCard: View {
         .scaleEffect(effectiveScale)
         .shadow(
             color: isSelected ? accent.opacity(0.6) : Color.black.opacity(isDragging ? 0.4 : 0.2),
-            radius: isDragging ? 20 : (isSelected ? 16 : 10),
+            radius: isDragging ? 24 : (isSelected ? 16 : 10),
             x: 0,
-            y: isDragging ? 15 : (isSelected ? 10 : 5)
+            y: isDragging ? 18 : (isSelected ? 10 : 5)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
@@ -1827,34 +2130,11 @@ private struct SelectableLabPaperCard: View {
             x: resolvedPosition.x + cardWidth / 2,
             y: resolvedPosition.y + 140
         )
-        .gesture(
-            isSelected ? DragGesture()
-                .onChanged { value in
-                    if !isDragging {
-                        isDragging = true
-                    }
-                    let currentPos = CGPoint(
-                        x: position.x + value.translation.width,
-                        y: position.y + value.translation.height
-                    )
-                    onDragChanged?(currentPos)
-                }
-                .updating($dragTranslation) { value, state, _ in
-                    state = value.translation
-                }
-                .onEnded { value in
-                    let newPosition = CGPoint(
-                        x: position.x + value.translation.width,
-                        y: position.y + value.translation.height
-                    )
-                    onDragChanged?(newPosition)
-                    onDragEnded(newPosition)
-                    isDragging = false
-                }
-            : nil
-        )
+        .gesture(cardDrag)
         .onTapGesture {
-            onTap()
+            if !isDragging {
+                onTap()
+            }
         }
     }
 }
@@ -2153,23 +2433,24 @@ private struct ContainerView: View {
         }
     }
     
-    private var dragThreshold: CGFloat { 60 }
+    private var dragThreshold: CGFloat { 50 }
     
     private func handleCardDragEnded(reportId: UUID, center: CGPoint, dragOffset: CGSize) {
         let distanceFromOrigin = sqrt(pow(dragOffset.width, 2) + pow(dragOffset.height, 2))
         
-        if distanceFromOrigin > dragThreshold {
+        let contentBounds = CGRect(
+            x: container.position.x + containerDragOffset.width - containerWidth / 2 + horizontalPadding,
+            y: container.position.y + containerDragOffset.height - totalHeight / 2 + headerHeight + verticalPadding,
+            width: containerWidth - horizontalPadding * 2,
+            height: totalHeight - headerHeight - verticalPadding * 2
+        )
+        
+        let isInsideContent = contentBounds.contains(center)
+        
+        if distanceFromOrigin > dragThreshold && !isInsideContent {
             onCardRemoved?(reportId)
-        } else if containerBounds.contains(center) {
-            let currentIndex = internalCardOrder.firstIndex(of: reportId) ?? 0
-            if currentIndex != 0 {
-                var newOrder = internalCardOrder
-                newOrder.removeAll { $0 == reportId }
-                newOrder.insert(reportId, at: max(0, currentIndex - 1))
-                internalCardOrder = newOrder
-                onCardReordered?(reportId, max(0, currentIndex - 1))
-            }
         }
+        
         onCardDragEnded?(reportId, center, dragOffset)
     }
     
