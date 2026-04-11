@@ -1428,7 +1428,7 @@ enum SearchScope: String, CaseIterable, Hashable {
 
 @MainActor
 class NavigationState: ObservableObject {
-    @Published var selectedView: String = "Dashboard"
+    @Published var selectedView: String = "Nutrivance Labs"
     @Published var selectedRootTab: RootTabSelection = .dashboard
     /// Root tabs currently shown in the iPad/Mac browser split (both panes). Empty when split is off.
     @Published var browserSplitEmbeddedRootTabs: Set<RootTabSelection> = []

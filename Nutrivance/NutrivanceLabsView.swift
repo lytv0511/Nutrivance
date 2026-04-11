@@ -505,10 +505,20 @@ struct MetricStackDetailView: View {
     @State private var isDrawingMode: Bool = false
     @State private var canvasDrawing: [String: Data] = [:]
     @State private var isHeaderMinimized: Bool = false
+    @State private var selectedCardId: UUID? = nil
+    @State private var cardContainers: [UUID: CardContainer] = [:]
+    @State private var draggingCardCenter: CGPoint? = nil
+    @State private var draggingCardId: UUID? = nil
+    @State private var canvasScale: CGFloat = 1.0
+    @State private var lastScrollOffset: CGPoint = .zero
+    @State private var scrollOffset: CGPoint = .zero
+    @State private var isLoadingPersistedState: Bool = true
     
     private let cardWidth: CGFloat = 300
     private let cardHeight: CGFloat = 280
     private let cardSpacing: CGFloat = 16
+    private let minScale: CGFloat = 0.3
+    private let maxScale: CGFloat = 2.5
 
     private var isCompactWidth: Bool {
         horizontalSizeClass == .compact
@@ -563,17 +573,60 @@ struct MetricStackDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.black.opacity(0.82).ignoresSafeArea())
         .onAppear {
-            sortByNewestFirst = sortNewestFirst
-            cardPositions = defaultPositions(for: 800)
+            loadPersistedState()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .freeformCanvasNeedsRefresh)) { _ in
+            Task {
+                await loadPersistedState()
+            }
+        }
+        .onChange(of: cardPositions) { _, _ in savePersistedState() }
+        .onChange(of: cardContainers) { _, _ in savePersistedState() }
+        .onChange(of: canvasScale) { _, _ in savePersistedState() }
+        .onChange(of: scrollOffset) { _, _ in savePersistedState() }
         .onChange(of: sortByNewestFirst) { _, newValue in
             sortByNewestFirst = newValue
         }
         .onDisappear {
+            savePersistedState()
             isOrganized = false
             isHeaderMinimized = false
-            cardPositions.removeAll()
         }
+    }
+    
+    private func loadPersistedState() {
+        Task { @MainActor in
+            let persistence = FreeformCanvasPersistence.shared
+            if let state = await persistence.loadState(for: metric) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    cardPositions = Dictionary(uniqueKeysWithValues: state.cardPositions.map { ($0.key, $0.value.cgPoint) })
+                    cardContainers = Dictionary(uniqueKeysWithValues: state.containers.map { ($0.id, $0.cardContainer) })
+                    scrollOffset = state.lastScrollOffset.cgPoint
+                    lastScrollOffset = state.lastScrollOffset.cgPoint
+                    canvasScale = state.canvasScale
+                    sortByNewestFirst = state.sortByNewestFirst
+                    isOrganized = state.isOrganized
+                }
+            } else {
+                sortByNewestFirst = sortNewestFirst
+                cardPositions = defaultPositions(for: 800)
+            }
+            isLoadingPersistedState = false
+        }
+    }
+    
+    private func savePersistedState() {
+        guard !isLoadingPersistedState else { return }
+        let state = FreeformCanvasState(
+            cardPositions: cardPositions.mapValues { CodablePoint($0) },
+            containers: cardContainers.values.map { CodableCardContainer(from: $0) },
+            lastScrollOffset: CodablePoint(scrollOffset),
+            canvasScale: canvasScale,
+            sortByNewestFirst: sortByNewestFirst,
+            isOrganized: isOrganized,
+            lastModified: Date()
+        )
+        FreeformCanvasPersistence.shared.saveState(state, for: metric)
     }
 
     private var glassyTextColor: Color {
@@ -820,6 +873,14 @@ struct MetricStackDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .tint(isDrawingMode ? .blue : snapshot.accent)
+                    
+                    Button {
+                        addNewContainer()
+                    } label: {
+                        Image(systemName: "plus.rectangle.on.rectangle")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(snapshot.accent)
                 }
             }
             .padding(.horizontal, 24)
@@ -881,56 +942,314 @@ struct MetricStackDetailView: View {
         let canvasWidth: CGFloat = 3000
         let canvasHeight: CGFloat = 2000
         
-        return ScrollView([.horizontal, .vertical], showsIndicators: false) {
-            ZStack(alignment: .topLeading) {
-                InfiniteGridView()
-                    .frame(width: canvasWidth, height: canvasHeight)
-                    .allowsHitTesting(false)
-                
-                if isDrawingMode {
-                    PencilKitCanvasView(
-                        drawingData: Binding(
-                            get: { canvasDrawing[metric.rawValue] },
-                            set: { canvasDrawing[metric.rawValue] = $0 }
-                        ),
-                        isDrawingMode: $isDrawingMode
-                    )
-                    .frame(width: canvasWidth, height: canvasHeight)
-                }
-                
-                ForEach(Array(sortedReports.enumerated()), id: \.element.id) { index, report in
-                    let rotation = Double(index) * 2 - Double(sortedReports.count - 1)
-                    
-                    DraggableLabPaperCard(
-                        report: report,
-                        metric: metric,
-                        accent: snapshot.accent,
-                        colorScheme: colorScheme,
-                        cardWidth: cardWidth,
-                        rotation: rotation,
-                        position: cardPositions[report.id] ?? .zero,
-                        onTap: {
-                            if !isDrawingMode {
-                                onSelectReport(report)
-                            }
-                        },
-                        onDragEnded: { newPosition in
-                            cardPositions[report.id] = newPosition
-                        },
-                        onDragStart: {
-                            bringCardToFront(report.id)
-                        }
-                    )
-                    .zIndex(Double(index))
+        return ZStack {
+            ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                ZoomableCanvasContent(
+                    canvasWidth: canvasWidth,
+                    canvasHeight: canvasHeight,
+                    metric: metric,
+                    snapshot: snapshot,
+                    isDrawingMode: isDrawingMode,
+                    canvasDrawing: $canvasDrawing,
+                    cardPositions: $cardPositions,
+                    selectedCardId: $selectedCardId,
+                    cardContainers: $cardContainers,
+                    draggingCardId: $draggingCardId,
+                    draggingCardCenter: $draggingCardCenter,
+                    scale: $canvasScale,
+                    cardsNotInContainers: cardsNotInContainers,
+                    cardWidth: cardWidth,
+                    onSelectReport: onSelectReport,
+                    onOrganizeCardsByMetric: organizeCardsByMetric,
+                    onCreateContainerWithCard: createContainerWithCard,
+                    getContainerCards: getContainerCards,
+                    handleCardDrop: handleCardDrop,
+                    handleContainerCardDrop: handleContainerCardDrop,
+                    removeCardFromContainer: removeCardFromContainer,
+                    reorderCardInContainer: reorderCardInContainer
+                )
+                .frame(width: canvasWidth, height: canvasHeight)
+            }
+            
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    zoomControls
+                        .padding()
                 }
             }
-            .frame(width: canvasWidth, height: canvasHeight)
         }
         .background(Color.black.opacity(0.3))
+    }
+    
+    private var zoomControls: some View {
+        HStack(spacing: 12) {
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    canvasScale = max(minScale, canvasScale - 0.25)
+                }
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+                    .font(.title3.weight(.medium))
+            }
+            .buttonStyle(.bordered)
+            .disabled(canvasScale <= minScale)
+            
+            Text("\(Int(canvasScale * 100))%")
+                .font(.caption.monospacedDigit().weight(.medium))
+                .frame(width: 50)
+            
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    canvasScale = min(maxScale, canvasScale + 0.25)
+                }
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+                    .font(.title3.weight(.medium))
+            }
+            .buttonStyle(.bordered)
+            .disabled(canvasScale >= maxScale)
+            
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    canvasScale = 1.0
+                }
+            } label: {
+                Image(systemName: "1.magnifyingglass")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+    }
+    
+    private func organizeCardsByMetric(_ sourceCardId: UUID) {
+        guard let sourceReport = sortedReports.first(where: { $0.id == sourceCardId }) else { return }
+        let reportMetric = sourceReport.metric
+        
+        let matchingCards = sortedReports.filter { $0.metric == reportMetric }
+        guard matchingCards.count > 1 else { return }
+        
+        let containerId = UUID()
+        let basePosition = cardPositions[sourceCardId] ?? .zero
+        
+        cardContainers[containerId] = CardContainer(
+            id: containerId,
+            position: basePosition,
+            cardIds: matchingCards.map { $0.id }
+        )
+        
+        for (index, report) in matchingCards.enumerated() {
+            cardPositions[report.id] = CGPoint(
+                x: basePosition.x + CGFloat(index) * 4,
+                y: basePosition.y + CGFloat(index) * 4
+            )
+        }
+        
+        selectedCardId = nil
+    }
+    
+    private func createContainerWithCard(_ cardId: UUID) {
+        let containerId = UUID()
+        let position = cardPositions[cardId] ?? .zero
+        
+        cardContainers[containerId] = CardContainer(
+            id: containerId,
+            position: position,
+            cardIds: [cardId]
+        )
+        
+        selectedCardId = nil
+    }
+    
+    private func addNewContainer() {
+        let containerId = UUID()
+        let position = CGPoint(x: 1500, y: 1000)
+        
+        cardContainers[containerId] = CardContainer(
+            id: containerId,
+            position: position,
+            cardIds: []
+        )
+    }
+    
+    private func deleteContainer(_ containerId: UUID) {
+        cardContainers.removeValue(forKey: containerId)
+    }
+    
+    private func makeContainerSmart(_ containerId: UUID, filter: SmartContainerFilter) {
+        if var container = cardContainers[containerId] {
+            container.isSmartContainer = true
+            container.smartFilter = filter
+            cardContainers[containerId] = container
+        }
+    }
+    
+    private func editSmartFilter(_ containerId: UUID, filter: SmartContainerFilter) {
+        if var container = cardContainers[containerId] {
+            container.smartFilter = filter
+            cardContainers[containerId] = container
+        }
+    }
+    
+    private func getContainerCards(_ containerId: UUID) -> [NutrivanceTuningReport] {
+        guard let container = cardContainers[containerId] else { return [] }
+        
+        if container.isSmartContainer, let filter = container.smartFilter {
+            return container.matchingCards(from: sortedReports)
+        } else {
+            return sortedReports.filter { container.cardIds.contains($0.id) }
+        }
+    }
+    
+    private var cardsNotInContainers: [NutrivanceTuningReport] {
+        let cardIdsInNonSmartContainers = cardContainers.values
+            .filter { !$0.isSmartContainer }
+            .flatMap { $0.cardIds }
+        
+        return sortedReports.filter { !cardIdsInNonSmartContainers.contains($0.id) }
     }
 
     private func bringCardToFront(_ id: UUID) {
         nextCardZOrder += 1
+    }
+    
+    private func handleCardDrop(cardId: UUID, position: CGPoint) {
+        let cardCenter = CGPoint(x: position.x + cardWidth / 2, y: position.y + cardHeight / 2)
+        
+        for (containerId, container) in cardContainers {
+            let containerCards = getContainerCards(containerId)
+            let cardAlreadyInContainer = containerCards.contains(where: { $0.id == cardId })
+            guard !cardAlreadyInContainer else { continue }
+            
+            let containerRect = containerDropRect(for: container)
+            
+            if containerRect.contains(cardCenter) {
+                addCardToContainer(cardId: cardId, containerId: containerId)
+                return
+            }
+        }
+    }
+    
+    private func handleContainerCardDrop(cardId: UUID, center: CGPoint, sourceContainerId: UUID) {
+        for (containerId, container) in cardContainers {
+            if containerId == sourceContainerId && !container.isSmartContainer {
+                continue
+            }
+            
+            let containerRect = containerDropRect(for: container)
+            
+            if containerRect.contains(center) {
+                if containerId != sourceContainerId {
+                    addCardToContainer(cardId: cardId, containerId: containerId)
+                }
+                return
+            }
+        }
+        
+        removeCardFromContainer(cardId: cardId, containerId: sourceContainerId)
+    }
+    
+    private func containerDropRect(for container: CardContainer) -> CGRect {
+        let containerWidth: CGFloat = 380
+        let estimatedHeight: CGFloat = container.isExpanded ? 300 : 80
+        return CGRect(
+            x: container.position.x - containerWidth / 2,
+            y: container.position.y - estimatedHeight / 2,
+            width: containerWidth,
+            height: estimatedHeight
+        )
+    }
+    
+    private func addCardToContainer(cardId: UUID, containerId: UUID) {
+        guard var container = cardContainers[containerId] else { return }
+        guard !container.isSmartContainer else { return }
+        guard !container.cardIds.contains(cardId) else { return }
+        
+        container.cardIds.append(cardId)
+        cardContainers[containerId] = container
+        
+        if selectedCardId == cardId {
+            selectedCardId = nil
+        }
+    }
+    
+    private func removeCardFromContainer(cardId: UUID, containerId: UUID) {
+        guard var container = cardContainers[containerId] else { return }
+        guard !container.isSmartContainer else { return }
+        
+        container.cardIds.removeAll { $0 == cardId }
+        cardContainers[containerId] = container
+    }
+    
+    private func reorderCardInContainer(cardId: UUID, newIndex: Int, containerId: UUID) {
+        guard var container = cardContainers[containerId] else { return }
+        guard !container.isSmartContainer else { return }
+        guard let currentIndex = container.cardIds.firstIndex(of: cardId) else { return }
+        
+        container.cardIds.remove(at: currentIndex)
+        let targetIndex = min(newIndex, container.cardIds.count)
+        container.cardIds.insert(cardId, at: targetIndex)
+        cardContainers[containerId] = container
+    }
+}
+
+struct SmartContainerFilter: Equatable {
+    enum FilterType: String, CaseIterable {
+        case factor
+        case date
+        case month
+        case valenceAbove
+    }
+    
+    var filterType: FilterType
+    var factorFilter: NutrivanceTuningFactor?
+    var dateFilter: Date?
+    var monthFilter: Int?
+    var yearFilter: Int?
+    var valenceThreshold: Double?
+}
+
+struct CardContainer: Identifiable, Equatable {
+    let id: UUID
+    var position: CGPoint
+    var cardIds: [UUID]
+    var isExpanded: Bool = false
+    var isSmartContainer: Bool = false
+    var smartFilter: SmartContainerFilter?
+    
+    static func == (lhs: CardContainer, rhs: CardContainer) -> Bool {
+        lhs.id == rhs.id && lhs.position == rhs.position && lhs.cardIds == rhs.cardIds && lhs.isExpanded == rhs.isExpanded && lhs.isSmartContainer == rhs.isSmartContainer && lhs.smartFilter == rhs.smartFilter
+    }
+    
+    func matchingCards(from reports: [NutrivanceTuningReport]) -> [NutrivanceTuningReport] {
+        guard isSmartContainer, let filter = smartFilter else {
+            return []
+        }
+        
+        return reports.filter { report in
+            switch filter.filterType {
+            case .factor:
+                guard let factorFilter = filter.factorFilter else { return false }
+                return report.factor == factorFilter
+            case .date:
+                guard let dateFilter = filter.dateFilter else { return false }
+                let calendar = Calendar.current
+                return calendar.isDate(report.createdAt, inSameDayAs: dateFilter)
+            case .month:
+                guard let month = filter.monthFilter, let year = filter.yearFilter else { return false }
+                let calendar = Calendar.current
+                let reportMonth = calendar.component(.month, from: report.createdAt)
+                let reportYear = calendar.component(.year, from: report.createdAt)
+                return reportMonth == month && reportYear == year
+            case .valenceAbove:
+                guard let threshold = filter.valenceThreshold else { return false }
+                return report.computedWeight >= threshold
+            }
+        }
     }
 }
 
@@ -957,11 +1276,242 @@ struct InfiniteGridView: View {
     }
 }
 
+// MARK: - Freeform Canvas Persistence
+
+struct CodablePoint: Codable, Equatable {
+    var x: Double
+    var y: Double
+    
+    init(_ point: CGPoint) {
+        self.x = point.x
+        self.y = point.y
+    }
+    
+    var cgPoint: CGPoint {
+        CGPoint(x: x, y: y)
+    }
+}
+
+struct CodableSmartFilter: Codable, Equatable {
+    enum FilterType: String, Codable, CaseIterable {
+        case factor
+        case date
+        case month
+        case valenceAbove
+    }
+    
+    var filterType: FilterType
+    var factorFilter: String?
+    var dateFilter: Date?
+    var monthFilter: Int?
+    var yearFilter: Int?
+    var valenceThreshold: Double?
+    
+    init(from filter: SmartContainerFilter?) {
+        guard let filter = filter else {
+            self.filterType = .factor
+            return
+        }
+        self.filterType = FilterType(rawValue: filter.filterType.rawValue) ?? .factor
+        self.factorFilter = filter.factorFilter?.rawValue
+        self.dateFilter = filter.dateFilter
+        self.monthFilter = filter.monthFilter
+        self.yearFilter = filter.yearFilter
+        self.valenceThreshold = filter.valenceThreshold
+    }
+    
+    var smartFilter: SmartContainerFilter {
+        SmartContainerFilter(
+            filterType: SmartContainerFilter.FilterType(rawValue: filterType.rawValue) ?? .factor,
+            factorFilter: factorFilter.flatMap { NutrivanceTuningFactor(rawValue: $0) },
+            dateFilter: dateFilter,
+            monthFilter: monthFilter,
+            yearFilter: yearFilter,
+            valenceThreshold: valenceThreshold
+        )
+    }
+}
+
+struct CodableCardContainer: Codable, Identifiable, Equatable {
+    let id: UUID
+    var position: CodablePoint
+    var cardIds: [UUID]
+    var isExpanded: Bool
+    var isSmartContainer: Bool
+    var smartFilter: CodableSmartFilter?
+    
+    init(from container: CardContainer) {
+        self.id = container.id
+        self.position = CodablePoint(container.position)
+        self.cardIds = container.cardIds
+        self.isExpanded = container.isExpanded
+        self.isSmartContainer = container.isSmartContainer
+        self.smartFilter = CodableSmartFilter(from: container.smartFilter)
+    }
+    
+    var cardContainer: CardContainer {
+        CardContainer(
+            id: id,
+            position: position.cgPoint,
+            cardIds: cardIds,
+            isExpanded: isExpanded,
+            isSmartContainer: isSmartContainer,
+            smartFilter: smartFilter?.smartFilter
+        )
+    }
+}
+
+struct FreeformCanvasState: Codable {
+    var cardPositions: [UUID: CodablePoint]
+    var containers: [CodableCardContainer]
+    var lastScrollOffset: CodablePoint
+    var canvasScale: Double
+    var sortByNewestFirst: Bool
+    var isOrganized: Bool
+    var lastModified: Date
+    
+    static let storageKey = "freeform_canvas_state_"
+    static let iCloudKey = "iCloud_freeform_canvas_state_"
+    
+    static func key(for metric: NutrivanceTuningMetric) -> String {
+        storageKey + metric.rawValue
+    }
+    
+    static func iCloudKey(for metric: NutrivanceTuningMetric) -> String {
+        iCloudKey + metric.rawValue
+    }
+}
+
+@MainActor
+class FreeformCanvasPersistence: ObservableObject {
+    static let shared = FreeformCanvasPersistence()
+    
+    @Published var isSyncing: Bool = false
+    @Published var lastSyncDate: Date?
+    
+    private let userDefaults = UserDefaults.standard
+    private var iCloudStore: NSUbiquitousKeyValueStore { NSUbiquitousKeyValueStore.default }
+    
+    private var iCloudObserver: NSObjectProtocol?
+    
+    init() {
+        setupiCloudObserver()
+    }
+    
+    deinit {
+        if let observer = iCloudObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+    
+    private func setupiCloudObserver() {
+        iCloudObserver = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: iCloudStore,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleiCloudChange(notification)
+        }
+        iCloudStore.synchronize()
+    }
+    
+    private nonisolated func handleiCloudChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let changeReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int else {
+            return
+        }
+        
+        Task { @MainActor in
+            switch changeReason {
+            case NSUbiquitousKeyValueStoreServerChange,
+                 NSUbiquitousKeyValueStoreInitialSyncChange:
+                self.isSyncing = true
+                await self.triggerRefreshFromiCloud()
+                self.isSyncing = false
+                self.lastSyncDate = Date()
+            case NSUbiquitousKeyValueStoreQuotaViolationChange:
+                print("iCloud quota exceeded for freeform canvas")
+            case NSUbiquitousKeyValueStoreAccountChange:
+                await self.handleAccountChange()
+            default:
+                break
+            }
+        }
+    }
+    
+    private func handleAccountChange() async {
+        for metric in NutrivanceTuningMetric.allCases {
+            await loadState(for: metric)
+        }
+    }
+    
+    private func triggerRefreshFromiCloud() async {
+        NotificationCenter.default.post(name: .freeformCanvasNeedsRefresh, object: nil)
+    }
+    
+    func saveState(_ state: FreeformCanvasState, for metric: NutrivanceTuningMetric) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        
+        userDefaults.set(data, forKey: FreeformCanvasState.key(for: metric))
+        iCloudStore.set(data, forKey: FreeformCanvasState.iCloudKey(for: metric))
+        iCloudStore.synchronize()
+    }
+    
+    func loadState(for metric: NutrivanceTuningMetric) async -> FreeformCanvasState? {
+        let localKey = FreeformCanvasState.key(for: metric)
+        let iCloudKey = FreeformCanvasState.iCloudKey(for: metric)
+        
+        if let localData = userDefaults.data(forKey: localKey),
+           let iCloudData = iCloudStore.data(forKey: iCloudKey) {
+            if let localState = try? JSONDecoder().decode(FreeformCanvasState.self, from: localData),
+               let iCloudState = try? JSONDecoder().decode(FreeformCanvasState.self, from: iCloudData) {
+                return mergeStates(local: localState, iCloud: iCloudState)
+            }
+        }
+        
+        if let iCloudData = iCloudStore.data(forKey: iCloudKey),
+           let state = try? JSONDecoder().decode(FreeformCanvasState.self, from: iCloudData) {
+            userDefaults.set(iCloudData, forKey: localKey)
+            return state
+        }
+        
+        if let localData = userDefaults.data(forKey: localKey),
+           let state = try? JSONDecoder().decode(FreeformCanvasState.self, from: localData) {
+            return state
+        }
+        
+        return nil
+    }
+    
+    private func mergeStates(local: FreeformCanvasState, iCloud: FreeformCanvasState) -> FreeformCanvasState {
+        if iCloud.lastModified > local.lastModified {
+            return iCloud
+        }
+        return local
+    }
+    
+    func deleteState(for metric: NutrivanceTuningMetric) {
+        let localKey = FreeformCanvasState.key(for: metric)
+        let iCloudKey = FreeformCanvasState.iCloudKey(for: metric)
+        
+        userDefaults.removeObject(forKey: localKey)
+        iCloudStore.removeObject(forKey: iCloudKey)
+        iCloudStore.synchronize()
+    }
+}
+
+extension Notification.Name {
+    static let freeformCanvasNeedsRefresh = Notification.Name("freeformCanvasNeedsRefresh")
+}
+
 import PencilKit
 
 struct PencilKitCanvasView: UIViewRepresentable {
     @Binding var drawingData: Data?
     @Binding var isDrawingMode: Bool
+    @Binding var selectedCardId: UUID?
+    let cardPositions: [UUID: CGPoint]
+    let cardWidth: CGFloat
     
     func makeUIView(context: Context) -> PKCanvasView {
         let canvas = PKCanvasView()
@@ -976,6 +1526,9 @@ struct PencilKitCanvasView: UIViewRepresentable {
         }
         
         context.coordinator.setupToolPicker(for: canvas)
+        context.coordinator.onLassoFinished = { strokePath in
+            checkLassoSelection(strokePath: strokePath)
+        }
         
         return canvas
     }
@@ -1001,9 +1554,21 @@ struct PencilKitCanvasView: UIViewRepresentable {
         Coordinator(self)
     }
     
+    private func checkLassoSelection(strokePath: UIBezierPath) {
+        for (cardId, position) in cardPositions {
+            let cardRect = CGRect(x: position.x, y: position.y, width: cardWidth, height: 280)
+            if strokePath.contains(CGPoint(x: cardRect.midX, y: cardRect.midY)) {
+                DispatchQueue.main.async {
+                    self.selectedCardId = cardId
+                }
+            }
+        }
+    }
+    
     class Coordinator: NSObject, PKCanvasViewDelegate {
         var parent: PencilKitCanvasView
         var toolPicker: PKToolPicker?
+        var onLassoFinished: ((UIBezierPath) -> Void)?
         
         init(_ parent: PencilKitCanvasView) {
             self.parent = parent
@@ -1021,31 +1586,215 @@ struct PencilKitCanvasView: UIViewRepresentable {
         
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             parent.drawingData = canvasView.drawing.dataRepresentation()
+            
+            if let strokes = canvasView.drawing.strokes.last,
+               strokes.path.count > 0 {
+                let bounds = strokes.renderBounds
+                let path = UIBezierPath(rect: bounds)
+                onLassoFinished?(path)
+            }
         }
     }
 }
 
-private struct DraggableLabPaperCard: View {
+private struct ZoomableCanvasContent: View {
+    let canvasWidth: CGFloat
+    let canvasHeight: CGFloat
+    let metric: NutrivanceTuningMetric
+    let snapshot: LabsMetricSnapshot
+    let isDrawingMode: Bool
+    @Binding var canvasDrawing: [String: Data]
+    @Binding var cardPositions: [UUID: CGPoint]
+    @Binding var selectedCardId: UUID?
+    @Binding var cardContainers: [UUID: CardContainer]
+    @Binding var draggingCardId: UUID?
+    @Binding var draggingCardCenter: CGPoint?
+    @Binding var scale: CGFloat
+    
+    let cardsNotInContainers: [NutrivanceTuningReport]
+    let cardWidth: CGFloat
+    var onSelectReport: (NutrivanceTuningReport) -> Void
+    var onOrganizeCardsByMetric: (UUID) -> Void
+    var onCreateContainerWithCard: (UUID) -> Void
+    var getContainerCards: (UUID) -> [NutrivanceTuningReport]
+    var handleCardDrop: (UUID, CGPoint) -> Void
+    var handleContainerCardDrop: (UUID, CGPoint, UUID) -> Void
+    var removeCardFromContainer: (UUID, UUID) -> Void
+    var reorderCardInContainer: (UUID, Int, UUID) -> Void
+    
+    @GestureState private var magnifyBy: CGFloat = 1.0
+    
+    private let minScale: CGFloat = 0.3
+    private let maxScale: CGFloat = 2.5
+    
+    private var effectiveScale: CGFloat {
+        (scale * magnifyBy).clamped(to: minScale...maxScale)
+    }
+    
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            InfiniteGridView()
+                .frame(width: canvasWidth, height: canvasHeight)
+                .allowsHitTesting(false)
+            
+            if isDrawingMode {
+                PencilKitCanvasView(
+                    drawingData: Binding(
+                        get: { canvasDrawing[metric.rawValue] },
+                        set: { canvasDrawing[metric.rawValue] = $0 }
+                    ),
+                    isDrawingMode: .constant(isDrawingMode),
+                    selectedCardId: $selectedCardId,
+                    cardPositions: cardPositions,
+                    cardWidth: cardWidth
+                )
+                .frame(width: canvasWidth, height: canvasHeight)
+            }
+            
+            ForEach(cardsNotInContainers) { report in
+                let isSelected = selectedCardId == report.id
+                let position = cardPositions[report.id] ?? .zero
+                
+                SelectableLabPaperCard(
+                    report: report,
+                    metric: metric,
+                    accent: snapshot.accent,
+                    colorScheme: .dark,
+                    cardWidth: cardWidth,
+                    isSelected: isSelected,
+                    position: position,
+                    onTap: {
+                        if !isDrawingMode {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                if selectedCardId == report.id {
+                                    selectedCardId = nil
+                                } else {
+                                    selectedCardId = report.id
+                                }
+                            }
+                        }
+                    },
+                    onDragChanged: { cardCenter in
+                        draggingCardId = report.id
+                        draggingCardCenter = cardCenter
+                    },
+                    onDragEnded: { newPosition in
+                        cardPositions[report.id] = newPosition
+                        handleCardDrop(report.id, newPosition)
+                        draggingCardId = nil
+                        draggingCardCenter = nil
+                    }
+                )
+                .zIndex(isSelected ? 1000 : 1)
+            }
+            
+            ForEach(Array(cardContainers.values), id: \.id) { container in
+                let containerCards = getContainerCards(container.id)
+                ContainerView(
+                    container: container,
+                    cards: containerCards,
+                    metric: metric,
+                    accent: snapshot.accent,
+                    colorScheme: .dark,
+                    cardWidth: cardWidth,
+                    onPositionChanged: { newPosition in
+                        cardContainers[container.id]?.position = newPosition
+                    },
+                    onToggleExpand: {
+                        cardContainers[container.id]?.isExpanded.toggle()
+                    },
+                    onDelete: {
+                        cardContainers.removeValue(forKey: container.id)
+                    },
+                    onMakeSmart: { _ in },
+                    onEditSmartFilter: { _ in },
+                    onCardTap: { report in
+                        onSelectReport(report)
+                    },
+                    onCardDragStarted: { cardId, center in
+                        draggingCardId = cardId
+                        draggingCardCenter = center
+                    },
+                    onCardDragMoved: { cardId, center in
+                        draggingCardId = cardId
+                        draggingCardCenter = center
+                    },
+                    onCardDragEnded: { cardId, center, _ in
+                        handleContainerCardDrop(cardId, center, container.id)
+                        draggingCardId = nil
+                        draggingCardCenter = nil
+                    },
+                    onCardRemoved: { cardId in
+                        removeCardFromContainer(cardId, container.id)
+                    },
+                    onCardReordered: { cardId, newIndex in
+                        reorderCardInContainer(cardId, newIndex, container.id)
+                    },
+                    draggingCardId: draggingCardId,
+                    draggingCardCenter: draggingCardCenter
+                )
+                .zIndex(50)
+            }
+            
+            if let selectedId = selectedCardId,
+               let selectedReport = cardsNotInContainers.first(where: { $0.id == selectedId }) {
+                let position = cardPositions[selectedId] ?? .zero
+                CardActionPopup(
+                    report: selectedReport,
+                    accent: snapshot.accent,
+                    position: position,
+                    cardWidth: cardWidth,
+                    onDismiss: {
+                        withAnimation {
+                            selectedCardId = nil
+                        }
+                    },
+                    onOrganizeAsStack: {
+                        onOrganizeCardsByMetric(selectedId)
+                    },
+                    onCreateContainer: {
+                        onCreateContainerWithCard(selectedId)
+                    }
+                )
+            }
+        }
+        .scaleEffect(effectiveScale)
+        .gesture(
+            MagnificationGesture()
+                .updating($magnifyBy) { value, state, _ in
+                    state = value
+                }
+                .onEnded { value in
+                    scale = (scale * value).clamped(to: minScale...maxScale)
+                }
+        )
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: magnifyBy)
+    }
+}
+
+extension Comparable {
+    func clamped(to limits: ClosedRange<Self>) -> Self {
+        min(max(self, limits.lowerBound), limits.upperBound)
+    }
+}
+
+private struct SelectableLabPaperCard: View {
     let report: NutrivanceTuningReport
     let metric: NutrivanceTuningMetric
     let accent: Color
     let colorScheme: ColorScheme
     let cardWidth: CGFloat
-    let rotation: Double
+    var isSelected: Bool
     var position: CGPoint
     var onTap: () -> Void
+    var onDragChanged: ((CGPoint) -> Void)?
     var onDragEnded: (CGPoint) -> Void
-    var onDragStart: () -> Void
 
     @GestureState private var dragTranslation: CGSize = .zero
     @State private var isDragging: Bool = false
 
-    private var effectiveRotation: Double {
-        isDragging ? 0 : rotation
-    }
-
     private var effectiveScale: CGFloat {
-        isDragging ? 1.08 : 1.0
+        isDragging ? 1.05 : 1.0
     }
 
     private var resolvedPosition: CGPoint {
@@ -1063,25 +1812,32 @@ private struct DraggableLabPaperCard: View {
             colorScheme: colorScheme,
             cardWidth: cardWidth
         )
-        .rotationEffect(.degrees(effectiveRotation))
         .scaleEffect(effectiveScale)
         .shadow(
-            color: Color.black.opacity(isDragging ? 0.4 : 0.2),
-            radius: isDragging ? 20 : 10,
+            color: isSelected ? accent.opacity(0.6) : Color.black.opacity(isDragging ? 0.4 : 0.2),
+            radius: isDragging ? 20 : (isSelected ? 16 : 10),
             x: 0,
-            y: isDragging ? 15 : 5
+            y: isDragging ? 15 : (isSelected ? 10 : 5)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? accent : Color.clear, lineWidth: isSelected ? 3 : 0)
         )
         .position(
             x: resolvedPosition.x + cardWidth / 2,
             y: resolvedPosition.y + 140
         )
         .gesture(
-            DragGesture()
-                .onChanged { _ in
+            isSelected ? DragGesture()
+                .onChanged { value in
                     if !isDragging {
                         isDragging = true
-                        onDragStart()
                     }
+                    let currentPos = CGPoint(
+                        x: position.x + value.translation.width,
+                        y: position.y + value.translation.height
+                    )
+                    onDragChanged?(currentPos)
                 }
                 .updating($dragTranslation) { value, state, _ in
                     state = value.translation
@@ -1091,13 +1847,513 @@ private struct DraggableLabPaperCard: View {
                         x: position.x + value.translation.width,
                         y: position.y + value.translation.height
                     )
+                    onDragChanged?(newPosition)
                     onDragEnded(newPosition)
                     isDragging = false
                 }
+            : nil
         )
         .onTapGesture {
-            if !isDragging {
-                onTap()
+            onTap()
+        }
+    }
+}
+
+private struct CardActionPopup: View {
+    let report: NutrivanceTuningReport
+    let accent: Color
+    let position: CGPoint
+    let cardWidth: CGFloat
+    var onDismiss: () -> Void
+    var onOrganizeAsStack: () -> Void
+    var onCreateContainer: () -> Void
+
+    private let cardHeight: CGFloat = 280
+    private let popupHeight: CGFloat = 100
+
+    private var popupY: CGFloat {
+        position.y + cardHeight + popupHeight > 2000 ? position.y - popupHeight - 10 : position.y + cardHeight + 10
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Button {
+                onOrganizeAsStack()
+            } label: {
+                Label("Organize as Stack", systemImage: "square.stack.3d.up")
+                    .font(.caption.weight(.medium))
+            }
+
+            Button {
+                onCreateContainer()
+            } label: {
+                Label("Create Container", systemImage: "rectangle.portrait.on.rectangle.portrait")
+                    .font(.caption.weight(.medium))
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(accent.opacity(0.3), lineWidth: 1)
+        )
+        .position(
+            x: position.x + cardWidth / 2,
+            y: popupY + popupHeight / 2
+        )
+        .onTapGesture {
+            onDismiss()
+        }
+    }
+}
+
+private struct ContainerView: View {
+    let container: CardContainer
+    let cards: [NutrivanceTuningReport]
+    let metric: NutrivanceTuningMetric
+    let accent: Color
+    let colorScheme: ColorScheme
+    let cardWidth: CGFloat
+    var onPositionChanged: (CGPoint) -> Void
+    var onToggleExpand: () -> Void
+    var onDelete: () -> Void
+    var onMakeSmart: (SmartContainerFilter) -> Void
+    var onEditSmartFilter: (SmartContainerFilter) -> Void
+    var onCardTap: (NutrivanceTuningReport) -> Void
+    var onCardDragStarted: ((UUID, CGPoint) -> Void)?
+    var onCardDragMoved: ((UUID, CGPoint) -> Void)?
+    var onCardDragEnded: ((UUID, CGPoint, CGSize) -> Void)?
+    var onCardRemoved: ((UUID) -> Void)?
+    var onCardReordered: ((UUID, Int) -> Void)?
+    var draggingCardId: UUID?
+    var draggingCardCenter: CGPoint?
+    
+    @GestureState private var containerDragOffset: CGSize = .zero
+    @State private var isDraggingContainer: Bool = false
+    @State private var showSmartConfig: Bool = false
+    @State private var internalCardOrder: [UUID] = []
+    @State private var draggingCardInContainer: UUID? = nil
+    @State private var cardDragOffset: CGSize = .zero
+    
+    private let headerHeight: CGFloat = 36
+    private let containerCardWidth: CGFloat = 220
+    private let containerCardHeight: CGFloat = 160
+    private let cardsPerRow: Int = 2
+    private let containerWidth: CGFloat = 460
+    private let horizontalPadding: CGFloat = 12
+    private let verticalPadding: CGFloat = 12
+    
+    private var sortedCards: [NutrivanceTuningReport] {
+        let orderedIds = internalCardOrder.isEmpty ? cards.map { $0.id } : internalCardOrder
+        return orderedIds.compactMap { id in cards.first { $0.id == id } }
+    }
+    
+    private var contentHeight: CGFloat {
+        let rowCount = max(1, (cards.count + cardsPerRow - 1) / cardsPerRow)
+        return CGFloat(rowCount) * (containerCardHeight + 8)
+    }
+    
+    private var totalHeight: CGFloat {
+        headerHeight + contentHeight + verticalPadding * 2
+    }
+    
+    private var containerBounds: CGRect {
+        let centerX = container.position.x + containerDragOffset.width
+        let centerY = container.position.y + containerDragOffset.height
+        return CGRect(
+            x: centerX - containerWidth / 2,
+            y: centerY - totalHeight / 2,
+            width: containerWidth,
+            height: totalHeight
+        )
+    }
+    
+    private var isDropTargeted: Bool {
+        guard let draggingId = draggingCardId,
+              let center = draggingCardCenter else { return false }
+        let cardAlreadyInContainer = cards.contains(where: { $0.id == draggingId })
+        guard !cardAlreadyInContainer else { return false }
+        return containerBounds.contains(center)
+    }
+    
+    private var currentCenter: CGPoint {
+        CGPoint(
+            x: container.position.x + containerDragOffset.width,
+            y: container.position.y + containerDragOffset.height
+        )
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            containerHeader
+            
+            containerContent
+        }
+        .frame(width: containerWidth, height: totalHeight)
+        .background(Color.black.opacity(isDropTargeted ? 0.5 : 0.3))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isDropTargeted ? accent : accent.opacity(0.4), lineWidth: isDropTargeted ? 4 : 2)
+        )
+        .shadow(
+            color: isDropTargeted ? accent.opacity(0.5) : Color.black.opacity(0.3),
+            radius: isDropTargeted ? 20 : 10,
+            x: 0,
+            y: isDropTargeted ? 8 : 5
+        )
+        .scaleEffect(isDropTargeted ? 1.05 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDropTargeted)
+        .position(currentCenter)
+        .gesture(
+            DragGesture()
+                .onChanged { _ in
+                    if !isDraggingContainer {
+                        isDraggingContainer = true
+                    }
+                }
+                .updating($containerDragOffset) { value, state, _ in
+                    state = value.translation
+                }
+                .onEnded { value in
+                    let newPosition = CGPoint(
+                        x: container.position.x + value.translation.width,
+                        y: container.position.y + value.translation.height
+                    )
+                    onPositionChanged(newPosition)
+                    isDraggingContainer = false
+                }
+        )
+        .onAppear {
+            internalCardOrder = cards.map { $0.id }
+        }
+        .onChange(of: cards.map { $0.id }) { _, newValue in
+            let existingOrder = internalCardOrder.filter { newValue.contains($0) }
+            let newIds = newValue.filter { !existingOrder.contains($0) }
+            internalCardOrder = existingOrder + newIds
+        }
+        .contextMenu {
+            Button {
+                onToggleExpand()
+            } label: {
+                Label(container.isExpanded ? "Collapse" : "Expand", systemImage: container.isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+            }
+            
+            Divider()
+            
+            if !container.isSmartContainer {
+                Button {
+                    showSmartConfig = true
+                } label: {
+                    Label("Make Smart Container", systemImage: "wand.and.stars")
+                }
+            } else {
+                Button {
+                    showSmartConfig = true
+                } label: {
+                    Label("Edit Smart Filter", systemImage: "pencil")
+                }
+                Label("Smart Container Active", systemImage: "checkmark.circle")
+            }
+            
+            Divider()
+            
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Delete Container", systemImage: "trash")
+            }
+        }
+        .sheet(isPresented: $showSmartConfig) {
+            SmartContainerConfigView(
+                metric: metric,
+                existingFilter: container.smartFilter,
+                onSave: { filter in
+                    if !container.isSmartContainer {
+                        onMakeSmart(filter)
+                    } else {
+                        onEditSmartFilter(filter)
+                    }
+                    showSmartConfig = false
+                }
+            )
+        }
+    }
+    
+    private var containerHeader: some View {
+        HStack {
+            Image(systemName: container.isSmartContainer ? "wand.and.stars" : "folder")
+                .foregroundStyle(accent)
+            
+            Text(container.isSmartContainer ? "Smart Container" : "Container")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+            
+            Text("(\(cards.count))")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.7))
+            
+            Spacer()
+            
+            Button {
+                onToggleExpand()
+            } label: {
+                Image(systemName: container.isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, 8)
+        .background(accent.opacity(0.6))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onToggleExpand()
+        }
+    }
+    
+    @ViewBuilder
+    private var containerContent: some View {
+        if container.isExpanded {
+            ScrollView {
+                LazyVGrid(columns: [
+                    GridItem(.fixed(containerCardWidth), spacing: 8),
+                    GridItem(.fixed(containerCardWidth), spacing: 8)
+                ], spacing: 8) {
+                    ForEach(Array(sortedCards.enumerated()), id: \.element.id) { index, report in
+                        ContainerCardView(
+                            report: report,
+                            metric: metric,
+                            accent: accent,
+                            colorScheme: colorScheme,
+                            cardWidth: containerCardWidth,
+                            isDragging: draggingCardId == report.id,
+                            onTap: {
+                                onCardTap(report)
+                            },
+                            onDragStarted: { center in
+                                draggingCardInContainer = report.id
+                                onCardDragStarted?(report.id, center)
+                            },
+                            onDragMoved: { center in
+                                onCardDragMoved?(report.id, center)
+                            },
+                            onDragEnded: { center, offset in
+                                handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
+                                draggingCardInContainer = nil
+                            },
+                            cardHeight: containerCardHeight
+                        )
+                    }
+                }
+                .padding(verticalPadding)
+            }
+        } else {
+            collapsedContent
+        }
+    }
+    
+    private var dragThreshold: CGFloat { 60 }
+    
+    private func handleCardDragEnded(reportId: UUID, center: CGPoint, dragOffset: CGSize) {
+        let distanceFromOrigin = sqrt(pow(dragOffset.width, 2) + pow(dragOffset.height, 2))
+        
+        if distanceFromOrigin > dragThreshold {
+            onCardRemoved?(reportId)
+        } else if containerBounds.contains(center) {
+            let currentIndex = internalCardOrder.firstIndex(of: reportId) ?? 0
+            if currentIndex != 0 {
+                var newOrder = internalCardOrder
+                newOrder.removeAll { $0 == reportId }
+                newOrder.insert(reportId, at: max(0, currentIndex - 1))
+                internalCardOrder = newOrder
+                onCardReordered?(reportId, max(0, currentIndex - 1))
+            }
+        }
+        onCardDragEnded?(reportId, center, dragOffset)
+    }
+    
+    private var collapsedContent: some View {
+        let previewCards: [NutrivanceTuningReport] = Array(cards.prefix(3))
+        return VStack(spacing: 4) {
+            ForEach(previewCards, id: \.id) { (report: NutrivanceTuningReport) in
+                HStack {
+                    Text(report.userNote.isEmpty ? "Untitled" : report.userNote)
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+            }
+            if cards.count > 3 {
+                Text("+\(cards.count - 3) more")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .padding(8)
+    }
+}
+
+private struct ContainerCardView: View {
+    let report: NutrivanceTuningReport
+    let metric: NutrivanceTuningMetric
+    let accent: Color
+    let colorScheme: ColorScheme
+    let cardWidth: CGFloat
+    var isDragging: Bool
+    var onTap: () -> Void
+    var onDragStarted: (CGPoint) -> Void
+    var onDragMoved: (CGPoint) -> Void
+    var onDragEnded: (CGPoint, CGSize) -> Void
+    var cardHeight: CGFloat = 160
+    
+    @GestureState private var dragOffset: CGSize = .zero
+    @State private var localIsDragging: Bool = false
+    
+    private var resolvedPosition: CGPoint {
+        CGPoint(
+            x: cardWidth / 2 + dragOffset.width,
+            y: cardHeight / 2 + dragOffset.height
+        )
+    }
+    
+    var body: some View {
+        ZStack {
+            MetricStackReportCardContent(
+                report: report,
+                metric: metric,
+                accent: accent,
+                colorScheme: colorScheme,
+                cardWidth: cardWidth,
+                cardHeight: cardHeight
+            )
+            .scaleEffect(localIsDragging ? 1.1 : 1.0)
+            .shadow(
+                color: localIsDragging ? accent.opacity(0.6) : Color.black.opacity(0.2),
+                radius: localIsDragging ? 15 : 5,
+                x: 0,
+                y: localIsDragging ? 10 : 3
+            )
+        }
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if !localIsDragging {
+                        localIsDragging = true
+                        onDragStarted(resolvedPosition)
+                    }
+                    onDragMoved(resolvedPosition)
+                }
+                .updating($dragOffset) { value, state, _ in
+                    state = value.translation
+                }
+                .onEnded { value in
+                    let finalOffset = dragOffset
+                    onDragEnded(resolvedPosition, finalOffset)
+                    localIsDragging = false
+                }
+        )
+        .onTapGesture {
+            onTap()
+        }
+    }
+}
+
+private struct SmartContainerConfigView: View {
+    let metric: NutrivanceTuningMetric
+    var existingFilter: SmartContainerFilter?
+    var onSave: (SmartContainerFilter) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var filterType: SmartContainerFilter.FilterType = .factor
+    @State private var selectedFactor: NutrivanceTuningFactor?
+    @State private var selectedDate: Date = Date()
+    @State private var selectedMonth: Int = 1
+    @State private var selectedYear: Int = Calendar.current.component(.year, from: Date())
+    @State private var valenceThreshold: Double = 0.5
+    
+    private let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+    
+    init(metric: NutrivanceTuningMetric, existingFilter: SmartContainerFilter? = nil, onSave: @escaping (SmartContainerFilter) -> Void) {
+        self.metric = metric
+        self.existingFilter = existingFilter
+        self.onSave = onSave
+        if let filter = existingFilter {
+            _filterType = State(initialValue: filter.filterType)
+            _selectedFactor = State(initialValue: filter.factorFilter)
+            _selectedDate = State(initialValue: filter.dateFilter ?? Date())
+            _selectedMonth = State(initialValue: filter.monthFilter ?? 1)
+            _selectedYear = State(initialValue: filter.yearFilter ?? Calendar.current.component(.year, from: Date()))
+            _valenceThreshold = State(initialValue: filter.valenceThreshold ?? 0.5)
+        }
+    }
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Filter Type") {
+                    Picker("Type", selection: $filterType) {
+                        Text("By Factor").tag(SmartContainerFilter.FilterType.factor)
+                        Text("By Date").tag(SmartContainerFilter.FilterType.date)
+                        Text("By Month").tag(SmartContainerFilter.FilterType.month)
+                        Text("Valence Above").tag(SmartContainerFilter.FilterType.valenceAbove)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                
+                Section("Filter Settings") {
+                    switch filterType {
+                    case .factor:
+                        Picker("Factor", selection: $selectedFactor) {
+                            Text("Select...").tag(nil as NutrivanceTuningFactor?)
+                            ForEach(NutrivanceTuningFactor.allCases, id: \.self) { f in
+                                Text(f.displayTitle).tag(f as NutrivanceTuningFactor?)
+                            }
+                        }
+                    case .date:
+                        DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
+                    case .month:
+                        Picker("Month", selection: $selectedMonth) {
+                            ForEach(1...12, id: \.self) { month in
+                                Text(months[month - 1]).tag(month)
+                            }
+                        }
+                        Picker("Year", selection: $selectedYear) {
+                            ForEach((selectedYear - 5)...(selectedYear + 1), id: \.self) { year in
+                                Text(String(year)).tag(year)
+                            }
+                        }
+                    case .valenceAbove:
+                        VStack(alignment: .leading) {
+                            Text("Minimum Valence: \(valenceThreshold, specifier: "%.2f")")
+                            Slider(value: $valenceThreshold, in: 0...1, step: 0.1)
+                        }
+                    }
+                }
+            }
+            .navigationTitle(existingFilter != nil ? "Edit Smart Container" : "Smart Container")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let filter = SmartContainerFilter(
+                            filterType: filterType,
+                            factorFilter: selectedFactor,
+                            dateFilter: filterType == .date ? selectedDate : nil,
+                            monthFilter: filterType == .month ? selectedMonth : nil,
+                            yearFilter: filterType == .month ? selectedYear : nil,
+                            valenceThreshold: filterType == .valenceAbove ? valenceThreshold : nil
+                        )
+                        onSave(filter)
+                    }
+                }
             }
         }
     }
@@ -1109,6 +2365,7 @@ private struct MetricStackReportCardContent: View {
     let accent: Color
     let colorScheme: ColorScheme
     let cardWidth: CGFloat
+    var cardHeight: CGFloat = 280
 
     var body: some View {
         LabPaperPreview(
@@ -1116,16 +2373,13 @@ private struct MetricStackReportCardContent: View {
             metric: metric,
             accent: accent,
             compact: false,
+            compactHeight: cardHeight < 200,
             colorScheme: colorScheme,
             showFooter: true,
             showWeightBar: true,
             weightBarValue: report.resolvedComputedWeight()
         )
         .frame(width: cardWidth, height: cardHeight)
-    }
-
-    private var cardHeight: CGFloat {
-        280
     }
 }
 
@@ -1240,11 +2494,16 @@ private struct LabPaperPreview: View {
     let metric: NutrivanceTuningMetric
     let accent: Color
     let compact: Bool
+    var compactHeight: Bool = false
     var colorScheme: ColorScheme = .dark
     var showFooter: Bool = true
     var showWeightBar: Bool = false
     var weightBarValue: Double = 0
     var backgroundOpacity: Double? = nil
+    
+    private var isCompact: Bool {
+        compact || compactHeight
+    }
 
     private var textColor: Color {
         colorScheme == .dark ? .white : .black
@@ -1266,38 +2525,39 @@ private struct LabPaperPreview: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 8 : 10) {
+        VStack(alignment: .leading, spacing: isCompact ? 6 : 10) {
             HStack(alignment: .top) {
                 Text(report.factor.displayTitle)
-                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                    .font(isCompact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
                     .foregroundStyle(textColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background(
                         Capsule()
                             .fill(accent.opacity(0.2))
                     )
                 Spacer()
                 Image(systemName: report.isEnabled ? "checkmark.circle.fill" : "pause.circle.fill")
+                    .font(isCompact ? .caption : .body)
                     .foregroundStyle(report.isEnabled ? accent : secondaryTextColor)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("\(report.factor.displayTitle) -> \(metric.displayTitle)")
-                    .font(compact ? .subheadline.weight(.semibold) : .headline)
+                    .font(isCompact ? .caption.weight(.semibold) : .headline)
                     .foregroundStyle(textColor)
                     .lineLimit(1)
                 Text(report.userNote)
-                    .font(compact ? .caption : .subheadline)
+                    .font(isCompact ? .caption2 : .subheadline)
                     .foregroundStyle(secondaryTextColor)
-                    .lineLimit(compact ? 3 : 4)
+                    .lineLimit(isCompact ? 2 : 4)
                     .multilineTextAlignment(.leading)
             }
 
             Spacer()
 
             if showFooter {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     if showWeightBar {
                         LabWeightBar(value: weightBarValue, tint: accent)
                         HStack {
@@ -1309,28 +2569,23 @@ private struct LabPaperPreview: View {
                         .foregroundStyle(secondaryTextColor)
                     }
 
-                    if compact {
+                    HStack {
+                        Text(isCompact ? report.createdAt.formatted(date: .abbreviated, time: .omitted) : report.shortAttributionLabel)
+                            .lineLimit(1)
+                            .foregroundStyle(secondaryTextColor)
+                        Spacer()
                         Text(report.createdAt.formatted(date: .abbreviated, time: .omitted))
                             .font(.caption2)
                             .foregroundStyle(secondaryTextColor)
-                    } else {
-                        HStack {
-                            Text(report.shortAttributionLabel)
-                                .lineLimit(1)
-                                .foregroundStyle(secondaryTextColor)
-                            Spacer()
-                            Text(report.createdAt.formatted(date: .abbreviated, time: .omitted))
-                                .foregroundStyle(secondaryTextColor)
-                        }
-                        .font(.caption2)
                     }
+                    .font(.caption2)
                 }
             }
         }
-        .padding(compact ? 14 : 16)
+        .padding(isCompact ? 10 : 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: compact ? 20 : 24, style: .continuous)
+            RoundedRectangle(cornerRadius: isCompact ? 16 : 24, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [cardBackgroundColor, accent.opacity(colorScheme == .dark ? 0.12 : 0.06)],
@@ -1340,7 +2595,7 @@ private struct LabPaperPreview: View {
                 )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: compact ? 20 : 24, style: .continuous)
+            RoundedRectangle(cornerRadius: isCompact ? 16 : 24, style: .continuous)
                 .stroke(strokeColor, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.2), radius: 16, y: 10)
