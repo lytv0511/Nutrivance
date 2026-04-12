@@ -1184,6 +1184,17 @@ extension Notification.Name {
     static let nutrivanceViewControlReadinessRefresh = Notification.Name("nutrivance.viewControl.readiness.refresh")
     static let nutrivanceViewControlStrainRecoverySettings = Notification.Name("nutrivance.viewControl.strainRecovery.settings")
     static let nutrivanceViewControlNutrivanceLabsNewEntry = Notification.Name("nutrivance.viewControl.nutrivanceLabs.newEntry")
+    static let nutrivanceViewControlNutrivanceLabsZoom100 = Notification.Name("nutrivance.viewControl.nutrivanceLabs.zoom100")
+    static let nutrivanceViewControlNutrivanceLabsZoomIn = Notification.Name("nutrivance.viewControl.nutrivanceLabs.zoomIn")
+    static let nutrivanceViewControlNutrivanceLabsZoomOut = Notification.Name("nutrivance.viewControl.nutrivanceLabs.zoomOut")
+    static let nutrivanceViewControlNutrivanceLabsNewContainer = Notification.Name("nutrivance.viewControl.nutrivanceLabs.newContainer")
+    static let nutrivanceViewControlNutrivanceLabsFreeformView = Notification.Name("nutrivance.viewControl.nutrivanceLabs.freeformView")
+    static let nutrivanceViewControlNutrivanceLabsOrganizeView = Notification.Name("nutrivance.viewControl.nutrivanceLabs.organizeView")
+    static let nutrivanceViewControlNutrivanceLabsSortNewest = Notification.Name("nutrivance.viewControl.nutrivanceLabs.sortNewest")
+    static let nutrivanceViewControlNutrivanceLabsSortStrongest = Notification.Name("nutrivance.viewControl.nutrivanceLabs.sortStrongest")
+    static let nutrivanceViewControlNutrivanceLabsToggleHeader = Notification.Name("nutrivance.viewControl.nutrivanceLabs.toggleHeader")
+    static let nutrivanceViewControlNutrivanceLabsToggleMetricLive = Notification.Name("nutrivance.viewControl.nutrivanceLabs.toggleMetricLive")
+    static let nutrivanceViewControlNutrivanceLabsToggleDrawingMode = Notification.Name("nutrivance.viewControl.nutrivanceLabs.toggleDrawingMode")
 
     // iPad browser window / tab commands (`ContentView_iPad`, Catalyst File & Window menus). `object` is often the posting `UIWindowScene`.
     static let nutrivanceBrowserNewTab = Notification.Name("nutrivance.browser.newTab")
@@ -2113,7 +2124,7 @@ struct NutrivanceApp: App {
                 Button("Stress") {
                     NutrivanceSceneMenuRouter.postMainMenuCommand("stress")
                 }
-                .keyboardShortcut("T", modifiers: [.command, .shift])
+                .keyboardShortcut("X", modifiers: [.command, .shift])
             }
             CommandMenu("Search") {
                 Button("Find") {
@@ -2519,10 +2530,73 @@ struct NutrivanceApp: App {
                     }
 
                     if nav.selectedRootTab == .nutrivanceLabs {
+                        Button("Zoom to 100%") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsZoom100)
+                        }
+                        .keyboardShortcut("0", modifiers: [.command])
+
+                        Button("Zoom In") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsZoomIn)
+                        }
+                        .keyboardShortcut("=", modifiers: [.command])
+
+                        Button("Zoom Out") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsZoomOut)
+                        }
+                        .keyboardShortcut("-", modifiers: [.command])
+
+                        Divider()
+
+                        Button("Freeform View") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsFreeformView)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command])
+
+                        Button("Organize View") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsOrganizeView)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command])
+
+                        Divider()
+
+                        Button("New Container") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsNewContainer)
+                        }
+                        .keyboardShortcut("N", modifiers: [.command, .option])
+
                         Button("New Entry") {
                             nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsNewEntry)
                         }
                         .keyboardShortcut("N", modifiers: [.command, .shift])
+
+                        Divider()
+
+                        Button("Sort by Newest First") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsSortNewest)
+                        }
+                        .keyboardShortcut("1", modifiers: [.command, .option, .control])
+
+                        Button("Sort by Strongest First") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsSortStrongest)
+                        }
+                        .keyboardShortcut("2", modifiers: [.command, .option, .control])
+
+                        Divider()
+
+                        Button("Toggle Header") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsToggleHeader)
+                        }
+                        .keyboardShortcut("T", modifiers: [.command, .shift])
+
+                        Button("Toggle Metric Live") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsToggleMetricLive)
+                        }
+                        .keyboardShortcut("0", modifiers: [.command, .control])
+
+                        Button("Toggle Drawing Mode") {
+                            nutrivancePostViewControlForKeyWindow(.nutrivanceViewControlNutrivanceLabsToggleDrawingMode)
+                        }
+                        .keyboardShortcut("A", modifiers: [.command, .shift])
                     }
                 } else {
                     Button("No View Controls Available") {}

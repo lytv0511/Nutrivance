@@ -501,6 +501,7 @@ struct MetricStackDetailView: View {
     @State private var cardPositions: [UUID: CGPoint] = [:]
     @State private var sortByNewestFirst: Bool = true
     @State private var nextCardZOrder: Int = 1
+    @State private var cardZOrder: [UUID: Int] = [:]
     @State private var isDrawingMode: Bool = false
     @State private var canvasDrawing: [String: Data] = [:]
     @State private var isHeaderMinimized: Bool = false
@@ -532,6 +533,8 @@ struct MetricStackDetailView: View {
     
     private func selectCard(_ cardId: UUID) {
         selectedCardIds = [cardId]
+        nextCardZOrder += 1
+        cardZOrder[cardId] = nextCardZOrder
     }
     
     private func deselectAllCards() {
@@ -570,6 +573,19 @@ struct MetricStackDetailView: View {
         )
         
         deselectAllCards()
+    }
+    
+    private func createContainerAtCenter() {
+        let containerId = UUID()
+        let centerPosition = CGPoint(x: 1500, y: 1000)
+        
+        cardContainers[containerId] = CardContainer(
+            id: containerId,
+            position: centerPosition,
+            cardIds: []
+        )
+        
+        selectedCardIds.removeAll()
     }
     
     private let cardWidth: CGFloat = 300
@@ -613,6 +629,13 @@ struct MetricStackDetailView: View {
     }
 
     var body: some View {
+        Group {
+            mainContent
+            keyboardShortcuts
+        }
+    }
+    
+    private var mainContent: some View {
         VStack(spacing: 0) {
             headerCard
                 .padding(.horizontal, isCompactWidth ? 16 : 24)
@@ -649,6 +672,63 @@ struct MetricStackDetailView: View {
             savePersistedState()
             isOrganized = false
             isHeaderMinimized = false
+        }
+    }
+    
+    private var keyboardShortcuts: some View {
+        Group { }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoom100)) { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                canvasScale = 1.0
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoomIn)) { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                canvasScale = min(maxScale, canvasScale + 0.25)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoomOut)) { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                canvasScale = max(minScale, canvasScale - 0.25)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsFreeformView)) { _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isOrganized = false
+                isHeaderMinimized = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsOrganizeView)) { _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isOrganized = true
+                isHeaderMinimized = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsNewContainer)) { _ in
+            createContainerAtCenter()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsSortNewest)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                sortByNewestFirst = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsSortStrongest)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                sortByNewestFirst = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleHeader)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHeaderMinimized.toggle()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleMetricLive)) { _ in
+            store.setMetricGloballyEnabled(metric, enabled: !store.isMetricGloballyEnabled(metric))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleDrawingMode)) { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                isDrawingMode.toggle()
+            }
         }
     }
     
@@ -1021,6 +1101,7 @@ struct MetricStackDetailView: View {
             lastSelectedCardPosition: lastSelectedCardPosition,
             hasSelection: hasSelection,
             selectedCount: selectedCount,
+            cardZOrder: cardZOrder,
             onSelectReport: onSelectReport,
             onOrganizeCardsByMetric: organizeCardsByMetric,
             onCreateContainerWithCard: createContainerWithCard,
@@ -1694,6 +1775,7 @@ private struct ZoomableCanvasView: View {
     var lastSelectedCardPosition: CGPoint?
     var hasSelection: Bool
     var selectedCount: Int
+    var cardZOrder: [UUID: Int]
     var onSelectReport: (NutrivanceTuningReport) -> Void
     var onOrganizeCardsByMetric: (UUID) -> Void
     var onCreateContainerWithCard: (UUID) -> Void
@@ -1736,6 +1818,7 @@ private struct ZoomableCanvasView: View {
                 lastSelectedCardPosition: lastSelectedCardPosition,
                 hasSelection: hasSelection,
                 selectedCount: selectedCount,
+                cardZOrder: cardZOrder,
                 onSelectReport: onSelectReport,
                 onOrganizeCardsByMetric: onOrganizeCardsByMetric,
                 onCreateContainerWithCard: onCreateContainerWithCard,
@@ -1947,6 +2030,7 @@ private struct ZoomableCanvasContent: View {
     var lastSelectedCardPosition: CGPoint?
     var hasSelection: Bool
     var selectedCount: Int
+    var cardZOrder: [UUID: Int]
     var onSelectReport: (NutrivanceTuningReport) -> Void
     var onOrganizeCardsByMetric: (UUID) -> Void
     var onCreateContainerWithCard: (UUID) -> Void
@@ -1991,6 +2075,7 @@ private struct ZoomableCanvasContent: View {
             ForEach(cardsNotInContainers) { report in
                 let isSelected = selectedCardIds.contains(report.id)
                 let position = cardPositions[report.id] ?? .zero
+                let zOrder = cardZOrder[report.id] ?? 0
                 
                 SelectableLabPaperCard(
                     report: report,
@@ -2053,7 +2138,7 @@ private struct ZoomableCanvasContent: View {
                         draggingCardCenter = nil
                     }
                 )
-                .zIndex(isSelected ? 1000 : 1)
+                .zIndex(isSelected ? 1000 : Double(zOrder))
             }
             
             ForEach(Array(cardContainers), id: \.key) { containerId, container in
@@ -2380,41 +2465,111 @@ private struct ContainerView: View {
     @State private var cardDragOffset: CGSize = .zero
     
     private let headerHeight: CGFloat = 36
-    private let containerCardWidth: CGFloat = 260
-    private let containerCardHeight: CGFloat = 160
-    private let containerWidth: CGFloat = 560
+    private let containerCardWidth: CGFloat = 280
+    private let containerCardHeight: CGFloat = 180
+    private let containerWidth: CGFloat = 600
     private let horizontalPadding: CGFloat = 12
     private let verticalPadding: CGFloat = 12
     
-    private let collapsedWidth: CGFloat = 300
-    private let collapsedHeight: CGFloat = 200
-    private let collapsedCardWidth: CGFloat = 200
-    private let collapsedCardHeight: CGFloat = 120
+    private var collapsedWidth: CGFloat {
+        let cardWidth: CGFloat = 420
+        let cardsToShow = min(cards.count, 5)
+        if cardsToShow <= 1 {
+            return cardWidth + 60
+        } else if cardsToShow <= 3 {
+            return cardWidth + 40
+        }
+        return cardWidth + 20
+    }
+    
+    private var collapsedHeight: CGFloat {
+        let baseHeight: CGFloat = 260
+        if cards.isEmpty {
+            return headerHeight + baseHeight
+        }
+        return headerHeight + baseHeight
+    }
+    
+    private let collapsedCardWidth: CGFloat = 380
+    private let collapsedCardHeight: CGFloat = 220
     private var collapsedCardAreaHeight: CGFloat { collapsedHeight - headerHeight }
     
     private func cardOffsetX(for index: Int) -> CGFloat {
-        switch index {
-        case 0: return -6
-        case 1: return 2
-        case 2: return 8
-        case 3: return -4
-        case 4: return 6
-        default: return 0
+        let totalCards = cards.count
+        switch totalCards {
+        case 1:
+            switch index {
+            case 0: return 0
+            default: return 0
+            }
+        case 2:
+            switch index {
+            case 0: return -20
+            case 1: return 20
+            default: return 0
+            }
+        case 3:
+            switch index {
+            case 0: return -30
+            case 1: return 0
+            case 2: return 30
+            default: return 0
+            }
+        case 4:
+            switch index {
+            case 0: return -25
+            case 1: return 10
+            case 2: return -10
+            case 3: return 25
+            default: return 0
+            }
+        default:
+            switch index {
+            case 0: return -8
+            case 1: return 4
+            case 2: return 12
+            case 3: return -6
+            case 4: return 8
+            default: return 0
+            }
         }
     }
     
     private func cardOffsetY(for index: Int) -> CGFloat {
-        switch index {
-        case 0: return -8
-        case 1: return -2
-        case 2: return 6
-        case 3: return -4
-        case 4: return 4
-        default: return 0
+        let totalCards = cards.count
+        switch totalCards {
+        case 1:
+            return 0
+        case 2:
+            switch index {
+            case 0: return -5
+            case 1: return 5
+            default: return 0
+            }
+        case 3:
+            switch index {
+            case 0: return -8
+            case 1: return 0
+            case 2: return 8
+            default: return 0
+            }
+        default:
+            switch index {
+            case 0: return -12
+            case 1: return -4
+            case 2: return 8
+            case 3: return -6
+            case 4: return 6
+            default: return 0
+            }
         }
     }
     
     private func cardRotation(for index: Int) -> Angle {
+        let totalCards = cards.count
+        if totalCards <= 2 {
+            return .zero
+        }
         switch index {
         case 0: return .degrees(-3)
         case 1: return .degrees(2)
@@ -2446,20 +2601,26 @@ private struct ContainerView: View {
     private var activeWidth: CGFloat {
         if container.isExpanded {
             if container.layoutMode == .fan {
-                let fanCardWidth: CGFloat = 230
-                let overlap: CGFloat = 120
-                let leadingInset: CGFloat = 24
-                return fanCardWidth + CGFloat(max(cards.count - 1, 0)) * overlap + leadingInset * 2 + horizontalPadding * 2
+                let fanCardWidth: CGFloat = 380
+                let overlap: CGFloat = 180
+                let leadingInset: CGFloat = 40
+                let cardsPerRow = min(cards.count, 6)
+                return fanCardWidth + CGFloat(max(cardsPerRow - 1, 0)) * overlap + leadingInset * 2 + horizontalPadding * 2
             }
             return containerWidth
         }
-        return collapsedWidth
+        let collapsedCardWidth: CGFloat = 420
+        let leadingInset: CGFloat = 20
+        return collapsedCardWidth + leadingInset * 2 + horizontalPadding * 2
     }
     
     private var activeHeight: CGFloat {
         if container.isExpanded {
             if container.layoutMode == .fan {
-                return headerHeight + 150 + verticalPadding * 2 + 20
+                let cardsPerRow = max(min(cards.count, 6), 1)
+                let numRows = max(1, (cards.count + cardsPerRow - 1) / cardsPerRow)
+                let fanCardHeight: CGFloat = 220
+                return headerHeight + CGFloat(numRows) * (fanCardHeight + 20) + verticalPadding * 2 + 20
             }
             return totalHeight
         }
@@ -2714,17 +2875,6 @@ private struct ContainerView: View {
             ForEach(Array(sortedCards.enumerated()), id: \.element.id) { index, report in
                 unifiedCardPosition(for: index, report: report)
             }
-            
-            if !container.isExpanded && hasAppeared {
-                Text("\(cards.count)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .transition(.opacity)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAppeared)
-            }
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.75), value: container.isExpanded)
         .animation(.spring(response: 0.5, dampingFraction: 0.75), value: container.layoutMode)
@@ -2743,28 +2893,34 @@ private struct ContainerView: View {
         let rotation: Angle
         
         if !isExpanded {
-            targetX = activeWidth / 2 + cardOffsetX(for: index)
-            targetY = headerHeight + (activeHeight - headerHeight) / 2 + cardOffsetY(for: index)
+            let cardsPerRow = min(cards.count, 5)
+            let rowIndex = index / max(cardsPerRow, 1)
+            let colIndex = index % max(cardsPerRow, 1)
+            let rowHeight: CGFloat = 40
+            
+            targetX = collapsedWidth / 2 + cardOffsetX(for: colIndex)
+            targetY = headerHeight + collapsedCardHeight / 2 + cardOffsetY(for: colIndex) + CGFloat(rowIndex) * rowHeight
             cardWidth = collapsedCardWidth
             cardHeight = collapsedCardHeight
             scale = 0.92
-            opacity = index < 5 ? 1.0 - Double(index) * 0.12 : 0.0
-            rotation = cardRotation(for: index)
+            opacity = colIndex < 5 ? 1.0 - Double(colIndex) * 0.06 : 0.0
+            rotation = cardRotation(for: colIndex)
         } else if isFan {
-            let fanCardWidth: CGFloat = 200
-            let fanCardHeight: CGFloat = 130
-            let overlap: CGFloat = 100
-            let leadingInset: CGFloat = 24
-            let totalWidth = fanCardWidth + CGFloat(max(cards.count - 1, 0)) * overlap + leadingInset * 2
-            let startX = leadingInset + fanCardWidth / 2
+            let fanCardWidth: CGFloat = 380
+            let fanCardHeight: CGFloat = 220
+            let overlap: CGFloat = 180
+            let leadingInset: CGFloat = 40
+            let cardsPerRow = min(cards.count, 6)
+            let rowIndex = index / max(cardsPerRow, 1)
+            let colIndex = index % max(cardsPerRow, 1)
             
-            targetX = startX + CGFloat(index) * overlap
-            targetY = headerHeight + fanCardHeight / 2 + 10
+            targetX = leadingInset + fanCardWidth / 2 + CGFloat(colIndex) * overlap
+            targetY = headerHeight + fanCardHeight / 2 + 16 + CGFloat(rowIndex) * (fanCardHeight + 20)
             cardWidth = fanCardWidth
             cardHeight = fanCardHeight
             scale = 1.0
             opacity = 1.0
-            let centeredIndex = Double(index) - Double(cards.count - 1) / 2
+            let centeredIndex = Double(colIndex) - Double(cardsPerRow - 1) / 2
             rotation = .degrees(centeredIndex * 5)
         } else {
             let listCardWidth = (containerWidth - horizontalPadding * 2 - 12) / 2

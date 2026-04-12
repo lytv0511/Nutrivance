@@ -2896,7 +2896,7 @@ struct HarmonyGemSection: View {
                     expandedLayout(totalWidth: width)
                 }
             }
-            .frame(minHeight: harmonyCircleSize + 20)
+            .frame(minHeight: max(harmonyCircleSize + 20, CGFloat(gems.count * 40 + 60)))
         }
         .padding(14)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
