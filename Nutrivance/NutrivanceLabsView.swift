@@ -2462,7 +2462,8 @@ private struct ContainerView: View {
     @State private var showSmartConfig: Bool = false
     @State private var internalCardOrder: [UUID] = []
     @State private var draggingCardInContainer: UUID? = nil
-    @State private var cardDragOffset: CGSize = .zero
+    @State private var cardDragOffsets: [UUID: CGSize] = [:]
+    @State private var originalCardPositions: [UUID: CGPoint] = [:]
     
     private let headerHeight: CGFloat = 36
     private let containerCardWidth: CGFloat = 280
@@ -2883,6 +2884,9 @@ private struct ContainerView: View {
     private func unifiedCardPosition(for index: Int, report: NutrivanceTuningReport) -> some View {
         let isExpanded = container.isExpanded
         let isFan = container.layoutMode == .fan
+        let cardId = report.id
+        let currentDragOffset = cardDragOffsets[cardId] ?? .zero
+        let isDraggingThisCard = draggingCardInContainer == cardId
         
         let targetX: CGFloat
         let targetY: CGFloat
@@ -2898,11 +2902,11 @@ private struct ContainerView: View {
             let colIndex = index % max(cardsPerRow, 1)
             let rowHeight: CGFloat = 40
             
-            targetX = collapsedWidth / 2 + cardOffsetX(for: colIndex)
-            targetY = headerHeight + collapsedCardHeight / 2 + cardOffsetY(for: colIndex) + CGFloat(rowIndex) * rowHeight
+            targetX = collapsedWidth / 2 + cardOffsetX(for: colIndex) + currentDragOffset.width
+            targetY = headerHeight + collapsedCardHeight / 2 + cardOffsetY(for: colIndex) + CGFloat(rowIndex) * rowHeight + currentDragOffset.height
             cardWidth = collapsedCardWidth
             cardHeight = collapsedCardHeight
-            scale = 0.92
+            scale = isDraggingThisCard ? 1.05 : 0.92
             opacity = colIndex < 5 ? 1.0 - Double(colIndex) * 0.06 : 0.0
             rotation = cardRotation(for: colIndex)
         } else if isFan {
@@ -2948,9 +2952,12 @@ private struct ContainerView: View {
             onTap: { onCardTap(report) },
             onDragStarted: { center in
                 draggingCardInContainer = report.id
+                originalCardPositions[report.id] = CGPoint(x: targetX + currentDragOffset.width, y: targetY + currentDragOffset.height)
+                cardDragOffsets[report.id] = .zero
                 onCardDragStarted?(report.id, center)
             },
-            onDragMoved: { center in
+            onDragMoved: { center, translation in
+                cardDragOffsets[report.id] = translation
                 onCardDragMoved?(report.id, center)
             },
             onDragEnded: { center, offset in
@@ -2988,7 +2995,7 @@ private struct ContainerView: View {
                             draggingCardInContainer = report.id
                             onCardDragStarted?(report.id, center)
                         },
-                        onDragMoved: { center in
+                        onDragMoved: { center, _ in
                             onCardDragMoved?(report.id, center)
                         },
                         onDragEnded: { center, offset in
@@ -3030,7 +3037,7 @@ private struct ContainerView: View {
                             draggingCardInContainer = report.id
                             onCardDragStarted?(report.id, center)
                         },
-                        onDragMoved: { center in
+                        onDragMoved: { center, _ in
                             onCardDragMoved?(report.id, center)
                         },
                         onDragEnded: { center, offset in
@@ -3083,7 +3090,7 @@ private struct ContainerCardView: View {
     var isDragging: Bool
     var onTap: () -> Void
     var onDragStarted: (CGPoint) -> Void
-    var onDragMoved: (CGPoint) -> Void
+    var onDragMoved: (CGPoint, CGSize) -> Void
     var onDragEnded: (CGPoint, CGSize) -> Void
     var cardHeight: CGFloat = 160
     
@@ -3122,7 +3129,7 @@ private struct ContainerCardView: View {
                         localIsDragging = true
                         onDragStarted(resolvedPosition)
                     }
-                    onDragMoved(resolvedPosition)
+                    onDragMoved(resolvedPosition, dragOffset)
                 }
                 .updating($dragOffset) { value, state, _ in
                     state = value.translation
