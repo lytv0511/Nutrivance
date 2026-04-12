@@ -12,6 +12,11 @@ struct NutrivanceLabsView: View {
     @State private var metricForNewReport: NutrivanceTuningMetric?
     @State private var sortNewestFirst = true
     @State private var showAddSheet = false
+    @State private var queryText = ""
+    @State private var showAutocomplete = false
+    @State private var selectedSuggestion = 0
+    @State private var queryResult: String?
+    @State private var isQueryRunning = false
 
     private var activeMetricCount: Int {
         NutrivanceTuningMetric.allCases.filter { store.isMetricGloballyEnabled($0) }.count
@@ -23,6 +28,41 @@ struct NutrivanceLabsView: View {
 
     private var bodyCopy: String {
         "Papers are display-layer nudges layered on top of live Recovery, Strain, and Readiness calculations. The raw engine formula stays intact; the lab lets people see, tune, and question the model output."
+    }
+    
+    private var querySuggestions: [String] {
+        let input = queryText.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !input.isEmpty else { return [] }
+        
+        let allSuggestions = [
+            "Recovery.hrv", "Recovery.sleep", "Recovery.resting_hr", "Recovery.overall_blend",
+            "Recovery.strength", "Recovery.live_weight", "Recovery.current_weight", "Recovery.base_strength",
+            "Recovery.age", "Recovery.date_created",
+            "Strain.training_load", "Strain.training_load_zones", "Strain.overall_blend",
+            "Strain.strength", "Strain.live_weight", "Strain.current_weight", "Strain.base_strength",
+            "Strain.age", "Strain.date_created",
+            "Readiness.readiness_blend", "Readiness.sleep", "Readiness.hrv", "Readiness.resting_hr",
+            "Readiness.training_load_zones", "Readiness.strength", "Readiness.live_weight",
+            "Readiness.current_weight", "Readiness.base_strength", "Readiness.age", "Readiness.date_created",
+            "=COUNT(Recovery.hrv)", "=COUNT(Recovery.strength)", "=AVG(Recovery.strength)", "=SUM(Recovery.strength)",
+            "=MAX(Recovery.live_weight)", "=MIN(Recovery.age)",
+            "SELECT hrv FROM recovery", "SELECT sleep FROM recovery", "SELECT strength FROM recovery",
+            "SELECT * FROM recovery", "SELECT count(*) FROM strain",
+            "SELECT * FROM recovery WHERE strength > 0.5", "SELECT * FROM recovery WHERE strength < 0.3",
+            "SELECT * FROM recovery WHERE age > 7", "SELECT count(*) FROM recovery WHERE strength > 0.5"
+        ]
+        
+        if input.hasPrefix("=") {
+            return allSuggestions.filter { $0.hasPrefix("=") && $0.lowercased().contains(input) }
+        } else if input.hasPrefix("select") {
+            return allSuggestions.filter { $0.uppercased().hasPrefix("SELECT") && $0.lowercased().contains(input) }
+        } else if input.contains("where") {
+            return allSuggestions.filter { $0.lowercased().contains(input) }
+        } else if input.contains(".") {
+            return allSuggestions.filter { $0.lowercased().hasPrefix(input) }
+        } else {
+            return allSuggestions.filter { $0.lowercased().contains(input) }
+        }
     }
 
     var body: some View {
@@ -182,10 +222,388 @@ struct NutrivanceLabsView: View {
                         LabLiveValueChip(snapshot: snapshot)
                     }
                 }
+                
+                queryField
             }
         }
     }
-
+    
+    private var queryField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Quick Query")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            
+            HStack(spacing: 0) {
+                TextField("=AVG(Recovery.hrv) or SELECT...", text: $queryText)
+                    .textFieldStyle(.plain)
+                    .font(.system(.body, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                    .onSubmit {
+                        executeQuery()
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+                
+                if showAutocomplete && !querySuggestions.isEmpty, let topSuggestion = querySuggestions.first {
+                    Button {
+                        queryText = topSuggestion
+                        showAutocomplete = false
+                    } label: {
+                        Text(topSuggestion)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 12)
+                            .background(Color.orange.opacity(0.15))
+                            .cornerRadius(10)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            
+            if !queryText.isEmpty {
+                HStack(spacing: 12) {
+                    Button {
+                        executeQuery()
+                    } label: {
+                        Label("Run Query", systemImage: "play.fill")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    
+                    Button {
+                        queryText = ""
+                        queryResult = nil
+                        showAutocomplete = false
+                    } label: {
+                        Text("Clear")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+                
+                if isQueryRunning {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Running query...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 8)
+                } else if let result = queryResult {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Result:")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Text(result)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.orange.opacity(0.1))
+                            )
+                    }
+                    .padding(.top, 8)
+                }
+            }
+        }
+    }
+    
+    private func executeQuery() {
+        showAutocomplete = false
+        let query = queryText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return }
+        
+        isQueryRunning = true
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            var result: String
+            
+            if query.lowercased().hasPrefix("=") {
+                result = self.executeSpreadsheetQuery(query)
+            } else if query.lowercased().hasPrefix("select") {
+                result = self.executeSQLQuery(query)
+            } else {
+                result = "Invalid query. Start with = or SELECT"
+            }
+            
+            self.queryResult = result
+            self.isQueryRunning = false
+        }
+    }
+    
+    private func executeSpreadsheetQuery(_ formula: String) -> String {
+        let clean = formula.dropFirst().lowercased()
+        
+        guard let openParen = clean.firstIndex(of: "("),
+              let closeParen = clean.lastIndex(of: ")") else {
+            return "Invalid: =FUNCTION(Table.attribute)"
+        }
+        
+        let funcName = String(clean[..<openParen]).uppercased()
+        let args = String(clean[clean.index(after: openParen)..<closeParen])
+        
+        let parts = args.split(separator: ".").map { String($0).trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2 else {
+            return "Use: =FUNCTION(Table.attribute)"
+        }
+        
+        let tableName = parts[0].lowercased()
+        let attrName = parts[1].lowercased().replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: " ", with: "")
+        
+        let reports = store.reports.filter { report in
+            switch tableName {
+            case "recovery": return report.metric == .recovery
+            case "strain": return report.metric == .strain
+            case "readiness": return report.metric == .readiness
+            default: return false
+            }
+        }
+        
+        guard !reports.isEmpty else {
+            return "No \(tableName) reports"
+        }
+        
+        if funcName == "COUNT" {
+            return "\(reports.count)"
+        }
+        
+        let matchedReports = reports.filter { report in
+            let factorStr = report.factor.rawValue.lowercased().replacingOccurrences(of: "_", with: "")
+            return factorStr == attrName ||
+                   report.factor.displayTitle.lowercased().replacingOccurrences(of: " ", with: "") == attrName ||
+                   (attrName == "overallblend" && report.factor == .composite) ||
+                   (attrName == "hrv" && report.factor == .hrv) ||
+                   (attrName == "restinghr" && report.factor == .rhr) ||
+                   (attrName == "trainingload" && report.factor == .strainLoad) ||
+                   (attrName == "readinessblend" && report.factor == .readinessBlend)
+        }
+        
+        guard !matchedReports.isEmpty else {
+            return "No \(attrName) in \(tableName)"
+        }
+        
+        switch funcName {
+        case "AVG", "SUM", "MAX", "MIN":
+            let values = matchedReports.map { $0.computedWeight }
+            switch funcName {
+            case "AVG":
+                let sum = values.reduce(0, +)
+                let avg = sum / Double(values.count)
+                return String(format: "%.2f", avg)
+            case "SUM":
+                let sum = values.reduce(0, +)
+                return String(format: "%.2f", sum)
+            case "MAX":
+                return String(format: "%.2f", values.max() ?? 0)
+            case "MIN":
+                return String(format: "%.2f", values.min() ?? 0)
+            default:
+                return "?"
+            }
+        default:
+            return "Unsupported: \(funcName)"
+        }
+    }
+    
+private static let baseAttributes: [String: (NutrivanceTuningReport) -> Double] = [
+        "strength": { $0.effectiveStrength },
+        "live_weight": { $0.computedWeight },
+        "current_weight": { $0.computedWeight },
+        "base_strength": { $0.effectiveStrength },
+        "age": { Date().timeIntervalSince($0.createdAt) / 86400 },
+    ]
+    
+    private static let conditionOperators: [String: (Double, Double) -> Bool] = [
+        ">": { $0 > $1 },
+        ">=": { $0 >= $1 },
+        "<": { $0 < $1 },
+        "<=": { $0 <= $1 },
+        "=": { $0 == $1 },
+        "!=": { $0 != $1 },
+        "==": { $0 == $1 },
+    ]
+    
+    private static let factorAttributes: [String: NutrivanceTuningFactor] = [
+        "hrv": .hrv,
+        "sleep": .sleep,
+        "resting_hr": .rhr,
+        "restinghr": .rhr,
+        "overall_blend": .composite,
+        "overallblend": .composite,
+        "composite": .composite,
+        "training_load": .strainLoad,
+        "trainingload": .strainLoad,
+        "strainload": .strainLoad,
+        "readiness_blend": .readinessBlend,
+        "readinessblend": .readinessBlend,
+    ]
+    
+    private func applyWhereCondition(_ clause: String, to reports: [NutrivanceTuningReport], tableName: String) -> [NutrivanceTuningReport] {
+        let parts = clause.split(separator: " ").map { String($0) }
+        guard parts.count >= 3 else { return reports }
+        
+        let attrName = parts[0].lowercased().replacingOccurrences(of: "_", with: "")
+        let op = parts[1]
+        let valueStr = parts[2]
+        guard let value = Double(valueStr) else { return reports }
+        
+        guard let opFunc = Self.conditionOperators[op] else { return reports }
+        
+        var getter: (NutrivanceTuningReport) -> Double
+        
+        if let factor = Self.factorAttributes[attrName] {
+            getter = { $0.factor == factor ? $0.computedWeight : 0 }
+        } else if let attrGetter = Self.baseAttributes[attrName] {
+            getter = attrGetter
+        } else {
+            return reports
+        }
+        
+        return reports.filter { report in
+            let attrValue = getter(report)
+            return opFunc(attrValue, value)
+        }
+    }
+    
+    private func executeSQLQuery(_ query: String) -> String {
+        let lower = query.lowercased()
+        
+        var tableName = ""
+        
+        if lower.contains("recovery") {
+            tableName = "recovery"
+        } else if lower.contains("strain") {
+            tableName = "strain"
+        } else if lower.contains("readiness") {
+            tableName = "readiness"
+        } else {
+            return "Unknown table. Use: recovery, strain, readiness"
+        }
+        
+        var whereClause = ""
+        var selectPart = lower
+        
+        if let whereIdx = lower.range(of: " where ") {
+            let afterSelect = lower[lower.startIndex..<whereIdx.lowerBound]
+            let afterWhere = lower[whereIdx.upperBound...]
+            selectPart = String(afterSelect).trimmingCharacters(in: .whitespaces)
+            whereClause = String(afterWhere).trimmingCharacters(in: .whitespaces)
+        } else {
+            selectPart = lower
+                .replacingOccurrences(of: "select", with: "")
+                .replacingOccurrences(of: "from \(tableName)", with: "")
+                .trimmingCharacters(in: .whitespaces)
+        }
+        
+        let reports = store.reports.filter { report in
+            switch tableName {
+            case "recovery": return report.metric == .recovery
+            case "strain": return report.metric == .strain
+            case "readiness": return report.metric == .readiness
+            default: return false
+            }
+        }
+        
+        guard !reports.isEmpty else {
+            return "No \(tableName) reports"
+        }
+        
+        var filteredReports = reports
+        
+        if !whereClause.isEmpty {
+            filteredReports = applyWhereCondition(whereClause, to: reports, tableName: tableName)
+        }
+        
+        guard !filteredReports.isEmpty else {
+            return "No matching rows after filter"
+        }
+        
+        let coreQuery = selectPart.trimmingCharacters(in: .whitespaces)
+        
+        if coreQuery == "*" || coreQuery.isEmpty {
+            return filteredReports.enumerated().map { i, r in
+                "[\(i+1)] \(r.factor.displayTitle): \(String(format: "%.2f", r.computedWeight))"
+            }.joined(separator: "\n")
+        }
+        
+        if coreQuery == "count" || coreQuery == "count(*)" {
+            return "\(filteredReports.count)"
+        }
+        
+        var funcName = ""
+        var attrPart = coreQuery
+        
+        if coreQuery.hasPrefix("avg(") {
+            funcName = "AVG"
+            attrPart = String(coreQuery.dropFirst(4)).trimmingCharacters(in: CharacterSet(charactersIn: "() "))
+        } else if coreQuery.hasPrefix("sum(") {
+            funcName = "SUM"
+            attrPart = String(coreQuery.dropFirst(4)).trimmingCharacters(in: CharacterSet(charactersIn: "() "))
+        } else if coreQuery.hasPrefix("max(") {
+            funcName = "MAX"
+            attrPart = String(coreQuery.dropFirst(4)).trimmingCharacters(in: CharacterSet(charactersIn: "() "))
+        } else if coreQuery.hasPrefix("min(") {
+            funcName = "MIN"
+            attrPart = String(coreQuery.dropFirst(4)).trimmingCharacters(in: CharacterSet(charactersIn: "() "))
+        } else if coreQuery.hasPrefix("count(") {
+            funcName = "COUNT"
+            attrPart = String(coreQuery.dropFirst(6)).trimmingCharacters(in: CharacterSet(charactersIn: "() "))
+        }
+        
+        attrPart = attrPart.lowercased().replacingOccurrences(of: "_", with: "")
+        
+        if let factor = Self.factorAttributes[attrPart] {
+            filteredReports = filteredReports.filter { $0.factor == factor }
+        } else if Self.baseAttributes[attrPart] != nil {
+            // base attribute - use all filtered
+        } else {
+            return "Unknown: \(attrPart)"
+        }
+        
+        guard !filteredReports.isEmpty else {
+            return "No \(attrPart) in filtered results"
+        }
+        
+        let values = filteredReports.map { r in
+            if let getter = Self.baseAttributes[attrPart] {
+                return getter(r)
+            }
+            return r.computedWeight
+        }
+        
+        switch funcName {
+        case "COUNT":
+            return "\(values.count)"
+        case "AVG":
+            let sum = values.reduce(0, +)
+            return String(format: "%.2f", sum / Double(values.count))
+        case "SUM":
+            return String(format: "%.2f", values.reduce(0, +))
+        case "MAX":
+            return String(format: "%.2f", values.max() ?? 0)
+        case "MIN":
+            return String(format: "%.2f", values.min() ?? 0)
+        default:
+            return "?"
+        }
+    }
+    
     private var deskControls: some View {
         HStack(spacing: 12) {
             Button {
@@ -514,6 +932,19 @@ struct MetricStackDetailView: View {
     @State private var scrollOffset: CGPoint = .zero
     @State private var isLoadingPersistedState: Bool = true
     @State private var showSelectionPopup: Bool = false
+    @State private var functionBlocks: [UUID: FunctionBlock] = [:]
+    @State private var connections: [UUID: FunctionConnection] = [:]
+    @State private var draggingFunctionConnectionSource: DraggingFunctionConnectionSource?
+    @State private var tempFunctionConnectionEnd: CGPoint? = nil
+    @State private var selectedFunctionBlockId: UUID? = nil
+    @State private var hoveredDropTargetId: UUID? = nil
+    
+    struct DraggingFunctionConnectionSource {
+        var sourceId: UUID
+        var sourceType: FunctionConnectionElementType
+        var connectionPoint: FunctionConnection.FunctionConnectionPoint
+        var startPosition: CGPoint
+    }
     
     private var hasSelection: Bool { !selectedCardIds.isEmpty }
     private var selectedCount: Int { selectedCardIds.count }
@@ -663,6 +1094,8 @@ struct MetricStackDetailView: View {
         }
         .onChange(of: cardPositions) { _, _ in savePersistedState() }
         .onChange(of: cardContainers) { _, _ in savePersistedState() }
+        .onChange(of: functionBlocks) { _, _ in savePersistedState() }
+        .onChange(of: connections) { _, _ in savePersistedState() }
         .onChange(of: canvasScale) { _, _ in savePersistedState() }
         .onChange(of: scrollOffset) { _, _ in savePersistedState() }
         .onChange(of: sortByNewestFirst) { _, newValue in
@@ -739,6 +1172,8 @@ struct MetricStackDetailView: View {
                 withAnimation(.easeInOut(duration: 0.3)) {
                     cardPositions = Dictionary(uniqueKeysWithValues: state.cardPositions.map { ($0.key, $0.value.cgPoint) })
                     cardContainers = Dictionary(uniqueKeysWithValues: state.containers.map { ($0.id, $0.cardContainer) })
+                    functionBlocks = Dictionary(uniqueKeysWithValues: state.functionBlocks.map { ($0.id, $0.functionBlock) })
+                    connections = Dictionary(uniqueKeysWithValues: state.connections.map { ($0.id, $0.functionConnection) })
                     scrollOffset = state.lastScrollOffset.cgPoint
                     lastScrollOffset = state.lastScrollOffset.cgPoint
                     canvasScale = state.canvasScale
@@ -758,6 +1193,8 @@ struct MetricStackDetailView: View {
         let state = FreeformCanvasState(
             cardPositions: cardPositions.mapValues { CodablePoint($0) },
             containers: cardContainers.values.map { CodableCardContainer(from: $0) },
+            functionBlocks: functionBlocks.values.map { CodableFunctionBlock(from: $0) },
+            connections: connections.values.map { CodableFunctionConnection(from: $0) },
             lastScrollOffset: CodablePoint(scrollOffset),
             canvasScale: canvasScale,
             sortByNewestFirst: sortByNewestFirst,
@@ -1090,8 +1527,14 @@ struct MetricStackDetailView: View {
             cardPositions: $cardPositions,
             selectedCardIds: $selectedCardIds,
             cardContainers: $cardContainers,
+            functionBlocks: $functionBlocks,
+            connections: $connections,
             draggingCardId: $draggingCardId,
             draggingCardCenter: $draggingCardCenter,
+            draggingFunctionConnectionSource: $draggingFunctionConnectionSource,
+            tempFunctionConnectionEnd: $tempFunctionConnectionEnd,
+            selectedFunctionBlockId: $selectedFunctionBlockId,
+            hoveredDropTargetId: $hoveredDropTargetId,
             scale: $canvasScale,
             scrollOffset: $scrollOffset,
             cardsNotInContainers: cardsNotInContainers,
@@ -1116,13 +1559,50 @@ struct MetricStackDetailView: View {
             removeCardFromContainer: { cardId, containerId, position in
                 removeCardFromContainer(cardId: cardId, containerId: containerId, atPosition: position)
             },
-            reorderCardInContainer: reorderCardInContainer
+            reorderCardInContainer: reorderCardInContainer,
+            onCreateFunctionBlock: createFunctionBlock,
+            onConnectToFunctionBlock: connectToFunctionBlock,
+            onDeleteFunctionBlock: deleteFunctionBlock,
+            computeFunctionResult: computeFunctionResult,
+            connectionStartPosition: connectionStartPosition,
+            functionBlockInputPosition: functionBlockInputPosition,
+            functionBlockOutputPosition: functionBlockOutputPosition,
+            getSourceCardsForBlock: getSourceCardsForBlock,
+            sortedReports: sortedReports
         )
         .overlay(alignment: .bottomTrailing) {
             zoomControls
                 .padding()
         }
+        .overlay(alignment: .topTrailing) {
+            functionBlockPalette
+                .padding()
+        }
         .background(Color.black.opacity(0.3))
+    }
+    
+    private var functionBlockPalette: some View {
+        HStack(spacing: 8) {
+            ForEach(FunctionType.allCases, id: \.self) { funcType in
+                Button {
+                    let position = CGPoint(x: 1600, y: 500)
+                    createFunctionBlock(at: position, type: funcType)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: funcType.icon)
+                            .font(.title3)
+                        Text(funcType.displayName)
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(snapshot.accent)
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
     
     private var zoomControls: some View {
@@ -1342,6 +1822,150 @@ struct MetricStackDetailView: View {
         container.cardIds.insert(cardId, at: targetIndex)
         cardContainers[containerId] = container
     }
+    
+    private func createFunctionBlock(at position: CGPoint, type: FunctionType) {
+        let blockId = UUID()
+        functionBlocks[blockId] = FunctionBlock(
+            id: blockId,
+            position: position,
+            functionType: type,
+            smartFilter: nil,
+            sourceElementId: nil,
+            sourceElementType: nil,
+            resultCardId: nil,
+            isExpanded: false
+        )
+    }
+    
+    private func connectToFunctionBlock(sourceId: UUID, sourceType: FunctionConnectionElementType, blockId: UUID, connectionPoint: FunctionConnection.FunctionConnectionPoint) {
+        if var block = functionBlocks[blockId] {
+            block.sourceElementId = sourceId
+            block.sourceElementType = sourceType
+            functionBlocks[blockId] = block
+            
+            let connectionId = UUID()
+            connections[connectionId] = FunctionConnection(
+                id: connectionId,
+                sourceId: sourceId,
+                sourceType: sourceType,
+                targetId: blockId,
+                targetType: .functionBlock,
+                connectionPoint: connectionPoint
+            )
+        }
+    }
+    
+    private func deleteFunctionBlock(_ blockId: UUID) {
+        let connectionsToRemove = connections.filter { $0.value.targetId == blockId || $0.value.sourceId == blockId }
+        for connectionId in connectionsToRemove.keys {
+            connections.removeValue(forKey: connectionId)
+        }
+        functionBlocks.removeValue(forKey: blockId)
+    }
+    
+    private func getSourceCardsForBlock(_ blockId: UUID) -> [NutrivanceTuningReport] {
+        guard let block = functionBlocks[blockId],
+              let sourceId = block.sourceElementId,
+              let sourceType = block.sourceElementType else {
+            return []
+        }
+        
+        switch sourceType {
+        case .card:
+            return sortedReports.filter { $0.id == sourceId }
+        case .container:
+            return getContainerCards(sourceId)
+        case .functionBlock:
+            return []
+        }
+    }
+    
+    private func computeFunctionResult(_ blockId: UUID) -> Double? {
+        guard let block = functionBlocks[blockId] else { return nil }
+        
+        var sourceCards = getSourceCardsForBlock(blockId)
+        
+        if let filter = block.smartFilter {
+            sourceCards = sourceCards.filter { report in
+                switch filter.filterType {
+                case .factor:
+                    guard let factorFilter = filter.factorFilter else { return true }
+                    return report.factor == factorFilter
+                case .date:
+                    guard let dateFilter = filter.dateFilter else { return true }
+                    return Calendar.current.isDate(report.createdAt, inSameDayAs: dateFilter)
+                case .month:
+                    guard let month = filter.monthFilter, let year = filter.yearFilter else { return true }
+                    let calendar = Calendar.current
+                    let reportMonth = calendar.component(.month, from: report.createdAt)
+                    let reportYear = calendar.component(.year, from: report.createdAt)
+                    return reportMonth == month && reportYear == year
+                case .valenceAbove:
+                    guard let threshold = filter.valenceThreshold else { return true }
+                    return report.computedWeight >= threshold
+                }
+            }
+        }
+        
+        let values = sourceCards.map { $0.computedWeight }
+        return block.functionType.compute(values)
+    }
+    
+    private func connectionStartPosition(for elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
+        switch elementType {
+        case .card:
+            guard let cardPos = cardPositions[elementId] else { return .zero }
+            let center = CGPoint(x: cardPos.x + cardWidth / 2, y: cardPos.y + 140)
+            switch point {
+            case .top: return CGPoint(x: center.x, y: cardPos.y)
+            case .bottom: return CGPoint(x: center.x, y: cardPos.y + 280)
+            case .left: return CGPoint(x: cardPos.x, y: center.y)
+            case .right: return CGPoint(x: cardPos.x + cardWidth, y: center.y)
+            }
+        case .container:
+            guard let container = cardContainers[elementId] else { return .zero }
+            let center = container.position
+            switch point {
+            case .top: return CGPoint(x: center.x, y: container.position.y - 100)
+            case .bottom: return CGPoint(x: center.x, y: container.position.y + 150)
+            case .left: return CGPoint(x: container.position.x - 200, y: center.y)
+            case .right: return CGPoint(x: container.position.x + 200, y: center.y)
+            }
+        case .functionBlock:
+            guard let block = functionBlocks[elementId] else { return .zero }
+            let center = block.position
+            switch point {
+            case .top: return CGPoint(x: center.x, y: block.position.y - 40)
+            case .bottom: return CGPoint(x: center.x, y: block.position.y + 80)
+            case .left: return CGPoint(x: block.position.x - 80, y: center.y)
+            case .right: return CGPoint(x: block.position.x + 80, y: center.y)
+            }
+        }
+    }
+    
+    private func functionBlockInputPosition(for blockId: UUID) -> CGPoint {
+        guard let block = functionBlocks[blockId] else { return .zero }
+        let blockWidth: CGFloat = 120
+        let blockHeight: CGFloat = 80
+        return CGPoint(x: block.position.x - blockWidth / 2, y: block.position.y)
+    }
+    
+    private func functionBlockOutputPosition(for blockId: UUID) -> CGPoint {
+        guard let block = functionBlocks[blockId] else { return .zero }
+        let blockWidth: CGFloat = 120
+        let blockHeight: CGFloat = 80
+        let arrowOffset: CGFloat = 8
+        return CGPoint(x: block.position.x + blockWidth / 2 - arrowOffset, y: block.position.y)
+    }
+    
+    private func isPointInContainer(_ point: CGPoint, containerId: UUID) -> Bool {
+        guard let container = cardContainers[containerId] else { return false }
+        let containerWidth: CGFloat = 600
+        let containerHeight: CGFloat = 300
+        let topLeft = CGPoint(x: container.position.x - containerWidth / 2, y: container.position.y - containerHeight / 2)
+        let rect = CGRect(x: topLeft.x, y: topLeft.y, width: containerWidth, height: containerHeight)
+        return rect.contains(point)
+    }
 }
 
 enum ContainerLayoutMode: String, CaseIterable, Codable {
@@ -1403,6 +2027,141 @@ struct CardContainer: Identifiable, Equatable {
                 return report.computedWeight >= threshold
             }
         }
+    }
+}
+
+enum FunctionType: String, CaseIterable, Codable {
+    case count = "COUNT"
+    case avg = "AVG"
+    case sum = "SUM"
+    case max = "MAX"
+    case min = "MIN"
+    
+    var displayName: String { rawValue }
+    
+    var icon: String {
+        switch self {
+        case .count: return "number"
+        case .avg: return "chart.bar"
+        case .sum: return "plus"
+        case .max: return "arrow.up"
+        case .min: return "arrow.down"
+        }
+    }
+    
+    func compute(_ values: [Double]) -> Double {
+        switch self {
+        case .count: return Double(values.count)
+        case .avg: return values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
+        case .sum: return values.reduce(0, +)
+        case .max: return values.max() ?? 0
+        case .min: return values.min() ?? 0
+        }
+    }
+}
+
+struct FunctionBlock: Identifiable, Equatable {
+    let id: UUID
+    var position: CGPoint
+    var functionType: FunctionType
+    var smartFilter: SmartContainerFilter?
+    var sourceElementId: UUID?
+    var sourceElementType: FunctionConnectionElementType?
+    var resultCardId: UUID?
+    var isExpanded: Bool = false
+    
+    static func == (lhs: FunctionBlock, rhs: FunctionBlock) -> Bool {
+        lhs.id == rhs.id && lhs.position == rhs.position && lhs.functionType == rhs.functionType && lhs.smartFilter == rhs.smartFilter && lhs.sourceElementId == rhs.sourceElementId && lhs.sourceElementType == rhs.sourceElementType && lhs.resultCardId == rhs.resultCardId && lhs.isExpanded == rhs.isExpanded
+    }
+}
+
+enum FunctionConnectionElementType: String, Codable {
+    case card
+    case container
+    case functionBlock
+}
+
+struct FunctionConnection: Identifiable, Equatable {
+    let id: UUID
+    var sourceId: UUID
+    var sourceType: FunctionConnectionElementType
+    var targetId: UUID
+    var targetType: FunctionConnectionElementType
+    var connectionPoint: FunctionConnectionPoint
+    
+    enum FunctionConnectionPoint: String, Codable {
+        case top
+        case bottom
+        case left
+        case right
+    }
+    
+    static func == (lhs: FunctionConnection, rhs: FunctionConnection) -> Bool {
+        lhs.id == rhs.id && lhs.sourceId == rhs.sourceId && lhs.sourceType == rhs.sourceType && lhs.targetId == rhs.targetId && lhs.targetType == rhs.targetType && lhs.connectionPoint == rhs.connectionPoint
+    }
+}
+
+struct CodableFunctionBlock: Codable, Identifiable, Equatable {
+    let id: UUID
+    var position: CodablePoint
+    var functionType: FunctionType
+    var smartFilter: CodableSmartFilter?
+    var sourceElementId: UUID?
+    var sourceElementType: FunctionConnectionElementType?
+    var resultCardId: UUID?
+    var isExpanded: Bool
+    
+    init(from block: FunctionBlock) {
+        self.id = block.id
+        self.position = CodablePoint(block.position)
+        self.functionType = block.functionType
+        self.smartFilter = CodableSmartFilter(from: block.smartFilter)
+        self.sourceElementId = block.sourceElementId
+        self.sourceElementType = block.sourceElementType
+        self.resultCardId = block.resultCardId
+        self.isExpanded = block.isExpanded
+    }
+    
+    var functionBlock: FunctionBlock {
+        FunctionBlock(
+            id: id,
+            position: position.cgPoint,
+            functionType: functionType,
+            smartFilter: smartFilter?.smartFilter,
+            sourceElementId: sourceElementId,
+            sourceElementType: sourceElementType,
+            resultCardId: resultCardId,
+            isExpanded: isExpanded
+        )
+    }
+}
+
+struct CodableFunctionConnection: Codable, Identifiable, Equatable {
+    let id: UUID
+    var sourceId: UUID
+    var sourceType: FunctionConnectionElementType
+    var targetId: UUID
+    var targetType: FunctionConnectionElementType
+    var connectionPoint: FunctionConnection.FunctionConnectionPoint
+    
+    init(from connection: FunctionConnection) {
+        self.id = connection.id
+        self.sourceId = connection.sourceId
+        self.sourceType = connection.sourceType
+        self.targetId = connection.targetId
+        self.targetType = connection.targetType
+        self.connectionPoint = connection.connectionPoint
+    }
+    
+    var functionConnection: FunctionConnection {
+        FunctionConnection(
+            id: id,
+            sourceId: sourceId,
+            sourceType: sourceType,
+            targetId: targetId,
+            targetType: targetType,
+            connectionPoint: connectionPoint
+        )
     }
 }
 
@@ -1520,6 +2279,8 @@ struct CodableCardContainer: Codable, Identifiable, Equatable {
 struct FreeformCanvasState: Codable {
     var cardPositions: [UUID: CodablePoint]
     var containers: [CodableCardContainer]
+    var functionBlocks: [CodableFunctionBlock]
+    var connections: [CodableFunctionConnection]
     var lastScrollOffset: CodablePoint
     var canvasScale: Double
     var sortByNewestFirst: Bool
@@ -1763,8 +2524,14 @@ private struct ZoomableCanvasView: View {
     @Binding var cardPositions: [UUID: CGPoint]
     @Binding var selectedCardIds: Set<UUID>
     @Binding var cardContainers: [UUID: CardContainer]
+    @Binding var functionBlocks: [UUID: FunctionBlock]
+    @Binding var connections: [UUID: FunctionConnection]
     @Binding var draggingCardId: UUID?
     @Binding var draggingCardCenter: CGPoint?
+    @Binding var draggingFunctionConnectionSource: MetricStackDetailView.DraggingFunctionConnectionSource?
+    @Binding var tempFunctionConnectionEnd: CGPoint?
+    @Binding var selectedFunctionBlockId: UUID?
+    @Binding var hoveredDropTargetId: UUID?
     @Binding var scale: CGFloat
     @Binding var scrollOffset: CGPoint
     
@@ -1789,6 +2556,15 @@ private struct ZoomableCanvasView: View {
     var handleContainerCardDrop: (UUID, CGPoint, UUID) -> Void
     var removeCardFromContainer: (UUID, UUID, CGPoint?) -> Void
     var reorderCardInContainer: (UUID, Int, UUID) -> Void
+    var onCreateFunctionBlock: (CGPoint, FunctionType) -> Void
+    var onConnectToFunctionBlock: (UUID, FunctionConnectionElementType, UUID, FunctionConnection.FunctionConnectionPoint) -> Void
+    var onDeleteFunctionBlock: (UUID) -> Void
+    var computeFunctionResult: (UUID) -> Double?
+    var connectionStartPosition: (UUID, FunctionConnectionElementType, FunctionConnection.FunctionConnectionPoint) -> CGPoint
+    var functionBlockInputPosition: (UUID) -> CGPoint
+    var functionBlockOutputPosition: (UUID) -> CGPoint
+    var getSourceCardsForBlock: (UUID) -> [NutrivanceTuningReport]
+    var sortedReports: [NutrivanceTuningReport]
     
     var body: some View {
         let canvasSize = computedCanvasSize
@@ -1810,8 +2586,14 @@ private struct ZoomableCanvasView: View {
                 cardPositions: $cardPositions,
                 selectedCardIds: $selectedCardIds,
                 cardContainers: $cardContainers,
+                functionBlocks: $functionBlocks,
+                connections: $connections,
                 draggingCardId: $draggingCardId,
                 draggingCardCenter: $draggingCardCenter,
+                draggingFunctionConnectionSource: $draggingFunctionConnectionSource,
+                tempFunctionConnectionEnd: $tempFunctionConnectionEnd,
+                selectedFunctionBlockId: $selectedFunctionBlockId,
+                hoveredDropTargetId: $hoveredDropTargetId,
                 scale: $scale,
                 cardsNotInContainers: cardsNotInContainers,
                 cardWidth: cardWidth,
@@ -1831,7 +2613,16 @@ private struct ZoomableCanvasView: View {
                 handleCardDrop: handleCardDrop,
                 handleContainerCardDrop: handleContainerCardDrop,
                 removeCardFromContainer: removeCardFromContainer,
-                reorderCardInContainer: reorderCardInContainer
+                reorderCardInContainer: reorderCardInContainer,
+                onCreateFunctionBlock: onCreateFunctionBlock,
+                onConnectToFunctionBlock: onConnectToFunctionBlock,
+                onDeleteFunctionBlock: onDeleteFunctionBlock,
+                computeFunctionResult: computeFunctionResult,
+                connectionStartPosition: connectionStartPosition,
+                functionBlockInputPosition: functionBlockInputPosition,
+                functionBlockOutputPosition: functionBlockOutputPosition,
+                getSourceCardsForBlock: getSourceCardsForBlock,
+                sortedReports: sortedReports
             )
             .onTapGesture {
                 onDeselectAll()
@@ -1860,6 +2651,13 @@ private struct ZoomableCanvasView: View {
             minY = min(minY, container.position.y - 200)
             maxX = max(maxX, container.position.x + 250)
             maxY = max(maxY, container.position.y + 200)
+        }
+        
+        for (_, block) in functionBlocks {
+            minX = min(minX, block.position.x - 100)
+            minY = min(minY, block.position.y - 100)
+            maxX = max(maxX, block.position.x + 100)
+            maxY = max(maxY, block.position.y + 100)
         }
         
         let expandedWidth = max(maxX + edgeMargin, baseCanvasWidth + minExpansion)
@@ -2021,8 +2819,14 @@ private struct ZoomableCanvasContent: View {
     @Binding var cardPositions: [UUID: CGPoint]
     @Binding var selectedCardIds: Set<UUID>
     @Binding var cardContainers: [UUID: CardContainer]
+    @Binding var functionBlocks: [UUID: FunctionBlock]
+    @Binding var connections: [UUID: FunctionConnection]
     @Binding var draggingCardId: UUID?
     @Binding var draggingCardCenter: CGPoint?
+    @Binding var draggingFunctionConnectionSource: MetricStackDetailView.DraggingFunctionConnectionSource?
+    @Binding var tempFunctionConnectionEnd: CGPoint?
+    @Binding var selectedFunctionBlockId: UUID?
+    @Binding var hoveredDropTargetId: UUID?
     @Binding var scale: CGFloat
     
     let cardsNotInContainers: [NutrivanceTuningReport]
@@ -2044,6 +2848,15 @@ private struct ZoomableCanvasContent: View {
     var handleContainerCardDrop: (UUID, CGPoint, UUID) -> Void
     var removeCardFromContainer: (UUID, UUID, CGPoint?) -> Void
     var reorderCardInContainer: (UUID, Int, UUID) -> Void
+    var onCreateFunctionBlock: (CGPoint, FunctionType) -> Void
+    var onConnectToFunctionBlock: (UUID, FunctionConnectionElementType, UUID, FunctionConnection.FunctionConnectionPoint) -> Void
+    var onDeleteFunctionBlock: (UUID) -> Void
+    var computeFunctionResult: (UUID) -> Double?
+    var connectionStartPosition: (UUID, FunctionConnectionElementType, FunctionConnection.FunctionConnectionPoint) -> CGPoint
+    var functionBlockInputPosition: (UUID) -> CGPoint
+    var functionBlockOutputPosition: (UUID) -> CGPoint
+    var getSourceCardsForBlock: (UUID) -> [NutrivanceTuningReport]
+    var sortedReports: [NutrivanceTuningReport]
     
     @State private var originalPositions: [UUID: CGPoint] = [:]
     
@@ -2072,6 +2885,96 @@ private struct ZoomableCanvasContent: View {
                 .frame(width: computedCanvasWidth, height: computedCanvasHeight)
             }
             
+            FunctionConnectionLinesView(
+                connections: connections,
+                functionBlocks: functionBlocks,
+                cardPositions: cardPositions,
+                cardContainers: cardContainers,
+                connectionStartPosition: connectionStartPosition,
+                functionBlockInputPosition: functionBlockInputPosition,
+                tempFunctionConnectionEnd: tempFunctionConnectionEnd,
+                draggingFunctionConnectionSource: draggingFunctionConnectionSource,
+                hoveredDropTargetId: hoveredDropTargetId
+            )
+            .frame(width: computedCanvasWidth, height: computedCanvasHeight)
+            .allowsHitTesting(false)
+            
+            ForEach(Array(functionBlocks), id: \.key) { blockId, block in
+                FunctionBlockView(
+                    block: block,
+                    accent: snapshot.accent,
+                    result: computeFunctionResult(blockId),
+                    sourceCardsCount: getSourceCardsForBlock(blockId).count,
+                    isSelected: selectedFunctionBlockId == blockId,
+                    onPositionChanged: { newPosition in
+                        functionBlocks[blockId]?.position = newPosition
+                    },
+                    onSelect: {
+                        selectedFunctionBlockId = blockId
+                    },
+                    onDelete: {
+                        onDeleteFunctionBlock(blockId)
+                    },
+                    onStartFunctionConnection: { connectionPoint in
+                        let startPos = functionBlockOutputPosition(blockId)
+                        draggingFunctionConnectionSource = MetricStackDetailView.DraggingFunctionConnectionSource(
+                            sourceId: blockId,
+                            sourceType: .functionBlock,
+                            connectionPoint: connectionPoint,
+                            startPosition: startPos
+                        )
+                        tempFunctionConnectionEnd = startPos
+                        hoveredDropTargetId = nil
+                    },
+                    onFunctionConnectionDrop: { position in
+                        // Check function blocks first
+                        for (targetId, _) in functionBlocks where targetId != blockId {
+                            let inputPos = functionBlockInputPosition(targetId)
+                            let distance = sqrt(pow(position.x - inputPos.x, 2) + pow(position.y - inputPos.y, 2))
+                            if distance < 50 {
+                                onConnectToFunctionBlock(blockId, .functionBlock, targetId, .left)
+                                draggingFunctionConnectionSource = nil
+                                tempFunctionConnectionEnd = nil
+                                hoveredDropTargetId = nil
+                                return
+                            }
+                        }
+                        
+                        // Check containers
+                        for (containerId, _) in cardContainers {
+                            if isPointInContainer(position, containerId: containerId) {
+                                onConnectToFunctionBlock(blockId, .functionBlock, containerId, .left)
+                                draggingFunctionConnectionSource = nil
+                                tempFunctionConnectionEnd = nil
+                                hoveredDropTargetId = nil
+                                return
+                            }
+                        }
+                        
+                        draggingFunctionConnectionSource = nil
+                        tempFunctionConnectionEnd = nil
+                        hoveredDropTargetId = nil
+                    },
+                    onFunctionConnectionDragChanged: { position in
+                        tempFunctionConnectionEnd = position
+                        
+                        // Update hovered target
+                        var newHoveredId: UUID? = nil
+                        for (targetId, _) in functionBlocks where targetId != blockId {
+                            let inputPos = functionBlockInputPosition(targetId)
+                            let distance = sqrt(pow(position.x - inputPos.x, 2) + pow(position.y - inputPos.y, 2))
+                            if distance < 50 {
+                                newHoveredId = targetId
+                                break
+                            }
+                        }
+                        hoveredDropTargetId = newHoveredId
+                    },
+                    getContainerCards: getContainerCards
+                )
+                .zIndex(75)
+            }
+            
             ForEach(cardsNotInContainers) { report in
                 let isSelected = selectedCardIds.contains(report.id)
                 let position = cardPositions[report.id] ?? .zero
@@ -2085,6 +2988,7 @@ private struct ZoomableCanvasContent: View {
                     cardWidth: cardWidth,
                     isSelected: isSelected,
                     position: position,
+                    showFunctionConnectionArrows: true,
                     onTap: {
                         if !isDrawingMode {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -2136,6 +3040,63 @@ private struct ZoomableCanvasContent: View {
                         handleCardDrop(report.id, newPosition)
                         draggingCardId = nil
                         draggingCardCenter = nil
+                    },
+                    onStartFunctionConnection: { connectionPoint, startPos in
+                        draggingFunctionConnectionSource = MetricStackDetailView.DraggingFunctionConnectionSource(
+                            sourceId: report.id,
+                            sourceType: .card,
+                            connectionPoint: connectionPoint,
+                            startPosition: startPos
+                        )
+                        tempFunctionConnectionEnd = startPos
+                    },
+                    onFunctionConnectionDrop: { localPosition in
+                        // The localPosition is already in canvas coordinates (arrow is in a frame starting at card's top-left)
+                        let canvasPosition = localPosition
+                        
+                        // Check function blocks first
+                        for (blockId, _) in functionBlocks {
+                            let inputPos = functionBlockInputPosition(blockId)
+                            let distance = sqrt(pow(canvasPosition.x - inputPos.x, 2) + pow(canvasPosition.y - inputPos.y, 2))
+                            if distance < 50 {
+                                onConnectToFunctionBlock(report.id, .card, blockId, .left)
+                                draggingFunctionConnectionSource = nil
+                                tempFunctionConnectionEnd = nil
+                                hoveredDropTargetId = nil
+                                return
+                            }
+                        }
+                        
+                        // Check containers
+                        for (containerId, _) in cardContainers {
+                            if isPointInContainer(canvasPosition, containerId: containerId) {
+                                onConnectToFunctionBlock(report.id, .card, containerId, .left)
+                                draggingFunctionConnectionSource = nil
+                                tempFunctionConnectionEnd = nil
+                                hoveredDropTargetId = nil
+                                return
+                            }
+                        }
+                        
+                        draggingFunctionConnectionSource = nil
+                        tempFunctionConnectionEnd = nil
+                        hoveredDropTargetId = nil
+                    },
+                    onFunctionConnectionDragChanged: { localPosition in
+                        // The localPosition is already in canvas coordinates
+                        tempFunctionConnectionEnd = localPosition
+                        
+                        // Update hovered target
+                        var newHoveredId: UUID? = nil
+                        for (blockId, _) in functionBlocks {
+                            let inputPos = functionBlockInputPosition(blockId)
+                            let distance = sqrt(pow(localPosition.x - inputPos.x, 2) + pow(localPosition.y - inputPos.y, 2))
+                            if distance < 50 {
+                                newHoveredId = blockId
+                                break
+                            }
+                        }
+                        hoveredDropTargetId = newHoveredId
                     }
                 )
                 .zIndex(isSelected ? 1000 : Double(zOrder))
@@ -2187,7 +3148,48 @@ private struct ZoomableCanvasContent: View {
                         reorderCardInContainer(cardId, newIndex, container.id)
                     },
                     draggingCardId: draggingCardId,
-                    draggingCardCenter: draggingCardCenter
+                    draggingCardCenter: draggingCardCenter,
+                    showFunctionConnectionArrows: true,
+                    onStartFunctionConnection: { connectionPoint, startPos in
+                        draggingFunctionConnectionSource = MetricStackDetailView.DraggingFunctionConnectionSource(
+                            sourceId: container.id,
+                            sourceType: .container,
+                            connectionPoint: connectionPoint,
+                            startPosition: startPos
+                        )
+                        tempFunctionConnectionEnd = startPos
+                    },
+                    onFunctionConnectionDrop: { position in
+                        for (blockId, _) in functionBlocks {
+                            let inputPos = functionBlockInputPosition(blockId)
+                            let distance = sqrt(pow(position.x - inputPos.x, 2) + pow(position.y - inputPos.y, 2))
+                            if distance < 50 {
+                                onConnectToFunctionBlock(container.id, .container, blockId, .left)
+                                draggingFunctionConnectionSource = nil
+                                tempFunctionConnectionEnd = nil
+                                hoveredDropTargetId = nil
+                                return
+                            }
+                        }
+                        draggingFunctionConnectionSource = nil
+                        tempFunctionConnectionEnd = nil
+                        hoveredDropTargetId = nil
+                    },
+                    onFunctionConnectionDragChanged: { position in
+                        tempFunctionConnectionEnd = position
+                        
+                        // Update hovered target
+                        var newHoveredId: UUID? = nil
+                        for (blockId, _) in functionBlocks {
+                            let inputPos = functionBlockInputPosition(blockId)
+                            let distance = sqrt(pow(position.x - inputPos.x, 2) + pow(position.y - inputPos.y, 2))
+                            if distance < 50 {
+                                newHoveredId = blockId
+                                break
+                            }
+                        }
+                        hoveredDropTargetId = newHoveredId
+                    }
                 )
                 .zIndex(50)
             }
@@ -2214,6 +3216,371 @@ private struct ZoomableCanvasContent: View {
                 .position(x: toolbarX, y: toolbarY)
             }
         }
+    }
+    
+    private func connectionStartPositionForCard(position: CGPoint, point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
+        let arrowOffset: CGFloat = 8
+        let centerY = position.y + 140
+        switch point {
+        case .top: return CGPoint(x: position.x + cardWidth / 2, y: position.y + arrowOffset)
+        case .bottom: return CGPoint(x: position.x + cardWidth / 2, y: position.y + 280 - arrowOffset)
+        case .left: return CGPoint(x: position.x + arrowOffset, y: centerY)
+        case .right: return CGPoint(x: position.x + cardWidth - arrowOffset, y: centerY)
+        }
+    }
+    
+    private func containerPositionForConnection(position: CGPoint, point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
+        let containerWidth: CGFloat = 600
+        let containerHeight: CGFloat = 300
+        let arrowOffset: CGFloat = 8
+        switch point {
+        case .top: return CGPoint(x: position.x, y: position.y - containerHeight / 2 - arrowOffset)
+        case .bottom: return CGPoint(x: position.x, y: position.y + containerHeight / 2 + arrowOffset)
+        case .left: return CGPoint(x: position.x - containerWidth / 2 - arrowOffset, y: position.y)
+        case .right: return CGPoint(x: position.x + containerWidth / 2 + arrowOffset, y: position.y)
+        }
+    }
+    
+    private func isPointInContainer(_ point: CGPoint, containerId: UUID) -> Bool {
+        guard let container = cardContainers[containerId] else { return false }
+        let containerWidth: CGFloat = 600
+        let containerHeight: CGFloat = 300
+        let topLeft = CGPoint(x: container.position.x - containerWidth / 2, y: container.position.y - containerHeight / 2)
+        let rect = CGRect(x: topLeft.x, y: topLeft.y, width: containerWidth, height: containerHeight)
+        return rect.contains(point)
+    }
+}
+
+struct FunctionConnectionLinesView: View {
+    let connections: [UUID: FunctionConnection]
+    let functionBlocks: [UUID: FunctionBlock]
+    let cardPositions: [UUID: CGPoint]
+    let cardContainers: [UUID: CardContainer]
+    let connectionStartPosition: (UUID, FunctionConnectionElementType, FunctionConnection.FunctionConnectionPoint) -> CGPoint
+    let functionBlockInputPosition: (UUID) -> CGPoint
+    let tempFunctionConnectionEnd: CGPoint?
+    let draggingFunctionConnectionSource: MetricStackDetailView.DraggingFunctionConnectionSource?
+    let hoveredDropTargetId: UUID?
+    
+    var body: some View {
+        Canvas { context, size in
+            for (_, connection) in connections {
+                let startPos = getStartPosition(for: connection)
+                let endPos = getEndPosition(for: connection)
+                
+                var path = Path()
+                path.move(to: startPos)
+                let controlOffset: CGFloat = 30
+                path.addCurve(
+                    to: endPos,
+                    control1: CGPoint(x: startPos.x + controlOffset, y: startPos.y),
+                    control2: CGPoint(x: endPos.x - controlOffset, y: endPos.y)
+                )
+                
+                context.stroke(
+                    path,
+                    with: .color(.cyan.opacity(0.7)),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [5, 5])
+                )
+            }
+            
+            if let source = draggingFunctionConnectionSource, let endPos = tempFunctionConnectionEnd {
+                let startPos = source.startPosition
+                var path = Path()
+                path.move(to: startPos)
+                let controlOffset: CGFloat = 30
+                path.addCurve(
+                    to: endPos,
+                    control1: CGPoint(x: startPos.x + controlOffset, y: startPos.y),
+                    control2: CGPoint(x: endPos.x - controlOffset, y: endPos.y)
+                )
+                
+                context.stroke(
+                    path,
+                    with: .color(.orange.opacity(0.8)),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [8, 4])
+                )
+                
+                Circle()
+                    .stroke(Color.green, lineWidth: 2)
+                    .frame(width: 20, height: 20)
+                    .position(startPos)
+                
+                Circle()
+                    .stroke(Color.orange, lineWidth: 2)
+                    .frame(width: 20, height: 20)
+                    .position(endPos)
+            }
+            
+            if let hoveredId = hoveredDropTargetId {
+                let pos = functionBlockInputPosition(hoveredId)
+                Circle()
+                    .stroke(Color.green, lineWidth: 3)
+                    .frame(width: 40, height: 40)
+                    .position(pos)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+    
+    private func getStartPosition(for connection: FunctionConnection) -> CGPoint {
+        return connectionStartPosition(connection.sourceId, connection.sourceType, connection.connectionPoint)
+    }
+    
+    private func getEndPosition(for connection: FunctionConnection) -> CGPoint {
+        switch connection.targetType {
+        case .functionBlock:
+            return functionBlockInputPosition(connection.targetId)
+        case .card:
+            if let pos = cardPositions[connection.targetId] {
+                return CGPoint(x: pos.x, y: pos.y + 140)
+            }
+        case .container:
+            if let container = cardContainers[connection.targetId] {
+                return container.position
+            }
+        }
+        return .zero
+    }
+}
+
+struct FunctionBlockView: View {
+    let block: FunctionBlock
+    let accent: Color
+    let result: Double?
+    let sourceCardsCount: Int
+    let isSelected: Bool
+    var onPositionChanged: (CGPoint) -> Void
+    var onSelect: () -> Void
+    var onDelete: () -> Void
+    var onStartFunctionConnection: (FunctionConnection.FunctionConnectionPoint) -> Void
+    var onFunctionConnectionDrop: (CGPoint) -> Void
+    var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
+    var getContainerCards: (UUID) -> [NutrivanceTuningReport]
+    
+    @State private var isDragging: Bool = false
+    @State private var dragOffset: CGSize = .zero
+    @State private var isEditing: Bool = false
+    @State private var showDeleteConfirm: Bool = false
+    @GestureState private var connectionDragOffset: CGSize = .zero
+    @State private var tempFunctionConnectionEnd: CGPoint? = nil
+    
+    private let blockWidth: CGFloat = 120
+    private let blockHeight: CGFloat = 80
+    
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black.opacity(0.85))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(isSelected ? accent : accent.opacity(0.5), lineWidth: isSelected ? 3 : 1)
+                )
+            
+            VStack(spacing: 4) {
+                HStack {
+                    Image(systemName: block.functionType.icon)
+                        .font(.caption)
+                    Text(block.functionType.displayName)
+                        .font(.caption.weight(.bold))
+                }
+                .foregroundStyle(accent)
+                
+                if let result = result {
+                    Text(String(format: "%.2f", result))
+                        .font(.title2.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                } else if block.sourceElementId != nil {
+                    Text("...")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No input")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                
+                HStack(spacing: 4) {
+                    Image(systemName: "cube.fill")
+                        .font(.caption2)
+                    Text("\(sourceCardsCount)")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+            }
+            
+            HStack {
+                FunctionConnectionArrow(position: .left, onDragChanged: { offset in
+                    tempFunctionConnectionEnd = CGPoint(
+                        x: block.position.x - blockWidth / 2 + 8 + offset.width,
+                        y: block.position.y + offset.height
+                    )
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDragChanged?(end)
+                    }
+                }, onDragEnded: { _ in
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDrop(end)
+                    }
+                    tempFunctionConnectionEnd = nil
+                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                    onStartFunctionConnection(.left)
+                })
+                .frame(width: 16, height: 16)
+                
+                Spacer()
+                
+                FunctionConnectionArrow(position: .right, onDragChanged: { offset in
+                    tempFunctionConnectionEnd = CGPoint(
+                        x: block.position.x + blockWidth / 2 - 8 + offset.width,
+                        y: block.position.y + offset.height
+                    )
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDragChanged?(end)
+                    }
+                }, onDragEnded: { _ in
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDrop(end)
+                    }
+                    tempFunctionConnectionEnd = nil
+                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                    onStartFunctionConnection(.right)
+                })
+                .frame(width: 16, height: 16)
+            }
+            
+            VStack {
+                FunctionConnectionArrow(position: .top, onDragChanged: { offset in
+                    tempFunctionConnectionEnd = CGPoint(
+                        x: block.position.x + offset.width,
+                        y: block.position.y - blockHeight / 2 + 8 + offset.height
+                    )
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDragChanged?(end)
+                    }
+                }, onDragEnded: { _ in
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDrop(end)
+                    }
+                    tempFunctionConnectionEnd = nil
+                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                    onStartFunctionConnection(.top)
+                })
+                .frame(width: 16, height: 16)
+                
+                Spacer()
+                
+                FunctionConnectionArrow(position: .bottom, onDragChanged: { offset in
+                    tempFunctionConnectionEnd = CGPoint(
+                        x: block.position.x + offset.width,
+                        y: block.position.y + blockHeight / 2 - 8 + offset.height
+                    )
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDragChanged?(end)
+                    }
+                }, onDragEnded: { _ in
+                    if let end = tempFunctionConnectionEnd {
+                        onFunctionConnectionDrop(end)
+                    }
+                    tempFunctionConnectionEnd = nil
+                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                    onStartFunctionConnection(.bottom)
+                })
+                .frame(width: 16, height: 16)
+            }
+        }
+        .frame(width: blockWidth, height: blockHeight)
+        .shadow(
+            color: isSelected ? accent.opacity(0.5) : Color.black.opacity(0.3),
+            radius: isDragging ? 15 : 8,
+            x: 0,
+            y: isDragging ? 10 : 4
+        )
+        .scaleEffect(isDragging ? 1.05 : 1.0)
+        .position(
+            x: block.position.x + blockWidth / 2 + dragOffset.width,
+            y: block.position.y + blockHeight / 2 + dragOffset.height
+        )
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    isDragging = true
+                    dragOffset = value.translation
+                }
+                .onEnded { value in
+                    let newPosition = CGPoint(
+                        x: block.position.x + value.translation.width,
+                        y: block.position.y + value.translation.height
+                    )
+                    onPositionChanged(newPosition)
+                    dragOffset = .zero
+                    isDragging = false
+                }
+        )
+        .onTapGesture {
+            onSelect()
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                showDeleteConfirm = true
+            } label: {
+                Label("Delete Block", systemImage: "trash")
+            }
+        }
+        .alert("Delete Function Block?", isPresented: $showDeleteConfirm) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                onDelete()
+            }
+        } message: {
+            Text("This will remove the function block and its connections.")
+        }
+    }
+}
+
+struct FunctionConnectionArrow: View {
+    let position: FunctionConnection.FunctionConnectionPoint
+    let onDragChanged: (CGSize) -> Void
+    let onDragEnded: (CGSize) -> Void
+    let isActive: Bool
+    var onDragStarted: (() -> Void)?
+    
+    @State private var hasDragStarted: Bool = false
+    
+    private var arrowRotation: Angle {
+        switch position {
+        case .top: return .degrees(-90)
+        case .bottom: return .degrees(90)
+        case .left: return .degrees(180)
+        case .right: return .degrees(0)
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(hasDragStarted || isActive ? Color.orange : Color.cyan.opacity(0.5))
+                .frame(width: 16, height: 16)
+            
+            Image(systemName: "arrow.right")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+                .rotationEffect(arrowRotation)
+        }
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if !hasDragStarted {
+                        hasDragStarted = true
+                        onDragStarted?()
+                    }
+                    onDragChanged(value.translation)
+                }
+                .onEnded { value in
+                    onDragEnded(value.translation)
+                    hasDragStarted = false
+                }
+        )
     }
 }
 
@@ -2295,15 +3662,21 @@ private struct SelectableLabPaperCard: View {
     let cardWidth: CGFloat
     var isSelected: Bool
     var position: CGPoint
+    var showFunctionConnectionArrows: Bool = false
     var onTap: () -> Void
     var onDoubleTap: () -> Void
     var onLongPress: (() -> Void)?
     var onDragChanged: ((CGPoint, CGSize) -> Void)?
     var onDragEnded: (CGPoint, CGSize) -> Void
+    var onStartFunctionConnection: ((FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void)?
+    var onFunctionConnectionDrop: ((CGPoint) -> Void)?
+    var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
 
     @GestureState private var dragTranslation: CGSize = .zero
     @State private var isDragging: Bool = false
     @State private var isLongPressing: Bool = false
+
+    private let cardHeight: CGFloat = 280
 
     private var effectiveScale: CGFloat {
         isDragging ? 1.08 : (isLongPressing ? 1.02 : 1.0)
@@ -2350,13 +3723,33 @@ private struct SelectableLabPaperCard: View {
     }
 
     var body: some View {
-        MetricStackReportCardContent(
-            report: report,
-            metric: metric,
-            accent: accent,
-            colorScheme: colorScheme,
-            cardWidth: cardWidth
-        )
+        ZStack {
+            MetricStackReportCardContent(
+                report: report,
+                metric: metric,
+                accent: accent,
+                colorScheme: colorScheme,
+                cardWidth: cardWidth
+            )
+            
+            if showFunctionConnectionArrows && isSelected {
+                FunctionConnectionArrowsOverlay(
+                    cardWidth: cardWidth,
+                    cardHeight: cardHeight,
+                    cardPosition: resolvedPosition,
+                    accent: accent,
+                    onStartFunctionConnection: { point, startPos in
+                        onStartFunctionConnection?(point, startPos)
+                    },
+                    onFunctionConnectionDrop: { position in
+                        onFunctionConnectionDrop?(position)
+                    },
+                    onFunctionConnectionDragChanged: { position in
+                        onFunctionConnectionDragChanged?(position)
+                    }
+                )
+            }
+        }
         .scaleEffect(effectiveScale)
         .shadow(
             color: isSelected ? accent.opacity(0.6) : Color.black.opacity(isDragging ? 0.4 : 0.2),
@@ -2379,6 +3772,254 @@ private struct SelectableLabPaperCard: View {
         .onTapGesture {
             if !isDragging {
                 onTap()
+            }
+        }
+    }
+}
+
+struct FunctionConnectionArrowsOverlay: View {
+    let cardWidth: CGFloat
+    let cardHeight: CGFloat
+    let cardPosition: CGPoint
+    let accent: Color
+    let onStartFunctionConnection: (FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void
+    let onFunctionConnectionDrop: (CGPoint) -> Void
+    let onFunctionConnectionDragChanged: (CGPoint) -> Void
+    
+    private let arrowSize: CGFloat = 16
+    private let arrowOffset: CGFloat = 8
+    
+    var body: some View {
+        ZStack {
+            HStack {
+                CardFunctionConnectionArrow(
+                    isActive: false,
+                    onDragChanged: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + arrowOffset, y: cardPosition.y + cardHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + arrowOffset, y: cardPosition.y + cardHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: cardPosition.x + arrowOffset, y: cardPosition.y + cardHeight / 2)
+                        onStartFunctionConnection(.left, startPos)
+                    }
+                )
+                .frame(width: arrowSize, height: arrowSize)
+                
+                Spacer()
+                
+                CardFunctionConnectionArrow(
+                    isActive: false,
+                    onDragChanged: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth - arrowOffset, y: cardPosition.y + cardHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth - arrowOffset, y: cardPosition.y + cardHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth - arrowOffset, y: cardPosition.y + cardHeight / 2)
+                        onStartFunctionConnection(.right, startPos)
+                    }
+                )
+                .frame(width: arrowSize, height: arrowSize)
+            }
+            .padding(.horizontal, 4)
+            
+            VStack {
+                CardFunctionConnectionArrow(
+                    isActive: false,
+                    onDragChanged: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + arrowOffset)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + arrowOffset)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + arrowOffset)
+                        onStartFunctionConnection(.top, startPos)
+                    }
+                )
+                .frame(width: arrowSize, height: arrowSize)
+                
+                Spacer()
+                
+                CardFunctionConnectionArrow(
+                    isActive: false,
+                    onDragChanged: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + cardHeight - arrowOffset)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + cardHeight - arrowOffset)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + cardHeight - arrowOffset)
+                        onStartFunctionConnection(.bottom, startPos)
+                    }
+                )
+                .frame(width: arrowSize, height: arrowSize)
+            }
+        }
+        .frame(width: cardWidth, height: cardHeight)
+    }
+}
+
+struct CardFunctionConnectionArrow: View {
+    let isActive: Bool
+    let onDragChanged: (CGSize) -> Void
+    let onDragEnded: (CGSize) -> Void
+    var onDragStarted: (() -> Void)?
+    
+    @State private var hasDragStarted: Bool = false
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(hasDragStarted || isActive ? Color.orange : Color.cyan.opacity(0.7))
+                .frame(width: 16, height: 16)
+            
+            Image(systemName: "arrow.right")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+        }
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if !hasDragStarted {
+                        hasDragStarted = true
+                        onDragStarted?()
+                    }
+                    onDragChanged(value.translation)
+                }
+                .onEnded { value in
+                    onDragEnded(value.translation)
+                    hasDragStarted = false
+                }
+        )
+    }
+}
+
+struct ContainerFunctionConnectionArrowsOverlay: View {
+    let containerWidth: CGFloat
+    let containerHeight: CGFloat
+    let accent: Color
+    let onStartFunctionConnection: (FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void
+    let onFunctionConnectionDrop: (CGPoint) -> Void
+    let onFunctionConnectionDragChanged: (CGPoint) -> Void
+    
+    @State private var isDraggingFromLeft: Bool = false
+    @State private var isDraggingFromRight: Bool = false
+    @State private var isDraggingFromTop: Bool = false
+    @State private var isDraggingFromBottom: Bool = false
+    
+    var body: some View {
+        ZStack {
+            HStack {
+                CardFunctionConnectionArrow(
+                    isActive: isDraggingFromLeft,
+                    onDragChanged: { offset in
+                        isDraggingFromLeft = true
+                        let startPos = CGPoint(x: containerWidth / 2 - 8, y: containerHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: containerWidth / 2 - 8, y: containerHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                        isDraggingFromLeft = false
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: containerWidth / 2 - 8, y: containerHeight / 2)
+                        onStartFunctionConnection(.left, startPos)
+                    }
+                )
+                .offset(x: -containerWidth/2 - 8)
+                
+                Spacer()
+                
+                CardFunctionConnectionArrow(
+                    isActive: isDraggingFromRight,
+                    onDragChanged: { offset in
+                        isDraggingFromRight = true
+                        let startPos = CGPoint(x: containerWidth / 2 + 8, y: containerHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: containerWidth / 2 + 8, y: containerHeight / 2)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                        isDraggingFromRight = false
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: containerWidth / 2 + 8, y: containerHeight / 2)
+                        onStartFunctionConnection(.right, startPos)
+                    }
+                )
+                .offset(x: containerWidth/2 + 8)
+            }
+            
+            VStack {
+                CardFunctionConnectionArrow(
+                    isActive: isDraggingFromTop,
+                    onDragChanged: { offset in
+                        isDraggingFromTop = true
+                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 - 8)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 - 8)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                        isDraggingFromTop = false
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 - 8)
+                        onStartFunctionConnection(.top, startPos)
+                    }
+                )
+                .offset(y: -containerHeight/2 - 8)
+                
+                Spacer()
+                
+                CardFunctionConnectionArrow(
+                    isActive: isDraggingFromBottom,
+                    onDragChanged: { offset in
+                        isDraggingFromBottom = true
+                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 + 8)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDragChanged(newPos)
+                    },
+                    onDragEnded: { offset in
+                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 + 8)
+                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
+                        onFunctionConnectionDrop(newPos)
+                        isDraggingFromBottom = false
+                    },
+                    onDragStarted: {
+                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 + 8)
+                        onStartFunctionConnection(.bottom, startPos)
+                    }
+                )
+                .offset(y: containerHeight/2 + 8)
             }
         }
     }
@@ -2453,6 +4094,10 @@ private struct ContainerView: View {
     var onCardReordered: ((UUID, Int) -> Void)?
     var draggingCardId: UUID?
     var draggingCardCenter: CGPoint?
+    var showFunctionConnectionArrows: Bool = false
+    var onStartFunctionConnection: ((FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void)?
+    var onFunctionConnectionDrop: ((CGPoint) -> Void)?
+    var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
     
     @Namespace private var containerNamespace
     @State private var hasAppeared = false
@@ -2661,9 +4306,28 @@ private struct ContainerView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            containerHeader
-            containerContent
+        ZStack {
+            VStack(spacing: 0) {
+                containerHeader
+                containerContent
+            }
+            
+            if showFunctionConnectionArrows {
+                ContainerFunctionConnectionArrowsOverlay(
+                    containerWidth: activeWidth,
+                    containerHeight: activeHeight,
+                    accent: accent,
+                    onStartFunctionConnection: { point, startPos in
+                        onStartFunctionConnection?(point, startPos)
+                    },
+                    onFunctionConnectionDrop: { position in
+                        onFunctionConnectionDrop?(position)
+                    },
+                    onFunctionConnectionDragChanged: { position in
+                        onFunctionConnectionDragChanged?(position)
+                    }
+                )
+            }
         }
         .frame(width: activeWidth, height: activeHeight)
         .background(Color.black.opacity(isDropTargeted ? 0.5 : (shouldShowBoundingBox ? 0.3 : 0.0)))
@@ -2731,7 +4395,7 @@ private struct ContainerView: View {
                     isDragging: false,
                     onTap: { onCardTap(report) },
                     onDragStarted: { _ in },
-                    onDragMoved: { _ in },
+                    onDragMoved: { _, _ in },
                     onDragEnded: { _, _ in },
                     cardHeight: collapsedCardHeight
                 )

@@ -20,11 +20,7 @@
 		15561A632D6B7580006B8741 /* MovanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A622D6B7580006B8741 /* MovanceView.swift */; };
 		15561A652D6B758D006B8741 /* SpirivanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A642D6B758D006B8741 /* SpirivanceView.swift */; };
 		15561A672D6B78FB006B8741 /* GradientBackgrounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A662D6B78FB006B8741 /* GradientBackgrounds.swift */; };
-		15561A692D6B8718006B8741 /* PlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A682D6B8718006B8741 /* PlaygroundView.swift */; };
 		15561A6B2D6B88B0006B8741 /* PresetButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A6A2D6B88B0006B8741 /* PresetButton.swift */; };
-		15561A6D2D6B88BF006B8741 /* ConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */; };
-		15561A6F2D6B88EC006B8741 /* ResizableWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A6E2D6B88EC006B8741 /* ResizableWidgetView.swift */; };
-		15561A712D6B8945006B8741 /* PlaygroundTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15561A702D6B8945006B8741 /* PlaygroundTypes.swift */; };
 		1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */; };
 		1557A05A2CD26FA6004E1D13 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1557A0592CD26FA6004E1D13 /* HomeView.swift */; };
 		155F788F2F70F3F40018E661 /* CoachComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155F788E2F70F3F40018E661 /* CoachComparisonView.swift */; };
@@ -196,11 +192,7 @@
 		15561A622D6B7580006B8741 /* MovanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovanceView.swift; sourceTree = "<group>"; };
 		15561A642D6B758D006B8741 /* SpirivanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpirivanceView.swift; sourceTree = "<group>"; };
 		15561A662D6B78FB006B8741 /* GradientBackgrounds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradientBackgrounds.swift; sourceTree = "<group>"; };
-		15561A682D6B8718006B8741 /* PlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundView.swift; sourceTree = "<group>"; };
 		15561A6A2D6B88B0006B8741 /* PresetButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetButton.swift; sourceTree = "<group>"; };
-		15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsView.swift; sourceTree = "<group>"; };
-		15561A6E2D6B88EC006B8741 /* ResizableWidgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResizableWidgetView.swift; sourceTree = "<group>"; };
-		15561A702D6B8945006B8741 /* PlaygroundTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundTypes.swift; sourceTree = "<group>"; };
 		1557A0532CD269FE004E1D13 /* ContentView_iPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView_iPhone.swift; sourceTree = "<group>"; };
 		1557A0592CD26FA6004E1D13 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		155F788E2F70F3F40018E661 /* CoachComparisonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachComparisonView.swift; sourceTree = "<group>"; };
@@ -615,7 +607,6 @@
 				A2B3C4D52F80000000000002 /* HealthKitCloudSyncProducer.swift */,
 				156814222D5C0F2D003C861E /* CoachView.swift */,
 				1568141A2D5C0E80003C861E /* ComingSoonView.swift */,
-				15561A6C2D6B88BF006B8741 /* ConnectionsView.swift */,
 				1533E8E22F84BB66004E8198 /* iOSWorkoutSyncManager.swift */,
 				15D7FFA22CD142690048E050 /* ContentView.swift */,
 				159F51702CD5BC9C001F5FFC /* ContentView_iPad.swift */,
@@ -682,8 +673,6 @@
 				15561A602D6B755E006B8741 /* NutrivanceView.swift */,
 				1568142B2D5C0F2D003C861E /* PerformanceFoodsView.swift */,
 				15175B552F7B889B00CC7415 /* PastQuestsView.swift */,
-				15561A702D6B8945006B8741 /* PlaygroundTypes.swift */,
-				15561A682D6B8718006B8741 /* PlaygroundView.swift */,
 				1568142D2D5C0F2D003C861E /* PostWorkoutWindowView.swift */,
 				15561A6A2D6B88B0006B8741 /* PresetButton.swift */,
 				15D7FFA82CD1426A0048E050 /* Preview Content */,
@@ -693,7 +682,6 @@
 				1514E7972F620AF30027B222 /* HealthStateEngine.swift */,
 				156814312D5C0F2D003C861E /* RecoveryScoreView.swift */,
 				B3C4D5E62F90000000000001 /* RecoveryReadinessPipeline.swift */,
-				15561A6E2D6B88EC006B8741 /* ResizableWidgetView.swift */,
 				157C20AF2D6E6E1A00D1FA9A /* ResourcesView.swift */,
 				156AA8EA2D76A80200DA0845 /* RingDetailView.swift */,
 				15F586602CF7845B006D3A9C /* SavedMealsView.swift */,
@@ -939,7 +927,6 @@
 				157C20B42D6E6E6600D1FA9A /* BreathingView.swift in Sources */,
 				15D7FFA52CD142690048E050 /* Item.swift in Sources */,
 				152C743A2CF79BE300DB118D /* HealthAnalysisService.swift in Sources */,
-				15561A6F2D6B88EC006B8741 /* ResizableWidgetView.swift in Sources */,
 				15CB57122CEEC22F00A6E970 /* HealthKitImportView.swift in Sources */,
 				159F517E2CD7C8FB001F5FFC /* NutrientCardView.swift in Sources */,
 				15CB570E2CEEC03B00A6E970 /* NutritionResultsView.swift in Sources */,
@@ -960,14 +947,12 @@
 				159F517C2CD715AA001F5FFC /* ContentView_iPad_alt.swift in Sources */,
 				15D7FFA12CD142690048E050 /* NutrivanceApp.swift in Sources */,
 				15561A652D6B758D006B8741 /* SpirivanceView.swift in Sources */,
-				15561A712D6B8945006B8741 /* PlaygroundTypes.swift in Sources */,
 				159F517A2CD70DBD001F5FFC /* NutrientModel.swift in Sources */,
 				15A53B672D3AF4880043287C /* SubcategoryDetailView.swift in Sources */,
 				15F71FEC2F83CC5A00B5DFC8 /* NutrivanceSceneRoot.swift in Sources */,
 				1514E7982F620AF30027B222 /* HealthStateEngine.swift in Sources */,
 				157C20B02D6E6E1A00D1FA9A /* ResourcesView.swift in Sources */,
 				157C20B82D6E6E7C00D1FA9A /* StressView.swift in Sources */,
-				15561A692D6B8718006B8741 /* PlaygroundView.swift in Sources */,
 				15F71FE82F83CC3000B5DFC8 /* SceneDelegate.swift in Sources */,
 				1557A0542CD269FE004E1D13 /* ContentView_iPhone.swift in Sources */,
 				15A70DA22CF0F5CC007FBC5D /* LogView.swift in Sources */,
@@ -975,7 +960,6 @@
 				159F51712CD5BC9C001F5FFC /* ContentView_iPad.swift in Sources */,
 				15BFD16F2D0E252E00E7847E /* NutrientCharts.swift in Sources */,
 				155F78912F71A5870018E661 /* ChartInteractionSmoothing.swift in Sources */,
-				15561A6D2D6B88BF006B8741 /* ConnectionsView.swift in Sources */,
 				15F71FEA2F83CC5500B5DFC8 /* NutrivanceSceneMenuRouter.swift in Sources */,
 				15F71FEE2F83CC5B00B5DFC8 /* NutrivanceCatalystMenuBuilder.swift in Sources */,
 				1570E2672D67B75300F42CB5 /* FuelCheckView.swift in Sources */,
