@@ -787,10 +787,13 @@ private struct RecoveryHalo: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .onAppear {
+        .onChange(of: score) { oldValue, newValue in
             withAnimation(.spring(response: 1.0, dampingFraction: 0.82)) {
-                animatedScore = score
+                animatedScore = newValue
             }
+        }
+        .onAppear {
+            animatedScore = score
         }
     }
 }

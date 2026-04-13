@@ -755,22 +755,36 @@ private func buildColoredRouteSegments(
         return [ColoredRouteSegment(coordinates: locations.map(\.coordinate), color: .systemBlue)]
     }
 
-    func nearestHeartRate(to date: Date, startingAt index: inout Int) -> Double {
-        while index < sortedHeartRates.count - 1 &&
-                abs(sortedHeartRates[index + 1].0.timeIntervalSince(date)) <= abs(sortedHeartRates[index].0.timeIntervalSince(date)) {
-            index += 1
+    // Binary search for fast heart rate lookups
+    func nearestHeartRate(to date: Date) -> Double {
+        var left = 0
+        var right = sortedHeartRates.count - 1
+        
+        while left < right {
+            let mid = (left + right) / 2
+            if sortedHeartRates[mid].0 < date {
+                left = mid + 1
+            } else {
+                right = mid
+            }
         }
-        return sortedHeartRates[index].1
+        
+        // Check neighbors to find closest
+        var closestIndex = left
+        if left > 0 && (left >= sortedHeartRates.count || abs(sortedHeartRates[left - 1].0.timeIntervalSince(date)) < abs(sortedHeartRates[left].0.timeIntervalSince(date))) {
+            closestIndex = left - 1
+        }
+        
+        return sortedHeartRates[min(closestIndex, sortedHeartRates.count - 1)].1
     }
 
     var segments: [ColoredRouteSegment] = []
     var currentCoordinates: [CLLocationCoordinate2D] = [locations[0].coordinate]
-    var heartRateIndex = 0
-    var currentColor = routeTintColor(for: nearestHeartRate(to: locations[0].timestamp, startingAt: &heartRateIndex))
+    var currentColor = routeTintColor(for: nearestHeartRate(to: locations[0].timestamp))
 
     for locationIndex in 1..<locations.count {
         let location = locations[locationIndex]
-        let nextColor = routeTintColor(for: nearestHeartRate(to: location.timestamp, startingAt: &heartRateIndex))
+        let nextColor = routeTintColor(for: nearestHeartRate(to: location.timestamp))
 
         if nextColor != currentColor && currentCoordinates.count > 1 {
             segments.append(ColoredRouteSegment(coordinates: currentCoordinates, color: currentColor))
@@ -1299,6 +1313,8 @@ struct WorkoutDetailView: View {
     @State private var historicalMaxHR: Double? = nil
     @State private var historicalRestingHR: Double? = nil
     @State private var hasResolvedZoneProfile = false
+    @State private var cachedHeartRateZoneBreakdown: [HRZone]? = nil
+    @State private var cachedHeartRateZoneBreakdownID: String? = nil
     @State private var localSelectedScrubbedDate: Date? = nil
     @State private var showMapDetail = false
     @State private var showExpandedMap = false
@@ -1795,8 +1811,16 @@ struct WorkoutDetailView: View {
             return []
         }
 
+        // Check cache validity
+        let cacheID = "\(activeZoneProfile?.sport ?? 0)-\(activeZoneProfile?.schema.rawValue ?? "")-\(analytics.heartRates.count)"
+        if cachedHeartRateZoneBreakdownID == cacheID, let cached = cachedHeartRateZoneBreakdown {
+            return cached
+        }
+
+        var result: [HRZone] = []
+        
         if let profile = activeZoneProfile {
-            return healthKitManager.calculateZoneBreakdown(heartRates: analytics.heartRates, zoneProfile: profile).map { breakdown in
+            result = healthKitManager.calculateZoneBreakdown(heartRates: analytics.heartRates, zoneProfile: profile).map { breakdown in
                 HRZone(
                     name: breakdown.zone.name,
                     color: hexToColor(breakdown.zone.color),
@@ -1804,22 +1828,26 @@ struct WorkoutDetailView: View {
                     range: breakdown.zone.range
                 )
             }
-        }
-
-        // Fallback to manual calculation
-        let zones = dynamicHeartRateZones
-        var updatedZones = zones
-        
-        let samples = analytics.heartRates.sorted { $0.0 < $1.0 }
-        for i in 0..<(samples.count - 1) {
-            let hr = samples[i].1
-            let next = samples[i + 1].0
-            let duration = next.timeIntervalSince(samples[i].0)
-            if let idx = updatedZones.firstIndex(where: { $0.range.contains(hr) }) {
-                updatedZones[idx].time += duration
+        } else {
+            // Fallback to manual calculation
+            let zones = dynamicHeartRateZones
+            var updatedZones = zones
+            
+            let samples = analytics.heartRates.sorted { $0.0 < $1.0 }
+            for i in 0..<(samples.count - 1) {
+                let hr = samples[i].1
+                let next = samples[i + 1].0
+                let duration = next.timeIntervalSince(samples[i].0)
+                if let idx = updatedZones.firstIndex(where: { $0.range.contains(hr) }) {
+                    updatedZones[idx].time += duration
+                }
             }
+            result = updatedZones
         }
-        return updatedZones
+        
+        cachedHeartRateZoneBreakdown = result
+        cachedHeartRateZoneBreakdownID = cacheID
+        return result
     }
 
     @ViewBuilder
@@ -3278,8 +3306,11 @@ struct WorkoutDetailView: View {
         switch hrZoneSettings.mode {
         case .customZones:
             let workoutDate = analytics.workout.startDate
-            historicalMaxHR = await healthKitManager.fetchMaxHR(workoutDate: workoutDate)
-            historicalRestingHR = await healthKitManager.fetchRHR(workoutDate: workoutDate)
+            async let maxHRTask = healthKitManager.fetchMaxHR(workoutDate: workoutDate)
+            async let rhrTask = healthKitManager.fetchRHR(workoutDate: workoutDate)
+            
+            historicalMaxHR = await maxHRTask
+            historicalRestingHR = await rhrTask
             historicalZoneProfile = customZoneProfile
 
         case .customSchema:
@@ -3297,10 +3328,17 @@ struct WorkoutDetailView: View {
 
         case .intelligent:
             let workoutDate = analytics.workout.startDate
-            let maxHR = await healthKitManager.fetchMaxHR(workoutDate: workoutDate)
-            let restingHR = await healthKitManager.fetchRHR(workoutDate: workoutDate)
             let schema = analytics.hrZoneProfile?.schema ?? healthKitManager.recommendedSchema(for: analytics.workout.workoutActivityType)
-            let lactateThresholdHR = await healthKitManager.fetchLTHR(workoutDate: workoutDate, maxHR: maxHR)
+            
+            async let maxHRTask = healthKitManager.fetchMaxHR(workoutDate: workoutDate)
+            async let restingHRTask = healthKitManager.fetchRHR(workoutDate: workoutDate)
+            
+            let maxHR = await maxHRTask
+            let restingHR = await restingHRTask
+            
+            async let lthrTask = healthKitManager.fetchLTHR(workoutDate: workoutDate, maxHR: maxHR)
+            let lactateThresholdHR = await lthrTask
+            
             let rebuiltProfile = await healthKitManager.createHRZoneProfile(
                 for: analytics.workout.workoutActivityType,
                 schema: schema,

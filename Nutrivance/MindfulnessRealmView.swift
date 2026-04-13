@@ -198,7 +198,7 @@ struct MindfulnessRealmView: View {
     }
 
     private func realmActionRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
-        DragCancellableTap(action: action) {
+        Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.title2)
@@ -222,6 +222,7 @@ struct MindfulnessRealmView: View {
             .padding(14)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        .buttonStyle(.plain)
     }
 
     private var sessionSection: some View {

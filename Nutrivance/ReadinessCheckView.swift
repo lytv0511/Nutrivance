@@ -330,13 +330,10 @@ struct ReadinessCheckView: View {
         snapshot = buildSnapshot()
         
         #if targetEnvironment(macCatalyst)
-        let buildSnapshotCopy = buildSnapshot
-        DispatchQueue.global(qos: .userInitiated).async {
+        // On Mac, snapshot is built from cached data (iPhone sync). 
+        // Don't block UI; sync in background.
+        DispatchQueue.global(qos: .background).async {
             NSUbiquitousKeyValueStore.default.synchronize()
-            DispatchQueue.main.async {
-                let newSnapshot = buildSnapshotCopy()
-                self.snapshot = newSnapshot
-            }
         }
         return
         #endif
@@ -741,10 +738,13 @@ private struct ReadinessOrb: View {
             }
         }
         .frame(width: 112, height: 112)
-        .onAppear {
+        .onChange(of: score) { oldValue, newValue in
             withAnimation(.spring(response: 1.1, dampingFraction: 0.82)) {
-                animatedScore = score
+                animatedScore = newValue
             }
+        }
+        .onAppear {
+            animatedScore = score
         }
     }
 }

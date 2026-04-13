@@ -504,12 +504,9 @@ struct StrainRecoveryView: View {
     @MainActor
     private func ensureHistoricalCoverageIfNeeded() async {
         #if targetEnvironment(macCatalyst)
-        let refreshMethod = refreshDataFromCloud
-        DispatchQueue.global(qos: .userInitiated).async {
+        // On Mac, data comes from iPhone sync. Don't block UI; sync in background.
+        DispatchQueue.global(qos: .background).async {
             NSUbiquitousKeyValueStore.default.synchronize()
-            DispatchQueue.main.async {
-                refreshMethod()
-            }
         }
         return
         #endif

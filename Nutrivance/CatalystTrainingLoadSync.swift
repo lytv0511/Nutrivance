@@ -57,49 +57,62 @@ final class CatalystTrainingLoadSyncStore: ObservableObject {
     private let cloud = NSUbiquitousKeyValueStore.default
     private var cancellable: AnyCancellable?
     private let localCacheKey = "nutrivance.catalystTrainingLoad.v2.local"
+    private var isLoadingFromCloud = false
 
     private init() {
-        loadFromCacheOrCloud()
+        // Load from local cache immediately (no blocking)
+        loadFromLocalCache()
+        
+        // Schedule cloud sync for background (non-blocking)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.syncCloudInBackground()
+        }
+        
+        // Listen for external changes (e.g., iPhone updates)
         cancellable = NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.reloadFromICloud()
+                self?.syncCloudInBackground()
             }
     }
 
-    private func loadFromCacheOrCloud() {
+    private func loadFromLocalCache() {
         #if targetEnvironment(macCatalyst)
-        if let localData = UserDefaults.standard.data(forKey: localCacheKey),
-           let decoded = try? CatalystTrainingLoadPayload.decoder.decode(CatalystTrainingLoadPayload.self, from: localData) {
-            payload = decoded
-        }
-        
-        cloud.synchronize()
-        if let cloudData = cloud.data(forKey: CatalystTrainingLoadPayload.iCloudKey),
-           let decoded = try? CatalystTrainingLoadPayload.decoder.decode(CatalystTrainingLoadPayload.self, from: cloudData) {
-            payload = decoded
-            if let encoded = try? CatalystTrainingLoadPayload.encoder.encode(decoded) {
-                UserDefaults.standard.set(encoded, forKey: localCacheKey)
-            }
-        }
-        #else
-        payload = nil
-        #endif
-    }
-
-    func reloadFromICloud() {
-        #if targetEnvironment(macCatalyst)
-        cloud.synchronize()
-        guard let data = cloud.data(forKey: CatalystTrainingLoadPayload.iCloudKey),
-              let decoded = try? CatalystTrainingLoadPayload.decoder.decode(CatalystTrainingLoadPayload.self, from: data) else {
+        guard let localData = UserDefaults.standard.data(forKey: localCacheKey),
+              let decoded = try? CatalystTrainingLoadPayload.decoder.decode(CatalystTrainingLoadPayload.self, from: localData) else {
             return
         }
         payload = decoded
-        if let encoded = try? CatalystTrainingLoadPayload.encoder.encode(decoded) {
-            UserDefaults.standard.set(encoded, forKey: localCacheKey)
+        #endif
+    }
+
+    private func syncCloudInBackground() {
+        #if targetEnvironment(macCatalyst)
+        guard !isLoadingFromCloud else { return }
+        isLoadingFromCloud = true
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            defer { self?.isLoadingFromCloud = false }
+            
+            self?.cloud.synchronize()
+            
+            guard let cloudData = self?.cloud.data(forKey: CatalystTrainingLoadPayload.iCloudKey),
+                  let decoded = try? CatalystTrainingLoadPayload.decoder.decode(CatalystTrainingLoadPayload.self, from: cloudData) else {
+                return
+            }
+            
+            // Update local cache
+            if let encoded = try? CatalystTrainingLoadPayload.encoder.encode(decoded) {
+                UserDefaults.standard.set(encoded, forKey: self?.localCacheKey ?? "")
+            }
+            
+            // Update payload on main thread
+            DispatchQueue.main.async {
+                if self?.payload != decoded {
+                    self?.payload = decoded
+                }
+            }
         }
-        #else
-        payload = nil
         #endif
     }
 
@@ -107,7 +120,11 @@ final class CatalystTrainingLoadSyncStore: ObservableObject {
     func commitPayload(_ newValue: CatalystTrainingLoadPayload) {
         guard let data = try? CatalystTrainingLoadPayload.encoder.encode(newValue) else { return }
         cloud.set(data, forKey: CatalystTrainingLoadPayload.iCloudKey)
-        cloud.synchronize()
+        
+        // Sync in background, don't block
+        DispatchQueue.global(qos: .background).async {
+            self.cloud.synchronize()
+        }
     }
     #endif
 }

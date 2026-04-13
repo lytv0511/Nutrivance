@@ -29,6 +29,19 @@ struct CloudCacheHelper {
     
     func loadCloudAsync<T: Decodable>(_ type: T.Type) async -> T? {
         await withCheckedContinuation { continuation in
+            // Try local first (no waiting)
+            if let localData = self.defaults.data(forKey: self.localKey),
+               let decoded = try? JSONDecoder().decode(type, from: localData) {
+                continuation.resume(returning: decoded)
+                
+                // Sync cloud in background for next load
+                DispatchQueue.global(qos: .background).async {
+                    self.cloud.synchronize()
+                }
+                return
+            }
+            
+            // Only block on cloud if local cache miss
             DispatchQueue.global(qos: .userInitiated).async {
                 self.cloud.synchronize()
                 if let cloudData = self.cloud.data(forKey: self.cloudKey),
@@ -59,7 +72,8 @@ extension UserDefaults {
     static func cacheLaunchDataIfMacCatalyst() {
         guard PlatformContext.isMacCatalyst else { return }
         
-        DispatchQueue.global(qos: .background).async {
+        // Defer to background to avoid blocking main thread on launch
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 1.0) {
             let cloud = NSUbiquitousKeyValueStore.default
             cloud.synchronize()
             

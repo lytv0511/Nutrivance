@@ -927,6 +927,8 @@ struct MetricStackDetailView: View {
     @State private var cardContainers: [UUID: CardContainer] = [:]
     @State private var draggingCardCenter: CGPoint? = nil
     @State private var draggingCardId: UUID? = nil
+    @State private var draggingFunctionBlockId: UUID? = nil
+    @State private var draggingFunctionBlockOffset: CGSize = .zero
     @State private var canvasScale: CGFloat = 1.0
     @State private var lastScrollOffset: CGPoint = .zero
     @State private var scrollOffset: CGPoint = .zero
@@ -938,6 +940,7 @@ struct MetricStackDetailView: View {
     @State private var tempFunctionConnectionEnd: CGPoint? = nil
     @State private var selectedFunctionBlockId: UUID? = nil
     @State private var hoveredDropTargetId: UUID? = nil
+    @State private var hoveredArrowTarget: (elementId: UUID, point: FunctionConnection.FunctionConnectionPoint)? = nil
     
     struct DraggingFunctionConnectionSource {
         var sourceId: UUID
@@ -1535,6 +1538,7 @@ struct MetricStackDetailView: View {
             tempFunctionConnectionEnd: $tempFunctionConnectionEnd,
             selectedFunctionBlockId: $selectedFunctionBlockId,
             hoveredDropTargetId: $hoveredDropTargetId,
+            hoveredArrowTarget: $hoveredArrowTarget,
             scale: $canvasScale,
             scrollOffset: $scrollOffset,
             cardsNotInContainers: cardsNotInContainers,
@@ -1568,7 +1572,8 @@ struct MetricStackDetailView: View {
             functionBlockInputPosition: functionBlockInputPosition,
             functionBlockOutputPosition: functionBlockOutputPosition,
             getSourceCardsForBlock: getSourceCardsForBlock,
-            sortedReports: sortedReports
+            sortedReports: sortedReports,
+            detectHoveredArrow: detectHoveredArrow
         )
         .overlay(alignment: .bottomTrailing) {
             zoomControls
@@ -1579,30 +1584,6 @@ struct MetricStackDetailView: View {
                 .padding()
         }
         .background(Color.black.opacity(0.3))
-    }
-    
-    private var functionBlockPalette: some View {
-        HStack(spacing: 8) {
-            ForEach(FunctionType.allCases, id: \.self) { funcType in
-                Button {
-                    let position = CGPoint(x: 1600, y: 500)
-                    createFunctionBlock(at: position, type: funcType)
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: funcType.icon)
-                            .font(.title3)
-                        Text(funcType.displayName)
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(snapshot.accent)
-                    .padding(8)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
     
     private var zoomControls: some View {
@@ -1646,6 +1627,26 @@ struct MetricStackDetailView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.regularMaterial, in: Capsule())
+    }
+    
+    private var functionBlockPalette: some View {
+        VStack(spacing: 8) {
+            ForEach([FunctionType.count, .avg, .sum, .max, .min], id: \.self) { type in
+                Button {
+                    createFunctionBlock(at: CGPoint(x: 1500, y: 800), type: type)
+                } label: {
+                    Text(type.displayName)
+                        .font(.caption)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(snapshot.accent.opacity(0.2))
+                        .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
     
     private func organizeCardsByMetric(_ sourceCardId: UUID) {
@@ -1933,29 +1934,32 @@ struct MetricStackDetailView: View {
             }
         case .functionBlock:
             guard let block = functionBlocks[elementId] else { return .zero }
-            let center = block.position
+            let blockWidth: CGFloat = 200
+            let blockHeight: CGFloat = 160
+            let arrowSpacing: CGFloat = 8
             switch point {
-            case .top: return CGPoint(x: center.x, y: block.position.y - 40)
-            case .bottom: return CGPoint(x: center.x, y: block.position.y + 80)
-            case .left: return CGPoint(x: block.position.x - 80, y: center.y)
-            case .right: return CGPoint(x: block.position.x + 80, y: center.y)
+            case .top: return CGPoint(x: block.position.x + blockWidth / 2, y: block.position.y - arrowSpacing)
+            case .bottom: return CGPoint(x: block.position.x + blockWidth / 2, y: block.position.y + blockHeight + arrowSpacing)
+            case .left: return CGPoint(x: block.position.x - arrowSpacing, y: block.position.y + blockHeight / 2)
+            case .right: return CGPoint(x: block.position.x + blockWidth + arrowSpacing, y: block.position.y + blockHeight / 2)
             }
         }
     }
     
     private func functionBlockInputPosition(for blockId: UUID) -> CGPoint {
         guard let block = functionBlocks[blockId] else { return .zero }
-        let blockWidth: CGFloat = 120
-        let blockHeight: CGFloat = 80
-        return CGPoint(x: block.position.x - blockWidth / 2, y: block.position.y)
+        let blockWidth: CGFloat = 200
+        let blockHeight: CGFloat = 160
+        let arrowSpacing: CGFloat = 8
+        return CGPoint(x: block.position.x - arrowSpacing, y: block.position.y + blockHeight / 2)
     }
     
     private func functionBlockOutputPosition(for blockId: UUID) -> CGPoint {
         guard let block = functionBlocks[blockId] else { return .zero }
-        let blockWidth: CGFloat = 120
-        let blockHeight: CGFloat = 80
-        let arrowOffset: CGFloat = 8
-        return CGPoint(x: block.position.x + blockWidth / 2 - arrowOffset, y: block.position.y)
+        let blockWidth: CGFloat = 200
+        let blockHeight: CGFloat = 160
+        let arrowSpacing: CGFloat = 8
+        return CGPoint(x: block.position.x + blockWidth + arrowSpacing, y: block.position.y + blockHeight / 2)
     }
     
     private func isPointInContainer(_ point: CGPoint, containerId: UUID) -> Bool {
@@ -1965,6 +1969,52 @@ struct MetricStackDetailView: View {
         let topLeft = CGPoint(x: container.position.x - containerWidth / 2, y: container.position.y - containerHeight / 2)
         let rect = CGRect(x: topLeft.x, y: topLeft.y, width: containerWidth, height: containerHeight)
         return rect.contains(point)
+    }
+    
+    private func detectHoveredArrow(_ point: CGPoint) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)? {
+        let threshold: CGFloat = 30
+        
+        for (blockId, block) in functionBlocks {
+            for connectionPoint in [FunctionConnection.FunctionConnectionPoint.left, .right, .top, .bottom] {
+                let arrowPos: CGPoint
+                switch connectionPoint {
+                case .left:
+                    arrowPos = CGPoint(x: block.position.x - 60 - 32, y: block.position.y)
+                case .right:
+                    arrowPos = CGPoint(x: block.position.x + 60 + 32, y: block.position.y)
+                case .top:
+                    arrowPos = CGPoint(x: block.position.x, y: block.position.y - 40 - 32)
+                case .bottom:
+                    arrowPos = CGPoint(x: block.position.x, y: block.position.y + 40 + 32)
+                }
+                let distance = sqrt(pow(point.x - arrowPos.x, 2) + pow(point.y - arrowPos.y, 2))
+                if distance < threshold {
+                    return (blockId, .functionBlock, connectionPoint)
+                }
+            }
+        }
+        
+        for (containerId, container) in cardContainers {
+            for connectionPoint in [FunctionConnection.FunctionConnectionPoint.left, .right, .top, .bottom] {
+                let arrowPos: CGPoint
+                switch connectionPoint {
+                case .left:
+                    arrowPos = CGPoint(x: container.position.x - 300 - 32, y: container.position.y)
+                case .right:
+                    arrowPos = CGPoint(x: container.position.x + 300 + 32, y: container.position.y)
+                case .top:
+                    arrowPos = CGPoint(x: container.position.x, y: container.position.y - 150 - 32)
+                case .bottom:
+                    arrowPos = CGPoint(x: container.position.x, y: container.position.y + 150 + 32)
+                }
+                let distance = sqrt(pow(point.x - arrowPos.x, 2) + pow(point.y - arrowPos.y, 2))
+                if distance < threshold {
+                    return (containerId, .container, connectionPoint)
+                }
+            }
+        }
+        
+        return nil
     }
 }
 
@@ -2532,6 +2582,7 @@ private struct ZoomableCanvasView: View {
     @Binding var tempFunctionConnectionEnd: CGPoint?
     @Binding var selectedFunctionBlockId: UUID?
     @Binding var hoveredDropTargetId: UUID?
+    @Binding var hoveredArrowTarget: (elementId: UUID, point: FunctionConnection.FunctionConnectionPoint)?
     @Binding var scale: CGFloat
     @Binding var scrollOffset: CGPoint
     
@@ -2565,6 +2616,7 @@ private struct ZoomableCanvasView: View {
     var functionBlockOutputPosition: (UUID) -> CGPoint
     var getSourceCardsForBlock: (UUID) -> [NutrivanceTuningReport]
     var sortedReports: [NutrivanceTuningReport]
+    var detectHoveredArrow: (CGPoint) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)?
     
     var body: some View {
         let canvasSize = computedCanvasSize
@@ -2594,6 +2646,7 @@ private struct ZoomableCanvasView: View {
                 tempFunctionConnectionEnd: $tempFunctionConnectionEnd,
                 selectedFunctionBlockId: $selectedFunctionBlockId,
                 hoveredDropTargetId: $hoveredDropTargetId,
+                hoveredArrowTarget: $hoveredArrowTarget,
                 scale: $scale,
                 cardsNotInContainers: cardsNotInContainers,
                 cardWidth: cardWidth,
@@ -2622,7 +2675,8 @@ private struct ZoomableCanvasView: View {
                 functionBlockInputPosition: functionBlockInputPosition,
                 functionBlockOutputPosition: functionBlockOutputPosition,
                 getSourceCardsForBlock: getSourceCardsForBlock,
-                sortedReports: sortedReports
+                sortedReports: sortedReports,
+                detectHoveredArrow: detectHoveredArrow
             )
             .onTapGesture {
                 onDeselectAll()
@@ -2827,6 +2881,7 @@ private struct ZoomableCanvasContent: View {
     @Binding var tempFunctionConnectionEnd: CGPoint?
     @Binding var selectedFunctionBlockId: UUID?
     @Binding var hoveredDropTargetId: UUID?
+    @Binding var hoveredArrowTarget: (elementId: UUID, point: FunctionConnection.FunctionConnectionPoint)?
     @Binding var scale: CGFloat
     
     let cardsNotInContainers: [NutrivanceTuningReport]
@@ -2857,10 +2912,55 @@ private struct ZoomableCanvasContent: View {
     var functionBlockOutputPosition: (UUID) -> CGPoint
     var getSourceCardsForBlock: (UUID) -> [NutrivanceTuningReport]
     var sortedReports: [NutrivanceTuningReport]
+    var detectHoveredArrow: (CGPoint) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)?
     
     @State private var originalPositions: [UUID: CGPoint] = [:]
+    @State private var draggingFunctionBlockId: UUID? = nil
+    @State private var draggingFunctionBlockOffset: CGSize = .zero
+    @State private var draggingContainerId: UUID? = nil
+    @State private var draggingContainerOffset: CGSize = .zero
     
     private let cardHeight: CGFloat = 280
+    
+    private func calculateArrowPosition(cardId: UUID, point: FunctionConnection.FunctionConnectionPoint, dragOffset: CGSize) -> CGPoint {
+        guard let cardPos = originalPositions[cardId] else { return .zero }
+        let livePos = CGPoint(x: cardPos.x + dragOffset.width, y: cardPos.y + dragOffset.height)
+        let center = CGPoint(x: livePos.x + cardWidth / 2, y: livePos.y + 140)
+        switch point {
+        case .top: return CGPoint(x: center.x, y: livePos.y)
+        case .bottom: return CGPoint(x: center.x, y: livePos.y + 280)
+        case .left: return CGPoint(x: livePos.x, y: center.y)
+        case .right: return CGPoint(x: livePos.x + cardWidth, y: center.y)
+        }
+    }
+    
+    private func calculateArrowPositionForFunctionBlock(blockId: UUID, point: FunctionConnection.FunctionConnectionPoint, dragOffset: CGSize) -> CGPoint {
+        guard let block = functionBlocks[blockId] else { return .zero }
+        let blockWidth: CGFloat = 200
+        let blockHeight: CGFloat = 160
+        let arrowSpacing: CGFloat = 8
+        let livePos = CGPoint(x: block.position.x + dragOffset.width, y: block.position.y + dragOffset.height)
+        switch point {
+        case .top: return CGPoint(x: livePos.x + blockWidth / 2, y: livePos.y - arrowSpacing)
+        case .bottom: return CGPoint(x: livePos.x + blockWidth / 2, y: livePos.y + blockHeight + arrowSpacing)
+        case .left: return CGPoint(x: livePos.x - arrowSpacing, y: livePos.y + blockHeight / 2)
+        case .right: return CGPoint(x: livePos.x + blockWidth + arrowSpacing, y: livePos.y + blockHeight / 2)
+        }
+    }
+    
+    private func calculateArrowPositionForContainer(containerId: UUID, point: FunctionConnection.FunctionConnectionPoint, dragOffset: CGSize) -> CGPoint {
+        guard let container = cardContainers[containerId] else { return .zero }
+        let containerWidth: CGFloat = 600
+        let containerHeight: CGFloat = 300
+        let arrowSpacing: CGFloat = 8
+        let livePos = CGPoint(x: container.position.x + dragOffset.width, y: container.position.y + dragOffset.height)
+        switch point {
+        case .top: return CGPoint(x: livePos.x, y: livePos.y - containerHeight / 2 - arrowSpacing)
+        case .bottom: return CGPoint(x: livePos.x, y: livePos.y + containerHeight / 2 + arrowSpacing)
+        case .left: return CGPoint(x: livePos.x - containerWidth / 2 - arrowSpacing, y: livePos.y)
+        case .right: return CGPoint(x: livePos.x + containerWidth / 2 + arrowSpacing, y: livePos.y)
+        }
+    }
     
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -2894,7 +2994,14 @@ private struct ZoomableCanvasContent: View {
                 functionBlockInputPosition: functionBlockInputPosition,
                 tempFunctionConnectionEnd: tempFunctionConnectionEnd,
                 draggingFunctionConnectionSource: draggingFunctionConnectionSource,
-                hoveredDropTargetId: hoveredDropTargetId
+                hoveredDropTargetId: hoveredDropTargetId,
+                draggingCardId: draggingCardId,
+                draggingCardCenter: draggingCardCenter,
+                cardWidth: cardWidth,
+                draggingFunctionBlockId: draggingFunctionBlockId,
+                draggingFunctionBlockOffset: draggingFunctionBlockOffset,
+                draggingContainerId: draggingContainerId,
+                draggingContainerOffset: draggingContainerOffset
             )
             .frame(width: computedCanvasWidth, height: computedCanvasHeight)
             .allowsHitTesting(false)
@@ -2915,8 +3022,26 @@ private struct ZoomableCanvasContent: View {
                     onDelete: {
                         onDeleteFunctionBlock(blockId)
                     },
+                    onDragChanged: { dragOffset in
+                        draggingFunctionBlockId = blockId
+                        draggingFunctionBlockOffset = dragOffset
+                        if draggingFunctionConnectionSource?.sourceId == blockId && draggingFunctionConnectionSource?.sourceType == .functionBlock {
+                            let liveStartPos = calculateArrowPositionForFunctionBlock(blockId: blockId, point: draggingFunctionConnectionSource!.connectionPoint, dragOffset: dragOffset)
+                            draggingFunctionConnectionSource = MetricStackDetailView.DraggingFunctionConnectionSource(
+                                sourceId: blockId,
+                                sourceType: .functionBlock,
+                                connectionPoint: draggingFunctionConnectionSource!.connectionPoint,
+                                startPosition: liveStartPos
+                            )
+                            tempFunctionConnectionEnd = liveStartPos
+                        }
+                    },
+                    onDragEnded: {
+                        draggingFunctionBlockId = nil
+                        draggingFunctionBlockOffset = .zero
+                    },
                     onStartFunctionConnection: { connectionPoint in
-                        let startPos = functionBlockOutputPosition(blockId)
+                        let startPos = connectionStartPosition(blockId, .functionBlock, connectionPoint)
                         draggingFunctionConnectionSource = MetricStackDetailView.DraggingFunctionConnectionSource(
                             sourceId: blockId,
                             sourceType: .functionBlock,
@@ -3013,6 +3138,17 @@ private struct ZoomableCanvasContent: View {
                         draggingCardId = report.id
                         draggingCardCenter = cardCenter
                         
+                        if draggingFunctionConnectionSource?.sourceId == report.id && draggingFunctionConnectionSource?.sourceType == .card {
+                            let liveStartPos = calculateArrowPosition(cardId: report.id, point: draggingFunctionConnectionSource!.connectionPoint, dragOffset: dragOffset)
+                            draggingFunctionConnectionSource = MetricStackDetailView.DraggingFunctionConnectionSource(
+                                sourceId: report.id,
+                                sourceType: .card,
+                                connectionPoint: draggingFunctionConnectionSource!.connectionPoint,
+                                startPosition: liveStartPos
+                            )
+                            tempFunctionConnectionEnd = liveStartPos
+                        }
+                        
                         let otherSelectedIds = selectedCardIds.filter { $0 != report.id }
                         for otherId in otherSelectedIds {
                             if let originalPos = originalPositions[otherId] {
@@ -3050,54 +3186,33 @@ private struct ZoomableCanvasContent: View {
                         )
                         tempFunctionConnectionEnd = startPos
                     },
-                    onFunctionConnectionDrop: { localPosition in
-                        // The localPosition is already in canvas coordinates (arrow is in a frame starting at card's top-left)
-                        let canvasPosition = localPosition
-                        
-                        // Check function blocks first
-                        for (blockId, _) in functionBlocks {
-                            let inputPos = functionBlockInputPosition(blockId)
-                            let distance = sqrt(pow(canvasPosition.x - inputPos.x, 2) + pow(canvasPosition.y - inputPos.y, 2))
-                            if distance < 50 {
-                                onConnectToFunctionBlock(report.id, .card, blockId, .left)
-                                draggingFunctionConnectionSource = nil
-                                tempFunctionConnectionEnd = nil
-                                hoveredDropTargetId = nil
-                                return
+                    onFunctionConnectionDrop: { position in
+                        if let hovered = detectHoveredArrow(position) {
+                            if hovered.elementType == .functionBlock {
+                                onConnectToFunctionBlock(report.id, .card, hovered.elementId, hovered.point)
                             }
+                            draggingFunctionConnectionSource = nil
+                            tempFunctionConnectionEnd = nil
+                            hoveredDropTargetId = nil
+                            return
                         }
-                        
-                        // Check containers
-                        for (containerId, _) in cardContainers {
-                            if isPointInContainer(canvasPosition, containerId: containerId) {
-                                onConnectToFunctionBlock(report.id, .card, containerId, .left)
-                                draggingFunctionConnectionSource = nil
-                                tempFunctionConnectionEnd = nil
-                                hoveredDropTargetId = nil
-                                return
-                            }
-                        }
-                        
                         draggingFunctionConnectionSource = nil
                         tempFunctionConnectionEnd = nil
                         hoveredDropTargetId = nil
                     },
-                    onFunctionConnectionDragChanged: { localPosition in
-                        // The localPosition is already in canvas coordinates
-                        tempFunctionConnectionEnd = localPosition
+                    onFunctionConnectionDragChanged: { position in
+                        tempFunctionConnectionEnd = position
                         
-                        // Update hovered target
-                        var newHoveredId: UUID? = nil
-                        for (blockId, _) in functionBlocks {
-                            let inputPos = functionBlockInputPosition(blockId)
-                            let distance = sqrt(pow(localPosition.x - inputPos.x, 2) + pow(localPosition.y - inputPos.y, 2))
-                            if distance < 50 {
-                                newHoveredId = blockId
-                                break
-                            }
+                        if let hovered = detectHoveredArrow(position) {
+                            hoveredDropTargetId = hovered.elementId
+                            hoveredArrowTarget = (hovered.elementId, hovered.point)
+                        } else {
+                            hoveredDropTargetId = nil
+                            hoveredArrowTarget = nil
                         }
-                        hoveredDropTargetId = newHoveredId
-                    }
+                    },
+                    isFunctionConnectionDraggingFromThisCard: draggingFunctionConnectionSource?.sourceId == report.id && draggingFunctionConnectionSource?.sourceType == .card,
+                    hoveredArrowTarget: hoveredArrowTarget?.0 == report.id ? hoveredArrowTarget : nil
                 )
                 .zIndex(isSelected ? 1000 : Double(zOrder))
             }
@@ -3160,35 +3275,51 @@ private struct ZoomableCanvasContent: View {
                         tempFunctionConnectionEnd = startPos
                     },
                     onFunctionConnectionDrop: { position in
-                        for (blockId, _) in functionBlocks {
-                            let inputPos = functionBlockInputPosition(blockId)
-                            let distance = sqrt(pow(position.x - inputPos.x, 2) + pow(position.y - inputPos.y, 2))
-                            if distance < 50 {
-                                onConnectToFunctionBlock(container.id, .container, blockId, .left)
-                                draggingFunctionConnectionSource = nil
-                                tempFunctionConnectionEnd = nil
-                                hoveredDropTargetId = nil
-                                return
+                        if let hovered = detectHoveredArrow(position) {
+                            if hovered.elementType == .functionBlock {
+                                onConnectToFunctionBlock(container.id, .container, hovered.elementId, hovered.point)
                             }
+                            draggingFunctionConnectionSource = nil
+                            tempFunctionConnectionEnd = nil
+                            hoveredDropTargetId = nil
+                            hoveredArrowTarget = nil
+                            return
                         }
                         draggingFunctionConnectionSource = nil
                         tempFunctionConnectionEnd = nil
                         hoveredDropTargetId = nil
+                        hoveredArrowTarget = nil
                     },
                     onFunctionConnectionDragChanged: { position in
                         tempFunctionConnectionEnd = position
                         
-                        // Update hovered target
-                        var newHoveredId: UUID? = nil
-                        for (blockId, _) in functionBlocks {
-                            let inputPos = functionBlockInputPosition(blockId)
-                            let distance = sqrt(pow(position.x - inputPos.x, 2) + pow(position.y - inputPos.y, 2))
-                            if distance < 50 {
-                                newHoveredId = blockId
-                                break
-                            }
+                        if let hovered = detectHoveredArrow(position) {
+                            hoveredDropTargetId = hovered.elementId
+                            hoveredArrowTarget = (hovered.elementId, hovered.point)
+                        } else {
+                            hoveredDropTargetId = nil
+                            hoveredArrowTarget = nil
                         }
-                        hoveredDropTargetId = newHoveredId
+                    },
+                    isFunctionConnectionDraggingFromThisContainer: draggingFunctionConnectionSource?.sourceId == container.id && draggingFunctionConnectionSource?.sourceType == .container,
+                    hoveredArrowTarget: hoveredArrowTarget?.0 == container.id ? hoveredArrowTarget : nil,
+                    onDragChanged: { dragOffset in
+                        draggingContainerId = container.id
+                        draggingContainerOffset = dragOffset
+                        if draggingFunctionConnectionSource?.sourceId == container.id && draggingFunctionConnectionSource?.sourceType == .container {
+                            let liveStartPos = calculateArrowPositionForContainer(containerId: container.id, point: draggingFunctionConnectionSource!.connectionPoint, dragOffset: dragOffset)
+                            draggingFunctionConnectionSource = MetricStackDetailView.DraggingFunctionConnectionSource(
+                                sourceId: container.id,
+                                sourceType: .container,
+                                connectionPoint: draggingFunctionConnectionSource!.connectionPoint,
+                                startPosition: liveStartPos
+                            )
+                            tempFunctionConnectionEnd = liveStartPos
+                        }
+                    },
+                    onDragEnded: {
+                        draggingContainerId = nil
+                        draggingContainerOffset = .zero
                     }
                 )
                 .zIndex(50)
@@ -3219,25 +3350,25 @@ private struct ZoomableCanvasContent: View {
     }
     
     private func connectionStartPositionForCard(position: CGPoint, point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
-        let arrowOffset: CGFloat = 8
+        let arrowSpacing: CGFloat = 8
         let centerY = position.y + 140
         switch point {
-        case .top: return CGPoint(x: position.x + cardWidth / 2, y: position.y + arrowOffset)
-        case .bottom: return CGPoint(x: position.x + cardWidth / 2, y: position.y + 280 - arrowOffset)
-        case .left: return CGPoint(x: position.x + arrowOffset, y: centerY)
-        case .right: return CGPoint(x: position.x + cardWidth - arrowOffset, y: centerY)
+        case .top: return CGPoint(x: position.x + cardWidth / 2, y: position.y - arrowSpacing)
+        case .bottom: return CGPoint(x: position.x + cardWidth / 2, y: position.y + 280 + arrowSpacing)
+        case .left: return CGPoint(x: position.x - arrowSpacing, y: centerY)
+        case .right: return CGPoint(x: position.x + cardWidth + arrowSpacing, y: centerY)
         }
     }
     
     private func containerPositionForConnection(position: CGPoint, point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
         let containerWidth: CGFloat = 600
         let containerHeight: CGFloat = 300
-        let arrowOffset: CGFloat = 8
+        let arrowSpacing: CGFloat = 8
         switch point {
-        case .top: return CGPoint(x: position.x, y: position.y - containerHeight / 2 - arrowOffset)
-        case .bottom: return CGPoint(x: position.x, y: position.y + containerHeight / 2 + arrowOffset)
-        case .left: return CGPoint(x: position.x - containerWidth / 2 - arrowOffset, y: position.y)
-        case .right: return CGPoint(x: position.x + containerWidth / 2 + arrowOffset, y: position.y)
+        case .top: return CGPoint(x: position.x, y: position.y - containerHeight / 2 - arrowSpacing)
+        case .bottom: return CGPoint(x: position.x, y: position.y + containerHeight / 2 + arrowSpacing)
+        case .left: return CGPoint(x: position.x - containerWidth / 2 - arrowSpacing, y: position.y)
+        case .right: return CGPoint(x: position.x + containerWidth / 2 + arrowSpacing, y: position.y)
         }
     }
     
@@ -3248,6 +3379,31 @@ private struct ZoomableCanvasContent: View {
         let topLeft = CGPoint(x: container.position.x - containerWidth / 2, y: container.position.y - containerHeight / 2)
         let rect = CGRect(x: topLeft.x, y: topLeft.y, width: containerWidth, height: containerHeight)
         return rect.contains(point)
+    }
+    
+    private func getCardArrowPosition(_ cardId: UUID, _ point: FunctionConnection.FunctionConnectionPoint) -> CGPoint? {
+        guard let pos = cardPositions[cardId] else { return nil }
+        let arrowSpacing: CGFloat = 8
+        let centerY = pos.y + 140
+        switch point {
+        case .top: return CGPoint(x: pos.x + cardWidth / 2, y: pos.y - arrowSpacing)
+        case .bottom: return CGPoint(x: pos.x + cardWidth / 2, y: pos.y + 280 + arrowSpacing)
+        case .left: return CGPoint(x: pos.x - arrowSpacing, y: centerY)
+        case .right: return CGPoint(x: pos.x + cardWidth + arrowSpacing, y: centerY)
+        }
+    }
+    
+    private func getContainerArrowPosition(_ containerId: UUID, _ point: FunctionConnection.FunctionConnectionPoint) -> CGPoint? {
+        guard let container = cardContainers[containerId] else { return nil }
+        let containerWidth: CGFloat = 600
+        let containerHeight: CGFloat = 300
+        let arrowSpacing: CGFloat = 8
+        switch point {
+        case .top: return CGPoint(x: container.position.x, y: container.position.y - containerHeight / 2 - arrowSpacing)
+        case .bottom: return CGPoint(x: container.position.x, y: container.position.y + containerHeight / 2 + arrowSpacing)
+        case .left: return CGPoint(x: container.position.x - containerWidth / 2 - arrowSpacing, y: container.position.y)
+        case .right: return CGPoint(x: container.position.x + containerWidth / 2 + arrowSpacing, y: container.position.y)
+        }
     }
 }
 
@@ -3261,6 +3417,13 @@ struct FunctionConnectionLinesView: View {
     let tempFunctionConnectionEnd: CGPoint?
     let draggingFunctionConnectionSource: MetricStackDetailView.DraggingFunctionConnectionSource?
     let hoveredDropTargetId: UUID?
+    let draggingCardId: UUID?
+    let draggingCardCenter: CGPoint?
+    let cardWidth: CGFloat
+    let draggingFunctionBlockId: UUID?
+    let draggingFunctionBlockOffset: CGSize
+    let draggingContainerId: UUID?
+    let draggingContainerOffset: CGSize
     
     var body: some View {
         Canvas { context, size in
@@ -3324,10 +3487,61 @@ struct FunctionConnectionLinesView: View {
     }
     
     private func getStartPosition(for connection: FunctionConnection) -> CGPoint {
+        if connection.sourceType == .card, connection.sourceId == draggingCardId, let liveCenter = draggingCardCenter {
+            let livePos = CGPoint(x: liveCenter.x - cardWidth / 2, y: liveCenter.y - 140)
+            let center = liveCenter
+            switch connection.connectionPoint {
+            case .top: return CGPoint(x: center.x, y: livePos.y)
+            case .bottom: return CGPoint(x: center.x, y: livePos.y + 280)
+            case .left: return CGPoint(x: livePos.x, y: center.y)
+            case .right: return CGPoint(x: livePos.x + cardWidth, y: center.y)
+            }
+        }
+        if connection.sourceType == .functionBlock, connection.sourceId == draggingFunctionBlockId, let block = functionBlocks[connection.sourceId] {
+            let blockWidth: CGFloat = 200
+            let blockHeight: CGFloat = 160
+            let arrowSpacing: CGFloat = 8
+            let livePos = CGPoint(x: block.position.x + draggingFunctionBlockOffset.width, y: block.position.y + draggingFunctionBlockOffset.height)
+            switch connection.connectionPoint {
+            case .top: return CGPoint(x: livePos.x + blockWidth / 2, y: livePos.y - arrowSpacing)
+            case .bottom: return CGPoint(x: livePos.x + blockWidth / 2, y: livePos.y + blockHeight + arrowSpacing)
+            case .left: return CGPoint(x: livePos.x - arrowSpacing, y: livePos.y + blockHeight / 2)
+            case .right: return CGPoint(x: livePos.x + blockWidth + arrowSpacing, y: livePos.y + blockHeight / 2)
+            }
+        }
+        if connection.sourceType == .container, connection.sourceId == draggingContainerId, let container = cardContainers[connection.sourceId] {
+            let containerWidth: CGFloat = 600
+            let containerHeight: CGFloat = 300
+            let arrowSpacing: CGFloat = 8
+            let livePos = CGPoint(x: container.position.x + draggingContainerOffset.width, y: container.position.y + draggingContainerOffset.height)
+            switch connection.connectionPoint {
+            case .top: return CGPoint(x: livePos.x, y: livePos.y - containerHeight / 2 - arrowSpacing)
+            case .bottom: return CGPoint(x: livePos.x, y: livePos.y + containerHeight / 2 + arrowSpacing)
+            case .left: return CGPoint(x: livePos.x - containerWidth / 2 - arrowSpacing, y: livePos.y)
+            case .right: return CGPoint(x: livePos.x + containerWidth / 2 + arrowSpacing, y: livePos.y)
+            }
+        }
         return connectionStartPosition(connection.sourceId, connection.sourceType, connection.connectionPoint)
     }
     
     private func getEndPosition(for connection: FunctionConnection) -> CGPoint {
+        if connection.targetType == .card, connection.targetId == draggingCardId, let liveCenter = draggingCardCenter {
+            return CGPoint(x: liveCenter.x, y: liveCenter.y)
+        }
+        if connection.targetType == .functionBlock, connection.targetId == draggingFunctionBlockId, let block = functionBlocks[connection.targetId] {
+            let blockWidth: CGFloat = 200
+            let blockHeight: CGFloat = 160
+            let arrowSpacing: CGFloat = 8
+            let livePos = CGPoint(x: block.position.x + draggingFunctionBlockOffset.width, y: block.position.y + draggingFunctionBlockOffset.height)
+            return CGPoint(x: livePos.x - arrowSpacing, y: livePos.y + blockHeight / 2)
+        }
+        if connection.targetType == .container, connection.targetId == draggingContainerId, let container = cardContainers[connection.targetId] {
+            let containerWidth: CGFloat = 600
+            let containerHeight: CGFloat = 300
+            let arrowSpacing: CGFloat = 8
+            let livePos = CGPoint(x: container.position.x + draggingContainerOffset.width, y: container.position.y + draggingContainerOffset.height)
+            return CGPoint(x: livePos.x - containerWidth / 2 - arrowSpacing, y: livePos.y)
+        }
         switch connection.targetType {
         case .functionBlock:
             return functionBlockInputPosition(connection.targetId)
@@ -3353,6 +3567,8 @@ struct FunctionBlockView: View {
     var onPositionChanged: (CGPoint) -> Void
     var onSelect: () -> Void
     var onDelete: () -> Void
+    var onDragChanged: ((CGSize) -> Void)?
+    var onDragEnded: (() -> Void)?
     var onStartFunctionConnection: (FunctionConnection.FunctionConnectionPoint) -> Void
     var onFunctionConnectionDrop: (CGPoint) -> Void
     var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
@@ -3365,8 +3581,8 @@ struct FunctionBlockView: View {
     @GestureState private var connectionDragOffset: CGSize = .zero
     @State private var tempFunctionConnectionEnd: CGPoint? = nil
     
-    private let blockWidth: CGFloat = 120
-    private let blockHeight: CGFloat = 80
+    private let blockWidth: CGFloat = 200
+    private let blockHeight: CGFloat = 160
     
     var body: some View {
         ZStack {
@@ -3410,83 +3626,91 @@ struct FunctionBlockView: View {
             }
             
             HStack {
-                FunctionConnectionArrow(position: .left, onDragChanged: { offset in
-                    tempFunctionConnectionEnd = CGPoint(
-                        x: block.position.x - blockWidth / 2 + 8 + offset.width,
-                        y: block.position.y + offset.height
-                    )
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDragChanged?(end)
-                    }
-                }, onDragEnded: { _ in
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDrop(end)
-                    }
-                    tempFunctionConnectionEnd = nil
-                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                    onStartFunctionConnection(.left)
-                })
-                .frame(width: 16, height: 16)
+                if isSelected {
+                    FunctionConnectionArrow(position: .left, onDragChanged: { offset in
+                        tempFunctionConnectionEnd = CGPoint(
+                            x: block.position.x - 8 + offset.width,
+                            y: block.position.y + blockHeight / 2 + offset.height
+                        )
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDragChanged?(end)
+                        }
+                    }, onDragEnded: { _ in
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDrop(end)
+                        }
+                        tempFunctionConnectionEnd = nil
+                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                        onStartFunctionConnection(.left)
+                    })
+                    .frame(width: 28, height: 28)
+                }
                 
                 Spacer()
                 
-                FunctionConnectionArrow(position: .right, onDragChanged: { offset in
-                    tempFunctionConnectionEnd = CGPoint(
-                        x: block.position.x + blockWidth / 2 - 8 + offset.width,
-                        y: block.position.y + offset.height
-                    )
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDragChanged?(end)
-                    }
-                }, onDragEnded: { _ in
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDrop(end)
-                    }
-                    tempFunctionConnectionEnd = nil
-                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                    onStartFunctionConnection(.right)
-                })
-                .frame(width: 16, height: 16)
+                if isSelected {
+                    FunctionConnectionArrow(position: .right, onDragChanged: { offset in
+                        tempFunctionConnectionEnd = CGPoint(
+                            x: block.position.x + blockWidth + 8 + offset.width,
+                            y: block.position.y + blockHeight / 2 + offset.height
+                        )
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDragChanged?(end)
+                        }
+                    }, onDragEnded: { _ in
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDrop(end)
+                        }
+                        tempFunctionConnectionEnd = nil
+                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                        onStartFunctionConnection(.right)
+                    })
+                    .frame(width: 28, height: 28)
+                }
             }
             
             VStack {
-                FunctionConnectionArrow(position: .top, onDragChanged: { offset in
-                    tempFunctionConnectionEnd = CGPoint(
-                        x: block.position.x + offset.width,
-                        y: block.position.y - blockHeight / 2 + 8 + offset.height
-                    )
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDragChanged?(end)
-                    }
-                }, onDragEnded: { _ in
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDrop(end)
-                    }
-                    tempFunctionConnectionEnd = nil
-                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                    onStartFunctionConnection(.top)
-                })
-                .frame(width: 16, height: 16)
+                if isSelected {
+                    FunctionConnectionArrow(position: .top, onDragChanged: { offset in
+                        tempFunctionConnectionEnd = CGPoint(
+                            x: block.position.x + blockWidth / 2 + offset.width,
+                            y: block.position.y - 8 + offset.height
+                        )
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDragChanged?(end)
+                        }
+                    }, onDragEnded: { _ in
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDrop(end)
+                        }
+                        tempFunctionConnectionEnd = nil
+                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                        onStartFunctionConnection(.top)
+                    })
+                    .frame(width: 28, height: 28)
+                }
                 
                 Spacer()
                 
-                FunctionConnectionArrow(position: .bottom, onDragChanged: { offset in
-                    tempFunctionConnectionEnd = CGPoint(
-                        x: block.position.x + offset.width,
-                        y: block.position.y + blockHeight / 2 - 8 + offset.height
-                    )
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDragChanged?(end)
-                    }
-                }, onDragEnded: { _ in
-                    if let end = tempFunctionConnectionEnd {
-                        onFunctionConnectionDrop(end)
-                    }
-                    tempFunctionConnectionEnd = nil
-                }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                    onStartFunctionConnection(.bottom)
-                })
-                .frame(width: 16, height: 16)
+                if isSelected {
+                    FunctionConnectionArrow(position: .bottom, onDragChanged: { offset in
+                        tempFunctionConnectionEnd = CGPoint(
+                            x: block.position.x + blockWidth / 2 + offset.width,
+                            y: block.position.y + blockHeight + 8 + offset.height
+                        )
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDragChanged?(end)
+                        }
+                    }, onDragEnded: { _ in
+                        if let end = tempFunctionConnectionEnd {
+                            onFunctionConnectionDrop(end)
+                        }
+                        tempFunctionConnectionEnd = nil
+                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
+                        onStartFunctionConnection(.bottom)
+                    })
+                    .frame(width: 28, height: 28)
+                }
             }
         }
         .frame(width: blockWidth, height: blockHeight)
@@ -3506,6 +3730,7 @@ struct FunctionBlockView: View {
                 .onChanged { value in
                     isDragging = true
                     dragOffset = value.translation
+                    onDragChanged?(value.translation)
                 }
                 .onEnded { value in
                     let newPosition = CGPoint(
@@ -3515,6 +3740,7 @@ struct FunctionBlockView: View {
                     onPositionChanged(newPosition)
                     dragOffset = .zero
                     isDragging = false
+                    onDragEnded?()
                 }
         )
         .onTapGesture {
@@ -3543,6 +3769,7 @@ struct FunctionConnectionArrow: View {
     let onDragChanged: (CGSize) -> Void
     let onDragEnded: (CGSize) -> Void
     let isActive: Bool
+    var isHovered: Bool = false
     var onDragStarted: (() -> Void)?
     
     @State private var hasDragStarted: Bool = false
@@ -3556,17 +3783,32 @@ struct FunctionConnectionArrow: View {
         }
     }
     
+    private var isHighlighted: Bool {
+        hasDragStarted || isActive || isHovered
+    }
+    
+    private var circleColor: Color {
+        if hasDragStarted || isActive {
+            return .orange
+        } else if isHovered {
+            return .green
+        } else {
+            return .cyan.opacity(0.5)
+        }
+    }
+    
     var body: some View {
         ZStack {
             Circle()
-                .fill(hasDragStarted || isActive ? Color.orange : Color.cyan.opacity(0.5))
-                .frame(width: 16, height: 16)
+                .fill(circleColor)
+                .frame(width: isHighlighted ? 28 : 20, height: isHighlighted ? 28 : 20)
             
             Image(systemName: "arrow.right")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: isHighlighted ? 12 : 10, weight: .bold))
                 .foregroundStyle(.white)
                 .rotationEffect(arrowRotation)
         }
+        .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isHighlighted)
         .gesture(
             DragGesture()
                 .onChanged { value in
@@ -3581,6 +3823,139 @@ struct FunctionConnectionArrow: View {
                     hasDragStarted = false
                 }
         )
+    }
+}
+
+private struct ContainerFunctionConnectionArrowsOverlay: View {
+    let containerWidth: CGFloat
+    let containerHeight: CGFloat
+    let accent: Color
+    var isDraggingFromThisContainer: Bool = false
+    var draggingPoint: FunctionConnection.FunctionConnectionPoint?
+    var hoveredPoint: FunctionConnection.FunctionConnectionPoint?
+    var onStartFunctionConnection: ((FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void)?
+    var onFunctionConnectionDrop: ((CGPoint) -> Void)?
+    var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
+    
+    private let arrowSpacing: CGFloat = 32
+    
+    @State private var currentDragPosition: CGPoint?
+    
+    private func arrowBasePosition(for point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
+        let centerX = containerWidth / 2
+        let centerY = containerHeight / 2
+        
+        switch point {
+        case .top:
+            return CGPoint(x: centerX, y: -arrowSpacing)
+        case .bottom:
+            return CGPoint(x: centerX, y: containerHeight + arrowSpacing)
+        case .left:
+            return CGPoint(x: -arrowSpacing, y: centerY)
+        case .right:
+            return CGPoint(x: containerWidth + arrowSpacing, y: centerY)
+        }
+    }
+    
+    private func arrowPosition(for point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
+        arrowBasePosition(for: point)
+    }
+    
+    var body: some View {
+        ZStack {
+            FunctionConnectionArrow(
+                position: .top,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .top)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisContainer && draggingPoint == .top,
+                isHovered: hoveredPoint == .top,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .top)
+                    onStartFunctionConnection?(.top, startPos)
+                }
+            )
+            .position(arrowPosition(for: .top))
+            
+            FunctionConnectionArrow(
+                position: .bottom,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .bottom)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisContainer && draggingPoint == .bottom,
+                isHovered: hoveredPoint == .bottom,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .bottom)
+                    onStartFunctionConnection?(.bottom, startPos)
+                }
+            )
+            .position(arrowPosition(for: .bottom))
+            
+            FunctionConnectionArrow(
+                position: .left,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .left)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisContainer && draggingPoint == .left,
+                isHovered: hoveredPoint == .left,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .left)
+                    onStartFunctionConnection?(.left, startPos)
+                }
+            )
+            .position(arrowPosition(for: .left))
+            
+            FunctionConnectionArrow(
+                position: .right,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .right)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisContainer && draggingPoint == .right,
+                isHovered: hoveredPoint == .right,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .right)
+                    onStartFunctionConnection?(.right, startPos)
+                }
+            )
+            .position(arrowPosition(for: .right))
+        }
+        .frame(width: containerWidth, height: containerHeight)
     }
 }
 
@@ -3671,405 +4046,217 @@ private struct SelectableLabPaperCard: View {
     var onStartFunctionConnection: ((FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void)?
     var onFunctionConnectionDrop: ((CGPoint) -> Void)?
     var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
-
-    @GestureState private var dragTranslation: CGSize = .zero
-    @State private var isDragging: Bool = false
-    @State private var isLongPressing: Bool = false
-
+    var isFunctionConnectionDraggingFromThisCard: Bool = false
+    var hoveredArrowTarget: (UUID, FunctionConnection.FunctionConnectionPoint)? = nil
+    
+    @Namespace private var cardNamespace
+    
     private let cardHeight: CGFloat = 280
-
-    private var effectiveScale: CGFloat {
-        isDragging ? 1.08 : (isLongPressing ? 1.02 : 1.0)
-    }
-
-    private var resolvedPosition: CGPoint {
-        CGPoint(
-            x: position.x + dragTranslation.width,
-            y: position.y + dragTranslation.height
-        )
-    }
-
-    private var cardDrag: some Gesture {
-        DragGesture()
-            .onChanged { value in
-                if !isDragging {
-                    isDragging = true
-                    if !isSelected {
-                        withAnimation(.easeInOut(duration: 0.1)) {
-                            isLongPressing = true
-                        }
-                        onLongPress?()
-                    }
-                }
-                let currentPos = CGPoint(
-                    x: position.x + value.translation.width,
-                    y: position.y + value.translation.height
-                )
-                onDragChanged?(currentPos, value.translation)
-            }
-            .updating($dragTranslation) { value, state, _ in
-                state = value.translation
-            }
-            .onEnded { value in
-                let finalPosition = CGPoint(
-                    x: position.x + value.translation.width,
-                    y: position.y + value.translation.height
-                )
-                onDragChanged?(finalPosition, value.translation)
-                onDragEnded(finalPosition, value.translation)
-                isDragging = false
-                isLongPressing = false
-            }
-    }
-
-    var body: some View {
+    
+    @State private var dragOffset: CGSize = .zero
+    @State private var isDragging: Bool = false
+    
+    private var cardBody: some View {
         ZStack {
             MetricStackReportCardContent(
                 report: report,
                 metric: metric,
                 accent: accent,
                 colorScheme: colorScheme,
-                cardWidth: cardWidth
+                cardWidth: cardWidth,
+                cardHeight: cardHeight
             )
             
-            if showFunctionConnectionArrows && isSelected {
-                FunctionConnectionArrowsOverlay(
+            if showFunctionConnectionArrows {
+                CardFunctionConnectionArrowsOverlay(
                     cardWidth: cardWidth,
                     cardHeight: cardHeight,
-                    cardPosition: resolvedPosition,
                     accent: accent,
+                    isDraggingFromThisCard: isFunctionConnectionDraggingFromThisCard,
+                    hoveredPoint: hoveredArrowTarget?.1,
                     onStartFunctionConnection: { point, startPos in
-                        onStartFunctionConnection?(point, startPos)
+                        let absoluteStartPos = CGPoint(x: position.x + startPos.x, y: position.y + startPos.y)
+                        onStartFunctionConnection?(point, absoluteStartPos)
                     },
-                    onFunctionConnectionDrop: { position in
-                        onFunctionConnectionDrop?(position)
+                    onFunctionConnectionDrop: { localPosition in
+                        let absolutePos = CGPoint(x: position.x + localPosition.x, y: position.y + localPosition.y)
+                        onFunctionConnectionDrop?(absolutePos)
                     },
-                    onFunctionConnectionDragChanged: { position in
-                        onFunctionConnectionDragChanged?(position)
+                    onFunctionConnectionDragChanged: { localPosition in
+                        let absolutePos = CGPoint(x: position.x + localPosition.x, y: position.y + localPosition.y)
+                        onFunctionConnectionDragChanged?(absolutePos)
                     }
                 )
-            }
-        }
-        .scaleEffect(effectiveScale)
-        .shadow(
-            color: isSelected ? accent.opacity(0.6) : Color.black.opacity(isDragging ? 0.4 : 0.2),
-            radius: isDragging ? 24 : (isSelected ? 16 : 10),
-            x: 0,
-            y: isDragging ? 18 : (isSelected ? 10 : 5)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isSelected ? accent : Color.clear, lineWidth: isSelected ? 3 : 0)
-        )
-        .position(
-            x: resolvedPosition.x + cardWidth / 2,
-            y: resolvedPosition.y + 140
-        )
-        .gesture(cardDrag)
-        .onTapGesture(count: 2) {
-            onDoubleTap()
-        }
-        .onTapGesture {
-            if !isDragging {
-                onTap()
-            }
-        }
-    }
-}
-
-struct FunctionConnectionArrowsOverlay: View {
-    let cardWidth: CGFloat
-    let cardHeight: CGFloat
-    let cardPosition: CGPoint
-    let accent: Color
-    let onStartFunctionConnection: (FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void
-    let onFunctionConnectionDrop: (CGPoint) -> Void
-    let onFunctionConnectionDragChanged: (CGPoint) -> Void
-    
-    private let arrowSize: CGFloat = 16
-    private let arrowOffset: CGFloat = 8
-    
-    var body: some View {
-        ZStack {
-            HStack {
-                CardFunctionConnectionArrow(
-                    isActive: false,
-                    onDragChanged: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + arrowOffset, y: cardPosition.y + cardHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + arrowOffset, y: cardPosition.y + cardHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: cardPosition.x + arrowOffset, y: cardPosition.y + cardHeight / 2)
-                        onStartFunctionConnection(.left, startPos)
-                    }
-                )
-                .frame(width: arrowSize, height: arrowSize)
-                
-                Spacer()
-                
-                CardFunctionConnectionArrow(
-                    isActive: false,
-                    onDragChanged: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth - arrowOffset, y: cardPosition.y + cardHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth - arrowOffset, y: cardPosition.y + cardHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth - arrowOffset, y: cardPosition.y + cardHeight / 2)
-                        onStartFunctionConnection(.right, startPos)
-                    }
-                )
-                .frame(width: arrowSize, height: arrowSize)
-            }
-            .padding(.horizontal, 4)
-            
-            VStack {
-                CardFunctionConnectionArrow(
-                    isActive: false,
-                    onDragChanged: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + arrowOffset)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + arrowOffset)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + arrowOffset)
-                        onStartFunctionConnection(.top, startPos)
-                    }
-                )
-                .frame(width: arrowSize, height: arrowSize)
-                
-                Spacer()
-                
-                CardFunctionConnectionArrow(
-                    isActive: false,
-                    onDragChanged: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + cardHeight - arrowOffset)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + cardHeight - arrowOffset)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: cardPosition.x + cardWidth / 2, y: cardPosition.y + cardHeight - arrowOffset)
-                        onStartFunctionConnection(.bottom, startPos)
-                    }
-                )
-                .frame(width: arrowSize, height: arrowSize)
             }
         }
         .frame(width: cardWidth, height: cardHeight)
-    }
-}
-
-struct CardFunctionConnectionArrow: View {
-    let isActive: Bool
-    let onDragChanged: (CGSize) -> Void
-    let onDragEnded: (CGSize) -> Void
-    var onDragStarted: (() -> Void)?
-    
-    @State private var hasDragStarted: Bool = false
-    
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(hasDragStarted || isActive ? Color.orange : Color.cyan.opacity(0.7))
-                .frame(width: 16, height: 16)
-            
-            Image(systemName: "arrow.right")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white)
-        }
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    if !hasDragStarted {
-                        hasDragStarted = true
-                        onDragStarted?()
-                    }
-                    onDragChanged(value.translation)
-                }
-                .onEnded { value in
-                    onDragEnded(value.translation)
-                    hasDragStarted = false
-                }
-        )
-    }
-}
-
-struct ContainerFunctionConnectionArrowsOverlay: View {
-    let containerWidth: CGFloat
-    let containerHeight: CGFloat
-    let accent: Color
-    let onStartFunctionConnection: (FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void
-    let onFunctionConnectionDrop: (CGPoint) -> Void
-    let onFunctionConnectionDragChanged: (CGPoint) -> Void
-    
-    @State private var isDraggingFromLeft: Bool = false
-    @State private var isDraggingFromRight: Bool = false
-    @State private var isDraggingFromTop: Bool = false
-    @State private var isDraggingFromBottom: Bool = false
-    
-    var body: some View {
-        ZStack {
-            HStack {
-                CardFunctionConnectionArrow(
-                    isActive: isDraggingFromLeft,
-                    onDragChanged: { offset in
-                        isDraggingFromLeft = true
-                        let startPos = CGPoint(x: containerWidth / 2 - 8, y: containerHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: containerWidth / 2 - 8, y: containerHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                        isDraggingFromLeft = false
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: containerWidth / 2 - 8, y: containerHeight / 2)
-                        onStartFunctionConnection(.left, startPos)
-                    }
-                )
-                .offset(x: -containerWidth/2 - 8)
-                
-                Spacer()
-                
-                CardFunctionConnectionArrow(
-                    isActive: isDraggingFromRight,
-                    onDragChanged: { offset in
-                        isDraggingFromRight = true
-                        let startPos = CGPoint(x: containerWidth / 2 + 8, y: containerHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: containerWidth / 2 + 8, y: containerHeight / 2)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                        isDraggingFromRight = false
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: containerWidth / 2 + 8, y: containerHeight / 2)
-                        onStartFunctionConnection(.right, startPos)
-                    }
-                )
-                .offset(x: containerWidth/2 + 8)
-            }
-            
-            VStack {
-                CardFunctionConnectionArrow(
-                    isActive: isDraggingFromTop,
-                    onDragChanged: { offset in
-                        isDraggingFromTop = true
-                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 - 8)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 - 8)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                        isDraggingFromTop = false
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 - 8)
-                        onStartFunctionConnection(.top, startPos)
-                    }
-                )
-                .offset(y: -containerHeight/2 - 8)
-                
-                Spacer()
-                
-                CardFunctionConnectionArrow(
-                    isActive: isDraggingFromBottom,
-                    onDragChanged: { offset in
-                        isDraggingFromBottom = true
-                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 + 8)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDragChanged(newPos)
-                    },
-                    onDragEnded: { offset in
-                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 + 8)
-                        let newPos = CGPoint(x: startPos.x + offset.width, y: startPos.y + offset.height)
-                        onFunctionConnectionDrop(newPos)
-                        isDraggingFromBottom = false
-                    },
-                    onDragStarted: {
-                        let startPos = CGPoint(x: containerWidth / 2, y: containerHeight / 2 + 8)
-                        onStartFunctionConnection(.bottom, startPos)
-                    }
-                )
-                .offset(y: containerHeight/2 + 8)
-            }
-        }
-    }
-}
-
-private struct CardActionPopup: View {
-    let report: NutrivanceTuningReport
-    let accent: Color
-    let position: CGPoint
-    let cardWidth: CGFloat
-    var onDismiss: () -> Void
-    var onOrganizeAsStack: () -> Void
-    var onCreateContainer: () -> Void
-
-    private let cardHeight: CGFloat = 280
-    private let popupHeight: CGFloat = 100
-
-    private var popupY: CGFloat {
-        position.y + cardHeight + popupHeight > 2000 ? position.y - popupHeight - 10 : position.y + cardHeight + 10
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Button {
-                onOrganizeAsStack()
-            } label: {
-                Label("Organize as Stack", systemImage: "square.stack.3d.up")
-                    .font(.caption.weight(.medium))
-            }
-
-            Button {
-                onCreateContainer()
-            } label: {
-                Label("Create Container", systemImage: "rectangle.portrait.on.rectangle.portrait")
-                    .font(.caption.weight(.medium))
-            }
-        }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: Color.black.opacity(isSelected ? 0.4 : 0.2), radius: isSelected ? 15 : 8, x: 0, y: isSelected ? 8 : 4)
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(accent.opacity(0.3), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(isSelected ? accent : Color.clear, lineWidth: isSelected ? 3 : 0)
         )
-        .position(
-            x: position.x + cardWidth / 2,
-            y: popupY + popupHeight / 2
-        )
-        .onTapGesture {
-            onDismiss()
+    }
+    
+    var body: some View {
+        cardBody
+            .position(x: position.x + dragOffset.width + cardWidth / 2, y: position.y + dragOffset.height + cardHeight / 2)
+            .scaleEffect(isDragging ? 1.05 : 1.0)
+            .shadow(
+                color: Color.black.opacity(isDragging ? 0.4 : (isSelected ? 0.4 : 0.2)),
+                radius: isDragging ? 15 : (isSelected ? 15 : 8),
+                x: 0,
+                y: isDragging ? 10 : (isSelected ? 8 : 4)
+            )
+            .zIndex(isDragging ? 1000 : (isSelected ? 100 : 0))
+            .onTapGesture(perform: onTap)
+            .onTapGesture(count: 2, perform: onDoubleTap)
+            .onLongPressGesture(minimumDuration: 0.5, perform: onLongPress ?? {})
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        if !isDragging {
+                            isDragging = true
+                        }
+                        dragOffset = value.translation
+                        onDragChanged?(CGPoint(x: position.x + value.translation.width + cardWidth / 2, y: position.y + value.translation.height + cardHeight / 2), value.translation)
+                    }
+                    .onEnded { value in
+                        let newPosition = CGPoint(x: position.x + value.translation.width, y: position.y + value.translation.height)
+                        onDragEnded(newPosition, value.translation)
+                        dragOffset = .zero
+                        isDragging = false
+                    }
+            )
+    }
+}
+
+private struct CardFunctionConnectionArrowsOverlay: View {
+    let cardWidth: CGFloat
+    let cardHeight: CGFloat
+    let accent: Color
+    var isDraggingFromThisCard: Bool = false
+    var draggingPoint: FunctionConnection.FunctionConnectionPoint?
+    var hoveredPoint: FunctionConnection.FunctionConnectionPoint?
+    var onStartFunctionConnection: ((FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void)?
+    var onFunctionConnectionDrop: ((CGPoint) -> Void)?
+    var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
+    
+    private let arrowSpacing: CGFloat = 32
+    
+    @State private var currentDragPosition: CGPoint?
+    
+    private func arrowBasePosition(for point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
+        let centerX = cardWidth / 2
+        let centerY = cardHeight / 2
+        
+        switch point {
+        case .top:
+            return CGPoint(x: centerX, y: -arrowSpacing)
+        case .bottom:
+            return CGPoint(x: centerX, y: cardHeight + arrowSpacing)
+        case .left:
+            return CGPoint(x: -arrowSpacing, y: centerY)
+        case .right:
+            return CGPoint(x: cardWidth + arrowSpacing, y: centerY)
         }
+    }
+    
+    var body: some View {
+        ZStack {
+            FunctionConnectionArrow(
+                position: .top,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .top)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisCard && draggingPoint == .top,
+                isHovered: hoveredPoint == .top,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .top)
+                    onStartFunctionConnection?(.top, startPos)
+                }
+            )
+            .position(arrowBasePosition(for: .top))
+            
+            FunctionConnectionArrow(
+                position: .bottom,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .bottom)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisCard && draggingPoint == .bottom,
+                isHovered: hoveredPoint == .bottom,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .bottom)
+                    onStartFunctionConnection?(.bottom, startPos)
+                }
+            )
+            .position(arrowBasePosition(for: .bottom))
+            
+            FunctionConnectionArrow(
+                position: .left,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .left)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisCard && draggingPoint == .left,
+                isHovered: hoveredPoint == .left,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .left)
+                    onStartFunctionConnection?(.left, startPos)
+                }
+            )
+            .position(arrowBasePosition(for: .left))
+            
+            FunctionConnectionArrow(
+                position: .right,
+                onDragChanged: { offset in
+                    let basePos = arrowBasePosition(for: .right)
+                    let newPos = CGPoint(x: basePos.x + offset.width, y: basePos.y + offset.height)
+                    currentDragPosition = newPos
+                    onFunctionConnectionDragChanged?(newPos)
+                },
+                onDragEnded: { _ in
+                    if let pos = currentDragPosition {
+                        onFunctionConnectionDrop?(pos)
+                    }
+                    currentDragPosition = nil
+                },
+                isActive: isDraggingFromThisCard && draggingPoint == .right,
+                isHovered: hoveredPoint == .right,
+                onDragStarted: {
+                    let startPos = arrowBasePosition(for: .right)
+                    onStartFunctionConnection?(.right, startPos)
+                }
+            )
+            .position(arrowBasePosition(for: .right))
+        }
+        .frame(width: cardWidth, height: cardHeight)
     }
 }
 
@@ -4087,17 +4274,21 @@ private struct ContainerView: View {
     var onMakeSmart: (SmartContainerFilter) -> Void
     var onEditSmartFilter: (SmartContainerFilter) -> Void
     var onCardTap: (NutrivanceTuningReport) -> Void
-    var onCardDragStarted: ((UUID, CGPoint) -> Void)?
-    var onCardDragMoved: ((UUID, CGPoint) -> Void)?
-    var onCardDragEnded: ((UUID, CGPoint, CGSize) -> Void)?
-    var onCardRemoved: ((UUID, CGPoint) -> Void)?
-    var onCardReordered: ((UUID, Int) -> Void)?
+    var onCardDragStarted: (UUID, CGPoint) -> Void
+    var onCardDragMoved: (UUID, CGPoint) -> Void
+    var onCardDragEnded: (UUID, CGPoint, CGSize) -> Void
+    var onCardRemoved: (UUID, CGPoint) -> Void
+    var onCardReordered: (UUID, Int) -> Void
     var draggingCardId: UUID?
     var draggingCardCenter: CGPoint?
     var showFunctionConnectionArrows: Bool = false
     var onStartFunctionConnection: ((FunctionConnection.FunctionConnectionPoint, CGPoint) -> Void)?
     var onFunctionConnectionDrop: ((CGPoint) -> Void)?
     var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
+    var isFunctionConnectionDraggingFromThisContainer: Bool = false
+    var hoveredArrowTarget: (UUID, FunctionConnection.FunctionConnectionPoint)? = nil
+    var onDragChanged: ((CGSize) -> Void)?
+    var onDragEnded: (() -> Void)?
     
     @Namespace private var containerNamespace
     @State private var hasAppeared = false
@@ -4317,14 +4508,23 @@ private struct ContainerView: View {
                     containerWidth: activeWidth,
                     containerHeight: activeHeight,
                     accent: accent,
+                    isDraggingFromThisContainer: isFunctionConnectionDraggingFromThisContainer,
+                    draggingPoint: nil,
+                    hoveredPoint: hoveredArrowTarget?.1,
                     onStartFunctionConnection: { point, startPos in
-                        onStartFunctionConnection?(point, startPos)
+                        let topLeft = CGPoint(x: currentCenter.x - activeWidth / 2, y: currentCenter.y - activeHeight / 2)
+                        let absoluteStartPos = CGPoint(x: topLeft.x + startPos.x, y: topLeft.y + startPos.y)
+                        onStartFunctionConnection?(point, absoluteStartPos)
                     },
                     onFunctionConnectionDrop: { position in
-                        onFunctionConnectionDrop?(position)
+                        let topLeft = CGPoint(x: currentCenter.x - activeWidth / 2, y: currentCenter.y - activeHeight / 2)
+                        let absolutePos = CGPoint(x: topLeft.x + position.x, y: topLeft.y + position.y)
+                        onFunctionConnectionDrop?(absolutePos)
                     },
                     onFunctionConnectionDragChanged: { position in
-                        onFunctionConnectionDragChanged?(position)
+                        let topLeft = CGPoint(x: currentCenter.x - activeWidth / 2, y: currentCenter.y - activeHeight / 2)
+                        let absolutePos = CGPoint(x: topLeft.x + position.x, y: topLeft.y + position.y)
+                        onFunctionConnectionDragChanged?(absolutePos)
                     }
                 )
             }
@@ -4425,10 +4625,11 @@ private struct ContainerView: View {
 
     private var containerDragGesture: some Gesture {
         DragGesture()
-            .onChanged { _ in
+            .onChanged { value in
                 if !isDraggingContainer {
                     isDraggingContainer = true
                 }
+                onDragChanged?(value.translation)
             }
             .updating($containerDragOffset) { value, state, _ in
                 state = value.translation
@@ -4440,6 +4641,7 @@ private struct ContainerView: View {
                 )
                 onPositionChanged(newPosition)
                 isDraggingContainer = false
+                onDragEnded?()
             }
     }
     
@@ -4618,11 +4820,11 @@ private struct ContainerView: View {
                 draggingCardInContainer = report.id
                 originalCardPositions[report.id] = CGPoint(x: targetX + currentDragOffset.width, y: targetY + currentDragOffset.height)
                 cardDragOffsets[report.id] = .zero
-                onCardDragStarted?(report.id, center)
+                onCardDragStarted(report.id, center)
             },
             onDragMoved: { center, translation in
                 cardDragOffsets[report.id] = translation
-                onCardDragMoved?(report.id, center)
+                onCardDragMoved(report.id, center)
             },
             onDragEnded: { center, offset in
                 handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
@@ -4657,10 +4859,10 @@ private struct ContainerView: View {
                         },
                         onDragStarted: { center in
                             draggingCardInContainer = report.id
-                            onCardDragStarted?(report.id, center)
+                            onCardDragStarted(report.id, center)
                         },
                         onDragMoved: { center, _ in
-                            onCardDragMoved?(report.id, center)
+                            onCardDragMoved(report.id, center)
                         },
                         onDragEnded: { center, offset in
                             handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
@@ -4699,10 +4901,10 @@ private struct ContainerView: View {
                         },
                         onDragStarted: { center in
                             draggingCardInContainer = report.id
-                            onCardDragStarted?(report.id, center)
+                            onCardDragStarted(report.id, center)
                         },
                         onDragMoved: { center, _ in
-                            onCardDragMoved?(report.id, center)
+                            onCardDragMoved(report.id, center)
                         },
                         onDragEnded: { center, offset in
                             handleCardDragEnded(reportId: report.id, center: center, dragOffset: offset)
@@ -4737,10 +4939,10 @@ private struct ContainerView: View {
         let isInsideContent = contentBounds.contains(center)
         
         if distanceFromOrigin > dragThreshold && !isInsideContent {
-            onCardRemoved?(reportId, center)
+            onCardRemoved(reportId, center)
         }
         
-        onCardDragEnded?(reportId, center, dragOffset)
+        onCardDragEnded(reportId, center, dragOffset)
     }
     
 }
