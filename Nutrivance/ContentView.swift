@@ -7,6 +7,9 @@ import ActivityKit
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 #endif
+#if canImport(WorkoutKit)
+import WorkoutKit
+#endif
 
 struct WorkoutTimerSync: Equatable {
     let elapsedTime: TimeInterval
@@ -1537,99 +1540,228 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         location: HKWorkoutSessionLocationType,
         phases: [ProgramWorkoutPlanPhase]
     ) {
-#if canImport(WatchConnectivity)
-        activateIfNeeded()
-        guard WCSession.isSupported() else {
-            launchStatusMessage = "Apple Watch is unavailable on this device."
-            return
-        }
-
-        let session = WCSession.default
-        let phasePayloads: [[String: Any]] = phases.map { phase in
-            [
-                "id": phase.id.uuidString,
-                "title": phase.title,
-                "subtitle": phase.subtitle,
-                "activityID": phase.activityID,
-                "activityRawValue": Int(phase.activityRawValue),
-                "locationRawValue": phase.locationRawValue,
-                "plannedMinutes": phase.plannedMinutes,
-                "microStages": (phase.microStages ?? []).map { stage in
-                    [
-                        "id": stage.id.uuidString,
-                        "title": stage.title,
-                        "notes": stage.notes,
-                        "role": stage.role.rawValue,
-                        "goal": stage.goal.rawValue,
-                        "targetBehavior": stage.targetBehavior.rawValue,
-                        "plannedMinutes": stage.plannedMinutes,
-                        "repeats": stage.repeats,
-                        "targetValueText": stage.targetValueText,
-                        "repeatSetLabel": stage.repeatSetLabel,
-                        "circuitGroupID": stage.circuitGroupID?.uuidString as Any
-                    ]
-                },
-                "circuitGroups": (phase.circuitGroups ?? []).map { group in
-                    [
-                        "id": group.id.uuidString,
-                        "title": group.title,
-                        "repeats": group.repeats
-                    ]
-                }
-            ]
-        }
-        let payload: [String: Any] = [
-            "workoutStart": true,
-            "openInWorkoutApp": true,
-            "title": title,
-            "subtitle": subtitle,
-            "activityRawValue": Int(activity.rawValue),
-            "locationRawValue": location.rawValue,
-            "phasePayloads": phasePayloads
-        ]
-
-        launchStatusMessage = "Sending to Apple Workout on watch..."
-        if session.activationState != .activated {
-            session.activate()
-        }
-
-        if session.isReachable {
-            session.sendMessage(payload) { [weak self] reply in
-                Task { @MainActor in
-                    guard let strongSelf = self as? CompanionWorkoutLiveManager else { return }
-                    strongSelf.launchStatusMessage = (reply["accepted"] as? Bool) == true
-                        ? "Apple Workout is opening on Apple Watch."
-                        : "Apple Watch did not confirm the Workout app handoff."
-                    
-                    if #available(iOS 16.0, *) {
-                        let workoutConfig = HKWorkoutConfiguration()
-                        workoutConfig.activityType = activity
-                        workoutConfig.locationType = location
-                        HKHealthStore().startWatchApp(with: workoutConfig) { success, error in
-                            Task { @MainActor in
-                                if let error {
-                                    print("[Companion] Failed to start Watch app: \(error.localizedDescription)")
-                                } else if success {
-                                    print("[Companion] Requested watch app launch via HealthKit")
-                                } else {
-                                    print("[Companion] startWatchApp returned false without error")
-                                }
-                            }
-                        }
-                    }
-                }
-            } errorHandler: { [weak self] _ in
-                Task { @MainActor in
-                    guard let strongSelf = self as? CompanionWorkoutLiveManager else { return }
-                    strongSelf.launchStatusMessage = "Watch is not reachable. Open Nutrivance on Apple Watch to use Workout app handoff."
-                }
+        #if canImport(WorkoutKit)
+        Task { @MainActor in
+            // Check if WorkoutScheduler is supported (iOS 17+)
+            guard WorkoutScheduler.isSupported else {
+                launchStatusMessage = "Workout scheduling is not supported on this device."
+                return
             }
-        } else {
-            session.transferUserInfo(payload)
-            launchStatusMessage = "Handoff queued for Apple Watch."
+            
+            // Request authorization
+            let authStatus = await WorkoutScheduler.shared.requestAuthorization()
+            guard authStatus == .authorized else {
+                launchStatusMessage = "Permission denied to schedule workouts. Please enable in Settings."
+                return
+            }
+            
+            do {
+                launchStatusMessage = "Building workout plans..."
+                
+                // Group phases by activity type and build separate workouts for each
+                let workoutPlans = buildWorkoutPlansFromPhases(phases, title: title)
+                guard !workoutPlans.isEmpty else {
+                    launchStatusMessage = "Failed to build workout plans."
+                    return
+                }
+                
+                launchStatusMessage = "Scheduling \(workoutPlans.count) workout\(workoutPlans.count > 1 ? "s" : "")..."
+                
+                // Schedule for today at the current time
+                let now = Date()
+                var dateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: now)
+                // Add a minute buffer to ensure it's scheduled for a future time
+                if let minute = dateComponents.minute {
+                    dateComponents.minute = minute + 1
+                }
+                
+                // Schedule all workouts
+                for workoutPlan in workoutPlans {
+                    await WorkoutScheduler.shared.schedule(workoutPlan, at: dateComponents)
+                }
+                
+                launchStatusMessage = "Workouts scheduled in Apple Workout app."
+                print("[Companion] Successfully scheduled \(workoutPlans.count) workout(s)")
+                
+            } catch {
+                launchStatusMessage = "Failed to schedule workout: \(error.localizedDescription)"
+                print("[Companion] Failed to schedule workout: \(error)")
+            }
         }
-#endif
+        #else
+        launchStatusMessage = "WorkoutKit is not available on this device."
+        #endif
     }
+    
+    #if canImport(WorkoutKit)
+    private func buildWorkoutPlansFromPhases(
+        _ phases: [ProgramWorkoutPlanPhase],
+        title: String
+    ) -> [WorkoutPlan] {
+        // Group phases by activity ID to create separate workouts per activity
+        let phasesByActivity = Dictionary(grouping: phases, by: { $0.activityID })
+        var workoutPlans: [WorkoutPlan] = []
+        
+        for (index, (activityID, activityPhases)) in phasesByActivity.enumerated() {
+            guard let customWorkout = buildCustomWorkoutFromPhases(
+                activityPhases,
+                title: title,
+                activityIndex: index,
+                totalActivities: phasesByActivity.count
+            ) else {
+                continue
+            }
+            
+            let workout: WorkoutPlan.Workout = .custom(customWorkout)
+            let workoutPlan = WorkoutPlan(workout, id: UUID())
+            workoutPlans.append(workoutPlan)
+        }
+        
+        return workoutPlans
+    }
+    
+    private func buildCustomWorkoutFromPhases(
+        _ phases: [ProgramWorkoutPlanPhase],
+        title: String,
+        activityIndex: Int,
+        totalActivities: Int
+    ) -> CustomWorkout? {
+        guard let firstPhase = phases.first else { return nil }
+        
+        let hkActivityType = HKWorkoutActivityType(rawValue: firstPhase.activityRawValue)
+        let locationTypeValue = HKWorkoutSessionLocationType(rawValue: firstPhase.locationRawValue | 0)
+        let location = locationTypeValue ?? .outdoor
+        
+        // Build display name incorporating activity type
+        let displayName = totalActivities > 1
+            ? "\(title) - \(firstPhase.title)"
+            : title
+        
+        // Collect all stages from all phases
+        var allStages: [ProgramCustomWorkoutMicroStage] = []
+        for phase in phases {
+            if let microStages = phase.microStages, !microStages.isEmpty {
+                allStages.append(contentsOf: microStages)
+            } else {
+                // Create a default stage for this phase
+                let defaultStage = ProgramCustomWorkoutMicroStage(
+                    id: UUID(),
+                    title: phase.title,
+                    notes: "",
+                    role: .goal,
+                    goal: .time,
+                    plannedMinutes: phase.plannedMinutes,
+                    repeats: 1,
+                    targetValueText: "",
+                    repeatSetLabel: "",
+                    targetBehavior: .completionGoal,
+                    circuitGroupID: nil
+                )
+                allStages.append(defaultStage)
+            }
+        }
+        
+        // Separate warmup, cooldown, and main stages
+        var warmupStep: WorkoutKit.WorkoutStep?
+        var cooldownStep: WorkoutKit.WorkoutStep?
+        var mainStages: [ProgramCustomWorkoutMicroStage] = []
+        
+        for (index, stage) in allStages.enumerated() {
+            if stage.role == .warmup && warmupStep == nil {
+                // First warmup becomes the warmup step
+                let goal = workoutGoalFromStage(stage)
+                warmupStep = WorkoutKit.WorkoutStep(goal: goal, displayName: stage.title)
+            } else if stage.role == .cooldown && index == allStages.count - 1 {
+                // Last cooldown becomes the cooldown step
+                let goal = workoutGoalFromStage(stage)
+                cooldownStep = WorkoutKit.WorkoutStep(goal: goal, displayName: stage.title)
+            } else {
+                mainStages.append(stage)
+            }
+        }
+        
+        // Convert main stages to interval steps and group into blocks
+        var blocks: [IntervalBlock] = []
+        
+        if !mainStages.isEmpty {
+            let intervalSteps = mainStages.compactMap { stage -> IntervalStep? in
+                buildIntervalStepFromStage(stage)
+            }
+            
+            if !intervalSteps.isEmpty {
+                let block = IntervalBlock(steps: intervalSteps)
+                blocks.append(block)
+            }
+        }
+        
+        // If no blocks were created, create a default time-based block
+        if blocks.isEmpty {
+            let totalMinutes = phases.reduce(0) { $0 + $1.plannedMinutes }
+            let timeGoal = WorkoutGoal.time(Double(totalMinutes), .minutes)
+            let step = WorkoutKit.WorkoutStep(goal: timeGoal)
+            let intervalStep = IntervalStep(.work, step: step)
+            let block = IntervalBlock(steps: [intervalStep])
+            blocks.append(block)
+        }
+        
+        return CustomWorkout(
+            activity: hkActivityType ?? .running,
+            location: location,
+            displayName: displayName,
+            warmup: warmupStep,
+            blocks: blocks,
+            cooldown: cooldownStep
+        )
+    }
+    
+    private func buildIntervalStepFromStage(_ stage: ProgramCustomWorkoutMicroStage) -> IntervalStep? {
+        // Map stage role to interval purpose
+        let purpose: IntervalStep.Purpose = stage.role == .recovery ? .recovery : .work
+        
+        // Map stage goal to WorkoutGoal
+        let workoutGoal = workoutGoalFromStage(stage)
+        
+        let step = WorkoutKit.WorkoutStep(goal: workoutGoal, displayName: stage.title)
+        return IntervalStep(purpose, step: step)
+    }
+    
+    private func workoutGoalFromStage(_ stage: ProgramCustomWorkoutMicroStage) -> WorkoutGoal {
+        // Map ProgramMicroStageGoal to WorkoutGoal
+        switch stage.goal {
+        case .distance:
+            // Extract numeric distance value from target text
+            let distanceValue = extractNumericValue(from: stage.targetValueText) ?? Double(stage.plannedMinutes)
+            return .distance(distanceValue, .kilometers)
+            
+        case .energy:
+            // Extract calories from target value
+            let calorieValue = extractNumericValue(from: stage.targetValueText) ?? Double(stage.plannedMinutes * 10)
+            return .energy(calorieValue, .kilocalories)
+            
+        case .pace, .speed, .power, .cadence, .heartRateZone:
+            // WorkoutKit doesn't support pace/speed/power/cadence/heart rate zones directly
+            // Fall back to time goal
+            return .time(Double(stage.plannedMinutes), .minutes)
+            
+        case .open:
+            return .open
+            
+        case .time:
+            return .time(Double(stage.plannedMinutes), .minutes)
+        }
+    }
+    
+    private func extractNumericValue(from text: String) -> Double? {
+        // Extract the first numeric value from text
+        let pattern = "-?\\d+(?:\\.\\d+)?"
+        if let regex = try? NSRegularExpression(pattern: pattern),
+           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range, in: text) {
+            return Double(text[range])
+        }
+        return nil
+    }
+    #endif
 
     func submitEffortScoreOnPhone(_ score: Int) {
 #if canImport(WatchConnectivity)

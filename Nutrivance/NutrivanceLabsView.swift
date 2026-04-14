@@ -942,6 +942,16 @@ struct MetricStackDetailView: View {
     @State private var hoveredDropTargetId: UUID? = nil
     @State private var hoveredArrowTarget: (elementId: UUID, point: FunctionConnection.FunctionConnectionPoint)? = nil
     
+    @State private var undoStack: [CanvasState] = []
+    @State private var redoStack: [CanvasState] = []
+    
+    struct CanvasState {
+        var cardPositions: [UUID: CGPoint]
+        var functionBlocks: [UUID: FunctionBlock]
+        var connections: [UUID: FunctionConnection]
+        var cardContainers: [UUID: CardContainer]
+    }
+    
     struct DraggingFunctionConnectionSource {
         var sourceId: UUID
         var sourceType: FunctionConnectionElementType
@@ -1112,59 +1122,169 @@ struct MetricStackDetailView: View {
     }
     
     private var keyboardShortcuts: some View {
-        Group { }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoom100)) { _ in
+        Group {
+            zoom100Handler
+            zoomInHandler
+            zoomOutHandler
+            freeformViewHandler
+            organizeViewHandler
+            newContainerHandler
+            sortNewestHandler
+            sortStrongestHandler
+            toggleHeaderHandler
+            toggleMetricLiveHandler
+            toggleDrawingModeHandler
+            keyPressHandlers
+        }
+    }
+    
+    private var zoom100Handler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoom100)) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 canvasScale = 1.0
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoomIn)) { _ in
+    }
+    
+    private var zoomInHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoomIn)) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 canvasScale = min(maxScale, canvasScale + 0.25)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoomOut)) { _ in
+    }
+    
+    private var zoomOutHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsZoomOut)) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 canvasScale = max(minScale, canvasScale - 0.25)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsFreeformView)) { _ in
+    }
+    
+    private var freeformViewHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsFreeformView)) { _ in
             withAnimation(.easeInOut(duration: 0.3)) {
                 isOrganized = false
                 isHeaderMinimized = false
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsOrganizeView)) { _ in
+    }
+    
+    private var organizeViewHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsOrganizeView)) { _ in
             withAnimation(.easeInOut(duration: 0.3)) {
                 isOrganized = true
                 isHeaderMinimized = false
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsNewContainer)) { _ in
+    }
+    
+    private var newContainerHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsNewContainer)) { _ in
             createContainerAtCenter()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsSortNewest)) { _ in
+    }
+    
+    private var sortNewestHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsSortNewest)) { _ in
             withAnimation(.easeInOut(duration: 0.2)) {
                 sortByNewestFirst = true
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsSortStrongest)) { _ in
+    }
+    
+    private var sortStrongestHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsSortStrongest)) { _ in
             withAnimation(.easeInOut(duration: 0.2)) {
                 sortByNewestFirst = false
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleHeader)) { _ in
+    }
+    
+    private var toggleHeaderHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleHeader)) { _ in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHeaderMinimized.toggle()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleMetricLive)) { _ in
+    }
+    
+    private var toggleMetricLiveHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleMetricLive)) { _ in
             store.setMetricGloballyEnabled(metric, enabled: !store.isMetricGloballyEnabled(metric))
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleDrawingMode)) { _ in
+    }
+    
+    private var toggleDrawingModeHandler: some View {
+        Color.clear.onReceive(NotificationCenter.default.publisher(for: .nutrivanceViewControlNutrivanceLabsToggleDrawingMode)) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 isDrawingMode.toggle()
             }
+        }
+    }
+    
+    private var keyPressHandlers: some View {
+        Color.clear
+            .focusable()
+            .onKeyPress(.delete) {
+                deleteSelectedElements()
+                return .handled
+            }
+    }
+    
+    private var currentCanvasState: CanvasState {
+        CanvasState(
+            cardPositions: cardPositions,
+            functionBlocks: functionBlocks,
+            connections: connections,
+            cardContainers: cardContainers
+        )
+    }
+    
+    private func pushUndoState() {
+        undoStack.append(currentCanvasState)
+        redoStack.removeAll()
+        if undoStack.count > 50 {
+            undoStack.removeFirst()
+        }
+    }
+    
+    private func undo() {
+        guard let previousState = undoStack.popLast() else { return }
+        redoStack.append(currentCanvasState)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            cardPositions = previousState.cardPositions
+            functionBlocks = previousState.functionBlocks
+            connections = previousState.connections
+            cardContainers = previousState.cardContainers
+        }
+    }
+    
+    private func redo() {
+        guard let nextState = redoStack.popLast() else { return }
+        undoStack.append(currentCanvasState)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            cardPositions = nextState.cardPositions
+            functionBlocks = nextState.functionBlocks
+            connections = nextState.connections
+            cardContainers = nextState.cardContainers
+        }
+    }
+    
+    private func deleteSelectedElements() {
+        pushUndoState()
+        
+        if let blockId = selectedFunctionBlockId {
+            deleteFunctionBlock(blockId)
+            selectedFunctionBlockId = nil
+        }
+        
+        if !selectedCardIds.isEmpty {
+            for cardId in selectedCardIds {
+                cardPositions.removeValue(forKey: cardId)
+            }
+            selectedCardIds.removeAll()
         }
     }
     
@@ -1510,12 +1630,17 @@ struct MetricStackDetailView: View {
                     }
                 }
             } else {
-                freeformCanvas
+                GeometryReader { geometry in
+                    freeformCanvas
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .padding(.bottom, 24)
     }
-
+    
     private var freeformCanvas: some View {
         let baseCanvasWidth: CGFloat = 3000
         let baseCanvasHeight: CGFloat = 2000
@@ -1839,6 +1964,13 @@ struct MetricStackDetailView: View {
     }
     
     private func connectToFunctionBlock(sourceId: UUID, sourceType: FunctionConnectionElementType, blockId: UUID, connectionPoint: FunctionConnection.FunctionConnectionPoint) {
+        let existingConnection = connections.values.first { connection in
+            connection.sourceId == sourceId && connection.targetId == blockId
+        }
+        if existingConnection != nil {
+            return
+        }
+        
         if var block = functionBlocks[blockId] {
             block.sourceElementId = sourceId
             block.sourceElementType = sourceType
@@ -1971,21 +2103,27 @@ struct MetricStackDetailView: View {
         return rect.contains(point)
     }
     
-    private func detectHoveredArrow(_ point: CGPoint) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)? {
-        let threshold: CGFloat = 30
+    private func detectHoveredArrow(_ point: CGPoint, containerDragState: (id: UUID?, offset: CGSize)? = nil) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)? {
+        let threshold: CGFloat = 40
         
+        // Check function blocks
         for (blockId, block) in functionBlocks {
+            let blockWidth: CGFloat = 200
+            let blockHeight: CGFloat = 160
+            let isDragging = blockId == draggingFunctionBlockId
+            let offset = isDragging ? draggingFunctionBlockOffset : .zero
+            
             for connectionPoint in [FunctionConnection.FunctionConnectionPoint.left, .right, .top, .bottom] {
                 let arrowPos: CGPoint
                 switch connectionPoint {
                 case .left:
-                    arrowPos = CGPoint(x: block.position.x - 60 - 32, y: block.position.y)
+                    arrowPos = CGPoint(x: block.position.x - 8 + offset.width, y: block.position.y + blockHeight / 2 + offset.height)
                 case .right:
-                    arrowPos = CGPoint(x: block.position.x + 60 + 32, y: block.position.y)
+                    arrowPos = CGPoint(x: block.position.x + blockWidth + 8 + offset.width, y: block.position.y + blockHeight / 2 + offset.height)
                 case .top:
-                    arrowPos = CGPoint(x: block.position.x, y: block.position.y - 40 - 32)
+                    arrowPos = CGPoint(x: block.position.x + blockWidth / 2 + offset.width, y: block.position.y - 8 + offset.height)
                 case .bottom:
-                    arrowPos = CGPoint(x: block.position.x, y: block.position.y + 40 + 32)
+                    arrowPos = CGPoint(x: block.position.x + blockWidth / 2 + offset.width, y: block.position.y + blockHeight + 8 + offset.height)
                 }
                 let distance = sqrt(pow(point.x - arrowPos.x, 2) + pow(point.y - arrowPos.y, 2))
                 if distance < threshold {
@@ -1994,18 +2132,54 @@ struct MetricStackDetailView: View {
             }
         }
         
+        // Check cards
+        for (cardId, cardPos) in cardPositions {
+            let cardWidth: CGFloat = 300
+            let isDragging = cardId == draggingCardId
+            var livePos = cardPos
+            if isDragging, let liveCenter = draggingCardCenter {
+                livePos = CGPoint(x: liveCenter.x - cardWidth / 2, y: liveCenter.y - 140)
+            }
+            
+            for connectionPoint in [FunctionConnection.FunctionConnectionPoint.left, .right, .top, .bottom] {
+                let arrowPos: CGPoint
+                let centerY = livePos.y + 140
+                switch connectionPoint {
+                case .top: 
+                    arrowPos = CGPoint(x: livePos.x + cardWidth / 2, y: livePos.y - 8)
+                case .bottom:
+                    arrowPos = CGPoint(x: livePos.x + cardWidth / 2, y: livePos.y + 280 + 8)
+                case .left:
+                    arrowPos = CGPoint(x: livePos.x - 8, y: centerY)
+                case .right:
+                    arrowPos = CGPoint(x: livePos.x + cardWidth + 8, y: centerY)
+                }
+                let distance = sqrt(pow(point.x - arrowPos.x, 2) + pow(point.y - arrowPos.y, 2))
+                if distance < threshold {
+                    return (cardId, .card, connectionPoint)
+                }
+            }
+        }
+        
+        // Check containers
         for (containerId, container) in cardContainers {
+            let containerWidth: CGFloat = 600
+            let containerHeight: CGFloat = 300
+            let isDragging = containerId == containerDragState?.id
+            let offset = isDragging ? (containerDragState?.offset ?? .zero) : .zero
+            let livePos = CGPoint(x: container.position.x + offset.width, y: container.position.y + offset.height)
+            
             for connectionPoint in [FunctionConnection.FunctionConnectionPoint.left, .right, .top, .bottom] {
                 let arrowPos: CGPoint
                 switch connectionPoint {
-                case .left:
-                    arrowPos = CGPoint(x: container.position.x - 300 - 32, y: container.position.y)
-                case .right:
-                    arrowPos = CGPoint(x: container.position.x + 300 + 32, y: container.position.y)
                 case .top:
-                    arrowPos = CGPoint(x: container.position.x, y: container.position.y - 150 - 32)
+                    arrowPos = CGPoint(x: livePos.x, y: livePos.y - containerHeight / 2 - 8)
                 case .bottom:
-                    arrowPos = CGPoint(x: container.position.x, y: container.position.y + 150 + 32)
+                    arrowPos = CGPoint(x: livePos.x, y: livePos.y + containerHeight / 2 + 8)
+                case .left:
+                    arrowPos = CGPoint(x: livePos.x - containerWidth / 2 - 8, y: livePos.y)
+                case .right:
+                    arrowPos = CGPoint(x: livePos.x + containerWidth / 2 + 8, y: livePos.y)
                 }
                 let distance = sqrt(pow(point.x - arrowPos.x, 2) + pow(point.y - arrowPos.y, 2))
                 if distance < threshold {
@@ -2616,7 +2790,7 @@ private struct ZoomableCanvasView: View {
     var functionBlockOutputPosition: (UUID) -> CGPoint
     var getSourceCardsForBlock: (UUID) -> [NutrivanceTuningReport]
     var sortedReports: [NutrivanceTuningReport]
-    var detectHoveredArrow: (CGPoint) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)?
+    var detectHoveredArrow: (CGPoint, (id: UUID?, offset: CGSize)?) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)?
     
     var body: some View {
         let canvasSize = computedCanvasSize
@@ -2682,6 +2856,7 @@ private struct ZoomableCanvasView: View {
                 onDeselectAll()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     private var computedCanvasSize: CGSize {
@@ -2912,7 +3087,7 @@ private struct ZoomableCanvasContent: View {
     var functionBlockOutputPosition: (UUID) -> CGPoint
     var getSourceCardsForBlock: (UUID) -> [NutrivanceTuningReport]
     var sortedReports: [NutrivanceTuningReport]
-    var detectHoveredArrow: (CGPoint) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)?
+    var detectHoveredArrow: (CGPoint, (id: UUID?, offset: CGSize)?) -> (elementId: UUID, elementType: FunctionConnectionElementType, point: FunctionConnection.FunctionConnectionPoint)?
     
     @State private var originalPositions: [UUID: CGPoint] = [:]
     @State private var draggingFunctionBlockId: UUID? = nil
@@ -3083,19 +3258,24 @@ private struct ZoomableCanvasContent: View {
                     onFunctionConnectionDragChanged: { position in
                         tempFunctionConnectionEnd = position
                         
-                        // Update hovered target
-                        var newHoveredId: UUID? = nil
-                        for (targetId, _) in functionBlocks where targetId != blockId {
-                            let inputPos = functionBlockInputPosition(targetId)
-                            let distance = sqrt(pow(position.x - inputPos.x, 2) + pow(position.y - inputPos.y, 2))
-                            if distance < 50 {
-                                newHoveredId = targetId
-                                break
-                            }
+                        // Detect hovered arrow
+                        let containerDrag = (id: draggingContainerId, offset: draggingContainerOffset)
+                        if let hovered = detectHoveredArrow(position, containerDrag) {
+                            hoveredDropTargetId = hovered.elementId
+                            hoveredArrowTarget = (hovered.elementId, hovered.point)
+                        } else {
+                            hoveredDropTargetId = nil
+                            hoveredArrowTarget = nil
                         }
-                        hoveredDropTargetId = newHoveredId
                     },
-                    getContainerCards: getContainerCards
+                    getContainerCards: getContainerCards,
+                    hoveredArrowTarget: hoveredArrowTarget,
+                    isFunctionConnectionDraggingFromThisBlock: draggingFunctionConnectionSource?.sourceId == blockId && draggingFunctionConnectionSource?.sourceType == .functionBlock,
+                    onArrowHover: { hovered in
+                        if let hovered = hovered {
+                            hoveredArrowTarget = hovered
+                        }
+                    }
                 )
                 .zIndex(75)
             }
@@ -3187,7 +3367,8 @@ private struct ZoomableCanvasContent: View {
                         tempFunctionConnectionEnd = startPos
                     },
                     onFunctionConnectionDrop: { position in
-                        if let hovered = detectHoveredArrow(position) {
+                        let containerDrag = (id: draggingContainerId, offset: draggingContainerOffset)
+                        if let hovered = detectHoveredArrow(position, containerDrag) {
                             if hovered.elementType == .functionBlock {
                                 onConnectToFunctionBlock(report.id, .card, hovered.elementId, hovered.point)
                             }
@@ -3202,8 +3383,9 @@ private struct ZoomableCanvasContent: View {
                     },
                     onFunctionConnectionDragChanged: { position in
                         tempFunctionConnectionEnd = position
+                        let containerDrag = (id: draggingContainerId, offset: draggingContainerOffset)
                         
-                        if let hovered = detectHoveredArrow(position) {
+                        if let hovered = detectHoveredArrow(position, containerDrag) {
                             hoveredDropTargetId = hovered.elementId
                             hoveredArrowTarget = (hovered.elementId, hovered.point)
                         } else {
@@ -3275,7 +3457,8 @@ private struct ZoomableCanvasContent: View {
                         tempFunctionConnectionEnd = startPos
                     },
                     onFunctionConnectionDrop: { position in
-                        if let hovered = detectHoveredArrow(position) {
+                        let containerDrag = (id: draggingContainerId, offset: draggingContainerOffset)
+                        if let hovered = detectHoveredArrow(position, containerDrag) {
                             if hovered.elementType == .functionBlock {
                                 onConnectToFunctionBlock(container.id, .container, hovered.elementId, hovered.point)
                             }
@@ -3292,8 +3475,9 @@ private struct ZoomableCanvasContent: View {
                     },
                     onFunctionConnectionDragChanged: { position in
                         tempFunctionConnectionEnd = position
+                        let containerDrag = (id: draggingContainerId, offset: draggingContainerOffset)
                         
-                        if let hovered = detectHoveredArrow(position) {
+                        if let hovered = detectHoveredArrow(position, containerDrag) {
                             hoveredDropTargetId = hovered.elementId
                             hoveredArrowTarget = (hovered.elementId, hovered.point)
                         } else {
@@ -3347,6 +3531,7 @@ private struct ZoomableCanvasContent: View {
                 .position(x: toolbarX, y: toolbarY)
             }
         }
+        .frame(width: computedCanvasWidth, height: computedCanvasHeight)
     }
     
     private func connectionStartPositionForCard(position: CGPoint, point: FunctionConnection.FunctionConnectionPoint) -> CGPoint {
@@ -3573,6 +3758,9 @@ struct FunctionBlockView: View {
     var onFunctionConnectionDrop: (CGPoint) -> Void
     var onFunctionConnectionDragChanged: ((CGPoint) -> Void)?
     var getContainerCards: (UUID) -> [NutrivanceTuningReport]
+    var hoveredArrowTarget: (UUID, FunctionConnection.FunctionConnectionPoint)?
+    var isFunctionConnectionDraggingFromThisBlock: Bool = false
+    var onArrowHover: ((UUID, FunctionConnection.FunctionConnectionPoint)?) -> Void
     
     @State private var isDragging: Bool = false
     @State private var dragOffset: CGSize = .zero
@@ -3584,180 +3772,162 @@ struct FunctionBlockView: View {
     private let blockWidth: CGFloat = 200
     private let blockHeight: CGFloat = 160
     
-    var body: some View {
+    private var blockDragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                isDragging = true
+                dragOffset = value.translation
+                onDragChanged?(value.translation)
+            }
+            .onEnded { value in
+                let newPosition = CGPoint(
+                    x: block.position.x + value.translation.width,
+                    y: block.position.y + value.translation.height
+                )
+                onPositionChanged(newPosition)
+                dragOffset = .zero
+                isDragging = false
+                onDragEnded?()
+            }
+    }
+    
+    private var blockBackground: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color.black.opacity(0.85))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(isSelected ? accent : accent.opacity(0.5), lineWidth: isSelected ? 3 : 1)
-                )
             
-            VStack(spacing: 4) {
-                HStack {
-                    Image(systemName: block.functionType.icon)
-                        .font(.caption)
-                    Text(block.functionType.displayName)
-                        .font(.caption.weight(.bold))
-                }
-                .foregroundStyle(accent)
-                
-                if let result = result {
-                    Text(String(format: "%.2f", result))
-                        .font(.title2.weight(.bold).monospacedDigit())
-                        .foregroundStyle(.white)
-                } else if block.sourceElementId != nil {
-                    Text("...")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("No input")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                
-                HStack(spacing: 4) {
-                    Image(systemName: "cube.fill")
-                        .font(.caption2)
-                    Text("\(sourceCardsCount)")
-                        .font(.caption2)
-                }
-                .foregroundStyle(.secondary)
-            }
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? accent : accent.opacity(0.5), lineWidth: isSelected ? 3 : 1)
             
-            HStack {
-                if isSelected {
-                    FunctionConnectionArrow(position: .left, onDragChanged: { offset in
-                        tempFunctionConnectionEnd = CGPoint(
-                            x: block.position.x - 8 + offset.width,
-                            y: block.position.y + blockHeight / 2 + offset.height
-                        )
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDragChanged?(end)
-                        }
-                    }, onDragEnded: { _ in
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDrop(end)
-                        }
-                        tempFunctionConnectionEnd = nil
-                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                        onStartFunctionConnection(.left)
-                    })
-                    .frame(width: 28, height: 28)
-                }
-                
-                Spacer()
-                
-                if isSelected {
-                    FunctionConnectionArrow(position: .right, onDragChanged: { offset in
-                        tempFunctionConnectionEnd = CGPoint(
-                            x: block.position.x + blockWidth + 8 + offset.width,
-                            y: block.position.y + blockHeight / 2 + offset.height
-                        )
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDragChanged?(end)
-                        }
-                    }, onDragEnded: { _ in
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDrop(end)
-                        }
-                        tempFunctionConnectionEnd = nil
-                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                        onStartFunctionConnection(.right)
-                    })
-                    .frame(width: 28, height: 28)
-                }
-            }
-            
-            VStack {
-                if isSelected {
-                    FunctionConnectionArrow(position: .top, onDragChanged: { offset in
-                        tempFunctionConnectionEnd = CGPoint(
-                            x: block.position.x + blockWidth / 2 + offset.width,
-                            y: block.position.y - 8 + offset.height
-                        )
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDragChanged?(end)
-                        }
-                    }, onDragEnded: { _ in
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDrop(end)
-                        }
-                        tempFunctionConnectionEnd = nil
-                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                        onStartFunctionConnection(.top)
-                    })
-                    .frame(width: 28, height: 28)
-                }
-                
-                Spacer()
-                
-                if isSelected {
-                    FunctionConnectionArrow(position: .bottom, onDragChanged: { offset in
-                        tempFunctionConnectionEnd = CGPoint(
-                            x: block.position.x + blockWidth / 2 + offset.width,
-                            y: block.position.y + blockHeight + 8 + offset.height
-                        )
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDragChanged?(end)
-                        }
-                    }, onDragEnded: { _ in
-                        if let end = tempFunctionConnectionEnd {
-                            onFunctionConnectionDrop(end)
-                        }
-                        tempFunctionConnectionEnd = nil
-                    }, isActive: tempFunctionConnectionEnd != nil, onDragStarted: {
-                        onStartFunctionConnection(.bottom)
-                    })
-                    .frame(width: 28, height: 28)
-                }
-            }
+            blockContent
         }
         .frame(width: blockWidth, height: blockHeight)
-        .shadow(
-            color: isSelected ? accent.opacity(0.5) : Color.black.opacity(0.3),
-            radius: isDragging ? 15 : 8,
-            x: 0,
-            y: isDragging ? 10 : 4
-        )
-        .scaleEffect(isDragging ? 1.05 : 1.0)
-        .position(
-            x: block.position.x + blockWidth / 2 + dragOffset.width,
-            y: block.position.y + blockHeight / 2 + dragOffset.height
-        )
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    isDragging = true
-                    dragOffset = value.translation
-                    onDragChanged?(value.translation)
-                }
-                .onEnded { value in
-                    let newPosition = CGPoint(
-                        x: block.position.x + value.translation.width,
-                        y: block.position.y + value.translation.height
-                    )
-                    onPositionChanged(newPosition)
-                    dragOffset = .zero
-                    isDragging = false
-                    onDragEnded?()
-                }
-        )
-        .onTapGesture {
-            onSelect()
-        }
-        .contextMenu {
-            Button(role: .destructive) {
-                showDeleteConfirm = true
-            } label: {
-                Label("Delete Block", systemImage: "trash")
+    }
+    
+    private var blockContent: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Image(systemName: block.functionType.icon)
+                Text(block.functionType.displayName)
+                    .font(.caption.weight(.bold))
             }
+            .foregroundStyle(accent)
+            
+            resultText
+            
+            sourceCountText
+        }
+    }
+    
+    private var resultText: some View {
+        Group {
+            if let result = result {
+                Text(String(format: "%.2f", result))
+                    .font(.title2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+            } else if block.sourceElementId != nil {
+                Text("...")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No input")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+    
+    private var sourceCountText: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "cube.fill")
+                .font(.caption2)
+            Text("\(sourceCardsCount)")
+                .font(.caption2)
+        }
+        .foregroundStyle(.secondary)
+    }
+    
+    @ViewBuilder
+    private var arrowsOverlay: some View {
+        if isSelected {
+            leftArrow
+            rightArrow
+            topArrow
+            bottomArrow
+        }
+    }
+    
+    private var leftArrow: some View {
+        arrowButton(for: .left, xOffset: -blockWidth / 2 - 22)
+    }
+    
+    private var rightArrow: some View {
+        arrowButton(for: .right, xOffset: blockWidth / 2 + 22)
+    }
+    
+    private var topArrow: some View {
+        arrowButton(for: .top, yOffset: -blockHeight / 2 - 22)
+    }
+    
+    private var bottomArrow: some View {
+        arrowButton(for: .bottom, yOffset: blockHeight / 2 + 22)
+    }
+    
+    private func arrowButton(for point: FunctionConnection.FunctionConnectionPoint, xOffset: CGFloat = 0, yOffset: CGFloat = 0) -> some View {
+        let isThisArrowHovered = hoveredArrowTarget?.0 == block.id && hoveredArrowTarget?.1 == point
+        
+        return FunctionConnectionArrow(
+            position: point,
+            onDragChanged: { offset in
+                let pos = arrowPosition(for: point, offset: offset)
+                tempFunctionConnectionEnd = pos
+                onFunctionConnectionDragChanged?(pos)
+            },
+            onDragEnded: { _ in
+                if let end = tempFunctionConnectionEnd {
+                    onFunctionConnectionDrop(end)
+                }
+                tempFunctionConnectionEnd = nil
+            },
+            isActive: isFunctionConnectionDraggingFromThisBlock,
+            isHovered: isThisArrowHovered,
+            onDragStarted: {
+                onStartFunctionConnection(point)
+            }
+        )
+        .frame(width: 28, height: 28)
+        .offset(x: xOffset, y: yOffset)
+    }
+    
+    private func arrowPosition(for point: FunctionConnection.FunctionConnectionPoint, offset: CGSize) -> CGPoint {
+        switch point {
+        case .left:
+            return CGPoint(x: block.position.x - 8 + offset.width, y: block.position.y + blockHeight / 2 + offset.height)
+        case .right:
+            return CGPoint(x: block.position.x + blockWidth + 8 + offset.width, y: block.position.y + blockHeight / 2 + offset.height)
+        case .top:
+            return CGPoint(x: block.position.x + blockWidth / 2 + offset.width, y: block.position.y - 8 + offset.height)
+        case .bottom:
+            return CGPoint(x: block.position.x + blockWidth / 2 + offset.width, y: block.position.y + blockHeight + 8 + offset.height)
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            blockBackground
+            arrowsOverlay
+        }
+        .shadow(color: isSelected ? accent.opacity(0.5) : Color.black.opacity(0.3), radius: isDragging ? 15 : 8, x: 0, y: isDragging ? 10 : 4)
+        .scaleEffect(isDragging ? 1.05 : 1.0)
+        .position(x: block.position.x + blockWidth / 2 + dragOffset.width, y: block.position.y + blockHeight / 2 + dragOffset.height)
+        .gesture(blockDragGesture)
+        .onTapGesture { onSelect() }
+        .contextMenu {
+            Button(role: .destructive) { showDeleteConfirm = true } label: { Label("Delete Block", systemImage: "trash") }
         }
         .alert("Delete Function Block?", isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                onDelete()
-            }
+            Button("Delete", role: .destructive) { onDelete() }
         } message: {
             Text("This will remove the function block and its connections.")
         }

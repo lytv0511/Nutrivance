@@ -897,11 +897,24 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     var compactCurrentStageTitle: String? {
-        currentMicroStage?.title ?? currentPhase?.title
+        if let microStage = currentMicroStage {
+            let role = microStage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+            if !role.isEmpty {
+                return "\(role): \(microStage.title)"
+            }
+            return microStage.title
+        }
+        return currentPhase?.title
     }
 
     var compactCurrentStageTargetText: String? {
         if let currentMicroStage {
+            // Show goal type + target (e.g., "POWER 250-300W" or "ZONE 3")
+            if let goalRaw = currentMicroStage.goalRawValue, !goalRaw.isEmpty {
+                let goal = goalRaw.uppercased()
+                let target = compactTargetText(for: currentMicroStage)
+                return "\(goal) • \(target)"
+            }
             return compactTargetText(for: currentMicroStage)
         }
         guard let currentPhase else { return nil }
@@ -3506,187 +3519,301 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         location: HKWorkoutSessionLocationType,
         phases: [WatchProgramPhasePayload]
     ) async {
-        guard let workoutPlan = workoutPlanForWorkoutApp(title: title, activity: activity, location: location, phases: phases) else {
-            statusMessage = "Workout app handoff needs a single activity workout."
+        guard !phases.isEmpty else {
+            statusMessage = "Workout app needs at least one activity."
             return
         }
 
         do {
-            try await workoutPlan.openInWorkoutApp()
-            statusMessage = "Opened in Apple Workout."
+            if #available(watchOS 10.0, *) {
+                let workoutPlans = buildWorkoutPlans(
+                    title: title,
+                    defaultActivity: activity,
+                    defaultLocation: location,
+                    phases: phases
+                )
+
+                guard !workoutPlans.isEmpty else {
+                    statusMessage = "Could not create workout plan from stages."
+                    print("[Watch] Failed to build workout plan")
+                    return
+                }
+
+                if workoutPlans.count == 1, let workoutPlan = workoutPlans.first {
+                    try await workoutPlan.openInWorkoutApp()
+                    statusMessage = "Opened staged workout in Apple Workout."
+                    print("[Watch] Successfully opened \(title) with \(phases.count) phases in Workout app")
+                } else {
+                    let scheduledCount = await scheduleWorkoutPlansForWorkoutApp(workoutPlans)
+                    guard scheduledCount > 0 else {
+                        return
+                    }
+
+                    statusMessage = scheduledCount == 1
+                        ? "Scheduled 1 workout in Apple Workout."
+                        : "Scheduled \(scheduledCount) workouts in Apple Workout."
+                    print("[Watch] Scheduled \(scheduledCount) Apple Workout plans for \(title)")
+                }
+            } else {
+                statusMessage = "Workout app not available on this watchOS version."
+                print("[Watch] watchOS 10.0+ required for WorkoutKit")
+            }
         } catch {
-            statusMessage = "Could not open Apple Workout."
+            statusMessage = "Could not open Workout app: \(error.localizedDescription)"
+            print("[Watch] Error opening Workout app: \(error)")
         }
     }
 
-    private func workoutPlanForWorkoutApp(
+    private func buildWorkoutPlan(
         title: String,
         activity: HKWorkoutActivityType,
         location: HKWorkoutSessionLocationType,
         phases: [WatchProgramPhasePayload]
     ) -> WorkoutPlan? {
-        let resolvedPhases = phases.isEmpty ? currentPhase.map { [$0] } ?? [] : phases
-        guard let primaryPhase = resolvedPhases.first else { return nil }
+        guard !phases.isEmpty, #available(watchOS 10.0, *) else { return nil }
 
-        guard resolvedPhases.allSatisfy({
-            HKWorkoutActivityType(rawValue: $0.activityRawValue) == activity &&
-            HKWorkoutSessionLocationType(rawValue: $0.locationRawValue) == location
-        }) else {
-            return nil
+        // Flatten all micro-stages from all phases for a comprehensive multi-activity workout
+        let allMicroStages = phases.flatMap { phase in
+            (phase.microStages ?? []).isEmpty 
+                ? [buildDefaultMicroStage(from: phase)]
+                : phase.microStages ?? []
         }
 
-        let microStages = resolvedPhases.flatMap { workoutKitMicroStages(from: $0) }
-        if microStages.isEmpty {
-            let workout = SingleGoalWorkout(
-                activity: activity,
-                location: location,
-                goal: .time(Double(max(primaryPhase.plannedMinutes, 1)), .minutes)
-            )
-            return WorkoutPlan(.goal(workout))
+        guard !allMicroStages.isEmpty else { return nil }
+
+        // Build workout structure with warmup, work blocks, and cooldown
+        let warmupStage = allMicroStages.first(where: { isWarmupStage($0) })
+        let cooldownStage = allMicroStages.last(where: { isCooldownStage($0) })
+        let workStages = allMicroStages.filter { stage in
+            stage.id != warmupStage?.id && stage.id != cooldownStage?.id
         }
 
-        return WorkoutPlan(
-            .custom(
-                customWorkoutForWorkoutApp(
-                    title: title,
-                    activity: activity,
-                    location: location,
-                    microStages: microStages
-                )
-            )
-        )
-    }
+        // Create interval blocks from work stages
+        var intervalBlocks: [IntervalBlock] = []
+        var stageIndex = 0
 
-    private func customWorkoutForWorkoutApp(
-        title: String,
-        activity: HKWorkoutActivityType,
-        location: HKWorkoutSessionLocationType,
-        microStages: [WatchProgramMicroStagePayload]
-    ) -> CustomWorkout {
-        let warmup = microStages.first(where: { isWarmupStage($0) })
-        let cooldown = microStages.last(where: { isCooldownStage($0) })
-        let mainStages = microStages.filter { stage in
-            stage.id != warmup?.id && stage.id != cooldown?.id
-        }
-
-        var blocks: [IntervalBlock] = []
-        var index = 0
-        while index < mainStages.count {
-            let stage = mainStages[index]
+        while stageIndex < workStages.count {
+            let stage = workStages[stageIndex]
             let repeatLabel = stage.repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let circuitKey = stage.circuitGroupID?.uuidString ?? repeatLabel
+
             var groupedStages = [stage]
             if !circuitKey.isEmpty {
-                var nextIndex = index + 1
-                while nextIndex < mainStages.count,
-                      (mainStages[nextIndex].circuitGroupID?.uuidString ?? mainStages[nextIndex].repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == circuitKey,
-                      mainStages[nextIndex].repeats == stage.repeats {
-                    groupedStages.append(mainStages[nextIndex])
+                var nextIndex = stageIndex + 1
+                while nextIndex < workStages.count,
+                      (workStages[nextIndex].circuitGroupID?.uuidString ?? workStages[nextIndex].repeatSetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == circuitKey,
+                      workStages[nextIndex].repeats == stage.repeats {
+                    groupedStages.append(workStages[nextIndex])
                     nextIndex += 1
                 }
-                index = nextIndex
+                stageIndex = nextIndex
             } else {
-                index += 1
+                stageIndex += 1
             }
 
-            let steps = groupedStages.map { groupedStage in
-                IntervalStep(intervalStepPurpose(for: groupedStage),
-                             step: workoutStep(for: groupedStage))
+            let steps = groupedStages.map { stage in
+                IntervalStep(
+                    intervalStepPurpose(for: stage),
+                    step: buildWorkoutStep(for: stage)
+                )
             }
-            blocks.append(IntervalBlock(steps: steps, iterations: max(stage.repeats, 1)))
+
+            intervalBlocks.append(
+                IntervalBlock(steps: steps, iterations: max(stage.repeats, 1))
+            )
         }
 
-        return CustomWorkout(
+        // Create CustomWorkout with all stages
+        let customWorkout = CustomWorkout(
             activity: activity,
             location: location,
             displayName: title,
-            warmup: warmup.map(workoutStep(for:)),
-            blocks: blocks,
-            cooldown: cooldown.map(workoutStep(for:))
+            warmup: warmupStage.map(buildWorkoutStep(for:)),
+            blocks: intervalBlocks,
+            cooldown: cooldownStage.map(buildWorkoutStep(for:))
         )
+
+        // Wrap in WorkoutPlan and return
+        return WorkoutPlan(.custom(customWorkout))
     }
 
-    private func workoutKitMicroStages(from phase: WatchProgramPhasePayload) -> [WatchProgramMicroStagePayload] {
-        if let microStages = phase.microStages, !microStages.isEmpty {
-            return microStages
+    private func buildWorkoutPlans(
+        title: String,
+        defaultActivity: HKWorkoutActivityType,
+        defaultLocation: HKWorkoutSessionLocationType,
+        phases: [WatchProgramPhasePayload]
+    ) -> [WorkoutPlan] {
+        guard !phases.isEmpty, #available(watchOS 10.0, *) else { return [] }
+
+        if phases.count == 1,
+           let workoutPlan = buildWorkoutPlan(
+               title: title,
+               activity: HKWorkoutActivityType(rawValue: phases[0].activityRawValue) ?? defaultActivity,
+               location: HKWorkoutSessionLocationType(rawValue: phases[0].locationRawValue) ?? defaultLocation,
+               phases: phases
+           ) {
+            return [workoutPlan]
         }
 
+        return phases.compactMap { phase in
+            let phaseActivity = HKWorkoutActivityType(rawValue: phase.activityRawValue) ?? defaultActivity
+            let phaseLocation = HKWorkoutSessionLocationType(rawValue: phase.locationRawValue) ?? defaultLocation
+            let displayName = phase.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? title
+                : "\(title) • \(phase.title)"
+
+            return buildWorkoutPlan(
+                title: displayName,
+                activity: phaseActivity,
+                location: phaseLocation,
+                phases: [phase]
+            )
+        }
+    }
+
+    private func scheduleWorkoutPlansForWorkoutApp(_ workoutPlans: [WorkoutPlan]) async -> Int {
+        guard #available(watchOS 10.0, *) else { return 0 }
+        guard !workoutPlans.isEmpty else { return 0 }
+
+        if schedulerAuthorizationState != .authorized {
+            schedulerAuthorizationState = await WorkoutScheduler.shared.requestAuthorization()
+        }
+        guard schedulerAuthorizationState == .authorized else {
+            statusMessage = "Workout scheduling permission is required."
+            return 0
+        }
+
+        let calendar = Calendar.current
+        let startDate = calendar.date(byAdding: .minute, value: 1, to: Date()) ?? Date()
+
+        for (index, workoutPlan) in workoutPlans.enumerated() {
+            let date = calendar.date(byAdding: .minute, value: index, to: startDate) ?? startDate
+            let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+            await WorkoutScheduler.shared.schedule(workoutPlan, at: components)
+        }
+
+        scheduledPlans = await WorkoutScheduler.shared.scheduledWorkouts
+        return workoutPlans.count
+    }
+
+    private func buildDefaultMicroStage(from phase: WatchProgramPhasePayload) -> WatchProgramMicroStagePayload {
         let objective = phase.objective ?? WatchPhaseObjectivePayload(
             kind: .time,
             targetValue: Double(max(phase.plannedMinutes, 1)),
             label: "Time"
         )
-        return [
-            WatchProgramMicroStagePayload(
-                id: phase.id,
-                title: phase.title,
-                notes: phase.subtitle,
-                roleRawValue: nil,
-                goalRawValue: fallbackGoalRawValue(for: objective.kind),
-                plannedMinutes: max(phase.plannedMinutes, 1),
-                repeats: 1,
-                repeatSetLabel: nil,
-                targetValueText: objective.label,
-                targetBehaviorRawValue: nil,
-                circuitGroupID: nil,
-                objective: objective
-            )
-        ]
+
+        return WatchProgramMicroStagePayload(
+            id: phase.id,
+            title: phase.title,
+            notes: phase.subtitle,
+            roleRawValue: nil,
+            goalRawValue: fallbackGoalRawValue(for: objective.kind),
+            plannedMinutes: max(phase.plannedMinutes, 1),
+            repeats: 1,
+            repeatSetLabel: nil,
+            targetValueText: objective.label,
+            targetBehaviorRawValue: nil,
+            circuitGroupID: nil,
+            objective: objective
+        )
     }
 
-    private func workoutStep(for stage: WatchProgramMicroStagePayload) -> WorkoutStep {
-        WorkoutStep(goal: workoutGoal(for: stage), alert: workoutAlert(for: stage), displayName: stage.title)
+    private func buildWorkoutStep(for stage: WatchProgramMicroStagePayload) -> WorkoutStep {
+        WorkoutStep(
+            goal: buildWorkoutGoal(for: stage),
+            alert: buildWorkoutAlert(for: stage),
+            displayName: stage.title
+        )
     }
 
-    private func workoutGoal(for stage: WatchProgramMicroStagePayload) -> WorkoutGoal {
+    private func buildWorkoutGoal(for stage: WatchProgramMicroStagePayload) -> WorkoutGoal {
         switch stage.objective.kind {
         case .distance, .routeDistance:
             return .distance(max(stage.objective.targetValue, 0.1), .kilometers)
         case .energy:
             return .energy(max(stage.objective.targetValue, 1), .kilocalories)
-        case .time, .heartRateZone, .power, .cadence, .speed, .pace:
+        case .heartRateZone, .power, .cadence, .speed, .pace, .time:
             return .time(Double(max(stage.plannedMinutes, 1)), .minutes)
         }
     }
 
-    private func workoutAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+    private func buildWorkoutAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
         switch stage.objective.kind {
         case .heartRateZone:
-            return .heartRate(zone: Int(stage.objective.secondaryValue ?? 3))
+            let zone = Int(stage.objective.secondaryValue ?? 3)
+            return .heartRate(zone: zone)
         case .power:
-            return powerAlert(for: stage)
+            return buildPowerAlert(for: stage)
         case .cadence:
-            return cadenceAlert(for: stage)
+            return buildCadenceAlert(for: stage)
         case .speed:
-            return speedAlert(for: stage)
+            return buildSpeedAlert(for: stage)
         case .pace:
-            return paceAlert(for: stage)
+            return buildPaceAlert(for: stage)
         case .time, .distance, .energy, .routeDistance:
             return nil
         }
     }
 
-    private func intervalStepPurpose(for stage: WatchProgramMicroStagePayload) -> IntervalStep.Purpose {
-        switch stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "recovery":
-            return .recovery
-        default:
-            return .work
+    private func buildPowerAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+
+        if behavior == "belowthreshold", let target = label.firstNumberValue {
+            return .power(0...target, unit: .watts)
         }
+        if let range = label.numberRange {
+            return .power(range.lowerBound...range.upperBound, unit: .watts)
+        }
+        if let target = label.firstNumberValue {
+            return .power(target, unit: .watts)
+        }
+        return nil
     }
 
-    private func isWarmupStage(_ stage: WatchProgramMicroStagePayload) -> Bool {
-        if stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "warmup" {
-            return true
+    private func buildCadenceAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+
+        if behavior == "belowthreshold", let target = label.firstNumberValue {
+            return .cadence(0...target)
         }
-        return stage.title.localizedCaseInsensitiveContains("warm")
+        if let range = label.numberRange {
+            return .cadence(range.lowerBound...range.upperBound)
+        }
+        if let target = label.firstNumberValue {
+            return .cadence(target)
+        }
+        return nil
     }
 
-    private func isCooldownStage(_ stage: WatchProgramMicroStagePayload) -> Bool {
-        if stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "cooldown" {
-            return true
+    private func buildSpeedAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+
+        guard let target = label.speedTarget else { return nil }
+        if behavior == "belowthreshold" {
+            return .speed(target.recoveryRange.lowerBound...target.recoveryRange.upperBound, unit: target.unit)
         }
-        return stage.title.localizedCaseInsensitiveContains("cool")
+        if let range = target.range {
+            return .speed(range.lowerBound...range.upperBound, unit: target.unit)
+        }
+        return .speed(target.threshold, unit: target.unit)
+    }
+
+    private func buildPaceAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText ?? stage.objective.label ?? ""
+
+        guard let target = label.paceAsSpeedTarget else { return nil }
+        if behavior == "belowthreshold" {
+            return .speed(target.recoveryRange.lowerBound...target.recoveryRange.upperBound, unit: target.unit)
+        }
+        if let range = target.range {
+            return .speed(range.lowerBound...range.upperBound, unit: target.unit)
+        }
+        return .speed(target.threshold, unit: target.unit)
     }
 
     private func fallbackGoalRawValue(for kind: WatchPhaseObjectivePayload.Kind) -> String? {
@@ -3710,60 +3837,27 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
     }
 
-    private func powerAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
-        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let label = stage.targetValueText ?? stage.objective.label ?? ""
-        if behavior == "belowthreshold", let target = label.firstNumberValue {
-            return .power(0...target, unit: .watts)
+    private func isWarmupStage(_ stage: WatchProgramMicroStagePayload) -> Bool {
+        if stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "warmup" {
+            return true
         }
-        if let range = label.numberRange {
-            return .power(range.lowerBound...range.upperBound, unit: .watts)
-        }
-        if let target = label.firstNumberValue {
-            return .power(target, unit: .watts)
-        }
-        return nil
+        return stage.title.localizedCaseInsensitiveContains("warm")
     }
 
-    private func cadenceAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
-        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let label = stage.targetValueText ?? stage.objective.label ?? ""
-        if behavior == "belowthreshold", let target = label.firstNumberValue {
-            return .cadence(0...target)
+    private func isCooldownStage(_ stage: WatchProgramMicroStagePayload) -> Bool {
+        if stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "cooldown" {
+            return true
         }
-        if let range = label.numberRange {
-            return .cadence(range.lowerBound...range.upperBound)
-        }
-        if let target = label.firstNumberValue {
-            return .cadence(target)
-        }
-        return nil
+        return stage.title.localizedCaseInsensitiveContains("cool")
     }
 
-    private func speedAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
-        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let label = stage.targetValueText ?? stage.objective.label ?? ""
-        guard let target = label.speedTarget else { return nil }
-        if behavior == "belowthreshold" {
-            return .speed(target.recoveryRange.lowerBound...target.recoveryRange.upperBound, unit: target.unit)
+    private func intervalStepPurpose(for stage: WatchProgramMicroStagePayload) -> IntervalStep.Purpose {
+        switch stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "recovery":
+            return .recovery
+        default:
+            return .work
         }
-        if let range = target.range {
-            return .speed(range.lowerBound...range.upperBound, unit: target.unit)
-        }
-        return .speed(target.threshold, unit: target.unit)
-    }
-
-    private func paceAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
-        let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let label = stage.targetValueText ?? stage.objective.label ?? ""
-        guard let target = label.paceAsSpeedTarget else { return nil }
-        if behavior == "belowthreshold" {
-            return .speed(target.recoveryRange.lowerBound...target.recoveryRange.upperBound, unit: target.unit)
-        }
-        if let range = target.range {
-            return .speed(range.lowerBound...range.upperBound, unit: target.unit)
-        }
-        return .speed(target.threshold, unit: target.unit)
     }
 
     private func objectiveDisplayLabel(for objective: WatchPhaseObjectivePayload) -> String {

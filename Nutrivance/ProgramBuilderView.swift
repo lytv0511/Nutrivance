@@ -315,7 +315,12 @@ struct ProgramBuilderView: View {
             plannedRouteLaunchMetadata = nil
         }
         .onChange(of: draftCacheID) { _, _ in
-            persistBuilderDraft()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                await MainActor.run {
+                    persistBuilderDraft()
+                }
+            }
         }
         .onChange(of: customMicroStagesByActivityID) { _, _ in
             syncAvailableMinutesWithStages()
@@ -385,39 +390,20 @@ struct ProgramBuilderView: View {
         let activities = selectedActivities
         guard !activities.isEmpty else { return [] }
 
-        let normalizedWeights = activities.reduce(into: [String: Double]()) { result, activity in
-            result[activity.id] = max(0.15, allocationWeights[activity.id, default: 1])
-        }
-        let totalWeight = normalizedWeights.values.reduce(0, +)
-        let totalMinutes = max(Int(availableMinutes.rounded()), activities.count)
-        guard totalWeight > 0 else { return [] }
-
-        var plannedMinutesByActivity: [String: Int] = [:]
-        var consumedMinutes = 0
-
-        for (index, activity) in activities.enumerated() {
-            let weight = normalizedWeights[activity.id, default: 1]
-            let assignedMinutes = index == activities.count - 1
-                ? max(totalMinutes - consumedMinutes, 1)
-                : max(Int(((weight / totalWeight) * Double(totalMinutes)).rounded()), 1)
-            plannedMinutesByActivity[activity.id] = assignedMinutes
-            consumedMinutes += assignedMinutes
-        }
-
-        if consumedMinutes != totalMinutes, let lastID = activities.last?.id {
-            plannedMinutesByActivity[lastID] = max((plannedMinutesByActivity[lastID] ?? 1) + (totalMinutes - consumedMinutes), 1)
-        }
-
         return activities.map { activity in
-            ProgramWorkoutPlanPhase(
+            let plannedMinutes = max(allocationMinutes(for: activity.id), 1)
+            let microStages = resolvedMicroStages(for: activity, totalMinutes: plannedMinutes)
+            let circuitGroups = resolvedCircuitGroups(for: activity, totalMinutes: plannedMinutes)
+
+            return ProgramWorkoutPlanPhase(
                 title: activity.title,
-                subtitle: "\(plannedMinutesByActivity[activity.id] ?? 1) min planned",
+                subtitle: "\(plannedMinutes) min planned",
                 activityID: activity.id,
                 activityRawValue: activity.hkWorkoutActivityType.rawValue,
                 locationRawValue: activity.preferredLocationType(for: selectedMode).rawValue,
-                plannedMinutes: max(plannedMinutesByActivity[activity.id] ?? 1, 1),
-                microStages: resolvedMicroStages(for: activity, totalMinutes: plannedMinutesByActivity[activity.id] ?? 1),
-                circuitGroups: resolvedCircuitGroups(for: activity, totalMinutes: plannedMinutesByActivity[activity.id] ?? 1)
+                plannedMinutes: plannedMinutes,
+                microStages: microStages,
+                circuitGroups: circuitGroups
             )
         }
     }
@@ -1094,22 +1080,20 @@ struct ProgramBuilderView: View {
                             }
                         }
 
-                        if selectedActivities.count == 1 {
-                            ProgramLaunchButton(
-                                title: "Workout App",
-                                subtitle: "Open in first-party Apple Workout",
-                                symbol: "figure.outdoor.cycle",
-                                tint: .white,
-                                fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
-                            ) {
-                                liveWorkoutManager.sendWorkoutToAppleWorkoutAppOnWatch(
-                                    title: launchTitle,
-                                    subtitle: launchSubtitle,
-                                    activity: activity.hkWorkoutActivityType,
-                                    location: activity.preferredLocationType(for: selectedMode),
-                                    phases: buildPlanPhases()
-                                )
-                            }
+                        ProgramLaunchButton(
+                            title: "Workout App",
+                            subtitle: "Open in first-party Apple Workout",
+                            symbol: "figure.outdoor.cycle",
+                            tint: .white,
+                            fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
+                        ) {
+                            liveWorkoutManager.sendWorkoutToAppleWorkoutAppOnWatch(
+                                title: launchTitle,
+                                subtitle: launchSubtitle,
+                                activity: activity.hkWorkoutActivityType,
+                                location: activity.preferredLocationType(for: selectedMode),
+                                phases: buildPlanPhases()
+                            )
                         }
                     }
                     #if !targetEnvironment(macCatalyst)
@@ -1620,6 +1604,9 @@ struct ProgramBuilderView: View {
         }
 
         let phases = buildPlanPhases()
+        let shouldPersistPhases = phases.contains { phase in
+            !(phase.microStages ?? []).isEmpty || !(phase.circuitGroups ?? []).isEmpty
+        } || phases.count > 1
 
         return ProgramWorkoutPlanRecord(
             id: UUID(),
@@ -1645,7 +1632,7 @@ struct ProgramBuilderView: View {
             routeName: routeLaunch?.name,
             trailhead: routeLaunch?.trailhead.map(ProgramStoredCoordinate.init),
             routeCoordinates: routeLaunch?.coordinates.map(ProgramStoredCoordinate.init) ?? [],
-            phases: phases.count > 1 ? phases : nil,
+            phases: shouldPersistPhases ? phases : nil,
             createdAt: Date(),
             updatedAt: Date(),
             expiresAt: expiresAt,

@@ -37,6 +37,37 @@ private struct DragCancellableTap<Label: View>: View {
     }
 }
 
+// MARK: - Scrollable tap that allows parent ScrollView to scroll while still being tappable
+
+private struct ScrollableTapRow<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var hasDragged = false
+
+    var body: some View {
+        content()
+            .contentShape(Rectangle())
+            .opacity(hasDragged ? 0.7 : 1.0)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        hasDragged = true
+                    }
+                    .onEnded { value in
+                        hasDragged = false
+                        let d = hypot(value.translation.width, value.translation.height)
+                        if d < 10 {
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                            action()
+                        }
+                    }
+            )
+    }
+}
+
 // MARK: - MindfulnessRealmView
 
 struct MindfulnessRealmView: View {
@@ -198,7 +229,7 @@ struct MindfulnessRealmView: View {
     }
 
     private func realmActionRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        ScrollableTapRow(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.title2)
@@ -222,7 +253,6 @@ struct MindfulnessRealmView: View {
             .padding(14)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .buttonStyle(.plain)
     }
 
     private var sessionSection: some View {
