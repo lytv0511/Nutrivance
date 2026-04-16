@@ -75,6 +75,7 @@ struct ProgramBuilderView: View {
     @StateObject private var planStore = ProgramWorkoutPlanStore.shared
     @StateObject private var stageQuestStore = StageQuestStore.shared
     @EnvironmentObject private var navigationState: NavigationState
+    @EnvironmentObject private var unitPreferences: UnitPreferencesStore
 
     @State private var searchText = ""
     @State private var selectedMode: ProgramBuilderMode = .guided
@@ -116,9 +117,16 @@ struct ProgramBuilderView: View {
     @State private var isStageManagerBanSheetPresented = false
     @State private var navigateToWorkoutViewsLayout = false
     @State private var navigateToMetricLayout = false
+    @State private var isScheduledWorkoutsSheetPresented = false
+    @State private var isWorkoutPreviewSheetPresented = false
+    @State private var workoutPreviewLaunchContext: (title: String, activity: ProgramWorkoutType)?
 
     private var catalog: [ProgramWorkoutType] {
         ProgramWorkoutType.catalog + customActivities
+    }
+
+    private var usesImperialDistance: Bool {
+        self.unitPreferences.resolvedDistanceUnit == .miles
     }
 
     private var filteredCatalog: [ProgramWorkoutType] {
@@ -248,55 +256,59 @@ struct ProgramBuilderView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            ScrollView {
-                contentLayout(for: proxy.size.width)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .foregroundStyle(.orange)
-            .tint(.orange)
-            .background(GradientBackgrounds().programBuilderMeshBackground())
-        }
-        .navigationTitle("Program Builder")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button {
-                    navigateToWorkoutViewsLayout = true
-                } label: {
-                    Image(systemName: "square.grid.2x2")
+        buildMainView()
+            .navigationTitle("Program Builder")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button {
+                        isScheduledWorkoutsSheetPresented = true
+                    } label: {
+                        Image(systemName: "calendar.badge.clock")
+                    }
+                    Button {
+                        navigateToWorkoutViewsLayout = true
+                    } label: {
+                        Image(systemName: "square.grid.2x2")
+                    }
+                    Button {
+                        navigateToMetricLayout = true
+                    } label: {
+                        Image(systemName: "gauge")
+                    }
                 }
-                Button {
-                    navigateToMetricLayout = true
-                } label: {
-                    Image(systemName: "gauge")
-                }
-            }
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") {
-                    dismissProgramBuilderKeyboard()
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        dismissProgramBuilderKeyboard()
+                    }
                 }
             }
-        }
-        .navigationDestination(isPresented: $navigateToWorkoutViewsLayout) {
-            ProgramBuilderWorkoutViewsLayoutView()
-        }
-        .navigationDestination(isPresented: $navigateToMetricLayout) {
-            ProgramBuilderMetricLayoutView()
-        }
-        .fullScreenCover(isPresented: $isWorkoutStagesViewPresented) {
-            NavigationStack {
-                workoutStagesExpandedView
+            .navigationDestination(isPresented: $navigateToWorkoutViewsLayout) {
+                ProgramBuilderWorkoutViewsLayoutView()
             }
-        }
-        .sheet(isPresented: $isStageManagerBanSheetPresented) {
-            stageManagerBanListSheet
-        }
-        .task(id: coachContextID) {
+            .navigationDestination(isPresented: $navigateToMetricLayout) {
+                ProgramBuilderMetricLayoutView()
+            }
+            .fullScreenCover(isPresented: $isWorkoutStagesViewPresented) {
+                NavigationStack {
+                    workoutStagesExpandedView
+                }
+            }
+            .sheet(isPresented: $isStageManagerBanSheetPresented) {
+                stageManagerBanListSheet
+            }
+            .sheet(isPresented: $isScheduledWorkoutsSheetPresented) {
+                scheduledWorkoutsSheet
+            }
+            .sheet(isPresented: $isWorkoutPreviewSheetPresented) {
+                workoutPreviewConfirmationSheet
+            }
+            .task(id: coachContextID) {
             await planner.refreshCoachAdvice(
                 for: buildPlannerRequest(),
-                engine: engine
+                engine: engine,
+                usesImperial: usesImperialDistance
             )
         }
         .task(id: routeTemplateRefreshID) {
@@ -315,12 +327,7 @@ struct ProgramBuilderView: View {
             plannedRouteLaunchMetadata = nil
         }
         .onChange(of: draftCacheID) { _, _ in
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                await MainActor.run {
-                    persistBuilderDraft()
-                }
-            }
+            draftCachePersistenceTask()
         }
         .onChange(of: customMicroStagesByActivityID) { _, _ in
             syncAvailableMinutesWithStages()
@@ -339,6 +346,213 @@ struct ProgramBuilderView: View {
             guard navigationState.isGloballyActiveRootTab(.programBuilder) else { return }
             navigateToMetricLayout = true
         }
+    }
+
+    private func buildMainView() -> some View {
+        GeometryReader { proxy in
+            ScrollView {
+                contentLayout(for: proxy.size.width)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .foregroundStyle(.orange)
+        .tint(.orange)
+        .background(GradientBackgrounds().programBuilderMeshBackground())
+    }
+
+    private var scheduledWorkoutsSheet: some View {
+        VStack {
+            HStack {
+                Text("Scheduled Workouts")
+                    .font(.headline)
+                Spacer()
+                Button("Done") {
+                    isScheduledWorkoutsSheetPresented = false
+                }
+            }
+            .padding()
+            Spacer()
+        }
+    }
+
+    private var workoutPreviewConfirmationSheet: some View {
+        VStack(spacing: 16) {
+            // Header
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Confirm Workout")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(.white)
+                        Text("Review before sending to Apple Workouts app")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    Spacer()
+                    Button {
+                        isWorkoutPreviewSheetPresented = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                }
+                .padding(12)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            // Workout Details
+            if let context = workoutPreviewLaunchContext {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "figure.outdoor.cycle")
+                            .font(.title3)
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(context.title)
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                            Text(context.activity.title)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        Spacer()
+                    }
+
+                    // Stage Summary
+                    let phases = buildPlanPhases()
+                    let totalStages = phases.reduce(0) { $0 + ($1.microStages?.count ?? 0) }
+                    let totalMinutes = phases.reduce(0) { $0 + $1.plannedMinutes }
+
+                    HStack(spacing: 16) {
+                        VStack(spacing: 4) {
+                            Text("\(totalStages)")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.orange)
+                            Text("Stages")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+
+                        VStack(spacing: 4) {
+                            Text("\(totalMinutes)")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.orange)
+                            Text("Minutes")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    // Stage List Preview
+                    workoutPreviewStagesList(phases: phases)
+                }
+                .padding(12)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            Spacer()
+
+            // Action Buttons
+            HStack(spacing: 12) {
+                Button {
+                    isWorkoutPreviewSheetPresented = false
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                Button {
+                    if let context = workoutPreviewLaunchContext {
+                        liveWorkoutManager.sendWorkoutToAppleWorkoutAppOnWatch(
+                            title: context.title,
+                            subtitle: launchSubtitle(for: context.activity),
+                            activity: context.activity.hkWorkoutActivityType,
+                            location: context.activity.preferredLocationType(for: selectedMode),
+                            phases: buildPlanPhases()
+                        )
+                        isWorkoutPreviewSheetPresented = false
+                    }
+                } label: {
+                    Text("Send to Workout App")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(Color.orange, in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+        .padding(16)
+        .background(GradientBackgrounds().programBuilderMeshBackground())
+    }
+
+    private func workoutPreviewStagesList(phases: [ProgramWorkoutPlanPhase]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Stages Preview")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(phases, id: \.id) { phase in
+                        workoutPreviewPhaseStages(phase: phase)
+                    }
+                }
+            }
+            .frame(maxHeight: 200)
+        }
+    }
+
+    private func workoutPreviewPhaseStages(phase: ProgramWorkoutPlanPhase) -> some View {
+        Group {
+            if let stages = phase.microStages, !stages.isEmpty {
+                ForEach(stages, id: \.id) { stage in
+                    workoutPreviewStageRow(stage: stage)
+                }
+            }
+        }
+    }
+
+    private func workoutPreviewStageRow(stage: ProgramCustomWorkoutMicroStage) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: stage.role.title == "Work" ? "bolt.fill" : "pause.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(stage.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("\(stage.plannedMinutes) min")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+
+            Spacer()
+
+            if stage.repeats > 1 {
+                Text("×\(stage.repeats)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.2), in: Capsule())
+            }
+        }
+        .padding(8)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
     }
 
     @ViewBuilder
@@ -382,6 +596,15 @@ struct ProgramBuilderView: View {
         availableMinutes = Double(activityMinutes.values.reduce(0, +))
     }
 
+    private func draftCachePersistenceTask() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            await MainActor.run {
+                persistBuilderDraft()
+            }
+        }
+    }
+
     private func stageTotalMinutes(_ stages: [ProgramCustomWorkoutMicroStage]) -> Int {
         max(stages.reduce(0) { $0 + max($1.plannedMinutes, 1) * max($1.repeats, 1) }, 0)
     }
@@ -418,7 +641,8 @@ struct ProgramBuilderView: View {
                         Task {
                             await planner.refreshCoachAdvice(
                                 for: buildPlannerRequest(),
-                                engine: engine
+                                engine: engine,
+                                usesImperial: usesImperialDistance
                             )
                         }
                     }
@@ -697,7 +921,7 @@ struct ProgramBuilderView: View {
                                 Text(stage.title)
                                     .font(.subheadline.weight(.bold))
                                     .foregroundStyle(.white)
-                                Text(stage.displaySummary)
+Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUnit == .miles))
                                     .font(.caption)
                                     .foregroundStyle(.white.opacity(0.72))
                                     .lineLimit(2)
@@ -788,11 +1012,11 @@ struct ProgramBuilderView: View {
 
         let preferredRoles: [ProgramMicroStageRole]
         if prompt.contains("stamina") {
-            preferredRoles = [.steady, .recovery, .goal]
+            preferredRoles = [.steady, .recovery]
         } else if prompt.contains("ftp") || prompt.contains("threshold") || prompt.contains("power") {
             preferredRoles = [.work, .steady, .recovery]
         } else if intensityBias > 15 {
-            preferredRoles = [.work, .steady, .goal]
+            preferredRoles = [.work, .steady]
         } else if intensityBias < -5 {
             preferredRoles = [.steady, .recovery, .cooldown]
         } else {
@@ -859,7 +1083,7 @@ struct ProgramBuilderView: View {
             switch role {
             case .work:
                 return rec.pushingRange
-            case .steady, .warmup, .goal, .recovery, .cooldown:
+            case .steady, .warmup, .recovery, .cooldown:
                 return rec.comfortableRange
             }
         }()
@@ -888,12 +1112,17 @@ struct ProgramBuilderView: View {
     private func formatStageTargetValueText(rangeValues: (Double, Double), goal: ProgramMicroStageGoal) -> String? {
         let low = min(rangeValues.0, rangeValues.1)
         let high = max(rangeValues.0, rangeValues.1)
+        let usesImperial = self.unitPreferences.resolvedDistanceUnit == .miles
 
         switch goal {
         case .cadence:
             return "\(Int(low))-\(Int(high)) rpm"
         case .speed:
-            return "\(Int(low))-\(Int(high)) mph"
+            if usesImperial {
+                return "\(Int(low))-\(Int(high)) mph"
+            } else {
+                return "\(Int(low))-\(Int(high)) kph"
+            }
         case .power:
             return "\(Int(low))-\(Int(high)) W"
         case .heartRateZone:
@@ -911,9 +1140,17 @@ struct ProgramBuilderView: View {
             }
             let start = toPaceText(low)
             let end = toPaceText(high)
-            return "\(start)-\(end) /mi"
+            if usesImperial {
+                return "\(start)-\(end) /mi"
+            } else {
+                return "\(start)-\(end) /km"
+            }
         case .distance:
-            return "\(Int(low))-\(Int(high)) km"
+            if usesImperial {
+                return "\(Int(low))-\(Int(high)) mi"
+            } else {
+                return "\(Int(low))-\(Int(high)) km"
+            }
         case .energy:
             return "\(Int(low))-\(Int(high)) kcal"
         case .open, .time:
@@ -924,7 +1161,6 @@ struct ProgramBuilderView: View {
     private func suggestedMinutes(for role: ProgramMicroStageRole, index: Int) -> Int {
         switch role {
         case .warmup: return 8
-        case .goal: return 15
         case .steady: return 10
         case .work: return 8
         case .recovery: return 4
@@ -961,7 +1197,7 @@ struct ProgramBuilderView: View {
         case .pace:
             return role == .work ? "5k-10k effort" : "Comfortable pace"
         case .time:
-            return role == .goal ? (intensityBias > 0 ? "continuous push" : "smooth aerobic") : ""
+            return role == .steady ? (intensityBias > 0 ? "continuous push" : "smooth aerobic") : ""
         default:
             if prompt.contains("stamina") { return "sustainable range" }
             return defaultDescriptor(for: goal)
@@ -1087,13 +1323,8 @@ struct ProgramBuilderView: View {
                             tint: .white,
                             fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
                         ) {
-                            liveWorkoutManager.sendWorkoutToAppleWorkoutAppOnWatch(
-                                title: launchTitle,
-                                subtitle: launchSubtitle,
-                                activity: activity.hkWorkoutActivityType,
-                                location: activity.preferredLocationType(for: selectedMode),
-                                phases: buildPlanPhases()
-                            )
+                            workoutPreviewLaunchContext = (title: launchTitle, activity: activity)
+                            isWorkoutPreviewSheetPresented = true
                         }
                     }
                     #if !targetEnvironment(macCatalyst)
@@ -1920,13 +2151,13 @@ struct ProgramBuilderView: View {
         return normalizeStage(ProgramCustomWorkoutMicroStage(
             title: activity.title,
             notes: "",
-            role: .goal,
+            role: .steady,
             goal: goal,
             plannedMinutes: max(totalMinutes, 5),
             repeats: 1,
             targetValueText: targetValue,
             repeatSetLabel: "",
-            targetBehavior: .completionGoal
+            targetBehavior: .range
         ), for: activity)
     }
 
@@ -1970,7 +2201,7 @@ struct ProgramBuilderView: View {
         if selectedMode == .route, activity.routeFriendly {
             return .distance
         }
-        return allowedGoals(for: .goal, activity: activity).first ?? .time
+        return allowedGoals(for: .steady, activity: activity).first ?? .time
     }
 
     private func preferredSteadyOrWorkGoal(for activity: ProgramWorkoutType) -> ProgramMicroStageGoal {
@@ -2204,7 +2435,7 @@ struct ProgramBuilderView: View {
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
 
-            Text(stage.simpleSummary)
+            Text(stage.simpleSummary(usesImperial: self.unitPreferences.resolvedDistanceUnit == .miles))
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.78))
 
@@ -2301,34 +2532,135 @@ struct ProgramBuilderView: View {
         let width = availableWidth ?? 720
         let columns = stageEditorColumns(for: width)
 
-        if columns.count == 1 {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                ForEach(stages) { stage in
-                    microStageEditorCard(
-                        for: activity,
-                        stage: stage,
-                        index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
-                        stageCount: totalStages,
-                        isCollapsed: collapsedStageIDs.contains(stage.id),
-                        onToggleCollapsed: {
-                            toggleCollapsedState(for: stage.id)
-                        }
-                    )
+        // Group stages by circuit
+        var circuitGroups: [UUID: [ProgramCustomWorkoutMicroStage]] = [:]
+        var standaloneStages: [ProgramCustomWorkoutMicroStage] = []
+        
+        for stage in stages {
+            if let circuitID = stage.circuitGroupID {
+                if circuitGroups[circuitID] == nil {
+                    circuitGroups[circuitID] = []
                 }
+                circuitGroups[circuitID]?.append(stage)
+            } else {
+                standaloneStages.append(stage)
             }
-        } else {
-            LazyVGrid(columns: columns, spacing: 14) {
-                ForEach(stages) { stage in
-                    microStageEditorCard(
-                        for: activity,
-                        stage: stage,
-                        index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
-                        stageCount: totalStages,
-                        isCollapsed: collapsedStageIDs.contains(stage.id),
-                        onToggleCollapsed: {
-                            toggleCollapsedState(for: stage.id)
+        }
+
+        return Group {
+            if columns.count == 1 {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    // Circuit groups first
+                    ForEach(circuitGroups.sorted(by: { $0.key.uuidString < $1.key.uuidString }), id: \.key) { circuitID, circuitStages in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Label(circuitStages.first?.repeatSetLabel ?? "Circuit", systemImage: "repeat.circle.fill")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.orange)
+                                
+                                Text("\(circuitStages.count) stages × \(circuitStages.first?.repeats ?? 1) repeats")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.6))
+                                
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(circuitStages) { stage in
+                                    microStageEditorCard(
+                                        for: activity,
+                                        stage: stage,
+                                        index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                                        stageCount: totalStages,
+                                        isCollapsed: collapsedStageIDs.contains(stage.id),
+                                        onToggleCollapsed: {
+                                            toggleCollapsedState(for: stage.id)
+                                        }
+                                    )
+                                    .opacity(0.95)
+                                }
+                            }
+                            .padding(8)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
                         }
-                    )
+                        .padding(10)
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    
+                    // Standalone stages
+                    ForEach(standaloneStages) { stage in
+                        microStageEditorCard(
+                            for: activity,
+                            stage: stage,
+                            index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                            stageCount: totalStages,
+                            isCollapsed: collapsedStageIDs.contains(stage.id),
+                            onToggleCollapsed: {
+                                toggleCollapsedState(for: stage.id)
+                            }
+                        )
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    // Circuit groups first
+                    ForEach(circuitGroups.sorted(by: { $0.key.uuidString < $1.key.uuidString }), id: \.key) { circuitID, circuitStages in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Label(circuitStages.first?.repeatSetLabel ?? "Circuit", systemImage: "repeat.circle.fill")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.orange)
+                                
+                                Text("\(circuitStages.count) stages × \(circuitStages.first?.repeats ?? 1) repeats")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.6))
+                                
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+
+                            LazyVGrid(columns: columns, spacing: 10) {
+                                ForEach(circuitStages) { stage in
+                                    microStageEditorCard(
+                                        for: activity,
+                                        stage: stage,
+                                        index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                                        stageCount: totalStages,
+                                        isCollapsed: collapsedStageIDs.contains(stage.id),
+                                        onToggleCollapsed: {
+                                            toggleCollapsedState(for: stage.id)
+                                        }
+                                    )
+                                    .opacity(0.95)
+                                }
+                            }
+                            .padding(8)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        .padding(10)
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    
+                    // Standalone stages in grid
+                    LazyVGrid(columns: columns, spacing: 14) {
+                        ForEach(standaloneStages) { stage in
+                            microStageEditorCard(
+                                for: activity,
+                                stage: stage,
+                                index: stageIndex(for: activity.id, stageID: stage.id) ?? 0,
+                                stageCount: totalStages,
+                                isCollapsed: collapsedStageIDs.contains(stage.id),
+                                onToggleCollapsed: {
+                                    toggleCollapsedState(for: stage.id)
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -2451,20 +2783,42 @@ struct ProgramBuilderView: View {
                         }
                         .pickerStyle(.menu)
                     }
-                }
-
-                HStack(alignment: .top, spacing: 10) {
-                    wheelMetricPicker(
-                        title: "Minutes",
-                        selection: plannedMinutesWheelBinding(activityID: activity.id, stageID: stage.id),
-                        options: minuteWheelOptions
-                    )
 
                     wheelMetricPicker(
                         title: "Repeats",
                         selection: stageRepeatsWheelBinding(activityID: activity.id, stageID: stage.id),
                         options: repeatWheelOptions
                     )
+                }
+
+                HStack(alignment: .top, spacing: 10) {
+                    wheelMetricPicker(
+                        title: "Foundation",
+                        selection: foundationTypeWheelBinding(activityID: activity.id, stageID: stage.id),
+                        options: foundationWheelOptions
+                    )
+
+                    if stageBinding.foundationType.wrappedValue == .time {
+                        foundationDurationTextField(
+                            title: "Minutes",
+                            value: foundationMinutesBinding(activityID: activity.id, stageID: stage.id),
+                            placeholder: "5"
+                        )
+                    } else if stageBinding.foundationType.wrappedValue == .distance {
+                        foundationDurationTextField(
+                            title: distanceUnitLabel,
+                            value: foundationDistanceBinding(activityID: activity.id, stageID: stage.id, usesImperial: self.unitPreferences.resolvedDistanceUnit == .miles),
+                            placeholder: distanceUnitLabel == "mi" ? "3.1" : "5.0"
+                        )
+                    } else {
+                        foundationDurationTextField(
+                            title: "Duration",
+                            value: .constant(""),
+                            placeholder: "N/A"
+                        )
+                        .disabled(true)
+                        .opacity(0.5)
+                    }
                 }
 
                 if stageBinding.goal.wrappedValue.requiresDescriptorInput {
@@ -2505,7 +2859,7 @@ struct ProgramBuilderView: View {
                     .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 HStack(alignment: .top, spacing: 10) {
-                    Text(stageBinding.wrappedValue.displaySummary)
+                    Text(stageBinding.wrappedValue.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUnit == .miles))
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(0.68))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2514,6 +2868,66 @@ struct ProgramBuilderView: View {
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.58))
                         .frame(maxWidth: 120, alignment: .trailing)
+                }
+
+                // Circuit Management Section
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Circuit Group")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.72))
+
+                    if let circuitID = stageBinding.circuitGroupID.wrappedValue {
+                        HStack(spacing: 8) {
+                            Label(stageBinding.repeatSetLabel.wrappedValue.isEmpty ? "Circuit" : stageBinding.repeatSetLabel.wrappedValue, systemImage: "repeat.circle.fill")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.orange.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+
+                            Button(role: .destructive) {
+                                stageBinding.circuitGroupID.wrappedValue = nil
+                                stageBinding.repeatSetLabel.wrappedValue = ""
+                                stageBinding.repeats.wrappedValue = 1
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 14, weight: .bold))
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(.red.opacity(0.8))
+
+                            Spacer()
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            Button {
+                                let newCircuitID = UUID()
+                                stageBinding.circuitGroupID.wrappedValue = newCircuitID
+                                stageBinding.repeatSetLabel.wrappedValue = "Circuit \(Int.random(in: 1...9))"
+                                stageBinding.repeats.wrappedValue = 2
+                            } label: {
+                                Label("Create Circuit", systemImage: "repeat.circle")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(.orange)
+
+                            Button {
+                                // Open sheet to join existing circuit
+                            } label: {
+                                Label("Join Circuit", systemImage: "link.circle")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(.blue)
+
+                            Spacer()
+                        }
+                    }
+
+                    Text("Group multiple stages into a circuit to create one repeating block in WorkoutKit.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.58))
                 }
             }
         }
@@ -2546,7 +2960,7 @@ struct ProgramBuilderView: View {
                 }
             }
 
-            Text(stage.displaySummary)
+            Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUnit == .miles))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .lineLimit(3)
@@ -2773,21 +3187,164 @@ struct ProgramBuilderView: View {
         (1...12).map(String.init)
     }
 
+    private var foundationWheelOptions: [String] {
+        ProgramStageFoundation.allCases.map(\.rawValue)
+    }
+
+    private var distanceUnitLabel: String {
+        self.unitPreferences.resolvedDistanceUnit == .miles ? "mi" : "km"
+    }
+
+    private var foundationWheelOptionsBinding: Binding<String> {
+        Binding(
+            get: { "foundation" },
+            set: { _ in }
+        )
+    }
+
+    private func foundationDurationTextField(
+        title: String,
+        value: Binding<String>,
+        placeholder: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.72))
+
+            HStack(spacing: 4) {
+                TextField(placeholder, text: value)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 70)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+
+                if title != "Minutes" {
+                    Text(title)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+        }
+    }
+
+    private func foundationMinutesBinding(activityID: String, stageID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                String(comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedMinutes.wrappedValue)
+            },
+            set: { newValue in
+                if let value = Int(newValue), value > 0 {
+                    comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedMinutes.wrappedValue = value
+                }
+            }
+        )
+    }
+
+    private func foundationDistanceBinding(activityID: String, stageID: UUID, usesImperial: Bool) -> Binding<String> {
+        Binding(
+            get: {
+                let distance = comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedDistance.wrappedValue ?? 5.0
+                if usesImperial {
+                    return String(format: "%.1f", distance * 0.621371)
+                } else {
+                    return String(format: "%.1f", distance)
+                }
+            },
+            set: { newValue in
+                if let value = Double(newValue), value > 0 {
+                    var distanceKm = value
+                    if usesImperial {
+                        distanceKm = value / 0.621371
+                    }
+                    comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedDistance.wrappedValue = distanceKm
+                }
+            }
+        )
+    }
+
+    private func distanceWheelOptions(for activity: ProgramWorkoutType) -> [String] {
+        let usesImperial = self.unitPreferences.resolvedDistanceUnit == .miles
+        
+        let (minDist, maxDist, step): (Double, Double, Double)
+        switch activity.id {
+        case "running", "treadmill":
+            minDist = 1.0
+            maxDist = 50.0
+            step = 0.5
+        case "cycling", "indoor-cycling", "bike-touring":
+            minDist = 5.0
+            maxDist = 200.0
+            step = 5.0
+        case "swimming", "open-water-swimming":
+            minDist = 0.25
+            maxDist = 10.0
+            step = 0.25
+        case "walking", "hiking", "trail-running":
+            minDist = 1.0
+            maxDist = 30.0
+            step = 0.5
+        case "rowing":
+            minDist = 1.0
+            maxDist = 42.0
+            step = 1.0
+        case "cross-country-skiing", "ski-touring":
+            minDist = 5.0
+            maxDist = 50.0
+            step = 5.0
+        case "snowboarding", "downhill-skiing":
+            minDist = 10.0
+            maxDist = 100.0
+            step = 10.0
+        default:
+            minDist = 1.0
+            maxDist = 50.0
+            step = 1.0
+        }
+        
+        if usesImperial {
+            let minMi = minDist * 0.621371
+            let maxMi = maxDist * 0.621371
+            let stepMi = step * 0.621371
+            return stride(from: minMi, through: maxMi, by: stepMi).map { String(format: "%.1f mi", $0) }
+        } else {
+            return stride(from: minDist, through: maxDist, by: step).map { String(format: "%.1f km", $0) }
+        }
+    }
+
     private func wheelOptions(for goal: ProgramMicroStageGoal) -> [String] {
+        let usesImperial = self.unitPreferences.resolvedDistanceUnit == .miles
+        
         switch goal {
         case .power:
             return stride(from: 50, through: 600, by: 5).map(String.init)
         case .cadence:
             return stride(from: 50, through: 220, by: 5).map(String.init)
         case .speed:
-            return stride(from: 1, through: 40, by: 1).map(String.init)
+            if usesImperial {
+                return stride(from: 1, through: 30, by: 1).map { "\($0) mph" }
+            } else {
+                return stride(from: 1, through: 50, by: 1).map { "\($0) kph" }
+            }
         case .distance:
-            return stride(from: 1, through: 50, by: 1).map(String.init)
+            if usesImperial {
+                return stride(from: 1, through: 30, by: 1).map { "\($0) mi" }
+            } else {
+                return stride(from: 1, through: 50, by: 1).map { "\($0) km" }
+            }
         case .energy:
             return stride(from: 25, through: 2000, by: 25).map(String.init)
         case .pace:
-            return (180...900).filter { $0 % 5 == 0 }.map { seconds in
-                String(format: "%d:%02d", seconds / 60, seconds % 60)
+            if usesImperial {
+                return (180...900).filter { $0 % 5 == 0 }.map { seconds in
+                    String(format: "%d:%02d /mi", seconds / 60, seconds % 60)
+                }
+            } else {
+                return (240...1200).filter { $0 % 5 == 0 }.map { seconds in
+                    String(format: "%d:%02d /km", seconds / 60, seconds % 60)
+                }
             }
         case .heartRateZone:
             return zoneWheelOptions
@@ -2847,6 +3404,45 @@ struct ProgramBuilderView: View {
             set: { newValue in
                 let value = min(max(Int(newValue) ?? 1, 1), 240)
                 comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedMinutes.wrappedValue = value
+            }
+        )
+    }
+
+    private func foundationTypeWheelBinding(activityID: String, stageID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).foundationType.wrappedValue.rawValue
+            },
+            set: { newValue in
+                if let foundationType = ProgramStageFoundation(rawValue: newValue) {
+                    comprehensiveStageBinding(activityID: activityID, stageID: stageID).foundationType.wrappedValue = foundationType
+                    if foundationType == .distance && comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedDistance.wrappedValue == nil {
+                        comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedDistance.wrappedValue = 5.0
+                    }
+                }
+            }
+        )
+    }
+
+    private func plannedDistanceWheelBinding(activityID: String, stageID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                let distance = comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedDistance.wrappedValue ?? 5.0
+                let usesImperial = self.unitPreferences.resolvedDistanceUnit == .miles
+                if usesImperial {
+                    return String(format: "%.1f mi", distance * 0.621371)
+                } else {
+                    return String(format: "%.1f km", distance)
+                }
+            },
+            set: { newValue in
+                var numericValue = Double(newValue.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()) ?? 5.0
+                let usesImperial = self.unitPreferences.resolvedDistanceUnit == .miles
+                if usesImperial {
+                    numericValue = numericValue / 0.621371
+                }
+                numericValue = min(max(numericValue, 0.1), 500.0)
+                comprehensiveStageBinding(activityID: activityID, stageID: stageID).plannedDistance.wrappedValue = numericValue
             }
         )
     }
@@ -3030,6 +3626,12 @@ struct ProgramBuilderView: View {
 
         if let minutes = stageDurationMinutes(from: normalized) {
             updated.plannedMinutes = min(max(minutes, 1), 180)
+            updated.foundationType = .time
+        }
+
+        if let distanceKm = stageDurationDistanceKm(from: normalized) {
+            updated.plannedDistance = distanceKm
+            updated.foundationType = .distance
         }
 
         if let repeats = stageRepeats(from: normalized) {
@@ -3067,7 +3669,7 @@ struct ProgramBuilderView: View {
             return .work
         }
         if text.contains("calorie") || text.contains("kcal") || text.contains("distance") || text.contains("mile") || text.contains("km") || text.contains("meter") || text.contains("minute") || text.contains("hour") {
-            return .goal
+            return .steady
         }
         return fallback
     }
@@ -3107,6 +3709,22 @@ struct ProgramBuilderView: View {
         if let minutes = text.captureGroups(for: #"(\d+)\s*(minute|minutes|min|mins)"#).first?.first,
            let value = Int(minutes) {
             return value
+        }
+        return nil
+    }
+
+    private func stageDurationDistanceKm(from text: String) -> Double? {
+        if let miles = text.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(mile|miles|mi)\b"#).first?.first,
+           let value = Double(miles) {
+            return value / 0.621371
+        }
+        if let km = text.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(kilometer|kilometers|km)\b"#).first?.first,
+           let value = Double(km) {
+            return value
+        }
+        if let meters = text.captureGroups(for: #"(\d+(?:\.\d+)?)\s*(meter|meters|m)\b"#).first?.first,
+           let value = Double(meters) {
+            return value / 1000.0
         }
         return nil
     }
@@ -3287,15 +3905,6 @@ struct ProgramBuilderView: View {
         switch role {
         case .warmup:
             return "Warmup"
-        case .goal:
-            switch goal {
-            case .distance:
-                return "Distance Goal"
-            case .energy:
-                return "Energy Goal"
-            default:
-                return "Main Goal"
-            }
         case .steady:
             return "Steady \(goal.title)"
         case .work:
@@ -3315,7 +3924,7 @@ struct ProgramBuilderView: View {
                     return ProgramCustomWorkoutMicroStage(
                         title: "Stage",
                         notes: "",
-                        role: .goal,
+                        role: .steady,
                         goal: .time,
                         plannedMinutes: 5,
                         repeats: 1,
@@ -4836,7 +5445,6 @@ private enum ProgramTargetMetric: String, CaseIterable, Identifiable {
 
 enum ProgramMicroStageRole: String, CaseIterable, Codable, Hashable, Identifiable {
     case warmup
-    case goal
     case steady
     case work
     case recovery
@@ -4847,7 +5455,6 @@ enum ProgramMicroStageRole: String, CaseIterable, Codable, Hashable, Identifiabl
     var title: String {
         switch self {
         case .warmup: return "Warmup"
-        case .goal: return "Goal"
         case .steady: return "Steady"
         case .work: return "Work"
         case .recovery: return "Recovery"
@@ -4856,12 +5463,7 @@ enum ProgramMicroStageRole: String, CaseIterable, Codable, Hashable, Identifiabl
     }
 
     init?(storageValue: String) {
-        switch storageValue {
-        case "simpleGoal":
-            self = .goal
-        default:
-            self.init(rawValue: storageValue)
-        }
+        self.init(rawValue: storageValue)
     }
 
     init(from decoder: Decoder) throws {
@@ -4951,6 +5553,30 @@ enum ProgramStageTargetBehavior: String, CaseIterable, Codable, Hashable, Identi
     }
 }
 
+enum ProgramStageFoundation: String, CaseIterable, Codable, Hashable, Identifiable {
+    case open
+    case time
+    case distance
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .open: return "None"
+        case .time: return "Time"
+        case .distance: return "Distance"
+        }
+    }
+
+    var editorDescription: String {
+        switch self {
+        case .open: return "No duration or distance constraint."
+        case .time: return "Duration calculated by time in minutes."
+        case .distance: return "Duration calculated by distance covered."
+        }
+    }
+}
+
 struct ProgramWorkoutCircuitGroup: Identifiable, Codable, Hashable {
     let id: UUID
     var title: String
@@ -4975,6 +5601,8 @@ struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
     var targetValueText: String
     var repeatSetLabel: String
     var circuitGroupID: UUID?
+    var foundationTypeRawValue: String
+    var plannedDistance: Double?
 
     init(
         id: UUID = UUID(),
@@ -4987,7 +5615,9 @@ struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
         targetValueText: String,
         repeatSetLabel: String = "",
         targetBehavior: ProgramStageTargetBehavior? = nil,
-        circuitGroupID: UUID? = nil
+        circuitGroupID: UUID? = nil,
+        foundationType: ProgramStageFoundation = .time,
+        plannedDistance: Double? = nil
     ) {
         self.id = id
         self.title = title
@@ -5000,6 +5630,8 @@ struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
         self.targetValueText = targetValueText
         self.repeatSetLabel = repeatSetLabel
         self.circuitGroupID = circuitGroupID
+        self.foundationTypeRawValue = foundationType.rawValue
+        self.plannedDistance = plannedDistance
     }
 
     var role: ProgramMicroStageRole {
@@ -5017,31 +5649,66 @@ struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
         set { targetBehaviorRawValue = newValue.rawValue }
     }
 
+    var foundationType: ProgramStageFoundation {
+        get { ProgramStageFoundation(rawValue: foundationTypeRawValue) ?? .time }
+        set { foundationTypeRawValue = newValue.rawValue }
+    }
+
+    var effectiveDurationText: String {
+        effectiveDurationText(usesImperial: false)
+    }
+
+    func effectiveDurationText(usesImperial: Bool) -> String {
+        switch foundationType {
+        case .open:
+            return "Open"
+        case .time:
+            return "\(max(plannedMinutes, 1)) min"
+        case .distance:
+            if let distance = plannedDistance {
+                if usesImperial {
+                    return String(format: "%.1f mi", distance * 0.621371)
+                } else {
+                    return String(format: "%.1f km", distance)
+                }
+            }
+            return "Set distance"
+        }
+    }
+
     var simpleSummary: String {
+        simpleSummary(usesImperial: false)
+    }
+
+    func simpleSummary(usesImperial: Bool) -> String {
         let target = targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "\(max(plannedMinutes, 1)) min • \(goal.title)\(target.isEmpty ? "" : " • \(target)")"
+        return "\(effectiveDurationText(usesImperial: usesImperial)) • \(goal.title)\(target.isEmpty ? "" : " • \(target)")"
     }
 
     var displaySummary: String {
+        displaySummary(usesImperial: false)
+    }
+
+    func displaySummary(usesImperial: Bool) -> String {
         let target = targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
         let descriptor = target.isEmpty ? goal.title : "\(goal.title) \(target)"
         let groupLabel = repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let repeatText = repeats > 1 ? " • Repeat \(repeats)x" : ""
         let groupText = groupLabel.isEmpty ? "" : " • \(groupLabel)"
-        return "\(role.title) • \(max(plannedMinutes, 1)) min • \(descriptor)\(repeatText)\(groupText)"
+        return "\(role.title) • \(effectiveDurationText(usesImperial: usesImperial)) • \(descriptor)\(repeatText)\(groupText)"
     }
 
     fileprivate static func simpleDefault(for activity: ProgramWorkoutType, totalMinutes: Int) -> ProgramCustomWorkoutMicroStage {
         ProgramCustomWorkoutMicroStage(
             title: activity.title,
             notes: "",
-            role: .goal,
+            role: .steady,
             goal: .time,
             plannedMinutes: max(totalMinutes, 5),
             repeats: 1,
             targetValueText: "",
             repeatSetLabel: "",
-            targetBehavior: .completionGoal
+            targetBehavior: .range
         )
     }
 }
@@ -5049,7 +5716,7 @@ struct ProgramCustomWorkoutMicroStage: Identifiable, Codable, Hashable {
 private extension ProgramMicroStageRole {
     var defaultTargetBehavior: ProgramStageTargetBehavior {
         switch self {
-        case .warmup, .goal:
+        case .warmup:
             return .completionGoal
         case .steady:
             return .range
@@ -5237,7 +5904,7 @@ private struct ProgramWorkoutType: Identifiable, Hashable {
     }
 
     var supportedMicroStageGoals: [ProgramMicroStageGoal] {
-        supportedMicroStageGoals(for: .goal)
+        supportedMicroStageGoals(for: .steady)
     }
 
     func supportedMicroStageGoals(for role: ProgramMicroStageRole) -> [ProgramMicroStageGoal] {
@@ -5265,8 +5932,6 @@ private struct ProgramWorkoutType: Identifiable, Hashable {
         switch role {
         case .warmup:
             roleMatrix = [.time, .distance]
-        case .goal:
-            roleMatrix = [.time, .distance, .energy]
         case .steady:
             roleMatrix = [.power, .heartRateZone, .cadence, .speed, .pace]
         case .work:
@@ -5981,7 +6646,7 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
     @Published var microStageRegenerationErrorText: String?
     @Published var microStageRegenerationActivityID: String?
 
-    func refreshCoachAdvice(for request: ProgramPlannerRequest, engine: HealthStateEngine) async {
+    func refreshCoachAdvice(for request: ProgramPlannerRequest, engine: HealthStateEngine, usesImperial: Bool) async {
         isGeneratingCoach = true
         coachErrorText = nil
 
@@ -5991,7 +6656,7 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
             if model.isAvailable {
                 do {
                     let session = LanguageModelSession(model: model, instructions: programBuilderCoachInstructions)
-                    let response = try await session.respond(to: coachPrompt(for: request))
+                    let response = try await session.respond(to: coachPrompt(for: request, usesImperial: usesImperial))
                     let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     coachAdvice = cleaned.isEmpty ? fallbackCoachAdvice(for: request, engine: engine) : cleaned
                     isGeneratingCoach = false
@@ -6007,7 +6672,7 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         isGeneratingCoach = false
     }
 
-    func generateBlueprint(for request: ProgramPlannerRequest, engine: HealthStateEngine) async {
+    func generateBlueprint(for request: ProgramPlannerRequest, engine: HealthStateEngine, usesImperial: Bool) async {
         isGeneratingPlan = true
         planErrorText = nil
         generatedBlueprint = nil
@@ -6019,7 +6684,7 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
                 do {
                     let session = LanguageModelSession(model: model, instructions: programBuilderGenerationInstructions)
                     let response = try await session.respond(
-                        to: blueprintPrompt(for: request),
+                        to: blueprintPrompt(for: request, usesImperial: usesImperial),
                         generating: ProgramGeneratedBlueprint.self
                     )
                     generatedBlueprint = response.content
@@ -6043,7 +6708,8 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         request: ProgramPlannerRequest,
         existingStages: [ProgramCustomWorkoutMicroStage],
         existingCircuitGroups: [ProgramWorkoutCircuitGroup],
-        note: String
+        note: String,
+        usesImperial: Bool
     ) async -> ProgramStageRegenerationResult {
         let totalMinutes = totalStageMinutes(existingStages)
         let fallbackStages = fallbackRegeneratedMicroStages(
@@ -6080,7 +6746,8 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
                             request: request,
                             existingStages: existingStages,
                             note: note,
-                            totalMinutes: totalMinutes
+                            totalMinutes: totalMinutes,
+                            usesImperial: usesImperial
                         ),
                         generating: ProgramGeneratedMicroStagePlan.self
                     )
@@ -6192,15 +6859,16 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         }
     }
 
-    private func coachPrompt(for request: ProgramPlannerRequest) -> String {
+    private func coachPrompt(for request: ProgramPlannerRequest, usesImperial: Bool) -> String {
         let selectedActivities = request.selectedActivities.map(\.title).joined(separator: ", ")
         let recent = request.recentWorkouts.prefix(5).map(describeProgramWorkout).joined(separator: " ")
         let microStageSummary = request.microStagesByActivity
             .sorted { $0.key < $1.key }
             .map { key, stages in
-                "\(key): " + stages.map(\.displaySummary).joined(separator: " | ")
+                "\(key): " + stages.map { $0.displaySummary(usesImperial: usesImperial) }.joined(separator: " | ")
             }
             .joined(separator: " || ")
+
         return """
         Today context:
         - Selected activities: \(selectedActivities.isEmpty ? "none selected yet" : selectedActivities)
@@ -6223,7 +6891,7 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         """
     }
 
-    private func blueprintPrompt(for request: ProgramPlannerRequest) -> String {
+    private func blueprintPrompt(for request: ProgramPlannerRequest, usesImperial: Bool) -> String {
         let selectedActivities = request.selectedActivities.map(\.title).joined(separator: ", ")
         let allocations = request.allocations.map { "\($0.key): \($0.value)" }.sorted().joined(separator: "; ")
         let targetLine = request.target.map { "\($0.metric.title): \($0.descriptor.isEmpty ? "general focus" : $0.descriptor)" } ?? "none"
@@ -6231,7 +6899,7 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         let microStageSummary = request.microStagesByActivity
             .sorted { $0.key < $1.key }
             .map { key, stages in
-                "\(key): " + stages.map(\.displaySummary).joined(separator: " | ")
+                "\(key): " + stages.map { $0.displaySummary(usesImperial: usesImperial) }.joined(separator: " | ")
             }
             .joined(separator: " || ")
 
@@ -6264,9 +6932,10 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         request: ProgramPlannerRequest,
         existingStages: [ProgramCustomWorkoutMicroStage],
         note: String,
-        totalMinutes: Int
+        totalMinutes: Int,
+        usesImperial: Bool
     ) -> String {
-        let currentStages = existingStages.map(\.displaySummary).joined(separator: " | ")
+        let currentStages = existingStages.map { $0.displaySummary(usesImperial: usesImperial) }.joined(separator: " | ")
         let recent = request.recentWorkouts.prefix(4).map(describeProgramWorkout).joined(separator: " ")
         let supportedGoals = Array(Set(ProgramMicroStageRole.allCases.flatMap { activity.supportedMicroStageGoals(for: $0) }))
             .map(\.rawValue)
@@ -6334,13 +7003,13 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
                 ProgramCustomWorkoutMicroStage(
                     title: activity.title,
                     notes: "",
-                    role: .goal,
+                    role: .steady,
                     goal: fallbackGoal(for: request, activity: activity),
                     plannedMinutes: max(totalMinutes, 5),
                     repeats: 1,
                     targetValueText: normalizedTargetDescriptor(from: request, fallback: ""),
                     repeatSetLabel: "",
-                    targetBehavior: .completionGoal
+                    targetBehavior: .range
                 )
             ]
         }
@@ -6359,15 +7028,15 @@ private final class ProgramBuilderAIPlanner: ObservableObject {
         if stages.isEmpty {
             stages = [
                 ProgramCustomWorkoutMicroStage(
-                    title: "Main Goal",
+                    title: "Main Steady",
                     notes: "",
-                    role: .goal,
+                    role: .steady,
                     goal: fallbackGoal(for: request, activity: activity),
                     plannedMinutes: max(totalMinutes, 5),
                     repeats: 1,
                     targetValueText: normalizedTargetDescriptor(from: request, fallback: ""),
                     repeatSetLabel: "",
-                    targetBehavior: .completionGoal
+                    targetBehavior: .range
                 )
             ]
         }

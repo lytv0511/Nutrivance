@@ -1533,6 +1533,63 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
 #endif
     }
 
+    func previewWorkoutOnIOS(
+        title: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        phases: [ProgramWorkoutPlanPhase]
+    ) {
+        #if canImport(WorkoutKit)
+        guard #available(iOS 17.0, *) else {
+            launchStatusMessage = "Requires iOS 17 or later."
+            return
+        }
+        
+        Task { @MainActor in
+            do {
+                guard WorkoutScheduler.isSupported else {
+                    launchStatusMessage = "Workout app not supported on this device."
+                    return
+                }
+                
+                let authState = try await WorkoutScheduler.shared.requestAuthorization()
+                guard authState == .authorized else {
+                    launchStatusMessage = "Permission denied. Enable in Settings > Health."
+                    return
+                }
+                
+                launchStatusMessage = "Building and scheduling workout..."
+                
+                let workoutPlans = try buildWorkoutPlansFromPhases(phases, title: title)
+                
+                guard !workoutPlans.isEmpty else {
+                    launchStatusMessage = "No valid workout stages."
+                    return
+                }
+                
+                let now = Date()
+                var dateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: now)
+                if let minute = dateComponents.minute {
+                    dateComponents.minute = minute + 1
+                }
+                
+                for plan in workoutPlans {
+                    try await WorkoutScheduler.shared.schedule(plan, at: dateComponents)
+                }
+                
+                print("[Companion] Successfully scheduled \(workoutPlans.count) workout(s)")
+                launchStatusMessage = "Workout scheduled in Apple Workouts app."
+                
+            } catch {
+                launchStatusMessage = "Failed: \(error.localizedDescription)"
+                print("[Companion] Error: \(error)")
+            }
+        }
+        #else
+        launchStatusMessage = "WorkoutKit not available."
+        #endif
+    }
+    
     func sendWorkoutToAppleWorkoutAppOnWatch(
         title: String,
         subtitle: String,
@@ -1541,83 +1598,252 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         phases: [ProgramWorkoutPlanPhase]
     ) {
         #if canImport(WorkoutKit)
+        guard #available(iOS 17.0, *) else {
+            launchStatusMessage = "Requires iOS 17 or later."
+            return
+        }
+        
         Task { @MainActor in
-            // Check if WorkoutScheduler is supported (iOS 17+)
-            guard WorkoutScheduler.isSupported else {
-                launchStatusMessage = "Workout scheduling is not supported on this device."
-                return
-            }
-            
-            // Request authorization
-            let authStatus = await WorkoutScheduler.shared.requestAuthorization()
-            guard authStatus == .authorized else {
-                launchStatusMessage = "Permission denied to schedule workouts. Please enable in Settings."
-                return
-            }
-            
             do {
+                guard WorkoutScheduler.isSupported else {
+                    launchStatusMessage = "Workout app not supported on this device."
+                    return
+                }
+                
+                let authState = try await WorkoutScheduler.shared.requestAuthorization()
+                guard authState == .authorized else {
+                    launchStatusMessage = "Permission denied. Enable in Settings > Health."
+                    return
+                }
+                
                 launchStatusMessage = "Building workout plans..."
                 
-                // Group phases by activity type and build separate workouts for each
-                let workoutPlans = buildWorkoutPlansFromPhases(phases, title: title)
+                let workoutPlans = try buildWorkoutPlansFromPhases(phases, title: title)
+                
                 guard !workoutPlans.isEmpty else {
-                    launchStatusMessage = "Failed to build workout plans."
+                    launchStatusMessage = "No valid workout stages."
                     return
                 }
                 
                 launchStatusMessage = "Scheduling \(workoutPlans.count) workout\(workoutPlans.count > 1 ? "s" : "")..."
                 
-                // Schedule for today at the current time
                 let now = Date()
                 var dateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: now)
-                // Add a minute buffer to ensure it's scheduled for a future time
                 if let minute = dateComponents.minute {
                     dateComponents.minute = minute + 1
                 }
                 
-                // Schedule all workouts
-                for workoutPlan in workoutPlans {
-                    await WorkoutScheduler.shared.schedule(workoutPlan, at: dateComponents)
+                for plan in workoutPlans {
+                    try await WorkoutScheduler.shared.schedule(plan, at: dateComponents)
                 }
                 
                 launchStatusMessage = "Workouts scheduled in Apple Workout app."
                 print("[Companion] Successfully scheduled \(workoutPlans.count) workout(s)")
                 
             } catch {
-                launchStatusMessage = "Failed to schedule workout: \(error.localizedDescription)"
-                print("[Companion] Failed to schedule workout: \(error)")
+                launchStatusMessage = "Failed: \(error.localizedDescription)"
+                print("[Companion] Error: \(error)")
             }
         }
         #else
-        launchStatusMessage = "WorkoutKit is not available on this device."
+        launchStatusMessage = "WorkoutKit not available."
         #endif
     }
     
+    #if os(watchOS)
+    func openWorkoutPreviewOnWatchOS(
+        title: String,
+        activity: HKWorkoutActivityType,
+        location: HKWorkoutSessionLocationType,
+        phases: [ProgramWorkoutPlanPhase]
+    ) {
+        guard #available(watchOS 10.0, *) else {
+            launchStatusMessage = "Requires watchOS 10 or later."
+            return
+        }
+        
+        Task { @MainActor in
+            do {
+                launchStatusMessage = "Building workout..."
+                
+                let workoutPlans = try buildWorkoutPlansFromPhases(phases, title: title)
+                
+                guard let firstPlan = workoutPlans.first else {
+                    launchStatusMessage = "No valid workout stages."
+                    return
+                }
+                
+                launchStatusMessage = "Opening in Apple Workouts..."
+                
+                // Schedule for immediate time to open in Workouts app
+                let now = Date()
+                var dateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: now)
+                if let minute = dateComponents.minute {
+                    dateComponents.minute = minute
+                }
+                
+                try await WorkoutScheduler.shared.schedule(firstPlan, at: dateComponents)
+                
+                print("[Companion] Successfully opened workout on watchOS: \(title)")
+                launchStatusMessage = "Workout opened in Apple Workouts."
+                
+            } catch {
+                launchStatusMessage = "Failed: \(error.localizedDescription)"
+                print("[Companion] watchOS error: \(error)")
+            }
+        }
+    }
+    #endif
+    
     #if canImport(WorkoutKit)
+    private enum WorkoutBuildError: LocalizedError {
+        case noValidPhases
+        case invalidActivity
+        case triathlonNotSupported
+        case customWorkoutFailed
+        
+        var errorDescription: String? {
+            switch self {
+            case .noValidPhases:
+                return "No valid workout phases found."
+            case .invalidActivity:
+                return "Invalid workout activity type."
+            case .triathlonNotSupported:
+                return "Triathlon workouts require at least 2 activities."
+            case .customWorkoutFailed:
+                return "Failed to create custom workout."
+            }
+        }
+    }
+    
     private func buildWorkoutPlansFromPhases(
         _ phases: [ProgramWorkoutPlanPhase],
         title: String
-    ) -> [WorkoutPlan] {
-        // Group phases by activity ID to create separate workouts per activity
-        let phasesByActivity = Dictionary(grouping: phases, by: { $0.activityID })
+    ) throws -> [WorkoutPlan] {
+        guard !phases.isEmpty else {
+            throw WorkoutBuildError.noValidPhases
+        }
+
+        let orderedActivityIDs = phases.reduce(into: [String]()) { ordered, phase in
+            if !ordered.contains(phase.activityID) {
+                ordered.append(phase.activityID)
+            }
+        }
+        let phasesByActivity = Dictionary(grouping: phases, by: \.activityID)
         var workoutPlans: [WorkoutPlan] = []
-        
-        for (index, (activityID, activityPhases)) in phasesByActivity.enumerated() {
-            guard let customWorkout = buildCustomWorkoutFromPhases(
+
+        for (index, activityID) in orderedActivityIDs.enumerated() {
+            guard let activityPhases = phasesByActivity[activityID] else { continue }
+            if let customWorkout = buildCustomWorkoutFromPhases(
                 activityPhases,
                 title: title,
                 activityIndex: index,
-                totalActivities: phasesByActivity.count
-            ) else {
-                continue
+                totalActivities: orderedActivityIDs.count
+            ) {
+                let workoutPlan = WorkoutPlan(.custom(customWorkout))
+                workoutPlans.append(workoutPlan)
             }
-            
-            let workout: WorkoutPlan.Workout = .custom(customWorkout)
-            let workoutPlan = WorkoutPlan(workout, id: UUID())
-            workoutPlans.append(workoutPlan)
+        }
+
+        if let triathlonWorkout = try? buildTriathlonWorkout(from: phases, title: title) {
+            if SwimBikeRunWorkout.supportsActivityOrdering(triathlonWorkout.activities) {
+                return [WorkoutPlan(.swimBikeRun(triathlonWorkout))]
+            }
+        }
+
+        guard !workoutPlans.isEmpty else {
+            throw WorkoutBuildError.customWorkoutFailed
+        }
+
+        return workoutPlans
+    }
+    
+    private func buildTriathlonWorkout(
+        from phases: [ProgramWorkoutPlanPhase],
+        title: String
+    ) throws -> SwimBikeRunWorkout {
+        let orderedActivities = phases.map { $0.activityID }
+        
+        let hasSwim = orderedActivities.contains("swimming")
+        let hasBike = orderedActivities.contains("cycling")
+        let hasRun = orderedActivities.contains("running")
+        
+        let triathlonActivities = [hasSwim, hasBike, hasRun].filter { $0 }.count
+        guard triathlonActivities >= 2 else {
+            throw WorkoutBuildError.triathlonNotSupported
         }
         
-        return workoutPlans
+        // Build ordered list of SwimBikeRunWorkout activities
+        var triathlonPhases: [(order: Int, phase: ProgramWorkoutPlanPhase)] = []
+        
+        for phase in phases {
+            switch phase.activityID {
+            case "swimming":
+                triathlonPhases.append((order: 0, phase: phase))
+            case "cycling":
+                triathlonPhases.append((order: 1, phase: phase))
+            case "running":
+                triathlonPhases.append((order: 2, phase: phase))
+            default:
+                break
+            }
+        }
+        
+        // Sort by triathlon order (swim -> bike -> run)
+        triathlonPhases.sort { $0.order < $1.order }
+        
+        guard !triathlonPhases.isEmpty else {
+            throw WorkoutBuildError.noValidPhases
+        }
+        
+        // Build SwimBikeRunWorkout.Activity array
+        var workoutActivities: [SwimBikeRunWorkout.Activity] = []
+        
+        for triPhase in triathlonPhases {
+            let phase = triPhase.phase
+            
+            switch phase.activityID {
+            case "swimming":
+                // Swimming uses swimming-specific location type
+                let swimLocation: HKWorkoutSwimmingLocationType = {
+                    var rawValue = phase.locationRawValue
+                    if rawValue == 0 {
+                        rawValue = HKWorkoutSwimmingLocationType.pool.rawValue
+                    }
+                    return HKWorkoutSwimmingLocationType(rawValue: rawValue) ?? .pool
+                }()
+                workoutActivities.append(.swimming(swimLocation))
+                
+            case "cycling":
+                let location: HKWorkoutSessionLocationType = {
+                    var rawValue = phase.locationRawValue
+                    if rawValue == 0 {
+                        rawValue = HKWorkoutSessionLocationType.outdoor.rawValue
+                    }
+                    return HKWorkoutSessionLocationType(rawValue: rawValue) ?? .outdoor
+                }()
+                workoutActivities.append(.cycling(location))
+                
+            case "running":
+                let location: HKWorkoutSessionLocationType = {
+                    var rawValue = phase.locationRawValue
+                    if rawValue == 0 {
+                        rawValue = HKWorkoutSessionLocationType.outdoor.rawValue
+                    }
+                    return HKWorkoutSessionLocationType(rawValue: rawValue) ?? .outdoor
+                }()
+                workoutActivities.append(.running(location))
+                
+            default:
+                break
+            }
+        }
+        
+        guard !workoutActivities.isEmpty else {
+            throw WorkoutBuildError.noValidPhases
+        }
+        
+        return SwimBikeRunWorkout(activities: workoutActivities, displayName: title)
     }
     
     private func buildCustomWorkoutFromPhases(
@@ -1629,83 +1855,91 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         guard let firstPhase = phases.first else { return nil }
         
         let hkActivityType = HKWorkoutActivityType(rawValue: firstPhase.activityRawValue)
-        let locationTypeValue = HKWorkoutSessionLocationType(rawValue: firstPhase.locationRawValue | 0)
-        let location = locationTypeValue ?? .outdoor
+        var locationRawValue = firstPhase.locationRawValue
+        if locationRawValue == 0 {
+            locationRawValue = HKWorkoutSessionLocationType.outdoor.rawValue
+        }
+        let location = HKWorkoutSessionLocationType(rawValue: locationRawValue) ?? .outdoor
         
-        // Build display name incorporating activity type
-        let displayName = totalActivities > 1
-            ? "\(title) - \(firstPhase.title)"
-            : title
+        guard let validActivity = hkActivityType else { return nil }
         
-        // Collect all stages from all phases
-        var allStages: [ProgramCustomWorkoutMicroStage] = []
-        for phase in phases {
-            if let microStages = phase.microStages, !microStages.isEmpty {
-                allStages.append(contentsOf: microStages)
-            } else {
-                // Create a default stage for this phase
-                let defaultStage = ProgramCustomWorkoutMicroStage(
-                    id: UUID(),
-                    title: phase.title,
+        let displayName = totalActivities > 1 ? "\(title) - \(firstPhase.title)" : title
+
+        let allStages = exportedStages(from: phases)
+        guard !allStages.isEmpty else {
+            print("[Companion] Error: No stages to process")
+            return nil
+        }
+
+        let circuitGroups = Dictionary(
+            uniqueKeysWithValues: phases
+                .flatMap { $0.circuitGroups ?? [] }
+                .map { ($0.id, $0) }
+        )
+
+        let leadingWarmupCount = allStages.prefix { $0.role == .warmup }.count
+        let trailingCooldownCount = allStages.reversed().prefix { $0.role == .cooldown }.count
+        let coreUpperBound = max(leadingWarmupCount, allStages.count - trailingCooldownCount)
+
+        let leadingWarmups = Array(allStages.prefix(leadingWarmupCount))
+        let middleStages = Array(allStages[leadingWarmupCount..<coreUpperBound])
+        let trailingCooldowns = Array(allStages.suffix(trailingCooldownCount))
+
+        var warmupStep: WorkoutKit.WorkoutStep?
+        var cooldownStep: WorkoutKit.WorkoutStep?
+        var blocks: [WorkoutKit.IntervalBlock] = []
+
+        if let firstWarmup = leadingWarmups.first {
+            warmupStep = buildWorkoutStep(for: firstWarmup)
+        }
+        if let lastCooldown = trailingCooldowns.last {
+            cooldownStep = buildWorkoutStep(for: lastCooldown)
+        }
+
+        blocks.append(contentsOf: buildIntervalBlocks(from: Array(leadingWarmups.dropFirst()), circuitGroups: circuitGroups))
+        blocks.append(contentsOf: buildIntervalBlocks(from: middleStages, circuitGroups: circuitGroups))
+        blocks.append(contentsOf: buildIntervalBlocks(from: Array(trailingCooldowns.dropLast()), circuitGroups: circuitGroups))
+
+        if blocks.isEmpty {
+            let fallbackStage = normalizedWorkoutExportStage(
+                ProgramCustomWorkoutMicroStage(
+                    title: displayName,
                     notes: "",
-                    role: .goal,
+                    role: .steady,
                     goal: .time,
-                    plannedMinutes: phase.plannedMinutes,
+                    plannedMinutes: max(firstPhase.plannedMinutes, 1),
                     repeats: 1,
                     targetValueText: "",
                     repeatSetLabel: "",
-                    targetBehavior: .completionGoal,
-                    circuitGroupID: nil
-                )
-                allStages.append(defaultStage)
+                    targetBehavior: .range
+                ),
+                fallbackTitle: displayName
+            )
+            if let fallbackStep = buildIntervalStepFromStage(fallbackStage) {
+                blocks = [WorkoutKit.IntervalBlock(steps: [fallbackStep], iterations: 1)]
+            }
+        }
+
+        guard !blocks.isEmpty else {
+            print("[Companion] Error: No blocks created")
+            return nil
+        }
+
+        for (index, block) in blocks.enumerated() {
+            guard !block.steps.isEmpty else {
+                print("[Companion] Error: Block \(index) has empty steps")
+                return nil
+            }
+            guard block.iterations > 0 else {
+                print("[Companion] Error: Block \(index) has invalid iterations")
+                return nil
             }
         }
         
-        // Separate warmup, cooldown, and main stages
-        var warmupStep: WorkoutKit.WorkoutStep?
-        var cooldownStep: WorkoutKit.WorkoutStep?
-        var mainStages: [ProgramCustomWorkoutMicroStage] = []
-        
-        for (index, stage) in allStages.enumerated() {
-            if stage.role == .warmup && warmupStep == nil {
-                // First warmup becomes the warmup step
-                let goal = workoutGoalFromStage(stage)
-                warmupStep = WorkoutKit.WorkoutStep(goal: goal, displayName: stage.title)
-            } else if stage.role == .cooldown && index == allStages.count - 1 {
-                // Last cooldown becomes the cooldown step
-                let goal = workoutGoalFromStage(stage)
-                cooldownStep = WorkoutKit.WorkoutStep(goal: goal, displayName: stage.title)
-            } else {
-                mainStages.append(stage)
-            }
-        }
-        
-        // Convert main stages to interval steps and group into blocks
-        var blocks: [IntervalBlock] = []
-        
-        if !mainStages.isEmpty {
-            let intervalSteps = mainStages.compactMap { stage -> IntervalStep? in
-                buildIntervalStepFromStage(stage)
-            }
-            
-            if !intervalSteps.isEmpty {
-                let block = IntervalBlock(steps: intervalSteps)
-                blocks.append(block)
-            }
-        }
-        
-        // If no blocks were created, create a default time-based block
-        if blocks.isEmpty {
-            let totalMinutes = phases.reduce(0) { $0 + $1.plannedMinutes }
-            let timeGoal = WorkoutGoal.time(Double(totalMinutes), .minutes)
-            let step = WorkoutKit.WorkoutStep(goal: timeGoal)
-            let intervalStep = IntervalStep(.work, step: step)
-            let block = IntervalBlock(steps: [intervalStep])
-            blocks.append(block)
-        }
-        
-        return CustomWorkout(
-            activity: hkActivityType ?? .running,
+        print("[Companion] Creating CustomWorkout: blocks=\(blocks.count), warmup=\(warmupStep != nil), cooldown=\(cooldownStep != nil)")
+
+        return WorkoutKit.CustomWorkout(
+            activity: validActivity,
             location: location,
             displayName: displayName,
             warmup: warmupStep,
@@ -1713,53 +1947,336 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             cooldown: cooldownStep
         )
     }
-    
-    private func buildIntervalStepFromStage(_ stage: ProgramCustomWorkoutMicroStage) -> IntervalStep? {
-        // Map stage role to interval purpose
-        let purpose: IntervalStep.Purpose = stage.role == .recovery ? .recovery : .work
-        
-        // Map stage goal to WorkoutGoal
-        let workoutGoal = workoutGoalFromStage(stage)
-        
-        let step = WorkoutKit.WorkoutStep(goal: workoutGoal, displayName: stage.title)
-        return IntervalStep(purpose, step: step)
+
+    private func exportedStages(from phases: [ProgramWorkoutPlanPhase]) -> [ProgramCustomWorkoutMicroStage] {
+        phases.flatMap { phase in
+            let phaseStages = phase.microStages ?? []
+            if phaseStages.isEmpty {
+                return [
+                    normalizedWorkoutExportStage(
+                        ProgramCustomWorkoutMicroStage(
+                            title: phase.title,
+                            notes: phase.subtitle,
+                            role: .steady,
+                            goal: .time,
+                            plannedMinutes: max(phase.plannedMinutes, 1),
+                            repeats: 1,
+                            targetValueText: "",
+                            repeatSetLabel: "",
+                            targetBehavior: .range
+                        ),
+                        fallbackTitle: phase.title
+                    )
+                ]
+            }
+
+            return phaseStages.map { normalizedWorkoutExportStage($0, fallbackTitle: phase.title) }
+        }
+    }
+
+    private func normalizedWorkoutExportStage(
+        _ stage: ProgramCustomWorkoutMicroStage,
+        fallbackTitle: String
+    ) -> ProgramCustomWorkoutMicroStage {
+        let cleanedTitle = stage.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedTarget = stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let foundation = stage.foundationType
+        let normalizedDistance: Double?
+
+        if foundation == .distance {
+            let explicitDistance = sanitizeWorkoutValue(stage.plannedDistance ?? 0, min: 0.1, max: 500.0)
+            if stage.plannedDistance != nil, explicitDistance > 0 {
+                normalizedDistance = explicitDistance
+            } else if stage.goal == .distance, let parsedDistance = extractFirstNumber(from: cleanedTarget) {
+                normalizedDistance = sanitizeWorkoutValue(parsedDistance, min: 0.1, max: 500.0)
+            } else {
+                normalizedDistance = sanitizeWorkoutValue(Double(max(stage.plannedMinutes, 1)) / 6.0, min: 0.1, max: 500.0)
+            }
+        } else {
+            normalizedDistance = stage.plannedDistance
+        }
+
+        return ProgramCustomWorkoutMicroStage(
+            id: stage.id,
+            title: cleanedTitle.isEmpty ? fallbackTitle : cleanedTitle,
+            notes: stage.notes,
+            role: stage.role,
+            goal: stage.goal,
+            plannedMinutes: max(stage.plannedMinutes, 1),
+            repeats: max(stage.repeats, 1),
+            targetValueText: cleanedTarget,
+            repeatSetLabel: stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+            targetBehavior: stage.targetBehavior,
+            circuitGroupID: stage.circuitGroupID,
+            foundationType: foundation,
+            plannedDistance: normalizedDistance
+        )
+    }
+
+    private func buildIntervalBlocks(
+        from stages: [ProgramCustomWorkoutMicroStage],
+        circuitGroups: [UUID: ProgramWorkoutCircuitGroup]
+    ) -> [WorkoutKit.IntervalBlock] {
+        guard !stages.isEmpty else { return [] }
+
+        var blocks: [WorkoutKit.IntervalBlock] = []
+        var index = 0
+
+        while index < stages.count {
+            let stage = stages[index]
+            let circuitKey = circuitGroupingKey(for: stage)
+
+            if let circuitKey {
+                var groupedStages: [ProgramCustomWorkoutMicroStage] = []
+                var scanIndex = index
+
+                while scanIndex < stages.count,
+                      circuitGroupingKey(for: stages[scanIndex]) == circuitKey {
+                    groupedStages.append(stages[scanIndex])
+                    scanIndex += 1
+                }
+
+                let steps = groupedStages.compactMap(buildIntervalStepFromStage)
+                let iterations = resolvedIterations(for: groupedStages, circuitGroups: circuitGroups)
+                if !steps.isEmpty {
+                    blocks.append(WorkoutKit.IntervalBlock(steps: steps, iterations: iterations))
+                }
+                index = scanIndex
+                continue
+            }
+
+            if let step = buildIntervalStepFromStage(stage) {
+                blocks.append(
+                    WorkoutKit.IntervalBlock(
+                        steps: [step],
+                        iterations: resolvedIterations(for: [stage], circuitGroups: circuitGroups)
+                    )
+                )
+            }
+            index += 1
+        }
+
+        return blocks
     }
     
-    private func workoutGoalFromStage(_ stage: ProgramCustomWorkoutMicroStage) -> WorkoutGoal {
-        // Map ProgramMicroStageGoal to WorkoutGoal
+    private func buildWorkoutStep(for stage: ProgramCustomWorkoutMicroStage) -> WorkoutKit.WorkoutStep {
+        let goal = workoutGoalFromStage(stage)
+        let alert = buildWorkoutAlert(for: stage)
+        return WorkoutKit.WorkoutStep(goal: goal, alert: alert, displayName: stage.title)
+    }
+    
+    private func buildWorkoutAlert(for stage: ProgramCustomWorkoutMicroStage) -> (any WorkoutAlert)? {
+        let behavior = stage.targetBehaviorRawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = stage.targetValueText
+        
         switch stage.goal {
-        case .distance:
-            // Extract numeric distance value from target text
-            let distanceValue = extractNumericValue(from: stage.targetValueText) ?? Double(stage.plannedMinutes)
-            return .distance(distanceValue, .kilometers)
-            
-        case .energy:
-            // Extract calories from target value
-            let calorieValue = extractNumericValue(from: stage.targetValueText) ?? Double(stage.plannedMinutes * 10)
-            return .energy(calorieValue, .kilocalories)
-            
-        case .pace, .speed, .power, .cadence, .heartRateZone:
-            // WorkoutKit doesn't support pace/speed/power/cadence/heart rate zones directly
-            // Fall back to time goal
-            return .time(Double(stage.plannedMinutes), .minutes)
-            
-        case .open:
-            return .open
-            
-        case .time:
-            return .time(Double(stage.plannedMinutes), .minutes)
+        case .heartRateZone:
+            return buildHeartRateAlert(for: stage)
+        case .power:
+            return buildPowerAlert(label: label, behavior: behavior)
+        case .cadence:
+            return buildCadenceAlert(label: label, behavior: behavior)
+        case .speed:
+            return buildSpeedAlert(label: label, behavior: behavior)
+        case .pace:
+            return buildPaceAlert(label: label, behavior: behavior)
+        default:
+            return nil
         }
     }
     
-    private func extractNumericValue(from text: String) -> Double? {
-        // Extract the first numeric value from text
-        let pattern = "-?\\d+(?:\\.\\d+)?"
-        if let regex = try? NSRegularExpression(pattern: pattern),
-           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-           let range = Range(match.range, in: text) {
-            return Double(text[range])
+    private func buildHeartRateAlert(for stage: ProgramCustomWorkoutMicroStage) -> (any WorkoutAlert)? {
+        let label = stage.targetValueText
+        let lowerZone = label.lowercased()
+        
+        if lowerZone.contains("zone 5") || lowerZone.contains("z5") {
+            return .heartRate(zone: 5)
+        } else if lowerZone.contains("zone 4") || lowerZone.contains("z4") {
+            return .heartRate(zone: 4)
+        } else if lowerZone.contains("zone 3") || lowerZone.contains("z3") {
+            return .heartRate(zone: 3)
+        } else if lowerZone.contains("zone 2") || lowerZone.contains("z2") {
+            return .heartRate(zone: 2)
+        } else if lowerZone.contains("zone 1") || lowerZone.contains("z1") {
+            return .heartRate(zone: 1)
         }
         return nil
+    }
+    
+    private func buildPowerAlert(label: String, behavior: String) -> (any WorkoutAlert)? {
+        if behavior == "belowthreshold", let target = extractFirstNumber(from: label) {
+            return .power(0...target, unit: .watts)
+        }
+        if let range = extractNumberRange(from: label) {
+            return .power(range.lowerBound...range.upperBound, unit: .watts)
+        }
+        if let target = extractFirstNumber(from: label) {
+            return .power(target, unit: .watts)
+        }
+        return nil
+    }
+    
+    private func buildCadenceAlert(label: String, behavior: String) -> (any WorkoutAlert)? {
+        if behavior == "belowthreshold", let target = extractFirstNumber(from: label) {
+            return .cadence(0...target)
+        }
+        if let range = extractNumberRange(from: label) {
+            return .cadence(range.lowerBound...range.upperBound)
+        }
+        if let target = extractFirstNumber(from: label) {
+            return .cadence(target)
+        }
+        return nil
+    }
+    
+    private func buildSpeedAlert(label: String, behavior _: String) -> (any WorkoutKit.WorkoutAlert)? {
+        guard let values = extractSpeedValues(from: label) else { return nil }
+
+        let isMPH = label.lowercased().contains("mph")
+        let unit: UnitSpeed = isMPH ? .milesPerHour : .kilometersPerHour
+
+        return .speed(values.lower...values.upper, unit: unit)
+    }
+
+    private func buildPaceAlert(label: String, behavior _: String) -> (any WorkoutKit.WorkoutAlert)? {
+        guard let paceRange = extractPaceRange(from: label) else { return nil }
+
+        let isPerMile = label.lowercased().contains("mi")
+        let unit: UnitSpeed = isPerMile ? .milesPerHour : .kilometersPerHour
+
+        return .speed(paceRange.lower...paceRange.upper, unit: unit)
+    }
+    
+    private func extractFirstNumber(from text: String) -> Double? {
+        let pattern = "-?\\d+(?:\\.\\d+)?"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let numberRange = Range(match.range, in: text) else { return nil }
+        return Double(text[numberRange])
+    }
+    
+    private func extractNumberRange(from text: String) -> (lowerBound: Double, upperBound: Double)? {
+        let pattern = "(\\d+(?:\\.\\d+)?)[\\s\\-to]+(\\d+(?:\\.\\d+)?)"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let lowerRange = Range(match.range(at: 1), in: text),
+              let upperRange = Range(match.range(at: 2), in: text),
+              let lower = Double(text[lowerRange]),
+              let upper = Double(text[upperRange]) else { return nil }
+        return (lower, upper)
+    }
+    
+    private func extractSpeedValues(from text: String) -> (lower: Double, upper: Double)? {
+        guard let range = extractNumberRange(from: text) else { return nil }
+        
+        let isMPH = text.lowercased().contains("mph")
+        let isKPH = text.lowercased().contains("kph")
+        
+        if isMPH {
+            return (range.lowerBound * 1.60934, range.upperBound * 1.60934)
+        } else if isKPH {
+            return (range.lowerBound, range.upperBound)
+        }
+        return (range.lowerBound, range.upperBound)
+    }
+    
+    private func extractPaceRange(from text: String) -> (lower: Double, upper: Double)? {
+        let pacePattern = "(\\d+)[:.](\\d{2})"
+        guard let regex = try? NSRegularExpression(pattern: pacePattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: range)
+        
+        guard matches.count >= 1,
+              let lowerMinRange = Range(matches[0].range(at: 1), in: text),
+              let lowerSecRange = Range(matches[0].range(at: 2), in: text),
+              let lowerMin = Int(text[lowerMinRange]),
+              let lowerSec = Int(text[lowerSecRange]) else { return nil }
+        
+        let lowerPaceSecs = Double(lowerMin * 60 + lowerSec)
+        guard lowerPaceSecs > 0 else { return nil }
+        
+        var upperPaceSecs = lowerPaceSecs
+        if matches.count >= 2,
+           let upperMinRange = Range(matches[1].range(at: 1), in: text),
+           let upperSecRange = Range(matches[1].range(at: 2), in: text),
+           let upperMin = Int(text[upperMinRange]),
+           let upperSec = Int(text[upperSecRange]) {
+            upperPaceSecs = Double(upperMin * 60 + upperSec)
+        }
+        
+        guard upperPaceSecs > 0 else { return nil }
+        
+        let isPerMile = text.lowercased().contains("mi")
+        
+        let lowerSpeed = 3600.0 / lowerPaceSecs
+        let upperSpeed = 3600.0 / upperPaceSecs
+        
+        if isPerMile {
+            return (lowerSpeed / 1.60934, upperSpeed / 1.60934)
+        }
+        return (lowerSpeed, upperSpeed)
+    }
+    
+    private func buildIntervalStepFromStage(_ stage: ProgramCustomWorkoutMicroStage) -> WorkoutKit.IntervalStep? {
+        let purpose: WorkoutKit.IntervalStep.Purpose
+        switch stage.role {
+        case .recovery:
+            purpose = .recovery
+        default:
+            purpose = .work
+        }
+        
+        let step = buildWorkoutStep(for: stage)
+        return WorkoutKit.IntervalStep(purpose, step: step)
+    }
+    
+    private func workoutGoalFromStage(_ stage: ProgramCustomWorkoutMicroStage) -> WorkoutKit.WorkoutGoal {
+        let foundation = stage.foundationType
+
+        switch foundation {
+        case .time:
+            let minutes = Double(max(stage.plannedMinutes, 1))
+            return .time(sanitizeWorkoutValue(minutes, min: 1.0, max: 480.0), .minutes)
+
+        case .distance:
+            let explicitDistance = stage.plannedDistance ?? extractFirstNumber(from: stage.targetValueText) ?? (Double(max(stage.plannedMinutes, 1)) / 6.0)
+            return .distance(sanitizeWorkoutValue(explicitDistance, min: 0.1, max: 500.0), .kilometers)
+
+        case .open:
+            // WorkoutKit open goal: no set completion goal
+            return .open
+        }
+    }
+
+    private func circuitGroupingKey(for stage: ProgramCustomWorkoutMicroStage) -> String? {
+        if let groupID = stage.circuitGroupID {
+            return groupID.uuidString
+        }
+
+        let label = stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return label.isEmpty ? nil : label
+    }
+
+    private func resolvedIterations(
+        for stages: [ProgramCustomWorkoutMicroStage],
+        circuitGroups: [UUID: ProgramWorkoutCircuitGroup]
+    ) -> Int {
+        guard !stages.isEmpty else { return 1 }
+
+        if let groupID = stages.first?.circuitGroupID,
+           let groupRepeats = circuitGroups[groupID]?.repeats {
+            return max(groupRepeats, 1)
+        }
+
+        return max(stages.map(\.repeats).max() ?? 1, 1)
+    }
+
+    private func sanitizeWorkoutValue(_ value: Double, min: Double, max: Double) -> Double {
+        guard value.isFinite else { return min }
+        guard value >= 0 else { return min }
+        return value < min ? min : (value > max ? max : value)
     }
     #endif
 

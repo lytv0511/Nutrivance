@@ -20,6 +20,7 @@ private enum ProgramMicroStageRole: String, CaseIterable {
     case work
     case recovery
     case cooldown
+    case foundation
 
     init?(storageValue: String) {
         switch storageValue {
@@ -177,6 +178,8 @@ struct ContentView: View {
             SleepSnapshotView(store: store)
         case .journalSnippets:
             JournalComposerView(store: store, title: "Journal Snippets")
+        case .scheduledWorkouts:
+            WatchScheduledWorkoutsView()
         case .workoutDetail(let workoutID):
             if let workout = store.workout(id: workoutID) {
                 WorkoutDetailView(workout: workout)
@@ -4022,6 +4025,7 @@ private enum WatchDestination: Hashable {
     case stress
     case sleep
     case journalSnippets
+    case scheduledWorkouts
     case workoutDetail(UUID)
 }
 
@@ -5980,6 +5984,18 @@ private struct WatchWorkoutSettingsHubView: View {
                             subtitle: "Control which workout pages are enabled and the order they appear in.",
                             symbol: "rectangle.3.group.fill",
                             tint: .mint
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    NavigationLink {
+                        WatchScheduledWorkoutsView()
+                    } label: {
+                        WatchWorkoutSettingsCard(
+                            title: "Scheduled Workouts",
+                            subtitle: "View and manage workouts scheduled in Apple Workout.",
+                            symbol: "calendar.badge.clock",
+                            tint: .yellow
                         )
                     }
                     .buttonStyle(.plain)

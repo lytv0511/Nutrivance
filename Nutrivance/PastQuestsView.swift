@@ -133,7 +133,6 @@ private func supportedGoalsForWorkout(_ workoutID: String, role: ProgramMicroSta
     let roleMatrix: [ProgramMicroStageGoal]
     switch role {
     case .warmup: roleMatrix = [.time, .distance]
-    case .goal: roleMatrix = [.time, .distance, .energy]
     case .steady, .work: roleMatrix = [.power, .heartRateZone, .cadence, .speed, .pace]
     case .recovery, .cooldown: roleMatrix = [.time, .power, .cadence, .speed, .pace, .distance]
     }
@@ -609,7 +608,6 @@ private struct StageQuestCard: View {
     private var symbol: String {
         switch role {
         case .warmup: return "sunrise.fill"
-        case .goal: return "target"
         case .steady: return "gauge.medium"
         case .work: return "flame.fill"
         case .recovery: return "leaf.fill"
@@ -1043,7 +1041,7 @@ private struct ManualQuestLoggerSheet: View {
             return .maxOnly
         case .steady:
             return .range
-        case .warmup, .goal, .cooldown:
+        case .warmup, .cooldown:
             return goal == .heartRateZone ? .single : .range
         }
     }
