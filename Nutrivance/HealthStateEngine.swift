@@ -1201,6 +1201,7 @@ final class HealthStateEngine: ObservableObject {
                 verticalOscillation: entry.verticalOscillation,
                 groundContactTime: entry.groundContactTime,
                 strideLength: entry.strideLength,
+                workoutEffortScore: entry.metadata["HKMetadataKeyWorkoutEffortScore"],
                 hrZoneProfile: entry.hrZoneProfile,
                 hrZoneBreakdown: entry.hrZoneBreakdown.map { ($0.zone, $0.timeInZone) }
             )

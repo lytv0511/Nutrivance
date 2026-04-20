@@ -1,8 +1,8 @@
 import SwiftUI
-import WorkoutKit
 import HealthKit
 
 #if canImport(WorkoutKit)
+import WorkoutKit
 
 struct ScheduledWorkoutsManagerView: View {
     @Binding var isPresented: Bool

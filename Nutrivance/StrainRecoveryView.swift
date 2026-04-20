@@ -8020,6 +8020,7 @@ private func precomputeCoachPayload(
             let z4 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 4, profile: nil)
             let z5 = zoneMinutesAsync(for: pair.analytics, zoneNumber: 5, profile: nil)
             let peakHR = pair.analytics.peakHR.map { formatted($0, digits: 0) + "bpm" } ?? "-"
+            let effortScore = pair.analytics.workoutEffortScore.map { formatted($0, digits: 0) } ?? "-"
             let hrrR = coachCachedOrAnalyzedHRR(workout: pair.workout, analytics: pair.analytics)
             let hrrDrop: String
             if let ref = HeartRateRecoveryAnalysis.coachPreferredDropBpm(result: hrrR) {
@@ -8033,7 +8034,7 @@ private func precomputeCoachPayload(
             }
             let power = coachSessionAvgPowerWatts(pair.analytics).map { formatted($0, digits: 0) + "W" } ?? ""
             let cadence = coachSessionAvgCadenceRpm(pair.analytics).map { formatted($0, digits: 0) + "rpm" } ?? ""
-            lines.append("\(date) \(dur)min z4:\(formatted(z4, digits: 1)) z5:\(formatted(z5, digits: 1)) pk:\(peakHR) hrrDrop:\(hrrDrop) \(power) \(cadence)".trimmingCharacters(in: .whitespaces))
+            lines.append("\(date) \(dur)min z4:\(formatted(z4, digits: 1)) z5:\(formatted(z5, digits: 1)) pk:\(peakHR) effort:\(effortScore) hrrDrop:\(hrrDrop) \(power) \(cadence)".trimmingCharacters(in: .whitespaces))
         }
         payload.workoutSummary = lines.joined(separator: "\n")
 

@@ -1309,6 +1309,7 @@ struct WorkoutDetailView: View {
     @State private var routeLookupLocations: [CLLocation] = []
     @State private var coloredSegments: [ColoredRouteSegment] = []
     @State private var isLoadingRoute = false
+    @State private var loadedRouteWorkoutID: UUID? = nil
     @State private var historicalZoneProfile: HRZoneProfile? = nil
     @State private var historicalMaxHR: Double? = nil
     @State private var historicalRestingHR: Double? = nil
@@ -3036,6 +3037,7 @@ struct WorkoutDetailView: View {
         let cadenceAvg = analytics.cadenceSeries.map(\.1).average ?? 0
         
         let elevationGain = calculateElevationGain(analytics.elevationSeries)
+        let effortScore = analytics.workoutEffortScore ?? 0
         
         return """
         WORKOUT_SUMMARY:
@@ -3047,6 +3049,8 @@ struct WorkoutDetailView: View {
         heartRateAvgBpm=\(String(format: "%.0f", hrAvg))
         heartRateMaxBpm=\(String(format: "%.0f", hrMax))
         heartRateMinBpm=\(String(format: "%.0f", hrMin))
+        
+        workoutEffortScore=\(String(format: "%.0f", effortScore))
         
         metAvg=\(String(format: "%.1f", metAvg))
         metMax=\(String(format: "%.1f", metMax))
@@ -3355,13 +3359,22 @@ struct WorkoutDetailView: View {
     }
 
     private func loadRoute() {
-        guard routeLocations.isEmpty else { return }
+        let workoutID = analytics.workout.uuid
+        
+        guard workoutID != loadedRouteWorkoutID else { return }
+        
         guard analytics.workout.workoutActivityType == .running ||
               analytics.workout.workoutActivityType == .cycling ||
               analytics.workout.workoutActivityType == .walking ||
               analytics.workout.workoutActivityType == .hiking else { return }
 
+        loadedRouteWorkoutID = workoutID
+        routeLocations = []
+        routeLookupLocations = []
+        routePoints = []
+        coloredSegments = []
         isLoadingRoute = true
+        
         Task {
             let allLocations = await WorkoutRouteStore.shared.locations(for: analytics.workout)
             let displayLocations = sampledLocations(from: allLocations, maxPoints: 700)
@@ -3533,6 +3546,7 @@ struct MapDetailView: View {
     @State private var isLoadingRoute = false
     @State private var preferredMapSectionHeight: CGFloat = 374
     @State private var liveMapSectionDragTranslation: CGFloat = 0
+    @State private var loadedRouteWorkoutID: UUID? = nil
 
     private var selectedRouteLocation: CLLocation? {
         let referenceDate = selectedScrubbedDate ?? analytics.workout.startDate
@@ -3708,11 +3722,15 @@ struct MapDetailView: View {
     }
 
     private func loadRoute() async {
-        guard coloredSegments.isEmpty, !isLoadingRoute else { return }
-
-        await MainActor.run {
-            isLoadingRoute = true
-        }
+        let workoutID = analytics.workout.uuid
+        
+        guard workoutID != loadedRouteWorkoutID else { return }
+        
+        loadedRouteWorkoutID = workoutID
+        routeLocations = []
+        routeLookupLocations = []
+        coloredSegments = []
+        isLoadingRoute = true
 
         let allLocations = await WorkoutRouteStore.shared.locations(for: analytics.workout)
         let displayLocations = sampledLocations(from: allLocations, maxPoints: 700)
@@ -4462,6 +4480,7 @@ struct RoutePreviewView: View {
 
     @State private var coloredSegments: [ColoredRouteSegment] = []
     @State private var isLoading = false
+    @State private var loadedRouteWorkoutID: UUID? = nil
 
     var body: some View {
         ZStack {
@@ -4486,8 +4505,14 @@ struct RoutePreviewView: View {
     }
 
     private func loadRoute() {
-        guard coloredSegments.isEmpty else { return }
+        let workoutID = workout.uuid
+        
+        guard workoutID != loadedRouteWorkoutID else { return }
+        
+        loadedRouteWorkoutID = workoutID
+        coloredSegments = []
         isLoading = true
+        
         Task {
             let allLocations = await WorkoutRouteStore.shared.locations(for: workout)
             let displayLocations = sampledLocations(from: allLocations, maxPoints: 180)

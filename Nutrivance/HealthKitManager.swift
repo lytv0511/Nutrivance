@@ -94,6 +94,7 @@ struct WorkoutAnalytics {
     let verticalOscillation: Double? // For running, in cm
     let groundContactTime: Double? // For running, in ms
     let strideLength: Double? // For running, in meters
+    let workoutEffortScore: Double? // HKWorkoutEffortScore (0-100)
     var hrZoneProfile: HRZoneProfile?
     var hrZoneBreakdown: [(zone: HeartRateZone, timeInZone: TimeInterval)] = []
 }
@@ -508,6 +509,8 @@ extension HealthKitManager {
         print("  HR Zone Profile: \(zoneProfile.schema.rawValue) - max HR: \(zoneProfile.maxHR ?? 0), resting HR: \(zoneProfile.restingHR ?? 0)")
         print("  Zone breakdown: \(zoneBreakdown.map { "\($0.zone.name): \(Int($0.timeInZone))s" }.joined(separator: ", "))")
 
+        let effortScore = workoutEffortScoreValue(from: workout)
+        
         return WorkoutAnalytics(
             workout: workout,
             heartRates: hrSamples,
@@ -532,6 +535,7 @@ extension HealthKitManager {
             verticalOscillation: verticalOscillation,
             groundContactTime: groundContactTime,
             strideLength: strideLength,
+            workoutEffortScore: effortScore,
             hrZoneProfile: zoneProfile,
             hrZoneBreakdown: zoneBreakdown
         )
@@ -3158,14 +3162,14 @@ extension HealthKitManager {
         }
     }
     
-    /// Generate HR zones based on Lactate Threshold
+    /// Generate HR zones based on Lactate Threshold (Friel-style, tuned lower)
     func generateLTHRZones(lthr: Double) -> [HeartRateZone] {
         let zoneRanges: [(String, Double, Double, String, Int)] = [
-            ("Zone 1: Endurance Z1", 0.00, 0.85, "0099FF", 1),
-            ("Zone 2: Endurance Z2", 0.85, 0.89, "00CC00", 2),
-            ("Zone 3: Tempo", 0.90, 0.94, "FFCC00", 3),
-            ("Zone 4: Threshold", 0.95, 0.99, "FF6600", 4),
-            ("Zone 5: VO₂ Max", 1.00, 1.20, "FF0000", 5)
+            ("Zone 1: Endurance Z1", 0.00, 0.81, "0099FF", 1),
+            ("Zone 2: Endurance Z2", 0.81, 0.89, "00CC00", 2),
+            ("Zone 3: Tempo", 0.89, 0.93, "FFCC00", 3),
+            ("Zone 4: Threshold", 0.93, 0.99, "FF6600", 4),
+            ("Zone 5: VO₂ Max", 0.99, 1.15, "FF0000", 5)
         ]
         
         return zoneRanges.map { name, lowPct, highPct, color, num in

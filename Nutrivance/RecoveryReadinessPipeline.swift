@@ -1,5 +1,7 @@
 import Foundation
 import HealthKit
+import SwiftUI
+import Combine
 
 struct SharedWorkoutSummarySnapshot {
     let date: Date
@@ -145,4 +147,122 @@ func sharedDailyLoadSnapshots(
             daysSinceLastWorkout: daysSinceLastWorkout
         )
     }
+}
+
+// MARK: - Pro-Athlete Aware Score Calculation
+
+@MainActor
+func sharedProAthleteRecoveryScore(
+    for day: Date,
+    engine: HealthStateEngine,
+    profile: PerformanceProfileSettings,
+    chronicLoad: Double,
+    athleteHistoricalMaxChronicLoad: Double?
+) -> (score: Double, hrvWarning: Bool, sleepQualityWarning: Bool, subjectiveBoost: Double?)? {
+    guard let baseScore = sharedRecoveryScore(for: day, engine: engine) else { return nil }
+    
+    let normalizedDay = Calendar.current.startOfDay(for: day)
+    let hrvLookup = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
+    let inputs = HealthStateEngine.proRecoveryInputs(
+        latestHRV: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.effectHRV) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: hrvLookup),
+        restingHeartRate: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailyRestingHeartRate),
+        sleepDurationHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration),
+        timeInBedHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration),
+        hrvBaseline60Day: engine.hrvBaseline60Day,
+        rhrBaseline60Day: engine.rhrBaseline60Day,
+        sleepBaseline60Day: engine.sleepBaseline60Day,
+        hrvBaseline7Day: engine.hrvBaseline7Day,
+        rhrBaseline7Day: engine.rhrBaseline7Day,
+        sleepBaseline7Day: engine.sleepBaseline7Day,
+        bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: engine.sleepStartHours, around: normalizedDay)
+    )
+    
+    guard !inputs.isInconclusive else { return nil }
+    
+    let subjectiveBoost = SubjectiveDailyEntryManager.shared.subjectiveRecoveryBoost()
+    
+    return HealthStateEngine.proAthleteRecoveryScore(
+        from: inputs,
+        profile: ProAthleteProfileValues(from: profile),
+        chronicLoad: chronicLoad,
+        athleteHistoricalMaxChronicLoad: athleteHistoricalMaxChronicLoad,
+        subjectiveBoost: subjectiveBoost
+    )
+}
+
+@MainActor
+func sharedProAthleteReadinessScore(
+    for day: Date,
+    recoveryScore: Double,
+    strainScore: Double,
+    acwr: Double?,
+    acuteLoad: Double?,
+    chronicLoad: Double?,
+    engine: HealthStateEngine,
+    profile: PerformanceProfileSettings
+) -> (score: Double, acwrStatus: String, taperDetected: Bool, asymmetricStrainMultiplier: Double)? {
+    guard profile.isProAthleteMode else { return nil }
+    
+    return HealthStateEngine.proAthleteReadinessScore(
+        recovery: recoveryScore,
+        strain: strainScore,
+        hrvTrend: sharedReadinessTrendComponent(for: day, engine: engine),
+        acwr: acwr,
+        acuteLoad: acuteLoad,
+        chronicLoad: chronicLoad,
+        profile: ProAthleteProfileValues(from: profile)
+    )
+}
+
+// MARK: - Personalized MET Calculations
+
+@MainActor
+func sharedPersonalizedMETForWorkout(
+    workout: HKWorkout,
+    analytics: WorkoutAnalytics,
+    profile: PersonalizedMETProfile,
+    engine: HealthStateEngine
+) -> WorkoutPersonalizedMET? {
+    guard profile.isValid else { return nil }
+    
+    let normalizedDay = Calendar.current.startOfDay(for: workout.startDate)
+    let rhr = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.basalSleepingHeartRate) ?? 
+        HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailyRestingHeartRate) ?? 60
+    
+    return HealthStateEngine.calculatePersonalizedMETForWorkout(
+        workout: workout,
+        analytics: analytics,
+        profile: profile,
+        estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+        rhrAtWorkout: rhr
+    )
+}
+
+@MainActor
+func sharedDailyPersonalizedMETSnapshot(
+    for day: Date,
+    workouts: [WorkoutPersonalizedMET],
+    profile: PersonalizedMETProfile,
+    engine: HealthStateEngine,
+    useDailyAdaptiveThreshold: Bool,
+    recoveryScore: Double?
+) -> DailyPersonalizedMETSnapshot {
+    return HealthStateEngine.calculateDailyPersonalizedMETSnapshot(
+        date: day,
+        workouts: workouts,
+        profile: profile,
+        recoveryScore: recoveryScore,
+        useDailyAdaptiveThreshold: useDailyAdaptiveThreshold
+    )
+}
+
+@MainActor
+func sharedDeriveMaxMETsFromHistory(
+    engine: HealthStateEngine
+) -> Double? {
+    return HealthStateEngine.deriveMaxMETsFromHistory(
+        workouts: engine.workoutAnalytics,
+        estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+        rhrBaseline: engine.rhrBaseline7Day ?? 60
+    )
 }

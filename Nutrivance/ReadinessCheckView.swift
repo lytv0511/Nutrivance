@@ -3,9 +3,11 @@ import SwiftUI
 struct ReadinessCheckView: View {
     @EnvironmentObject private var navigationState: NavigationState
     @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
+    @ObservedObject private var performanceProfile = PerformanceProfileSettings.shared
     @State private var animationPhase: Double = 0
     @State private var isLoading = false
     @State private var snapshot = ReadinessSnapshot.empty
+    @State private var proAthleteReadinessData: (score: Double, acwrStatus: String, taperDetected: Bool, asymmetricStrainMultiplier: Double)?
     /// Same calendar day: rebuild from engine only when returning to this screen (no redundant coverage / CloudKit).
     @State private var lastCompletedCoverageTaskID: String?
 
@@ -228,6 +230,110 @@ struct ReadinessCheckView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        
+                        // MARK: - Pro-Athlete Analysis
+                        if performanceProfile.isProAthleteMode, let proData = proAthleteReadinessData {
+                            MetricSectionGroup(title: "Pro-Athlete Analysis") {
+                                VStack(spacing: 12) {
+                                    // ACWR Status Card
+                                    if let acwr = snapshot.readinessWindow.count > 0 ? proData.acwrStatus : nil {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Acute-to-Chronic Load Ratio")
+                                                        .font(.subheadline)
+                                                        .fontWeight(.semibold)
+                                                    Text("Training load progression")
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                                HStack(spacing: 8) {
+                                                    Text(acwr)
+                                                        .font(.caption)
+                                                        .fontWeight(.semibold)
+                                                        .foregroundColor(acwr == "Optimal" ? .green : acwr == "Danger" ? .red : .orange)
+                                                        .padding(.horizontal, 8)
+                                                        .padding(.vertical, 4)
+                                                        .background(
+                                                            RoundedRectangle(cornerRadius: 6)
+                                                                .fill(Color(.systemGray6))
+                                                        )
+                                                }
+                                            }
+                                            
+                                            if acwr == "Optimal" {
+                                                Text("Sweet spot for injury prevention (0.8–1.3 range). Recovery + 5 points.")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            } else if acwr == "Danger" {
+                                                Text("High load progression (>1.5 ratio). Readiness significantly reduced.")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.red)
+                                            }
+                                        }
+                                        .padding()
+                                        .background(Color(.systemBackground))
+                                        .cornerRadius(8)
+                                    }
+                                    
+                                    // Taper Detection Card
+                                    if proData.taperDetected {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            HStack {
+                                                Image(systemName: "pause.circle.fill")
+                                                    .foregroundColor(.yellow)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Fresh but Flat")
+                                                        .font(.subheadline)
+                                                        .fontWeight(.semibold)
+                                                    Text("Taper detected: readiness capped at 88")
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                            }
+                                            Text("You're in a planned rest phase. Stay disciplined—avoid the urge to push hard despite feeling charged.")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        .padding()
+                                        .background(Color(.systemBackground))
+                                        .cornerRadius(8)
+                                    }
+                                    
+                                    // Asymmetric Strain Impact Card
+                                    if proData.asymmetricStrainMultiplier < 1.0 {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            HStack {
+                                                Image(systemName: "chart.bar.xaxis")
+                                                    .foregroundColor(.orange)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Asymmetric Strain Impact")
+                                                        .font(.subheadline)
+                                                        .fontWeight(.semibold)
+                                                    Text("High strain creates exponential cost")
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                                Text(String(format: "× %.2f", proData.asymmetricStrainMultiplier))
+                                                    .font(.caption)
+                                                    .fontWeight(.semibold)
+                                                    .foregroundColor(.orange)
+                                            }
+                                            Text("Readiness multiplier applied: each unit of strain above threshold creates increasingly severe penalty.")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        .padding()
+                                        .background(Color(.systemBackground))
+                                        .cornerRadius(8)
+                                    }
+                                }
+                                .padding()
+                            }
+                        }
                     }
                     .padding(.horizontal)
                     .padding(.top, 18)
@@ -263,10 +369,12 @@ struct ReadinessCheckView: View {
                 }
                 if lastCompletedCoverageTaskID == refreshTaskID {
                     snapshot = buildSnapshot()
+                    updateProAthleteData()
                     return
                 }
                 await refreshCoverage(forceNetwork: false)
                 lastCompletedCoverageTaskID = refreshTaskID
+                updateProAthleteData()
             }
         }
     }
@@ -436,18 +544,52 @@ struct ReadinessCheckView: View {
                 hrvTrendSupport: hrvTrendSupport,
                 effectHRVToday: effectHRVToday,
                 basalRhrToday: basalRhrToday,
-                sleepEfficiencyToday: sleepEfficiencyToday
+                sleepEfficiencyToday: sleepEfficiencyToday,
+                recoveryInputsToday: recoveryInputsToday
             )
         )
     }
-
+    
+    @MainActor
+    private func updateProAthleteData() {
+        guard performanceProfile.isProAthleteMode else { 
+            proAthleteReadinessData = nil
+            return 
+        }
+        
+        let today = Calendar.current.startOfDay(for: Date())
+        let readinessDisplayWindow = (
+            start: Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today,
+            end: today,
+            endExclusive: Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+        )
+        let loadSnapshots = sharedDailyLoadSnapshots(
+            workouts: healthEngine.workoutAnalytics,
+            estimatedMaxHeartRate: healthEngine.estimatedMaxHeartRate,
+            displayWindow: readinessDisplayWindow
+        )
+        let todayLoad = loadSnapshots.first(where: { $0.date == today })
+        
+        proAthleteReadinessData = sharedProAthleteReadinessScore(
+            for: today,
+            recoveryScore: snapshot.recoveryValue,
+            strainScore: snapshot.strainValue,
+            acwr: todayLoad?.acwr,
+            acuteLoad: todayLoad?.acuteLoad,
+            chronicLoad: todayLoad?.chronicLoad,
+            engine: healthEngine,
+            profile: performanceProfile
+        )
+    }
+    
     private func makeReadinessDriverCards(
         recoveryValue: Double,
         strainValue: Double,
         hrvTrendSupport: Double,
         effectHRVToday: Double?,
         basalRhrToday: Double?,
-        sleepEfficiencyToday: Double?
+        sleepEfficiencyToday: Double?,
+        recoveryInputsToday: HealthStateEngine.ProRecoveryInputs
     ) -> [ReadinessFactorCardModel] {
         [
             ReadinessFactorCardModel(
@@ -455,42 +597,54 @@ struct ReadinessCheckView: View {
                 value: String(format: "%.0f", recoveryValue),
                 unit: "/100",
                 detail: "The biggest positive input. Better sleep, calmer basal HR, and stronger Effect HRV lift this.",
-                tint: .green
+                tint: .green,
+                contribution: nil,
+                contributionDirection: .higherIsBetter
             ),
             ReadinessFactorCardModel(
                 title: "Strain Drag",
                 value: String(format: "%.1f", strainValue),
                 unit: "/21",
                 detail: "Today's readiness gets pulled down when recent load is already heavy or spiky.",
-                tint: .orange
+                tint: .orange,
+                contribution: nil,
+                contributionDirection: .lowerIsBetter
             ),
             ReadinessFactorCardModel(
                 title: "HRV Trend",
                 value: String(format: "%.0f", hrvTrendSupport),
                 unit: "/100",
                 detail: "This is the momentum term. It rewards HRV trends that are holding up relative to baseline.",
-                tint: .cyan
+                tint: .cyan,
+                contribution: hrvTrendSupport,
+                contributionDirection: .higherIsBetter
             ),
             ReadinessFactorCardModel(
                 title: "Effect HRV",
                 value: effectHRVToday.map { String(format: "%.0f", $0) } ?? "–",
                 unit: "ms",
                 detail: "Sleep-anchored HRV carries more weight than random daytime HRV noise.",
-                tint: .mint
+                tint: .mint,
+                contribution: recoveryInputsToday.hrvZScore,
+                contributionDirection: .higherIsBetter
             ),
             ReadinessFactorCardModel(
                 title: "Basal Sleep HR",
                 value: basalRhrToday.map { String(format: "%.0f", $0) } ?? "–",
                 unit: "bpm",
                 detail: "Lower overnight heart rate relative to baseline usually means less recovery cost.",
-                tint: .blue
+                tint: .blue,
+                contribution: recoveryInputsToday.restingHeartRatePenaltyZScore,
+                contributionDirection: .lowerIsBetter
             ),
             ReadinessFactorCardModel(
                 title: "Sleep Efficiency",
                 value: sleepEfficiencyToday.map { String(format: "%.0f", $0 * 100) } ?? "–",
                 unit: "%",
                 detail: "A cleaner night helps preserve the recovery score that readiness starts from.",
-                tint: .indigo
+                tint: .indigo,
+                contribution: recoveryInputsToday.sleepEfficiency.map { $0 * 100 },
+                contributionDirection: .higherIsBetter
             )
         ]
     }
@@ -617,6 +771,50 @@ private struct ReadinessFactorCardModel: Identifiable {
     let unit: String
     let detail: String
     let tint: Color
+    let contribution: Double?
+    let contributionDirection: ContributionDirection
+    
+    enum ContributionDirection {
+        case higherIsBetter
+        case lowerIsBetter
+        case consistency
+    }
+    
+    var contributionBadge: (text: String, color: Color)? {
+        guard let contribution else { return nil }
+        switch contributionDirection {
+        case .higherIsBetter:
+            if contribution > 5 {
+                return ("+\(Int(contribution))", .green)
+            } else if contribution > 0 {
+                return ("+\(Int(contribution))", .mint)
+            } else if contribution > -5 {
+                return ("\(Int(contribution))", .orange)
+            } else {
+                return ("\(Int(contribution))", .red)
+            }
+        case .lowerIsBetter:
+            if contribution > 5 {
+                return ("+\(Int(contribution))", .green)
+            } else if contribution > 0 {
+                return ("+\(Int(contribution))", .mint)
+            } else if contribution > -5 {
+                return ("\(Int(contribution))", .orange)
+            } else {
+                return ("\(Int(contribution))", .red)
+            }
+        case .consistency:
+            if contribution > 3 {
+                return ("Consistent", .green)
+            } else if contribution > 0 {
+                return ("Stable", .mint)
+            } else if contribution > -3 {
+                return ("Variable", .orange)
+            } else {
+                return ("Inconsistent", .red)
+            }
+        }
+    }
 }
 
 private struct ReadinessFactorCard: View {
@@ -629,9 +827,14 @@ private struct ReadinessFactorCard: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Circle()
-                    .fill(model.tint.opacity(0.85))
-                    .frame(width: 10, height: 10)
+                if let badge = model.contributionBadge {
+                    Text(badge.text)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(badge.color)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(badge.color.opacity(0.15), in: Capsule())
+                }
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {

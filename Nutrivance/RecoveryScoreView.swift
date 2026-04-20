@@ -2,10 +2,12 @@ import SwiftUI
 
 struct RecoveryScoreView: View {
     @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
+    @ObservedObject private var performanceProfile = PerformanceProfileSettings.shared
     @State private var animationPhase: Double = 0
     @State private var isLoading = false
     @State private var timeFilter: RecoveryFocusTimeFilter = .day
     @State private var snapshotsByFilter: [RecoveryFocusTimeFilter: RecoverySnapshot] = [:]
+    @State private var proAthleteRecoveryData: (score: Double, hrvWarning: Bool, sleepQualityWarning: Bool, subjectiveBoost: Double?)?
     /// Avoids re-running CloudKit / coverage on every navigation back to this screen the same day.
     @State private var lastCompletedCoverageTaskID: String?
 
@@ -288,6 +290,61 @@ struct RecoveryScoreView: View {
                             }
                         }
                     }
+                    
+                    // MARK: - Pro-Athlete Insights
+                    if performanceProfile.isProAthleteMode, let proData = proAthleteRecoveryData {
+                        MetricSectionGroup(title: "Pro-Athlete Insights") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                // Show badges for active conditions
+                                if proData.hrvWarning {
+                                    HStack(spacing: 8) {
+                                        ProAthleteInfoBadge(badgeType: .hrvBellCurve)
+                                        Spacer()
+                                    }
+                                }
+                                
+                                if proData.sleepQualityWarning {
+                                    HStack(spacing: 8) {
+                                        ProAthleteInfoBadge(badgeType: .sleepQualityLow)
+                                        Spacer()
+                                    }
+                                }
+                                
+                                if performanceProfile.enableStrainSensitiveHRV && healthEngine.chronicTrainingLoad > 0 {
+                                    HStack(spacing: 8) {
+                                        ProAthleteInfoBadge(badgeType: .strainSensitiveHRV)
+                                        Spacer()
+                                    }
+                                }
+                                
+                                if let subjectiveBoost = proData.subjectiveBoost, subjectiveBoost != 0 {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(subjectiveBoost > 0 ? .green : .orange)
+                                            Text("Subjective Data Applied")
+                                                .font(.subheadline)
+                                                .fontWeight(.semibold)
+                                            Spacer()
+                                            Text(String(format: "%+.0f pts", subjectiveBoost))
+                                                .font(.caption)
+                                                .foregroundColor(subjectiveBoost > 0 ? .green : .orange)
+                                        }
+                                        .padding()
+                                        .background(Color(.systemBackground))
+                                        .cornerRadius(8)
+                                    }
+                                }
+                                
+                                // Subjective Data Entry (if enabled)
+                                if performanceProfile.enableSubjectiveDataCollection {
+                                    Divider().padding(.vertical, 8)
+                                    SubjectiveDailyEntryCompact()
+                                }
+                            }
+                            .padding()
+                        }
+                    }
                     .padding(.horizontal)
                     .padding(.top, 18)
                     .padding(.bottom, 32)
@@ -330,10 +387,12 @@ struct RecoveryScoreView: View {
                 }
                 if lastCompletedCoverageTaskID == refreshTaskID {
                     snapshotsByFilter = buildSnapshots()
+                    updateProAthleteData()
                     return
                 }
                 await refreshCoverage(forceNetwork: false)
                 lastCompletedCoverageTaskID = refreshTaskID
+                updateProAthleteData()
             }
         }
     }
@@ -480,22 +539,41 @@ struct RecoveryScoreView: View {
                     sleepEfficiencyToday: sleepEfficiencyToday,
                     respiratoryToday: respiratoryToday,
                     spO2Today: spO2Today,
-                    wristTemperatureToday: wristTemperatureToday
+                    wristTemperatureToday: wristTemperatureToday,
+                    recoveryInputsToday: recoveryInputsToday
                 )
             )
         }
 
         return snapshots
     }
+    
+    @MainActor
+    private func updateProAthleteData() {
+        guard performanceProfile.isProAthleteMode else { 
+            proAthleteRecoveryData = nil
+            return 
+        }
+        
+        let today = Calendar.current.startOfDay(for: Date())
+        proAthleteRecoveryData = sharedProAthleteRecoveryScore(
+            for: today,
+            engine: healthEngine,
+            profile: performanceProfile,
+            chronicLoad: healthEngine.chronicTrainingLoad,
+            athleteHistoricalMaxChronicLoad: nil
+        )
+    }
 
-    private func makeRecoverySignals(
+private func makeRecoverySignals(
         effectHRVToday: Double?,
         basalRhrToday: Double?,
         sleepToday: Double?,
         sleepEfficiencyToday: Double?,
         respiratoryToday: Double?,
         spO2Today: Double?,
-        wristTemperatureToday: Double?
+        wristTemperatureToday: Double?,
+        recoveryInputsToday: HealthStateEngine.ProRecoveryInputs
     ) -> [RecoverySignalCardModel] {
         [
             RecoverySignalCardModel(
@@ -503,49 +581,63 @@ struct RecoveryScoreView: View {
                 value: effectHRVToday.map { String(format: "%.0f", $0) } ?? "–",
                 unit: "ms",
                 detail: "Sleep-anchored HRV is the lead signal in your recovery model.",
-                tint: .mint
+                tint: .mint,
+                contribution: recoveryInputsToday.hrvZScore,
+                contributionDirection: .higherIsBetter
             ),
             RecoverySignalCardModel(
                 title: "Basal Sleeping HR",
                 value: basalRhrToday.map { String(format: "%.0f", $0) } ?? "–",
                 unit: "bpm",
                 detail: "The lowest stable overnight heart rate helps estimate cardiovascular cost.",
-                tint: .blue
+                tint: .blue,
+                contribution: recoveryInputsToday.restingHeartRatePenaltyZScore,
+                contributionDirection: .lowerIsBetter
             ),
             RecoverySignalCardModel(
                 title: "Sleep Duration",
                 value: sleepToday.map { String(format: "%.1f", $0) } ?? "–",
                 unit: "h",
                 detail: "Recovery still gets sleep-gated. A weak night caps the upside even with decent physiology.",
-                tint: .indigo
+                tint: .indigo,
+                contribution: recoveryInputsToday.sleepRatio,
+                contributionDirection: .higherIsBetter
             ),
             RecoverySignalCardModel(
                 title: "Sleep Efficiency",
                 value: sleepEfficiencyToday.map { String(format: "%.0f", $0 * 100) } ?? "–",
                 unit: "%",
                 detail: "Cleaner sleep generally preserves more of your base recovery score.",
-                tint: .cyan
+                tint: .cyan,
+                contribution: recoveryInputsToday.sleepEfficiency,
+                contributionDirection: .higherIsBetter
             ),
             RecoverySignalCardModel(
                 title: "Respiratory Rate",
                 value: respiratoryToday.map { String(format: "%.1f", $0) } ?? "–",
                 unit: "/min",
                 detail: "Breathing rate can help catch systemic stress before it shows up in performance.",
-                tint: .teal
+                tint: .teal,
+                contribution: recoveryInputsToday.bedtimeVarianceMinutes.map { min(abs($0) / 30, 1) * 10 - 5 },
+                contributionDirection: .consistency
             ),
             RecoverySignalCardModel(
                 title: "SpO2",
                 value: spO2Today.map { String(format: "%.0f", $0) } ?? "–",
                 unit: "%",
-                detail: "Blood oxygen doesn’t drive the score directly, but it’s useful recovery-side context.",
-                tint: .green
+                detail: "Blood oxygen doesn't drive the score directly, but it's useful recovery-side context.",
+                tint: .green,
+                contribution: spO2Today.map { ($0 - 98) * 2 },
+                contributionDirection: .higherIsBetter
             ),
             RecoverySignalCardModel(
                 title: "Wrist Temp",
                 value: wristTemperatureToday.map { String(format: "%.2f", $0) } ?? "–",
                 unit: "°C",
                 detail: "Temperature shifts can flag hidden stress, travel, illness, or poor overnight recovery.",
-                tint: .orange
+                tint: .orange,
+                contribution: wristTemperatureToday.map { -abs($0 - 35.5) * 3 },
+                contributionDirection: .consistency
             )
         ]
     }
@@ -695,6 +787,50 @@ private struct RecoverySignalCardModel: Identifiable {
     let unit: String
     let detail: String
     let tint: Color
+    let contribution: Double?
+    let contributionDirection: ContributionDirection
+    
+    enum ContributionDirection {
+        case higherIsBetter
+        case lowerIsBetter
+        case consistency
+    }
+    
+    var contributionBadge: (text: String, color: Color)? {
+        guard let contribution else { return nil }
+        switch contributionDirection {
+        case .higherIsBetter:
+            if contribution > 5 {
+                return ("+\(Int(contribution))", .green)
+            } else if contribution > 0 {
+                return ("+\(Int(contribution))", .mint)
+            } else if contribution > -5 {
+                return ("\(Int(contribution))", .orange)
+            } else {
+                return ("\(Int(contribution))", .red)
+            }
+        case .lowerIsBetter:
+            if contribution > 5 {
+                return ("+\(Int(contribution))", .green)
+            } else if contribution > 0 {
+                return ("+\(Int(contribution))", .mint)
+            } else if contribution > -5 {
+                return ("\(Int(contribution))", .orange)
+            } else {
+                return ("\(Int(contribution))", .red)
+            }
+        case .consistency:
+            if contribution > 3 {
+                return ("Consistent", .green)
+            } else if contribution > 0 {
+                return ("Stable", .mint)
+            } else if contribution > -3 {
+                return ("Variable", .orange)
+            } else {
+                return ("Inconsistent", .red)
+            }
+        }
+    }
 }
 
 private struct RecoverySignalCard: View {
@@ -707,9 +843,14 @@ private struct RecoverySignalCard: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(model.tint.opacity(0.85))
-                    .frame(width: 18, height: 18)
+                if let badge = model.contributionBadge {
+                    Text(badge.text)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(badge.color)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(badge.color.opacity(0.15), in: Capsule())
+                }
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
