@@ -1134,7 +1134,9 @@ private func workoutHistoryPreviewSection() -> some View {
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

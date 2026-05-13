@@ -83,6 +83,25 @@ private struct RoadmapPageHeightPreferenceKey: PreferenceKey {
     }
 }
 
+private struct RepositoryCardFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct RoadmapBubbleTail: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.closeSubpath()
+        return path
+    }
+}
+
 struct ProgramBuilderView: View {
     let presentationStyle: ProgramBuilderPresentationStyle
     let onPlanCommitted: ((ProgramWorkoutPlanRecord) -> Void)?
@@ -315,14 +334,14 @@ struct ProgramBuilderView: View {
                         } label: {
                             Text("Repository")
                         }
-                        .disabled(planner.generatedBlueprint == nil || selectedActivities.isEmpty)
+                        .disabled(selectedActivities.isEmpty)
 
                         Button("Save") {
                             Task {
                                 await commitCurrentPlan()
                             }
                         }
-                        .disabled(planner.generatedBlueprint == nil || selectedActivities.isEmpty)
+                        .disabled(selectedActivities.isEmpty)
                     }
                 }
                 if presentationStyle == .simplified, let onDismiss {
@@ -772,7 +791,7 @@ struct ProgramBuilderView: View {
                         workoutStagesTab
                     }
 
-                    if let _ = planner.generatedBlueprint {
+                    if presentationStyle != .dailyMission, !selectedActivities.isEmpty {
                         HStack(spacing: 12) {
                             Button {
                                 Task {
@@ -1440,6 +1459,18 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
                 let launchTitle = planner.generatedBlueprint?.title ?? activity.title
                 let launchSubtitle = launchSubtitle(for: activity)
 
+                Button {
+                    Task {
+                        await saveCurrentPlanToRepository()
+                    }
+                } label: {
+                    Label("Save to Repository", systemImage: "square.and.arrow.down")
+                        .font(.subheadline.weight(.bold))
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.white.opacity(0.16))
+
                 if isPadDevice {
                     ProgramLaunchButton(
                         title: "Save Plan & Send to iPhone",
@@ -1470,34 +1501,34 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
                             )
                         }
 
-                        ProgramLaunchButton(
-                            title: "Start on Watch",
-                            subtitle: "Mirror back to phone",
-                            symbol: "applewatch",
-                            tint: .orange,
-                            fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
-                        ) {
-                            Task {
-                                let routeLaunch: RouteLaunchMetadata
-                                if let plannedRouteLaunchMetadata {
-                                    routeLaunch = plannedRouteLaunchMetadata
-                                } else if let fetchedRouteLaunch = await routeLaunchMetadata() {
-                                    routeLaunch = fetchedRouteLaunch
-                                } else {
-                                    routeLaunch = RouteLaunchMetadata(name: "", trailhead: nil, coordinates: [])
-                                }
-                                liveWorkoutManager.startWorkoutOnWatch(
-                                    title: launchTitle,
-                                    subtitle: launchSubtitle,
-                                    activity: activity.hkWorkoutActivityType,
-                                    location: activity.preferredLocationType(for: selectedMode),
-                                    phases: buildPlanPhases(),
-                                    routeName: routeLaunch.name.isEmpty ? nil : routeLaunch.name,
-                                    trailheadCoordinate: routeLaunch.trailhead,
-                                    routeCoordinates: routeLaunch.coordinates
-                                )
-                            }
-                        }
+//                        ProgramLaunchButton(
+//                            title: "Start on Watch",
+//                            subtitle: "Mirror back to phone",
+//                            symbol: "applewatch",
+//                            tint: .orange,
+//                            fixedHeight: launchButtonHeight > 0 ? launchButtonHeight : nil
+//                        ) {
+//                            Task {
+//                                let routeLaunch: RouteLaunchMetadata
+//                                if let plannedRouteLaunchMetadata {
+//                                    routeLaunch = plannedRouteLaunchMetadata
+//                                } else if let fetchedRouteLaunch = await routeLaunchMetadata() {
+//                                    routeLaunch = fetchedRouteLaunch
+//                                } else {
+//                                    routeLaunch = RouteLaunchMetadata(name: "", trailhead: nil, coordinates: [])
+//                                }
+//                                liveWorkoutManager.startWorkoutOnWatch(
+//                                    title: launchTitle,
+//                                    subtitle: launchSubtitle,
+//                                    activity: activity.hkWorkoutActivityType,
+//                                    location: activity.preferredLocationType(for: selectedMode),
+//                                    phases: buildPlanPhases(),
+//                                    routeName: routeLaunch.name.isEmpty ? nil : routeLaunch.name,
+//                                    trailheadCoordinate: routeLaunch.trailhead,
+//                                    routeCoordinates: routeLaunch.coordinates
+//                                )
+//                            }
+//                        }
 
                         ProgramLaunchButton(
                             title: "Workout App",
@@ -2012,10 +2043,10 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
     }
 
     private func buildPlanRecord(expiresAt: Date?) async -> ProgramWorkoutPlanRecord? {
-        guard let activity = selectedActivities.first,
-              let blueprint = planner.generatedBlueprint else {
+        guard let activity = selectedActivities.first else {
             return nil
         }
+        let blueprint = planner.generatedBlueprint ?? fallbackBlueprint(primaryActivity: activity)
 
         let routeLaunch: RouteLaunchMetadata?
         if selectedMode == .route {
@@ -2062,6 +2093,25 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
             updatedAt: Date(),
             expiresAt: expiresAt,
             sourceDeviceLabel: isPadDevice ? "iPad" : "iPhone"
+        )
+    }
+
+    private func fallbackBlueprint(primaryActivity: ProgramWorkoutType) -> ProgramGeneratedBlueprint {
+        let minutes = max(10, Int(availableMinutes.rounded()))
+        let targetText = "\(selectedTargetMetric.title) · Zone \(selectedZone)"
+        return ProgramGeneratedBlueprint(
+            title: "\(primaryActivity.title) Session",
+            summary: "Saved from current builder inputs without running legacy blueprint generation.",
+            todayFocus: targetText,
+            blocks: [
+                ProgramGeneratedBlueprint.Block(
+                    title: primaryActivity.title,
+                    minutes: minutes,
+                    focus: targetText,
+                    cue: "Use your selected mode and stage settings as the primary guide."
+                )
+            ],
+            cautionNote: nil
         )
     }
 
@@ -2387,8 +2437,13 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
         return defaultValue
     }
 
+    private func roleSupportsGoalSelection(_ role: ProgramMicroStageRole) -> Bool {
+        role != .warmup && role != .cooldown
+    }
+
     private func allowedGoals(for role: ProgramMicroStageRole, activity: ProgramWorkoutType) -> [ProgramMicroStageGoal] {
-        activity.supportedMicroStageGoals(for: role)
+        guard roleSupportsGoalSelection(role) else { return [.time] }
+        return activity.supportedMicroStageGoals(for: role)
     }
 
     private func defaultMainGoal(for activity: ProgramWorkoutType) -> ProgramMicroStageGoal {
@@ -2969,13 +3024,15 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
                         .pickerStyle(.menu)
                     }
 
-                    compactMenuField(title: "Goal") {
-                        Picker("Goal", selection: stageBinding.goal) {
-                            ForEach(availableGoals) { goal in
-                                Text(goal.title).tag(goal)
+                    if roleSupportsGoalSelection(stageBinding.role.wrappedValue) {
+                        compactMenuField(title: "Goal") {
+                            Picker("Goal", selection: stageBinding.goal) {
+                                ForEach(availableGoals) { goal in
+                                    Text(goal.title).tag(goal)
+                                }
                             }
+                            .pickerStyle(.menu)
                         }
-                        .pickerStyle(.menu)
                     }
 
                     wheelMetricPicker(
@@ -3015,7 +3072,8 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
                     }
                 }
 
-                if stageBinding.goal.wrappedValue.requiresDescriptorInput {
+                if roleSupportsGoalSelection(stageBinding.role.wrappedValue),
+                   stageBinding.goal.wrappedValue.requiresDescriptorInput {
                     stageTargetEditor(for: activity, stageID: stage.id)
                 }
 
@@ -3147,7 +3205,7 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
                     .padding(.vertical, 4)
                     .background(Color.orange, in: Capsule())
 
-                if !stage.goal.title.isEmpty {
+                if roleSupportsGoalSelection(stage.role), !stage.goal.title.isEmpty {
                     Text(stage.goal.title)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.72))
@@ -5535,9 +5593,9 @@ private struct ProgramLaunchButton: View {
                 Text(title)
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.white)
-                Text(subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.68))
+//                Text(subtitle)
+//                    .font(.footnote)
+//                    .foregroundStyle(.white.opacity(0.68))
             }
             .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .frame(height: resolvedHeight, alignment: .topLeading)
@@ -8180,7 +8238,7 @@ struct TrainingRoadmapView: View {
     @StateObject private var planStore = ProgramWorkoutPlanStore.shared
     @StateObject private var liveWorkoutManager = CompanionWorkoutLiveManager.shared
 
-    @State private var selectedPage = 0
+    @State private var expandedWeekIndices: Set<Int> = [0]
     @State private var selectedDayForAction: RoadmapDayPlan?
     @State private var selectedDayForRepositoryPicker: RoadmapDayPlan?
     @State private var selectedDayForBuilder: RoadmapDayPlan?
@@ -8189,36 +8247,60 @@ struct TrainingRoadmapView: View {
     @State private var repeatUntilDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
     @State private var statusMessage: String?
     @State private var isScheduling = false
-    @State private var pageHeights: [Int: CGFloat] = [:]
+    @State private var isRepositoryDragActive = false
+    @State private var draggingRepositoryPlanID: UUID?
+    @State private var targetedProxyDate: Date?
+    @State private var isDropHoveringRepositorySection = false
+    @State private var isDropHoveringDayCards = false
+    @State private var repositoryCardFrames: [UUID: CGRect] = [:]
 
-    private let roadmapColumns = Array(repeating: GridItem(.flexible(), spacing: 14), count: 1)
+    private let proxyOverlayColumns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 7)
+    private var isPadDevice: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                TabView(selection: $selectedPage) {
-                    ForEach(0..<4, id: \.self) { page in
-                        LazyVGrid(columns: roadmapColumns, spacing: 14) {
-                            ForEach(pageDays(page)) { day in
+                ForEach(roadmapWeekSections()) { week in
+                    DisclosureGroup(
+                        isExpanded: Binding(
+                            get: { expandedWeekIndices.contains(week.index) },
+                            set: { isExpanded in
+                                if isExpanded {
+                                    expandedWeekIndices.insert(week.index)
+                                } else {
+                                    expandedWeekIndices.remove(week.index)
+                                }
+                            }
+                        )
+                    ) {
+                        LazyVStack(spacing: 14) {
+                            ForEach(week.days) { day in
                                 roadmapDayCard(day)
                             }
                         }
-                        .tag(page)
-                        .padding(.horizontal, 4)
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: RoadmapPageHeightPreferenceKey.self,
-                                    value: [page: proxy.size.height]
-                                )
+                        .padding(.top, 10)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Week \(week.index + 1)")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(.primary)
+                                Text(week.dateRangeLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                        )
+                            Spacer()
+                            Text("\(week.days.count) days")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .always))
-                .frame(height: max(pageHeights[selectedPage] ?? 640, 640))
-                .onPreferenceChange(RoadmapPageHeightPreferenceKey.self) { heights in
-                    pageHeights.merge(heights, uniquingKeysWith: max)
+                    .padding(14)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
                 }
 
                 roadmapRepositorySection
@@ -8289,12 +8371,149 @@ struct TrainingRoadmapView: View {
         ) {
             repeatEditorSheet
         }
+        .onChange(of: isRepositoryDragActive) { _, active in
+            if !active {
+                targetedProxyDate = nil
+                isDropHoveringRepositorySection = false
+                isDropHoveringDayCards = false
+            }
+        }
     }
 
-    private func pageDays(_ page: Int) -> [RoadmapDayPlan] {
-        let start = page * 7
-        let end = min(start + 7, roadmapStore.days.count)
-        return Array(roadmapStore.days[start..<end])
+    private var roadmapQuickDropProxyBar: some View {
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Drop to day")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            LazyVGrid(columns: proxyOverlayColumns, spacing: 8) {
+                ForEach(roadmapStore.days) { day in
+                    proxyDropTile(for: day)
+                }
+            }
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func proxyDropTile(for day: RoadmapDayPlan) -> some View {
+        let proxyDate = Calendar.current.startOfDay(for: day.date)
+        let isTargeted = targetedProxyDate == proxyDate
+        let dayNumberText = day.date.formatted(.dateTime.day())
+        let weekdayText = day.date.formatted(.dateTime.weekday(.narrow))
+        let cornerRadius: CGFloat = isTargeted ? 12 : 10
+        let strokeGradient: LinearGradient = {
+            if isTargeted {
+                return LinearGradient(
+                    colors: [Color.orange.opacity(0.9), Color.yellow.opacity(0.55)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+            return LinearGradient(
+                colors: [Color.orange.opacity(0.25), Color.orange.opacity(0.25)],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }()
+
+        VStack(spacing: 2) {
+            Text(dayNumberText)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.primary)
+            Text(weekdayText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 42)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(strokeGradient, lineWidth: isTargeted ? 1.8 : 1)
+        )
+        .scaleEffect(isTargeted ? 1.05 : 1.0)
+        .shadow(
+            color: isTargeted ? Color.orange.opacity(0.55) : .clear,
+            radius: isTargeted ? 12 : 0,
+            x: 0,
+            y: 0
+        )
+        .animation(.spring(response: 0.22, dampingFraction: 0.82), value: isTargeted)
+        .dropDestination(
+            for: String.self,
+            action: { items, _ in
+                handleRepositoryDrop(items: items, to: day.date)
+            },
+            isTargeted: { hovering in
+                updateProxyTargetHover(proxyDate: proxyDate, hovering: hovering)
+            }
+        )
+    }
+
+    private func updateProxyTargetHover(proxyDate: Date, hovering: Bool) {
+        if hovering {
+            targetedProxyDate = proxyDate
+        } else if targetedProxyDate == proxyDate {
+            targetedProxyDate = nil
+            finalizeDragOverlayIfIdle()
+        }
+    }
+
+    private func handleRepositoryDrop(items: [String], to date: Date) -> Bool {
+        guard let first = items.first,
+              let planID = UUID(uuidString: first),
+              let plan = planStore.repositoryPlans.first(where: { $0.id == planID }) else {
+            return false
+        }
+        roadmapStore.add(plan: plan, to: date)
+        statusMessage = "Added \(plan.title) to \(date.formatted(date: .abbreviated, time: .omitted))."
+        isRepositoryDragActive = false
+        draggingRepositoryPlanID = nil
+        targetedProxyDate = nil
+        isDropHoveringRepositorySection = false
+        return true
+    }
+
+    private func finalizeDragOverlayIfIdle() {
+        guard isRepositoryDragActive else { return }
+        guard targetedProxyDate == nil else { return }
+        guard !isDropHoveringRepositorySection else { return }
+        guard !isDropHoveringDayCards else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            guard targetedProxyDate == nil else { return }
+            guard !isDropHoveringRepositorySection else { return }
+            guard !isDropHoveringDayCards else { return }
+            isRepositoryDragActive = false
+            draggingRepositoryPlanID = nil
+        }
+    }
+
+    private struct RoadmapWeekSection: Identifiable {
+        let index: Int
+        let days: [RoadmapDayPlan]
+        var id: Int { index }
+
+        var dateRangeLabel: String {
+            guard let first = days.first?.date, let last = days.last?.date else { return "" }
+            return "\(first.formatted(date: .abbreviated, time: .omitted)) - \(last.formatted(date: .abbreviated, time: .omitted))"
+        }
+    }
+
+    private func roadmapWeekSections() -> [RoadmapWeekSection] {
+        let allDays = roadmapStore.days
+        guard !allDays.isEmpty else { return [] }
+        let chunked = stride(from: 0, to: allDays.count, by: 7).map { start -> [RoadmapDayPlan] in
+            let end = min(start + 7, allDays.count)
+            return Array(allDays[start..<end])
+        }
+        return chunked.enumerated().map { index, days in
+            RoadmapWeekSection(index: index, days: days)
+        }
     }
 
     @ViewBuilder
@@ -8348,16 +8567,18 @@ struct TrainingRoadmapView: View {
         .onTapGesture {
             selectedDayForAction = day
         }
-        .dropDestination(for: String.self) { items, _ in
-            guard let first = items.first,
-                  let planID = UUID(uuidString: first),
-                  let plan = planStore.repositoryPlans.first(where: { $0.id == planID }) else {
-                return false
+        .dropDestination(
+            for: String.self,
+            action: { items, _ in
+                handleRepositoryDrop(items: items, to: day.date)
+            },
+            isTargeted: { hovering in
+                isDropHoveringDayCards = hovering
+                if !hovering {
+                    finalizeDragOverlayIfIdle()
+                }
             }
-            roadmapStore.add(plan: plan, to: day.date)
-            statusMessage = "Added \(plan.title) to \(day.date.formatted(date: .abbreviated, time: .omitted))."
-            return true
-        }
+        )
     }
 
     private func roadmapAssignmentChip(day: RoadmapDayPlan, assignment: RoadmapWorkoutAssignment) -> some View {
@@ -8428,30 +8649,129 @@ struct TrainingRoadmapView: View {
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
+                if isPadDevice {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
                         ForEach(planStore.repositoryPlans) { plan in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(plan.title)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                                Text(activityTitles(for: plan).joined(separator: " • "))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                            .padding(12)
-                            .frame(width: 200, alignment: .leading)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .draggable(plan.id.uuidString)
+                            repositoryPlanCard(plan)
                         }
                     }
-                    .padding(.vertical, 4)
+                } else {
+                    LazyVStack(spacing: 10) {
+                        ForEach(planStore.repositoryPlans) { plan in
+                            repositoryPlanCard(plan)
+                        }
+                    }
                 }
             }
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .coordinateSpace(name: "roadmapRepositorySection")
+        .onPreferenceChange(RepositoryCardFramePreferenceKey.self) { frames in
+            repositoryCardFrames = frames
+        }
+        .overlay(alignment: .topLeading) {
+            if isRepositoryDragActive, draggingRepositoryPlanID != nil {
+                GeometryReader { geo in
+                    let sectionWidth = geo.size.width
+                    let bubbleWidth = min(sectionWidth - 16, isPadDevice ? 620 : 360)
+                    let proxyRowCount = max(1, Int(ceil(Double(roadmapStore.days.count) / 7.0)))
+                    let bubbleBodyHeight = 12 + 16 + 10 + (CGFloat(proxyRowCount) * 42) + (CGFloat(max(0, proxyRowCount - 1)) * 8) + 12
+                    let chipMidX: CGFloat = {
+                        guard let id = draggingRepositoryPlanID,
+                              let frame = repositoryCardFrames[id] else { return sectionWidth * 0.5 }
+                        return frame.midX
+                    }()
+                    let bubbleX = max(8, min(chipMidX - bubbleWidth / 2, sectionWidth - bubbleWidth - 8))
+                    let bubbleY: CGFloat = {
+                        guard let id = draggingRepositoryPlanID,
+                              let frame = repositoryCardFrames[id] else { return 72 }
+                        // Keep the bubble directly above the dragged chip; allow negative Y so it does not cover list content.
+                        return max(-bubbleBodyHeight - 18, frame.minY - (bubbleBodyHeight + 9))
+                    }()
+                    let tailCenterX = max(14, min(chipMidX - bubbleX, bubbleWidth - 14))
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        roadmapQuickDropProxyBar
+                            .frame(width: bubbleWidth, alignment: .leading)
+                        RoadmapBubbleTail()
+                            .fill(.ultraThinMaterial)
+                            .frame(width: 18, height: 9)
+                            .overlay(
+                                RoadmapBubbleTail()
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                            .offset(x: tailCenterX - 9, y: 0)
+                    }
+                    .offset(x: bubbleX, y: bubbleY)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topLeading)))
+                    .animation(.spring(response: 0.24, dampingFraction: 0.82), value: bubbleX)
+                    .animation(.spring(response: 0.24, dampingFraction: 0.82), value: bubbleY)
+                    .animation(.spring(response: 0.24, dampingFraction: 0.82), value: tailCenterX)
+                    .animation(.easeInOut(duration: 0.12), value: isRepositoryDragActive)
+                }
+            }
+        }
+        .dropDestination(
+            for: String.self,
+            action: { _, _ in false },
+            isTargeted: { hovering in
+                isDropHoveringRepositorySection = hovering
+                if hovering, draggingRepositoryPlanID != nil {
+                    isRepositoryDragActive = true
+                } else {
+                    finalizeDragOverlayIfIdle()
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func repositoryPlanCard(_ plan: ProgramWorkoutPlanRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(plan.title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Text(activityTitles(for: plan).joined(separator: " • "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    draggingRepositoryPlanID == plan.id ? Color.orange.opacity(0.6) : Color.clear,
+                    lineWidth: 1.2
+                )
+        )
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: RepositoryCardFramePreferenceKey.self,
+                    value: [plan.id: proxy.frame(in: .named("roadmapRepositorySection"))]
+                )
+            }
+        )
+        .onTapGesture {
+            if isRepositoryDragActive, draggingRepositoryPlanID == plan.id {
+                isRepositoryDragActive = false
+                draggingRepositoryPlanID = nil
+                targetedProxyDate = nil
+                isDropHoveringRepositorySection = false
+                isDropHoveringDayCards = false
+            } else {
+                draggingRepositoryPlanID = plan.id
+                isRepositoryDragActive = true
+            }
+        }
+        .onDrag {
+            isRepositoryDragActive = true
+            draggingRepositoryPlanID = plan.id
+            return NSItemProvider(object: plan.id.uuidString as NSString)
+        }
     }
 
     private func roadmapRepositoryPicker(for day: RoadmapDayPlan) -> some View {
