@@ -391,3 +391,24 @@ func sharedDeriveMaxMETsFromHistory(
         rhrBaseline: engine.rhrBaseline7Day ?? 60
     )
 }
+
+// MARK: - Metric view display cache (disk)
+
+/// Shared Application Support folder for instant reload of heavy metric screens.
+enum NutrivanceViewMetricDisplayCacheURL {
+    static func directory() throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let dir = base.appendingPathComponent("NutrivanceMetricDisplayCache", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func fileURL(named fileName: String) throws -> URL {
+        try directory().appendingPathComponent(fileName, isDirectory: false)
+    }
+}

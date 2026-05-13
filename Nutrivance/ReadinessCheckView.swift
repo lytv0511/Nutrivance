@@ -1,20 +1,16 @@
 import SwiftUI
+import UIKit
 
 struct ReadinessCheckView: View {
     @EnvironmentObject private var navigationState: NavigationState
     @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     @ObservedObject private var performanceProfile = PerformanceProfileSettings.shared
     @State private var animationPhase: Double = 0
-    @State private var isLoading = false
     @State private var snapshot = ReadinessSnapshot.empty
     @State private var proAthleteReadinessData: (score: Double, acwrStatus: String, taperDetected: Bool, asymmetricStrainMultiplier: Double)?
     /// Caches the per-day load snapshots produced by `buildSnapshot()` so the
     /// pro-athlete pass does not recompute `sharedDailyLoadSnapshots` for the same window.
     @State private var cachedReadinessLoadSnapshots: [SharedWorkoutSummarySnapshot] = []
-    /// Same calendar day: rebuild from engine only when returning to this screen (no redundant coverage / CloudKit).
-    @State private var lastCompletedCoverageTaskID: String?
-
-    // Body Status + Morning Readiness
     @State private var bodyStatusModel: BodyStatusModel = .empty
     @State private var morningReadiness: MorningReadinessSnapshot? = nil
     @State private var showBodyStatus = false
@@ -365,12 +361,6 @@ struct ReadinessCheckView: View {
                     .padding(.bottom, 32)
                 }
 
-                if isLoading {
-                    ProgressView("Refreshing readiness...")
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                }
             }
             .navigationTitle("Readiness Check")
             .toolbar {
@@ -391,34 +381,46 @@ struct ReadinessCheckView: View {
             .sheet(isPresented: $showBodyStatus) {
                 BodyStatusView()
             }
+            .onAppear {
+                let day = today
+                if let cached = ReadinessDisplayDiskCache.loadIfMatches(anchorDay: day) {
+                    snapshot = cached
+                } else {
+                    snapshot = .empty
+                }
+                applyAuxiliaryReadinessChrome()
+            }
             .task(id: refreshTaskID) {
                 withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                     animationPhase = 20
                 }
-                if lastCompletedCoverageTaskID == refreshTaskID {
-                    // Same calendar day as the last completed coverage pass: keep the cached snapshot
-                    // to avoid recomputing the full readiness pipeline on every navigation back.
-                    updateProAthleteData()
-                    bodyStatusModel = computeBodyStatus(engine: healthEngine)
-                    morningReadiness = buildMorningReadiness(engine: healthEngine)
-                    return
-                }
-                await refreshCoverage(forceNetwork: false)
-                lastCompletedCoverageTaskID = refreshTaskID
-                updateProAthleteData()
-                bodyStatusModel = computeBodyStatus(engine: healthEngine)
-                morningReadiness = buildMorningReadiness(engine: healthEngine)
+                await recomputeReadinessFromEngineIfNeeded()
+                applyAuxiliaryReadinessChrome()
             }
         }
     }
 
     private func scheduleForceRefresh() {
         Task {
-            await refreshCoverage(forceNetwork: true)
-            lastCompletedCoverageTaskID = refreshTaskID
-            bodyStatusModel = computeBodyStatus(engine: healthEngine)
-            morningReadiness = buildMorningReadiness(engine: healthEngine)
+            await refreshCoverageOnUserDemand(forceNetwork: true)
+            applyAuxiliaryReadinessChrome()
         }
+    }
+
+    /// Rebuild charts from whatever is already loaded in `HealthStateEngine` (no HK / CloudKit pulls).
+    @MainActor
+    private func recomputeReadinessFromEngineIfNeeded() async {
+        guard snapshot.readinessWindow.isEmpty else { return }
+        snapshot = buildSnapshot()
+        ReadinessDisplayDiskCache.save(snapshot, anchorDay: today)
+    }
+
+    /// Pro-athlete / body / morning widgets from the engine (cheap vs full `buildSnapshot()` fan-out).
+    @MainActor
+    private func applyAuxiliaryReadinessChrome() {
+        updateProAthleteData()
+        bodyStatusModel = computeBodyStatus(engine: healthEngine)
+        morningReadiness = buildMorningReadiness(engine: healthEngine)
     }
 
     private var readinessHero: some View {
@@ -469,12 +471,11 @@ struct ReadinessCheckView: View {
     }
 
     @MainActor
-    private func refreshCoverage(forceNetwork: Bool) async {
+    private func refreshCoverageOnUserDemand(forceNetwork: Bool) async {
         #if targetEnvironment(macCatalyst)
-        // On Mac, snapshot is built from cached data (iPhone sync).
-        // Don't block UI; sync in background.
         snapshot = buildSnapshot()
-        DispatchQueue.global(qos: .background).async {
+        ReadinessDisplayDiskCache.save(snapshot, anchorDay: today)
+        DispatchQueue.global(qos: .utility).async {
             NSUbiquitousKeyValueStore.default.synchronize()
         }
         return
@@ -486,31 +487,18 @@ struct ReadinessCheckView: View {
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today
 
         if forceNetwork {
-            isLoading = true
             await healthEngine.refreshSyncedHealthDataFromICloud()
-            snapshot = buildSnapshot()
-            isLoading = false
-            return
         }
 
-        let needRecovery = healthEngine.needsRecoveryMetricsCoverage(from: recoveryStart, to: end)
-        let needWorkouts = healthEngine.needsWorkoutAnalyticsCoverage(from: workoutStart, to: end)
-
-        if needRecovery || needWorkouts {
-            isLoading = true
-            if needRecovery {
-                await healthEngine.ensureRecoveryMetricsCoverage(from: recoveryStart, to: end)
-            }
-            if needWorkouts {
-                await healthEngine.ensureWorkoutAnalyticsCoverage(from: workoutStart, to: end)
-            }
-            isLoading = false
+        if healthEngine.needsRecoveryMetricsCoverage(from: recoveryStart, to: end) {
+            await healthEngine.ensureRecoveryMetricsCoverage(from: recoveryStart, to: end)
+        }
+        if healthEngine.needsWorkoutAnalyticsCoverage(from: workoutStart, to: end) {
+            await healthEngine.ensureWorkoutAnalyticsCoverage(from: workoutStart, to: end)
         }
 
-        // Rebuild snapshot only when we fetched new coverage or we have not built a window yet.
-        if needRecovery || needWorkouts || snapshot.readinessWindow.isEmpty {
-            snapshot = buildSnapshot()
-        }
+        snapshot = buildSnapshot()
+        ReadinessDisplayDiskCache.save(snapshot, anchorDay: today)
     }
 
     /// Builds the readiness snapshot. The heavy fan-out — ~21 per-day pipeline calls
@@ -840,6 +828,233 @@ private struct ReadinessSnapshot {
     )
 }
 
+// MARK: - Readiness display disk cache
+
+private struct ReadinessDV: Codable {
+    var d: TimeInterval
+    var y: Double
+}
+
+private struct ReadinessMapDisk: Codable {
+    var pairs: [ReadinessDV]
+}
+
+private struct PersistedProRecoveryInputs: Codable {
+    var hrvZScore: Double?
+    var restingHeartRateZScore: Double?
+    var restingHeartRatePenaltyZScore: Double?
+    var sleepRatio: Double?
+    var sleepScalar: Double?
+    var sleepGoalHours: Double
+    var sleepDurationHours: Double?
+    var timeInBedHours: Double?
+    var sleepEfficiency: Double?
+    var composite: Double
+    var baseRecoveryScore: Double
+    var finalRecoveryScore: Double
+    var sleepDebtPenalty: Double
+    var circadianPenalty: Double
+    var efficiencyCap: Double?
+    var bedtimeVarianceMinutes: Double?
+    var isInconclusive: Bool
+
+    init(_ i: HealthStateEngine.ProRecoveryInputs) {
+        hrvZScore = i.hrvZScore
+        restingHeartRateZScore = i.restingHeartRateZScore
+        restingHeartRatePenaltyZScore = i.restingHeartRatePenaltyZScore
+        sleepRatio = i.sleepRatio
+        sleepScalar = i.sleepScalar
+        sleepGoalHours = i.sleepGoalHours
+        sleepDurationHours = i.sleepDurationHours
+        timeInBedHours = i.timeInBedHours
+        sleepEfficiency = i.sleepEfficiency
+        composite = i.composite
+        baseRecoveryScore = i.baseRecoveryScore
+        finalRecoveryScore = i.finalRecoveryScore
+        sleepDebtPenalty = i.sleepDebtPenalty
+        circadianPenalty = i.circadianPenalty
+        efficiencyCap = i.efficiencyCap
+        bedtimeVarianceMinutes = i.bedtimeVarianceMinutes
+        isInconclusive = i.isInconclusive
+    }
+
+    var asInputs: HealthStateEngine.ProRecoveryInputs {
+        HealthStateEngine.ProRecoveryInputs(
+            hrvZScore: hrvZScore,
+            restingHeartRateZScore: restingHeartRateZScore,
+            restingHeartRatePenaltyZScore: restingHeartRatePenaltyZScore,
+            sleepRatio: sleepRatio,
+            sleepScalar: sleepScalar,
+            sleepGoalHours: sleepGoalHours,
+            sleepDurationHours: sleepDurationHours,
+            timeInBedHours: timeInBedHours,
+            sleepEfficiency: sleepEfficiency,
+            composite: composite,
+            baseRecoveryScore: baseRecoveryScore,
+            finalRecoveryScore: finalRecoveryScore,
+            sleepDebtPenalty: sleepDebtPenalty,
+            circadianPenalty: circadianPenalty,
+            efficiencyCap: efficiencyCap,
+            bedtimeVarianceMinutes: bedtimeVarianceMinutes,
+            isInconclusive: isInconclusive
+        )
+    }
+}
+
+private struct ReadinessFactorDiskCard: Codable {
+    var title: String
+    var value: String
+    var unit: String
+    var detail: String
+    var tr: Double
+    var tg: Double
+    var tb: Double
+    var ta: Double
+    var contribution: Double?
+    var direction: String
+
+    init(_ m: ReadinessFactorCardModel) {
+        title = m.title
+        value = m.value
+        unit = m.unit
+        detail = m.detail
+        let c = UIColor(m.tint)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        c.getRed(&r, green: &g, blue: &b, alpha: &a)
+        tr = Double(r)
+        tg = Double(g)
+        tb = Double(b)
+        ta = Double(a)
+        contribution = m.contribution
+        switch m.contributionDirection {
+        case .higherIsBetter: direction = "higher"
+        case .lowerIsBetter: direction = "lower"
+        case .consistency: direction = "consistency"
+        }
+    }
+
+    var asModel: ReadinessFactorCardModel {
+        let dir: ReadinessFactorCardModel.ContributionDirection
+        switch direction {
+        case "lower": dir = .lowerIsBetter
+        case "consistency": dir = .consistency
+        default: dir = .higherIsBetter
+        }
+        return ReadinessFactorCardModel(
+            title: title,
+            value: value,
+            unit: unit,
+            detail: detail,
+            tint: Color(red: tr, green: tg, blue: tb, opacity: ta),
+            contribution: contribution,
+            contributionDirection: dir
+        )
+    }
+}
+
+private struct ReadinessSnapshotDiskEnvelope: Codable {
+    var v: Int
+    var anchor: TimeInterval
+    var savedAt: TimeInterval
+    var readinessValue: Double
+    var recoveryValue: Double
+    var strainValue: Double
+    var readinessWindow: [TimeInterval]
+    var readinessSeries: [ReadinessDV]
+    var recoverySeries: ReadinessMapDisk
+    var strainSeries: ReadinessMapDisk
+    var hrvTrendSeries: [ReadinessDV]
+    var effectHRVToday: Double?
+    var basalRhrToday: Double?
+    var sleepToday: Double?
+    var sleepEfficiencyToday: Double?
+    var recoveryInputs: PersistedProRecoveryInputs
+    var hrvTrendSupport: Double
+    var driverCards: [ReadinessFactorDiskCard]
+
+    init(snapshot: ReadinessSnapshot, anchorDay: Date) {
+        v = 1
+        anchor = anchorDay.timeIntervalSince1970
+        savedAt = Date().timeIntervalSince1970
+        readinessValue = snapshot.readinessValue
+        recoveryValue = snapshot.recoveryValue
+        strainValue = snapshot.strainValue
+        readinessWindow = snapshot.readinessWindow.map(\.timeIntervalSince1970)
+        readinessSeries = snapshot.readinessSeries.map { ReadinessDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        recoverySeries = ReadinessMapDisk(pairs: snapshot.recoverySeriesMap.keys.sorted().map { d in
+            ReadinessDV(d: d.timeIntervalSince1970, y: snapshot.recoverySeriesMap[d] ?? 0)
+        })
+        strainSeries = ReadinessMapDisk(pairs: snapshot.strainSeriesMap.keys.sorted().map { d in
+            ReadinessDV(d: d.timeIntervalSince1970, y: snapshot.strainSeriesMap[d] ?? 0)
+        })
+        hrvTrendSeries = snapshot.hrvTrendSeries.map { ReadinessDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        effectHRVToday = snapshot.effectHRVToday
+        basalRhrToday = snapshot.basalRhrToday
+        sleepToday = snapshot.sleepToday
+        sleepEfficiencyToday = snapshot.sleepEfficiencyToday
+        recoveryInputs = PersistedProRecoveryInputs(snapshot.recoveryInputsToday)
+        hrvTrendSupport = snapshot.hrvTrendSupport
+        driverCards = snapshot.readinessDriverCards.map(ReadinessFactorDiskCard.init)
+    }
+
+    func asSnapshot() -> ReadinessSnapshot {
+        let cal = Calendar.current
+        let recoveryMap = Dictionary(uniqueKeysWithValues: recoverySeries.pairs.map { pair in
+            (cal.startOfDay(for: Date(timeIntervalSince1970: pair.d)), pair.y)
+        })
+        let strainMap = Dictionary(uniqueKeysWithValues: strainSeries.pairs.map { pair in
+            (cal.startOfDay(for: Date(timeIntervalSince1970: pair.d)), pair.y)
+        })
+        return ReadinessSnapshot(
+            readinessValue: readinessValue,
+            recoveryValue: recoveryValue,
+            strainValue: strainValue,
+            readinessWindow: readinessWindow.map { cal.startOfDay(for: Date(timeIntervalSince1970: $0)) },
+            readinessSeries: readinessSeries.map { (cal.startOfDay(for: Date(timeIntervalSince1970: $0.d)), $0.y) },
+            recoverySeriesMap: recoveryMap,
+            strainSeriesMap: strainMap,
+            hrvTrendSeries: hrvTrendSeries.map { (cal.startOfDay(for: Date(timeIntervalSince1970: $0.d)), $0.y) },
+            effectHRVToday: effectHRVToday,
+            basalRhrToday: basalRhrToday,
+            sleepToday: sleepToday,
+            sleepEfficiencyToday: sleepEfficiencyToday,
+            recoveryInputsToday: recoveryInputs.asInputs,
+            hrvTrendSupport: hrvTrendSupport,
+            readinessDriverCards: driverCards.map(\.asModel)
+        )
+    }
+}
+
+private enum ReadinessDisplayDiskCache {
+    private static let fileName = "readiness-display-v1.json"
+    private static let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys]
+        return e
+    }()
+    private static let decoder = JSONDecoder()
+
+    static func loadIfMatches(anchorDay: Date) -> ReadinessSnapshot? {
+        let day = Calendar.current.startOfDay(for: anchorDay)
+        guard let url = try? NutrivanceViewMetricDisplayCacheURL.fileURL(named: fileName),
+              let data = try? Data(contentsOf: url),
+              let env = try? decoder.decode(ReadinessSnapshotDiskEnvelope.self, from: data) else {
+            return nil
+        }
+        let cachedAnchor = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: env.anchor))
+        guard cachedAnchor == day else { return nil }
+        return env.asSnapshot()
+    }
+
+    static func save(_ snapshot: ReadinessSnapshot, anchorDay: Date) {
+        let day = Calendar.current.startOfDay(for: anchorDay)
+        let env = ReadinessSnapshotDiskEnvelope(snapshot: snapshot, anchorDay: day)
+        guard let url = try? NutrivanceViewMetricDisplayCacheURL.fileURL(named: fileName),
+              let data = try? encoder.encode(env) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+}
+
 private struct ReadinessNarrative {
     let title: String
     let detail: String
@@ -946,7 +1161,7 @@ private struct ReadinessFactorCard: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 180, alignment: .leading)
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(

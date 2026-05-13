@@ -15,10 +15,6 @@ struct StrainRecoveryView: View {
     @EnvironmentObject private var navigationState: NavigationState
     @Environment(\.scenePhase) private var scenePhase
     @State private var animationPhase: Double = 0
-    @State private var isLoadingHistoricalCoverage = false
-    @State private var showsHistoricalCoverageOverlay = false
-    @State private var historicalCoverageMessage = "Loading older strain and recovery history..."
-    @State private var historicalCoverageTask: Task<Void, Never>?
 
     enum TimeFilter: String, CaseIterable {
         case day = "1D"
@@ -329,8 +325,6 @@ struct StrainRecoveryView: View {
 
                     if aggressiveCachingController.isActive {
                         aggressiveCachingOverlay
-                    } else if showsHistoricalCoverageOverlay {
-                        historicalCoverageOverlay
                     }
                 }
             }
@@ -445,93 +439,19 @@ struct StrainRecoveryView: View {
                 guard navigationState.isGloballyActiveRootTab(.strainRecovery) else { return }
                 showingSummarySettings = true
             }
-            .task(id: historicalCoverageKey) {
-                await ensureHistoricalCoverageIfNeeded()
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                guard newPhase == .background else { return }
-                historicalCoverageTask?.cancel()
-                isLoadingHistoricalCoverage = false
-                AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(false)
-            }
             .sheet(isPresented: $showingSummarySettings) {
                 StrainRecoverySummarySettingsView(
                     engine: engine,
                     aggressiveCachingController: aggressiveCachingController
                 )
             }
-            .onDisappear {
-                historicalCoverageTask?.cancel()
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .background else { return }
+                AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(false)
             }
         }
     }
 
-    private var historicalCoverageKey: String {
-        "\(timeFilter.rawValue)-\(Calendar.current.startOfDay(for: selectedDate).timeIntervalSinceReferenceDate)"
-    }
-
-    @MainActor
-    private func ensureHistoricalCoverageIfNeeded() async {
-        #if targetEnvironment(macCatalyst)
-        // On Mac, data comes from iPhone sync. Don't block UI; sync in background.
-        DispatchQueue.global(qos: .background).async {
-            NSUbiquitousKeyValueStore.default.synchronize()
-        }
-        return
-        #endif
-        
-        historicalCoverageTask?.cancel()
-        
-        let calendar = Calendar.current
-        let window = chartWindow(for: timeFilter, anchorDate: selectedDate)
-        let historicalWindowStart = calendar.date(byAdding: .day, value: -27, to: window.start) ?? window.start
-        let interactiveThreshold = calendar.date(byAdding: .day, value: -engine.interactiveWorkoutLookbackDaysForUI, to: Date()) ?? Date()
-        
-        guard selectedDate < interactiveThreshold else { return }
-
-        // Short-circuit: if the engine has already loaded workouts that reach the
-        // historical window's start, no need to schedule an `ensureWorkoutCoverage` pass.
-        // Falls through if the cache is empty or doesn't cover the requested window.
-        let selectedYearStart = calendar.dateInterval(of: .year, for: selectedDate)?.start ?? window.start
-        let yearPrefetchStart = calendar.date(byAdding: .day, value: -27, to: selectedYearStart) ?? selectedYearStart
-        let workoutCoverageStart = min(yearPrefetchStart, historicalWindowStart)
-        if let oldestLoaded = engine.oldestLoadedWorkoutDate,
-           oldestLoaded <= workoutCoverageStart,
-           !engine.needsRecoveryMetricsCoverage(from: historicalWindowStart, to: window.endExclusive) {
-            return
-        }
-
-        let task = Task { @MainActor in
-            let vitalCoverageStart = historicalWindowStart
-            let needsWorkoutCoverage = engine.needsWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
-            let needsRecoveryMetricsCoverage = engine.needsRecoveryMetricsCoverage(from: vitalCoverageStart, to: window.endExclusive)
-            guard needsWorkoutCoverage || needsRecoveryMetricsCoverage else { return }
-
-            historicalCoverageMessage = "Loading \(calendar.component(.year, from: selectedDate)) training and recovery history through \(selectedDate.formatted(date: .abbreviated, time: .omitted))..."
-            isLoadingHistoricalCoverage = true
-            showsHistoricalCoverageOverlay = false
-            let overlayTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                guard !Task.isCancelled, isLoadingHistoricalCoverage else { return }
-                showsHistoricalCoverageOverlay = true
-            }
-            defer {
-                overlayTask.cancel()
-                isLoadingHistoricalCoverage = false
-                showsHistoricalCoverageOverlay = false
-            }
-
-            if needsWorkoutCoverage {
-                await engine.ensureWorkoutAnalyticsCoverage(from: workoutCoverageStart, to: window.endExclusive)
-            }
-            if needsRecoveryMetricsCoverage {
-                await engine.ensureRecoveryMetricsCoverage(from: vitalCoverageStart, to: window.endExclusive)
-            }
-        }
-        historicalCoverageTask = task
-        await task.value
-    }
-    
     #if targetEnvironment(macCatalyst)
     private func refreshDataFromCloud() {
         let calendar = Calendar.current
@@ -552,39 +472,6 @@ struct StrainRecoveryView: View {
         }
     }
     #endif
-
-    private var historicalCoverageOverlay: some View {
-        VStack {
-            HStack {
-                Spacer()
-                VStack(spacing: 10) {
-                    ProgressView()
-                        .scaleEffect(0.95)
-                    Text(historicalCoverageMessage)
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-                    Text("Fetching only the missing history in the background.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.orange.opacity(0.18), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.16), radius: 18, y: 10)
-                Spacer()
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 18)
-            Spacer()
-        }
-        .allowsHitTesting(false)
-        .transition(.opacity)
-    }
 
     private var aggressiveCachingOverlay: some View {
         VStack(spacing: 16) {
@@ -2856,9 +2743,7 @@ private struct StrainRecoveryAISummarySection: View {
     @State private var selectedComparisonInsight: CoachSummaryInsight?
     @State private var backgroundGenerationTask: Task<Void, Never>? = nil
     @State private var backgroundGenerationStarterTask: Task<Void, Never>? = nil
-    @State private var deferredSummaryLoadingTask: Task<Void, Never>? = nil
     @State private var deferredSuggestionsRefreshTask: Task<Void, Never>? = nil
-    @State private var summaryPrerequisiteTask: Task<Void, Never>? = nil
     @State private var requestedRequestID: String? = nil
     @State private var backgroundGenerationContextID: String? = nil
     @State private var backgroundFetchStatusText: String? = nil
@@ -3096,13 +2981,7 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     private var liveOperationStatusText: String? {
-        if summaryText.isEmpty && isLoading {
-            return nil
-        }
-        if isLoading {
-            return "Loading requested report of \(currentRequestDescriptor)"
-        }
-        return backgroundFetchStatusText
+        backgroundFetchStatusText
     }
 
     private var summaryGenerationReadiness: SummaryGenerationReadiness {
@@ -3166,7 +3045,7 @@ private struct StrainRecoveryAISummarySection: View {
         if !summaryGenerationReadiness.canGenerate {
             return summaryGenerationReadiness.placeholderText
         }
-        if isLoading && requestedRequestID == selectedSuggestionRequestID {
+        if activeRequestKey == selectedSuggestionRequestID {
             return "This coach report is still being prepared for \(selectedSuggestion?.title ?? detectedIntent.displayName). The current filter does not have a finished summary yet."
         }
         let normalizedStatus = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3179,13 +3058,19 @@ private struct StrainRecoveryAISummarySection: View {
             return normalizedStatus
         }
         if suggestions.isEmpty {
-            return "Preparing coaching suggestions for this date and filter before generating the first AI summary."
+            return "Pick a coaching suggestion or tap Generate when you are ready to build the AI summary for this date and filter."
         }
         return "Preparing the \(selectedSuggestion?.title ?? detectedIntent.displayName) AI summary for this date and filter."
     }
 
     private var shouldShowRefresh: Bool {
         !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var shouldShowGenerateCoachSummary: Bool {
+        summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && summaryGenerationReadiness.canGenerate
+            && !isLoading
     }
 
     private var shouldRecommendRefresh: Bool {
@@ -3218,18 +3103,6 @@ private struct StrainRecoveryAISummarySection: View {
     }
 
     @MainActor
-    private func scheduleDebouncedSuggestionsRefresh() {
-        deferredSuggestionsRefreshTask?.cancel()
-        deferredSuggestionsRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            guard !Task.isCancelled else { return }
-            showsAllSuggestions = false
-            refreshSuggestionsSnapshot()
-            scheduleAutoSummaryLoad()
-        }
-    }
-
-    @MainActor
     private func refreshSuggestionsSnapshot() {
         let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
         suggestionsSnapshot = SummarySuggestion.buildSuggestions(
@@ -3248,7 +3121,6 @@ private struct StrainRecoveryAISummarySection: View {
 
     @MainActor
     private func resetSummaryForNavigation() {
-        deferredSummaryLoadingTask?.cancel()
         cancelBackgroundGeneration()
         selectedComparisonInsight = nil
         requestedRequestID = nil
@@ -3290,37 +3162,6 @@ private struct StrainRecoveryAISummarySection: View {
                 requireAppleIntelligence: shouldRequireAppleIntelligenceByDefault,
                 allowLocalRefreshFallback: !shouldRequireAppleIntelligenceByDefault
             )
-        }
-    }
-
-    @MainActor
-    private func scheduleAutoSummaryLoad() {
-        deferredSummaryLoadingTask?.cancel()
-        deferredSummaryLoadingTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            triggerAutoSummaryLoadIfNeeded()
-        }
-    }
-
-    @MainActor
-    private func ensureSummaryPrerequisitesIfNeeded() {
-        let isMissingCoreRecoveryInputs = !engine.feelGoodScoreInputsAvailable
-        let isMissingRecoveryTrendSeries = engine.dailyHRV.isEmpty || engine.dailyRestingHeartRate.isEmpty
-        let isMissingSleepContext = engine.sleepStages.isEmpty && engine.sleepHours == nil
-
-        guard isMissingCoreRecoveryInputs || isMissingRecoveryTrendSeries || isMissingSleepContext else {
-            return
-        }
-
-        summaryPrerequisiteTask?.cancel()
-        summaryPrerequisiteTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            guard !Task.isCancelled else { return }
-            let chartFilter: StrainRecoveryView.TimeFilter = timeFilter == .day ? .week : timeFilter
-            let window = chartWindow(for: chartFilter, anchorDate: anchorDate)
-            let start = Calendar.current.date(byAdding: .day, value: -27, to: window.start) ?? window.start
-            await engine.ensureRecoveryMetricsCoverage(from: start, to: window.endExclusive)
         }
     }
 
@@ -3369,6 +3210,11 @@ private struct StrainRecoveryAISummarySection: View {
                 allowLocalRefreshFallback: selectedBackend != .appleIntelligence
             )
         }
+    }
+
+    @MainActor
+    private func performGenerateCoachSummary() {
+        triggerAutoSummaryLoadIfNeeded()
     }
 
     @ViewBuilder
@@ -3517,6 +3363,15 @@ private struct StrainRecoveryAISummarySection: View {
                     .tint(.orange)
                     .catalystDesktopFocusable()
                     .catalystFocusablePrimaryAction { performRefresh() }
+                } else if shouldShowGenerateCoachSummary {
+                    Button("Generate") {
+                        performGenerateCoachSummary()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .catalystDesktopFocusable()
+                    .catalystFocusablePrimaryAction { performGenerateCoachSummary() }
                 }
                 if !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button(isSavingToJournal ? "Saved" : "Save To Journal") {
@@ -3533,13 +3388,9 @@ private struct StrainRecoveryAISummarySection: View {
                         performSaveToJournal()
                     }
                 }
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                }
             }
 
-            if isLoading, let liveOperationStatusText {
+            if let liveOperationStatusText {
                 Text(liveOperationStatusText)
                     .font(.caption2)
                     .foregroundColor(.secondary)
@@ -3640,23 +3491,16 @@ private struct StrainRecoveryAISummarySection: View {
                     timeFilter: timeFilter
                 )
 
-                if summaryText.isEmpty && isLoading {
-                    SummaryPreparationAnimationView(
-                        title: "Generating \(selectedSuggestion?.title ?? detectedIntent.displayName)",
-                        subtitle: statusText
-                    )
-                } else {
-                    CoachSummaryInteractiveText(
-                        parsed: coachMarkdown,
-                        insights: coachInsights
-                    ) { insight in
-                        selectedComparisonInsight = insight
-                    }
-                    .font(.body)
-                    .foregroundColor(.primary)
+                CoachSummaryInteractiveText(
+                    parsed: coachMarkdown,
+                    insights: coachInsights
+                ) { insight in
+                    selectedComparisonInsight = insight
                 }
+                .font(.body)
+                .foregroundColor(.primary)
 
-                if !(summaryText.isEmpty && isLoading) {
+                if !statusText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(statusText)
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -3742,64 +3586,33 @@ private struct StrainRecoveryAISummarySection: View {
                     intentText = suggestions.first?.queryText ?? ""
                 }
             }
-            if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
-                resetSummaryForNavigation()
-                if shouldRequireAppleIntelligenceByDefault,
-                   let selectedSuggestion {
-                    let request = await StrainRecoverySummaryRequest.build(
-                        engine: engine,
-                        timeFilter: timeFilter,
-                        sportFilter: sportFilter,
-                        anchorDate: anchorDate,
-                        intentText: intentText.isEmpty ? selectedSuggestion.queryText : intentText,
-                        selectedSuggestion: selectedSuggestion,
-                        refreshVersion: refreshVersions[selectedSuggestion.id, default: 0],
-                        backend: selectedBackend
-                    )
-                    await generateSummary(
-                        for: request,
-                        requireAppleIntelligence: true,
-                        allowLocalRefreshFallback: false
-                    )
-                } else {
-                    triggerAutoSummaryLoadIfNeeded()
-                }
-            }
-        }
-        .onChange(of: engine.workoutAnalytics.count) { _, _ in
-            scheduleDebouncedSuggestionsRefresh()
+            _ = restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID)
         }
         .onAppear {
             AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(true)
-            ensureSummaryPrerequisitesIfNeeded()
-        }
-        .onChange(of: summaryGenerationReadiness.triggerToken) { _, _ in
-            scheduleAutoSummaryLoad()
         }
         .onChange(of: selectedSuggestionRequestID) { _, _ in
-            scheduleAutoSummaryLoad()
-        }
-        .onChange(of: suggestions.count) { _, _ in
-            scheduleAutoSummaryLoad()
+            if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
+                resetSummaryForNavigation()
+            }
         }
         .onChange(of: aggressiveCachingController.isActive) { _, isActive in
             guard !isActive else { return }
             refreshLocalSnapshots(forceReload: true)
             refreshSuggestionsSnapshot()
             if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
-                scheduleAutoSummaryLoad()
+                resetSummaryForNavigation()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
             refreshLocalSnapshots(forceReload: true)
-            scheduleAutoSummaryLoad()
+            _ = restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID)
         }
         .onReceive(NotificationCenter.default.publisher(for: .strainRecoverySummarySettingsDidChange)) { _ in
             refreshLocalSnapshots(forceReload: true)
             refreshSuggestionsSnapshot()
             if !restoreCachedSummaryIfAvailable(requestID: selectedSuggestionRequestID) {
                 resetSummaryForNavigation()
-                scheduleAutoSummaryLoad()
             }
         }
         .onChange(of: aggressiveCachingController.pendingAction) { _, action in
@@ -3815,16 +3628,12 @@ private struct StrainRecoveryAISummarySection: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .background else { return }
-            deferredSummaryLoadingTask?.cancel()
             deferredSuggestionsRefreshTask?.cancel()
-            summaryPrerequisiteTask?.cancel()
             cancelBackgroundGeneration()
         }
         .onDisappear {
             AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(false)
-            deferredSummaryLoadingTask?.cancel()
             deferredSuggestionsRefreshTask?.cancel()
-            summaryPrerequisiteTask?.cancel()
             cancelBackgroundGeneration()
         }
     }
@@ -4591,79 +4400,6 @@ private struct StrainRecoveryAISummarySection: View {
             return "Generated in background on \(deviceName) using \(sourceText). Saved to cache and iCloud."
         case .refresh:
             return "Refreshed live on \(deviceName) using \(sourceText). This version replaced cache and iCloud for this report."
-        }
-    }
-}
-
-private struct SummaryPreparationAnimationView: View {
-    let title: String
-    let subtitle: String
-    @State private var travel: CGFloat = -160
-    @State private var pulse = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ZStack(alignment: .leading) {
-                let capsuleShape = RoundedRectangle(cornerRadius: 18, style: .continuous)
-
-                capsuleShape
-                    .fill(Color.orange.opacity(0.08))
-                    .frame(height: 58)
-                    .overlay(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.clear,
-                                        Color.orange.opacity(0.12),
-                                        Color.blue.opacity(0.18),
-                                        Color.clear
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: 170, height: 58)
-                            .offset(x: travel)
-                            .blur(radius: 1.2)
-                    }
-                    .clipShape(capsuleShape)
-
-                HStack(spacing: 10) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.orange.opacity(0.18))
-                            .frame(width: 28, height: 28)
-                            .scaleEffect(pulse ? 1.08 : 0.92)
-                        Image(systemName: "sparkles")
-                            .font(.caption.bold())
-                            .foregroundColor(.orange)
-                    }
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.primary)
-                        Text("Apple Intelligence is preparing a fresh coaching read.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding(.horizontal, 14)
-            }
-
-            Text(subtitle)
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .onAppear {
-            travel = -160
-            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
-                travel = 320
-            }
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                pulse = true
-            }
         }
     }
 }
@@ -10655,7 +10391,11 @@ struct VitalsSection: View {
         let hasData = !respArray.isEmpty || !tempArray.isEmpty || !spo2Array.isEmpty
         VStack {
             if !hasData {
-                ProgressView("Loading vitals...")
+                Text("No vitals data in this window yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
             } else {
                 HealthCard(
                     symbol: "lungs.fill",

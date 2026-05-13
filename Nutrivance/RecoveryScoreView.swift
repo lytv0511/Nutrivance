@@ -1,15 +1,13 @@
 import SwiftUI
+import UIKit
 
 struct RecoveryScoreView: View {
     @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     @ObservedObject private var performanceProfile = PerformanceProfileSettings.shared
     @State private var animationPhase: Double = 0
-    @State private var isLoading = false
     @State private var timeFilter: RecoveryFocusTimeFilter = .day
     @State private var snapshotsByFilter: [RecoveryFocusTimeFilter: RecoverySnapshot] = [:]
     @State private var proAthleteRecoveryData: (score: Double, hrvWarning: Bool, sleepQualityWarning: Bool, subjectiveBoost: Double?)?
-    /// Avoids re-running CloudKit / coverage on every navigation back to this screen the same day.
-    @State private var lastCompletedCoverageTaskID: String?
 
     private var today: Date {
         Calendar.current.startOfDay(for: Date())
@@ -280,13 +278,6 @@ struct RecoveryScoreView: View {
                     .padding(.top, 18)
                     .padding(.bottom, 32)
                 }
-
-                if isLoading {
-                    ProgressView("Refreshing recovery metrics...")
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                }
             }
             .navigationTitle("Recovery Score")
             .toolbar {
@@ -312,17 +303,19 @@ struct RecoveryScoreView: View {
             .onReceiveViewControl(.nutrivanceViewControlRecoveryScoreFilter1M) {
                 timeFilter = .month
             }
+            .onAppear {
+                if let cached = RecoveryDisplayDiskCache.loadIfMatches(anchorDay: today) {
+                    snapshotsByFilter = cached
+                } else {
+                    snapshotsByFilter = [:]
+                }
+                updateProAthleteData()
+            }
             .task(id: refreshTaskID) {
                 withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                     animationPhase = 20
                 }
-                if lastCompletedCoverageTaskID == refreshTaskID {
-                    // Same calendar day: reuse existing per-filter snapshots (avoid detached recompute on every return).
-                    updateProAthleteData()
-                    return
-                }
-                await refreshCoverage(forceNetwork: false)
-                lastCompletedCoverageTaskID = refreshTaskID
+                await recomputeRecoveryFromEngineIfNeeded()
                 updateProAthleteData()
             }
         }
@@ -330,9 +323,16 @@ struct RecoveryScoreView: View {
 
     private func scheduleForceRefresh() {
         Task {
-            await refreshCoverage(forceNetwork: true)
-            lastCompletedCoverageTaskID = refreshTaskID
+            await refreshCoverageOnUserDemand(forceNetwork: true)
         }
+    }
+
+    /// Build from in-memory engine only when there is no display cache for today (no HK / CloudKit pulls).
+    @MainActor
+    private func recomputeRecoveryFromEngineIfNeeded() async {
+        guard snapshotsByFilter.isEmpty else { return }
+        snapshotsByFilter = await buildSnapshots()
+        RecoveryDisplayDiskCache.save(snapshotsByFilter, anchorDay: today)
     }
 
     private var recoveryHero: some View {
@@ -463,30 +463,31 @@ struct RecoveryScoreView: View {
     }
 
     @MainActor
-    private func refreshCoverage(forceNetwork: Bool) async {
+    private func refreshCoverageOnUserDemand(forceNetwork: Bool) async {
+        #if targetEnvironment(macCatalyst)
+        snapshotsByFilter = await buildSnapshots()
+        RecoveryDisplayDiskCache.save(snapshotsByFilter, anchorDay: today)
+        DispatchQueue.global(qos: .utility).async {
+            NSUbiquitousKeyValueStore.default.synchronize()
+        }
+        updateProAthleteData()
+        return
+        #endif
+
         let calendar = Calendar.current
         let start = calendar.date(byAdding: .day, value: -35, to: today) ?? today
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today
 
         if forceNetwork {
-            isLoading = true
             await healthEngine.refreshSyncedHealthDataFromICloud()
-            snapshotsByFilter = await buildSnapshots()
-            isLoading = false
-            return
         }
-
-        let needsFetch = healthEngine.needsRecoveryMetricsCoverage(from: start, to: end)
-        if needsFetch {
-            isLoading = true
+        if healthEngine.needsRecoveryMetricsCoverage(from: start, to: end) {
             await healthEngine.ensureRecoveryMetricsCoverage(from: start, to: end)
-            isLoading = false
         }
 
-        // Recompute snapshots only after a fetch, or when nothing is cached yet.
-        if needsFetch || snapshotsByFilter.isEmpty {
-            snapshotsByFilter = await buildSnapshots()
-        }
+        snapshotsByFilter = await buildSnapshots()
+        RecoveryDisplayDiskCache.save(snapshotsByFilter, anchorDay: today)
+        updateProAthleteData()
     }
 
     /// Builds the per-filter snapshot grid for the recovery view.
@@ -930,7 +931,7 @@ private struct RecoverySignalCard: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 180, alignment: .leading)
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
@@ -1005,6 +1006,258 @@ private struct RecoveryHalo: View {
 private func recoveryFocusFormatted(_ value: Double?, digits: Int) -> String {
     guard let value else { return "–" }
     return String(format: "%.\(digits)f", value)
+}
+
+// MARK: - Recovery display disk cache
+
+private struct RecoveryScoreDV: Codable {
+    var d: TimeInterval
+    var y: Double
+}
+
+private struct RecoveryPersistedProRecoveryInputs: Codable {
+    var hrvZScore: Double?
+    var restingHeartRateZScore: Double?
+    var restingHeartRatePenaltyZScore: Double?
+    var sleepRatio: Double?
+    var sleepScalar: Double?
+    var sleepGoalHours: Double
+    var sleepDurationHours: Double?
+    var timeInBedHours: Double?
+    var sleepEfficiency: Double?
+    var composite: Double
+    var baseRecoveryScore: Double
+    var finalRecoveryScore: Double
+    var sleepDebtPenalty: Double
+    var circadianPenalty: Double
+    var efficiencyCap: Double?
+    var bedtimeVarianceMinutes: Double?
+    var isInconclusive: Bool
+
+    init(_ i: HealthStateEngine.ProRecoveryInputs) {
+        hrvZScore = i.hrvZScore
+        restingHeartRateZScore = i.restingHeartRateZScore
+        restingHeartRatePenaltyZScore = i.restingHeartRatePenaltyZScore
+        sleepRatio = i.sleepRatio
+        sleepScalar = i.sleepScalar
+        sleepGoalHours = i.sleepGoalHours
+        sleepDurationHours = i.sleepDurationHours
+        timeInBedHours = i.timeInBedHours
+        sleepEfficiency = i.sleepEfficiency
+        composite = i.composite
+        baseRecoveryScore = i.baseRecoveryScore
+        finalRecoveryScore = i.finalRecoveryScore
+        sleepDebtPenalty = i.sleepDebtPenalty
+        circadianPenalty = i.circadianPenalty
+        efficiencyCap = i.efficiencyCap
+        bedtimeVarianceMinutes = i.bedtimeVarianceMinutes
+        isInconclusive = i.isInconclusive
+    }
+
+    var asInputs: HealthStateEngine.ProRecoveryInputs {
+        HealthStateEngine.ProRecoveryInputs(
+            hrvZScore: hrvZScore,
+            restingHeartRateZScore: restingHeartRateZScore,
+            restingHeartRatePenaltyZScore: restingHeartRatePenaltyZScore,
+            sleepRatio: sleepRatio,
+            sleepScalar: sleepScalar,
+            sleepGoalHours: sleepGoalHours,
+            sleepDurationHours: sleepDurationHours,
+            timeInBedHours: timeInBedHours,
+            sleepEfficiency: sleepEfficiency,
+            composite: composite,
+            baseRecoveryScore: baseRecoveryScore,
+            finalRecoveryScore: finalRecoveryScore,
+            sleepDebtPenalty: sleepDebtPenalty,
+            circadianPenalty: circadianPenalty,
+            efficiencyCap: efficiencyCap,
+            bedtimeVarianceMinutes: bedtimeVarianceMinutes,
+            isInconclusive: isInconclusive
+        )
+    }
+}
+
+private struct RecoverySignalDiskCard: Codable {
+    var title: String
+    var value: String
+    var unit: String
+    var detail: String
+    var tr: Double
+    var tg: Double
+    var tb: Double
+    var ta: Double
+    var contribution: Double?
+    var direction: String
+
+    init(_ m: RecoverySignalCardModel) {
+        title = m.title
+        value = m.value
+        unit = m.unit
+        detail = m.detail
+        let c = UIColor(m.tint)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        c.getRed(&r, green: &g, blue: &b, alpha: &a)
+        tr = Double(r)
+        tg = Double(g)
+        tb = Double(b)
+        ta = Double(a)
+        contribution = m.contribution
+        switch m.contributionDirection {
+        case .higherIsBetter: direction = "higher"
+        case .lowerIsBetter: direction = "lower"
+        case .consistency: direction = "consistency"
+        }
+    }
+
+    var asModel: RecoverySignalCardModel {
+        let dir: RecoverySignalCardModel.ContributionDirection
+        switch direction {
+        case "lower": dir = .lowerIsBetter
+        case "consistency": dir = .consistency
+        default: dir = .higherIsBetter
+        }
+        return RecoverySignalCardModel(
+            title: title,
+            value: value,
+            unit: unit,
+            detail: detail,
+            tint: Color(red: tr, green: tg, blue: tb, opacity: ta),
+            contribution: contribution,
+            contributionDirection: dir
+        )
+    }
+}
+
+private struct RecoverySnapshotDisk: Codable {
+    var selectedWindow: [TimeInterval]
+    var recoverySeries: [RecoveryScoreDV]
+    var effectHRVSeries: [RecoveryScoreDV]
+    var basalRhrSeries: [RecoveryScoreDV]
+    var sleepSeries: [RecoveryScoreDV]
+    var respiratorySeries: [RecoveryScoreDV]
+    var spO2Series: [RecoveryScoreDV]
+    var wristTemperatureSeries: [RecoveryScoreDV]
+    var recoveryValue: Double
+    var effectHRVToday: Double?
+    var basalRhrToday: Double?
+    var sleepToday: Double?
+    var sleepEfficiencyToday: Double?
+    var respiratoryToday: Double?
+    var spO2Today: Double?
+    var wristTemperatureToday: Double?
+    var recoveryInputs: RecoveryPersistedProRecoveryInputs
+    var recoverySignals: [RecoverySignalDiskCard]
+
+    init(snapshot: RecoverySnapshot) {
+        selectedWindow = snapshot.selectedWindow.map(\.timeIntervalSince1970)
+        recoverySeries = snapshot.recoverySeries.map { RecoveryScoreDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        effectHRVSeries = snapshot.effectHRVSeries.map { RecoveryScoreDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        basalRhrSeries = snapshot.basalRhrSeries.map { RecoveryScoreDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        sleepSeries = snapshot.sleepSeries.map { RecoveryScoreDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        respiratorySeries = snapshot.respiratorySeries.map { RecoveryScoreDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        spO2Series = snapshot.spO2Series.map { RecoveryScoreDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        wristTemperatureSeries = snapshot.wristTemperatureSeries.map { RecoveryScoreDV(d: $0.0.timeIntervalSince1970, y: $0.1) }
+        recoveryValue = snapshot.recoveryValue
+        effectHRVToday = snapshot.effectHRVToday
+        basalRhrToday = snapshot.basalRhrToday
+        sleepToday = snapshot.sleepToday
+        sleepEfficiencyToday = snapshot.sleepEfficiencyToday
+        respiratoryToday = snapshot.respiratoryToday
+        spO2Today = snapshot.spO2Today
+        wristTemperatureToday = snapshot.wristTemperatureToday
+        recoveryInputs = RecoveryPersistedProRecoveryInputs(snapshot.recoveryInputsToday)
+        recoverySignals = snapshot.recoverySignals.map(RecoverySignalDiskCard.init)
+    }
+
+    func asSnapshot() -> RecoverySnapshot {
+        let cal = Calendar.current
+        func mapPairs(_ rows: [RecoveryScoreDV]) -> [(Date, Double)] {
+            rows.map { (cal.startOfDay(for: Date(timeIntervalSince1970: $0.d)), $0.y) }
+        }
+        return RecoverySnapshot(
+            selectedWindow: selectedWindow.map { cal.startOfDay(for: Date(timeIntervalSince1970: $0)) },
+            recoverySeries: mapPairs(recoverySeries),
+            effectHRVSeries: mapPairs(effectHRVSeries),
+            basalRhrSeries: mapPairs(basalRhrSeries),
+            sleepSeries: mapPairs(sleepSeries),
+            respiratorySeries: mapPairs(respiratorySeries),
+            spO2Series: mapPairs(spO2Series),
+            wristTemperatureSeries: mapPairs(wristTemperatureSeries),
+            recoveryValue: recoveryValue,
+            effectHRVToday: effectHRVToday,
+            basalRhrToday: basalRhrToday,
+            sleepToday: sleepToday,
+            sleepEfficiencyToday: sleepEfficiencyToday,
+            respiratoryToday: respiratoryToday,
+            spO2Today: spO2Today,
+            wristTemperatureToday: wristTemperatureToday,
+            recoveryInputsToday: recoveryInputs.asInputs,
+            recoverySignals: recoverySignals.map(\.asModel)
+        )
+    }
+}
+
+private struct RecoveryStoreDiskEnvelope: Codable {
+    var v: Int
+    var anchor: TimeInterval
+    var savedAt: TimeInterval
+    var snapshots: [String: RecoverySnapshotDisk]
+
+    init(snapshotsByFilter: [RecoveryFocusTimeFilter: RecoverySnapshot], anchorDay: Date) {
+        v = 1
+        anchor = anchorDay.timeIntervalSince1970
+        savedAt = Date().timeIntervalSince1970
+        let day = Calendar.current.startOfDay(for: anchorDay)
+        var out: [String: RecoverySnapshotDisk] = [:]
+        for filter in RecoveryFocusTimeFilter.allCases {
+            let snap = snapshotsByFilter[filter] ?? RecoverySnapshot.empty(for: filter, anchor: day)
+            out[filter.rawValue] = RecoverySnapshotDisk(snapshot: snap)
+        }
+        snapshots = out
+    }
+
+    func asSnapshotsByFilter(anchorDay: Date) -> [RecoveryFocusTimeFilter: RecoverySnapshot] {
+        let day = Calendar.current.startOfDay(for: anchorDay)
+        var out: [RecoveryFocusTimeFilter: RecoverySnapshot] = [:]
+        for filter in RecoveryFocusTimeFilter.allCases {
+            if let disk = snapshots[filter.rawValue] {
+                out[filter] = disk.asSnapshot()
+            } else {
+                out[filter] = RecoverySnapshot.empty(for: filter, anchor: day)
+            }
+        }
+        return out
+    }
+}
+
+private enum RecoveryDisplayDiskCache {
+    private static let fileName = "recovery-display-v1.json"
+    private static let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys]
+        return e
+    }()
+    private static let decoder = JSONDecoder()
+
+    static func loadIfMatches(anchorDay: Date) -> [RecoveryFocusTimeFilter: RecoverySnapshot]? {
+        let day = Calendar.current.startOfDay(for: anchorDay)
+        guard let url = try? NutrivanceViewMetricDisplayCacheURL.fileURL(named: fileName),
+              let data = try? Data(contentsOf: url),
+              let env = try? decoder.decode(RecoveryStoreDiskEnvelope.self, from: data) else {
+            return nil
+        }
+        let cachedAnchor = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: env.anchor))
+        guard cachedAnchor == day else { return nil }
+        return env.asSnapshotsByFilter(anchorDay: day)
+    }
+
+    static func save(_ snapshotsByFilter: [RecoveryFocusTimeFilter: RecoverySnapshot], anchorDay: Date) {
+        let day = Calendar.current.startOfDay(for: anchorDay)
+        let env = RecoveryStoreDiskEnvelope(snapshotsByFilter: snapshotsByFilter, anchorDay: day)
+        guard let url = try? NutrivanceViewMetricDisplayCacheURL.fileURL(named: fileName),
+              let data = try? encoder.encode(env) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
 }
 
 #Preview {

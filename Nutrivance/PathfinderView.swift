@@ -2886,6 +2886,8 @@ struct HarmonyGemSection: View {
         VStack(spacing: 14) {
             Text("Harmony")
                 .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
 
             GeometryReader { geo in
                 let width = geo.size.width
@@ -2898,24 +2900,30 @@ struct HarmonyGemSection: View {
             }
             .frame(minHeight: max(harmonyCircleSize + 20, CGFloat(gems.count * 40 + 60)))
         }
-        .padding(14)
+        .padding(.vertical, 14)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var compactLayout: some View {
         VStack(spacing: 14) {
             harmonyCircle
+                .frame(maxWidth: .infinity, alignment: .center)
 
             HStack(spacing: 20) {
+                Spacer()
                 ForEach(gems) { gem in
                     GemView(gem: gem)
                 }
+                Spacer()
             }
+            .padding(.horizontal, 14)
 
             if gems.isEmpty {
                 Text("Commit to a path to activate gems.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, 14)
             }
         }
     }
@@ -2944,10 +2952,12 @@ struct HarmonyGemSection: View {
                 }
             }
             .padding(.leading, 20)
+            .padding(.horizontal, 14)
 
             Spacer(minLength: 0)
         }
         .frame(minHeight: max(harmonyCircleSize + 40, CGFloat(max(gems.count, 3)) * 50 + 20))
+        .padding(.horizontal, 14)
     }
 
     private var harmonyCircle: some View {

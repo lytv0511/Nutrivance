@@ -120,6 +120,8 @@ struct ContentView: View {
             return
             #endif
 
+            try? await Task.sleep(nanoseconds: 120_000_000)
+
             // Early exit when cached data already exists - no need to show curtain
             let hasAllCachedData = engine.hasHydratedCachedMetrics && engine.hasInitializedWorkoutAnalytics
             if hasAllCachedData {
@@ -130,7 +132,11 @@ struct ContentView: View {
                 return
             }
 
-            let minimumCurtainDuration: UInt64 = engine.hasHydratedCachedMetrics ? 700_000_000 : 2_200_000_000
+            let minimumCurtainDuration: UInt64 = {
+                if engine.hasHydratedCachedMetrics { return 600_000_000 }
+                if engine.hasInitializedWorkoutAnalytics { return 900_000_000 }
+                return 2_000_000_000
+            }()
             let maximumCurtainDuration: UInt64 = 12_000_000_000
             let pollInterval: UInt64 = 200_000_000
 

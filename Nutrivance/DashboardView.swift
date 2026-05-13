@@ -243,6 +243,7 @@ struct DashboardView: View {
     @State private var isRefreshingDashboardMetrics = false
     @State private var hasStartedBackgroundRefresh = false
     @State private var dashboardRefreshTask: Task<Void, Never>? = nil
+    @State private var workoutCacheRebuildTask: Task<Void, Never>? = nil
     @State private var liveLoadSnapshot: DashboardLoadSnapshot = DashboardLoadSnapshot(
         acuteLoad: 0,
         acuteTotal: 0,
@@ -322,7 +323,8 @@ struct DashboardView: View {
         )
     }
 
-    private func workoutEffortScore(from workout: HKWorkout) -> Double? {
+    /// Session load math for charts — **`nonisolated`** so long histories aggregate off the main actor.
+    nonisolated private static func workoutEffortScoreForSessionLoad(from workout: HKWorkout) -> Double? {
         guard let metadata = workout.metadata else { return nil }
         let preferredKeys = [
             "HKMetadataKeyWorkloadEffortScore",
@@ -350,7 +352,7 @@ struct DashboardView: View {
         return nil
     }
 
-    private func sessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
+    nonisolated private static func sessionLoadForCharts(workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
         let zoneWeightedLoad = analytics.hrZoneBreakdown.reduce(0.0) { partial, entry in
             let zoneWeight = Double(min(max(entry.zone.zoneNumber, 1), 5))
             let zoneMinutes = entry.timeInZone / 60.0
@@ -362,11 +364,58 @@ struct DashboardView: View {
         }
 
         let durationMinutes = workout.duration / 60.0
-        if let effortScore = workoutEffortScore(from: workout) {
+        if let effortScore = workoutEffortScoreForSessionLoad(from: workout) {
             return (durationMinutes * max(1, effortScore)).rounded()
         }
 
         return 0
+    }
+
+    nonisolated private static func buildWorkoutDayCaches(from pairs: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) -> (
+        workoutsByDay: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]],
+        loadByDay: [Date: Double]
+    ) {
+        let calendar = Calendar.current
+        var workoutsByDayBuf: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] = [:]
+        var loadByDayBuf: [Date: Double] = [:]
+        for pair in pairs {
+            let day = calendar.startOfDay(for: pair.workout.startDate)
+            workoutsByDayBuf[day, default: []].append(pair)
+            loadByDayBuf[day, default: 0] += sessionLoadForCharts(workout: pair.workout, analytics: pair.analytics)
+        }
+        for (day, list) in workoutsByDayBuf {
+            workoutsByDayBuf[day] = list.sorted { $0.workout.startDate > $1.workout.startDate }
+        }
+        return (workoutsByDayBuf, loadByDayBuf)
+    }
+
+    private func recomputeWorkoutCachesFromEngineAsync() async {
+        let pairs = await MainActor.run { engine.workoutAnalytics }
+        guard !Task.isCancelled else { return }
+        let result = await Task.detached(priority: .userInitiated) {
+            DashboardView.buildWorkoutDayCaches(from: pairs)
+        }.value
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+            workoutsByDay = result.workoutsByDay
+            loadByDay = result.loadByDay
+            updateLiveLoadSnapshot()
+        }
+    }
+
+    private func enqueueWorkoutCacheRebuildFromEngine() {
+        workoutCacheRebuildTask?.cancel()
+        workoutCacheRebuildTask = Task {
+            await recomputeWorkoutCachesFromEngineAsync()
+        }
+    }
+
+    private func workoutEffortScore(from workout: HKWorkout) -> Double? {
+        Self.workoutEffortScoreForSessionLoad(from: workout)
+    }
+
+    private func sessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
+        Self.sessionLoadForCharts(workout: workout, analytics: analytics)
     }
 
     private func calculateLatestLoadSnapshot() -> DashboardLoadSnapshot {
@@ -450,20 +499,9 @@ struct DashboardView: View {
     /// Rebuilds the per-day workout and load lookups. Triggered only when
     /// `engine.workoutAnalytics` actually changes (count / last end date).
     private func recomputeWorkoutDayCaches() {
-        let calendar = Calendar.current
-        var workoutsByDayBuf: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] = [:]
-        var loadByDayBuf: [Date: Double] = [:]
-        for pair in engine.workoutAnalytics {
-            let day = calendar.startOfDay(for: pair.workout.startDate)
-            workoutsByDayBuf[day, default: []].append(pair)
-            loadByDayBuf[day, default: 0] += sessionLoad(for: pair.workout, analytics: pair.analytics)
-        }
-        // Sort each day's workouts once (newest first) so `workoutsForPreview` is O(1).
-        for (day, list) in workoutsByDayBuf {
-            workoutsByDayBuf[day] = list.sorted { $0.workout.startDate > $1.workout.startDate }
-        }
-        workoutsByDay = workoutsByDayBuf
-        loadByDay = loadByDayBuf
+        let built = Self.buildWorkoutDayCaches(from: engine.workoutAnalytics)
+        workoutsByDay = built.workoutsByDay
+        loadByDay = built.loadByDay
     }
 
     private var hasEnoughLoadedWorkoutsForDashboard: Bool {
@@ -620,24 +658,24 @@ struct DashboardView: View {
             .task {
                 guard !hasStartedBackgroundRefresh else { return }
                 hasStartedBackgroundRefresh = true
-                recomputeWorkoutDayCaches()
-                updateLiveLoadSnapshot()
                 dashboardRefreshTask?.cancel()
                 dashboardRefreshTask = Task(priority: .utility) {
                     await refreshDashboardMetricsInBackground()
                 }
+                // Let the navigation shell paint; aggregated load is intentionally off-thread
+                // (full `sessionLoad` over every workout dominated startup when run on MainActor).
+                await Task.yield()
+                await recomputeWorkoutCachesFromEngineAsync()
             }
             .onChange(of: layoutSettings) { _, newValue in
                 guard hasLoadedLayoutSettings else { return }
                 DashboardLayoutPersistence.save(newValue)
             }
             .onChange(of: engine.workoutAnalytics.count) { _, _ in
-                recomputeWorkoutDayCaches()
-                updateLiveLoadSnapshot()
+                enqueueWorkoutCacheRebuildFromEngine()
             }
             .onChange(of: engine.workoutAnalytics.last?.workout.endDate) { _, _ in
-                recomputeWorkoutDayCaches()
-                updateLiveLoadSnapshot()
+                enqueueWorkoutCacheRebuildFromEngine()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 let saved = DashboardLayoutPersistence.load()
@@ -648,18 +686,23 @@ struct DashboardView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .background else { return }
                 dashboardRefreshTask?.cancel()
+                workoutCacheRebuildTask?.cancel()
                 isRefreshingDashboardMetrics = false
             }
             .onDisappear {
                 dashboardRefreshTask?.cancel()
+                workoutCacheRebuildTask?.cancel()
             }
             .navigationDestination(isPresented: $showWorkoutDetail) {
                 if let selectedWorkout = selectedWorkoutForDetail {
-                    WorkoutDetailView(
-                        analytics: selectedWorkout.analytics,
-                        hrZoneSettings: hrZoneSettings,
-                        showsMapSection: true
-                    )
+                    ScrollView {
+                        WorkoutDetailView(
+                            analytics: selectedWorkout.analytics,
+                            hrZoneSettings: hrZoneSettings,
+                            showsMapSection: true
+                        )
+                    }
+                    .padding(.horizontal)
                 }
             }
         }
@@ -692,9 +735,7 @@ struct DashboardView: View {
         }
 
         guard !Task.isCancelled else { return }
-        await MainActor.run {
-            updateLiveLoadSnapshot()
-        }
+        await recomputeWorkoutCachesFromEngineAsync()
     }
 
     // MARK: - Dashboard Sections as ViewBuilder functions
@@ -1014,10 +1055,19 @@ private func workoutHistoryPreviewSection() -> some View {
 
     @ViewBuilder
     private func workoutHistoryTabView() -> some View {
+        let sectionHeight: CGFloat = 284
+        let viewportHeightForTwoWorkouts: CGFloat = 190
+        let singleWorkoutViewportHeight: CGFloat = 206
+        let emptyViewportHeight: CGFloat = 206
         TabView(selection: $currentWorkoutHistoryTabIndex) {
             ForEach(0..<7, id: \.self) { dayOffset in
                 let workouts = workoutsForPreview(dayOffset: -dayOffset)
                 let dateLabel = dateLabel(for: -dayOffset)
+                let viewportHeight: CGFloat = {
+                    if workouts.isEmpty { return emptyViewportHeight }
+                    if workouts.count == 1 { return singleWorkoutViewportHeight }
+                    return viewportHeightForTwoWorkouts
+                }()
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text(dateLabel)
@@ -1025,10 +1075,9 @@ private func workoutHistoryPreviewSection() -> some View {
                         .foregroundStyle(.secondary)
 
                     if workouts.isEmpty {
-                        Text("No workouts")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 6)
+                        workoutHistoryEmptyState(dateLabel: dateLabel)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(height: viewportHeight, alignment: .top)
                     } else {
                         ScrollView(.vertical, showsIndicators: false) {
                             VStack(alignment: .leading, spacing: 10) {
@@ -1039,7 +1088,8 @@ private func workoutHistoryPreviewSection() -> some View {
                                     }) {
                                         DashboardWorkoutPreviewCard(
                                             workout: pair.workout,
-                                            analytics: pair.analytics
+                                            analytics: pair.analytics,
+                                            style: workouts.count == 1 ? .expanded : .compact
                                         )
                                     }
                                     .buttonStyle(.plain)
@@ -1047,15 +1097,53 @@ private func workoutHistoryPreviewSection() -> some View {
                                 }
                             }
                         }
+                        .frame(height: viewportHeight)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 8)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.top, 4)
                 .tag(dayOffset)
             }
         }
-        .frame(height: 220)
-        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+        .frame(height: sectionHeight)
+        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+    }
+
+    @ViewBuilder
+    private func workoutHistoryEmptyState(dateLabel: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "figure.walk")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.orange)
+                Text("No workouts logged")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+
+            Text("Nothing was recorded for \(dateLabel.lowercased()) yet. Start a session from Workout to populate this timeline.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Label("Heart rate", systemImage: "heart.fill")
+                Label("MET", systemImage: "flame.fill")
+                Label("Duration", systemImage: "clock")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+        )
     }
 
     private func dateLabel(for dayOffset: Int) -> String {
@@ -1493,8 +1581,14 @@ private func activityTypeName(for type: HKWorkoutActivityType) -> String {
 }
 
 private struct DashboardWorkoutPreviewCard: View {
+    enum Style {
+        case compact
+        case expanded
+    }
+
     let workout: HKWorkout
     let analytics: WorkoutAnalytics
+    var style: Style = .compact
 
     private static let dateFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -1509,43 +1603,84 @@ private struct DashboardWorkoutPreviewCard: View {
     }()
 
     var body: some View {
-        HStack {
-            Image(systemName: activityTypeSymbol(for: workout.workoutActivityType))
-                .foregroundColor(.orange)
-            VStack(alignment: .leading) {
-                Text(activityTypeName(for: workout.workoutActivityType))
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text(Self.dateFormatter.string(from: workout.startDate)) + Text(" • ") + Text(Self.timeFormatter.string(from: workout.startDate)) + Text(" • \(Int(workout.duration / 60)) min")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: style == .expanded ? 14 : 0) {
+            HStack {
+                Image(systemName: activityTypeSymbol(for: workout.workoutActivityType))
+                    .foregroundColor(.orange)
+                VStack(alignment: .leading) {
+                    Text(activityTypeName(for: workout.workoutActivityType))
+                        .font(style == .expanded ? .title3.weight(.semibold) : .headline)
+                        .foregroundStyle(.primary)
+                    Text(Self.dateFormatter.string(from: workout.startDate)) + Text(" • ") + Text(Self.timeFormatter.string(from: workout.startDate)) + Text(" • \(Int(workout.duration / 60)) min")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                if style == .compact {
+                    VStack(alignment: .trailing) {
+                        if let avgHR = analytics.heartRates.map({ $0.1 }).average {
+                            Text("Avg HR: \(Int(avgHR)) bpm")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                        }
+                        if let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                            Text("Kcal: \(Int(kcal))")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                        }
+                        if let met = analytics.metTotal {
+                            Text("MET-min: \(Int(met))")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
             }
-            Spacer()
-            VStack(alignment: .trailing) {
-                if let avgHR = analytics.heartRates.map({ $0.1 }).average {
-                    Text("Avg HR: \(Int(avgHR)) bpm")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                }
-                if let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
-                    Text("Kcal: \(Int(kcal))")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                }
-                if let met = analytics.metTotal {
-                    Text("MET-min: \(Int(met))")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
+
+            if style == .expanded {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    metricPill(label: "Duration", value: "\(Int(workout.duration / 60)) min")
+                    if let kcal = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                        metricPill(label: "Energy", value: "\(Int(kcal)) kcal")
+                    } else {
+                        metricPill(label: "Energy", value: "—")
+                    }
+                    if let avgHR = analytics.heartRates.map({ $0.1 }).average {
+                        metricPill(label: "Avg HR", value: "\(Int(avgHR)) bpm")
+                    } else {
+                        metricPill(label: "Avg HR", value: "—")
+                    }
+                    if let met = analytics.metTotal {
+                        metricPill(label: "MET-min", value: "\(Int(met))")
+                    } else {
+                        metricPill(label: "MET-min", value: "—")
+                    }
                 }
             }
         }
-        .padding()
+        .padding(style == .expanded ? 16 : 10)
         .background(
             RoundedRectangle(cornerRadius: 18)
                 .fill(.ultraThinMaterial)
         )
         .cornerRadius(12)
         .shadow(radius: 2)
+    }
+
+    @ViewBuilder
+    private func metricPill(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
