@@ -7,7 +7,7 @@ import ActivityKit
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 #endif
-#if canImport(WorkoutKit)
+#if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
 import WorkoutKit
 #endif
 
@@ -17,34 +17,6 @@ struct WorkoutTimerSync: Equatable {
     let workoutState: String
     let splitCount: Int
 }
-
-#if !targetEnvironment(macCatalyst)
-struct WorkoutLiveActivityAttributes: ActivityAttributes {
-
-    public struct ContentState: Codable, Hashable {
-        var elapsedSeconds: Int
-        var elapsedReferenceDate: Date
-        var isPaused: Bool
-        var currentHeartRate: Int
-        var heartRateDisplay: String?
-        var totalCalories: Double
-        var caloriesDisplay: String?
-        var totalDistanceKilometers: Double
-        var distanceDisplay: String?
-        var currentPaceMinutesPerKm: Double?
-        var elevationGainMeters: Int
-        var currentHeartRateZone: Int?
-        var activePhaseTitle: String?
-    }
-
-    var workoutType: String
-    var activityIcon: String
-    var startTime: Date
-    var targetMinutes: Int?
-    var userInitials: String
-    var maxHeartRate: Int?
-}
-#endif
 
 private enum WorkoutMetricsVariant {
     case primary
@@ -1415,11 +1387,15 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
             "notes": stage.notes,
             "role": stage.role.rawValue,
             "goal": stage.goal.rawValue,
+            "foundationType": stage.foundationType.rawValue,
             "targetBehavior": stage.targetBehavior.rawValue,
             "plannedMinutes": stage.plannedMinutes,
             "repeats": stage.repeats,
             "targetValueText": stage.targetValueText
         ]
+        if let plannedDistance = stage.plannedDistance {
+            dict["plannedDistance"] = plannedDistance
+        }
         let label = stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         if !label.isEmpty {
             dict["repeatSetLabel"] = label
@@ -1539,7 +1515,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         location: HKWorkoutSessionLocationType,
         phases: [ProgramWorkoutPlanPhase]
     ) {
-        #if canImport(WorkoutKit)
+        #if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
         guard #available(iOS 17.0, *) else {
             launchStatusMessage = "Requires iOS 17 or later."
             return
@@ -1597,7 +1573,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         location: HKWorkoutSessionLocationType,
         phases: [ProgramWorkoutPlanPhase]
     ) {
-        #if canImport(WorkoutKit)
+        #if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
         guard #available(iOS 17.0, *) else {
             launchStatusMessage = "Requires iOS 17 or later."
             return
@@ -1695,7 +1671,7 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
     }
     #endif
     
-    #if canImport(WorkoutKit)
+    #if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
     private enum WorkoutBuildError: LocalizedError {
         case noValidPhases
         case invalidActivity

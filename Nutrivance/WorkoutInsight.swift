@@ -1,7 +1,7 @@
 import Foundation
 
 public struct WorkoutInsight: Identifiable, Codable {
-    let id = UUID()
+    public let id = UUID()
     let date: Date
     let activity: String
     let durationMinutes: Double

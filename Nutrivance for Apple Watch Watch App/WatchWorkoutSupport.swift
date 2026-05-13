@@ -884,7 +884,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     private func inTargetProgressTime(for stage: WatchProgramMicroStagePayload, at date: Date) -> TimeInterval {
-        guard objectiveCountsOnlyQualifiedTime(stage.objective.kind) else {
+        guard objectiveCountsOnlyQualifiedTime(for: stage) else {
             return 0
         }
         var qualifiedTime = accumulatedQualifiedObjectiveTime
@@ -1346,7 +1346,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         statusMessage = "Pausing workout..."
         accumulatedElapsedTime = currentElapsedTime(at: Date())
         accumulatedMicroStageElapsedTime = currentSegmentElapsedTime(at: Date())
-        if let currentMicroStage, objectiveCountsOnlyQualifiedTime(currentMicroStage.objective.kind) {
+        if let currentMicroStage, objectiveCountsOnlyQualifiedTime(for: currentMicroStage) {
             accumulatedQualifiedObjectiveTime = objectiveProgressTime(for: currentMicroStage, at: Date())
         }
         objectiveQualificationSampleDate = nil
@@ -2252,8 +2252,9 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         )
     }
 
-    private func objectiveCountsOnlyQualifiedTime(_ kind: WatchPhaseObjectivePayload.Kind) -> Bool {
-        [.power, .cadence, .speed, .pace].contains(kind)
+    private func objectiveCountsOnlyQualifiedTime(for stage: WatchProgramMicroStagePayload) -> Bool {
+        guard let metricKind = alertMetricKind(for: stage) else { return false }
+        return [.power, .cadence, .speed, .pace].contains(metricKind)
     }
 
     private func currentObjectiveProgressTime(at date: Date) -> TimeInterval {
@@ -2264,7 +2265,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     private func objectiveProgressTime(for stage: WatchProgramMicroStagePayload, at date: Date) -> TimeInterval {
-        guard objectiveCountsOnlyQualifiedTime(stage.objective.kind) else {
+        guard objectiveCountsOnlyQualifiedTime(for: stage) else {
             return currentSegmentElapsedTime(at: date)
         }
 
@@ -2278,7 +2279,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     private func updateQualifiedObjectiveProgress(at date: Date) {
-        guard let currentMicroStage, objectiveCountsOnlyQualifiedTime(currentMicroStage.objective.kind) else {
+        guard let currentMicroStage, objectiveCountsOnlyQualifiedTime(for: currentMicroStage) else {
             objectiveQualificationSampleDate = date
             accumulatedQualifiedObjectiveTime = 0
             return
@@ -2299,7 +2300,9 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         let behavior = stage.targetBehaviorRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let label = stage.targetValueText ?? stage.objective.label ?? ""
 
-        switch stage.objective.kind {
+        guard let metricKind = alertMetricKind(for: stage) else { return false }
+
+        switch metricKind {
         case .power:
             guard let currentPowerWatts else { return false }
             return numericMetricSatisfied(value: currentPowerWatts, label: label, behavior: behavior)
@@ -2321,7 +2324,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 let target = label.paceAsSpeedTarget
             else { return false }
             return speedMetricSatisfied(value: currentSpeedMetersPerSecond, target: target, behavior: behavior)
-        default:
+        case .open, .time, .distance, .energy, .heartRateZone, .routeDistance:
             return false
         }
     }
@@ -2965,6 +2968,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         }
 
         switch objective.kind {
+        case .open:
+            return ("Open", false)
         case .time:
             let targetSeconds = max(objective.targetValue, 1) * 60
             let remaining = max(targetSeconds - elapsedTime, 0)
@@ -3009,6 +3014,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         let energyDelta = max(currentEnergyKilocalories - microStageStartEnergyKilocalories, 0)
 
         switch stage.objective.kind {
+        case .open:
+            return ("\(repeatIterationPrefix(for: index))Open", false)
         case .time:
             let targetSeconds = max(stage.objective.targetValue, 1) * 60
             let remaining = max(targetSeconds - elapsedTime, 0)
@@ -3040,6 +3047,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private func compactTargetText(for stage: WatchProgramMicroStagePayload) -> String {
         switch stage.objective.kind {
+        case .open:
+            return "Open"
         case .time:
             return "\(max(stage.plannedMinutes, 1)) min"
         case .distance:
@@ -3062,6 +3071,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         )
 
         switch objective.kind {
+        case .open:
+            return "Open"
         case .time:
             return "\(max(phase.plannedMinutes, 1)) min"
         case .distance:
@@ -3081,6 +3092,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         let roundSuffix = compactRoundSuffix(for: index)
 
         switch stage.objective.kind {
+        case .open:
+            return "Open\(roundSuffix)"
         case .time:
             let targetSeconds = max(stage.objective.targetValue, 1) * 60
             let remaining = max(targetSeconds - currentSegmentElapsedTime(at: Date()), 0)
@@ -3114,6 +3127,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         )
 
         switch objective.kind {
+        case .open:
+            return "Open"
         case .time:
             let targetSeconds = max(objective.targetValue, 1) * 60
             let remaining = max(targetSeconds - elapsedTime, 0)
@@ -3144,6 +3159,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private func upcomingObjectiveText(for phase: WatchProgramPhasePayload, objective: WatchPhaseObjectivePayload) -> String {
         switch objective.kind {
+        case .open:
+            return "Open"
         case .time:
             return "\(phase.plannedMinutes) min planned"
         case .distance:
@@ -3161,6 +3178,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private func upcomingMicroStageText(for stage: WatchProgramMicroStagePayload) -> String {
         switch stage.objective.kind {
+        case .open:
+            return "Open"
         case .time:
             return "\(stage.plannedMinutes) min planned"
         case .distance:
@@ -3420,6 +3439,14 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
         return nil
     }
 
+    private func decodeWCDouble(_ value: Any?) -> Double? {
+        if let v = value as? Double { return v }
+        if let v = value as? Float { return Double(v) }
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let s = value as? String, let v = Double(s) { return v }
+        return nil
+    }
+
     private func decodePhasePayloads(from payloads: [[String: Any]]?) -> [WatchProgramPhasePayload] {
         guard let payloads else { return [] }
         return payloads.compactMap { phasePayload in
@@ -3443,21 +3470,27 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
                 let targetValueText = stagePayload["targetValueText"] as? String ?? ""
                 let roleRawValue = stagePayload["role"] as? String
                 let goalRawValue = stagePayload["goal"] as? String
+                let foundationRawValue = stagePayload["foundationType"] as? String
+                let plannedDistance = self.decodeWCDouble(stagePayload["plannedDistance"])
                 return WatchProgramMicroStagePayload(
                     id: UUID(uuidString: stagePayload["id"] as? String ?? "") ?? UUID(),
                     title: title,
                     notes: notes,
                     roleRawValue: roleRawValue,
                     goalRawValue: goalRawValue,
+                    foundationRawValue: foundationRawValue,
                     plannedMinutes: plannedMinutes,
+                    plannedDistance: plannedDistance,
                     repeats: repeats,
                     repeatSetLabel: stagePayload["repeatSetLabel"] as? String,
                     targetValueText: targetValueText.isEmpty ? nil : targetValueText,
                     targetBehaviorRawValue: stagePayload["targetBehavior"] as? String,
                     circuitGroupID: UUID(uuidString: stagePayload["circuitGroupID"] as? String ?? ""),
                     objective: workoutObjective(
+                        foundationRawValue: foundationRawValue,
                         goalRawValue: goal,
                         plannedMinutes: plannedMinutes,
+                        plannedDistance: plannedDistance,
                         targetValueText: targetValueText
                     )
                 )
@@ -3489,13 +3522,30 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     private func workoutObjective(
+        foundationRawValue: String?,
         goalRawValue: String,
         plannedMinutes: Int,
+        plannedDistance: Double?,
         targetValueText: String
     ) -> WatchPhaseObjectivePayload {
+        switch foundationRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "open":
+            return WatchPhaseObjectivePayload(kind: .open, targetValue: 0, label: "Open")
+        case "distance":
+            return WatchPhaseObjectivePayload(
+                kind: .distance,
+                targetValue: max(plannedDistance ?? targetValueText.firstNumberValue ?? 1, 0.1),
+                label: plannedDistance == nil ? targetValueText : nil
+            )
+        case "time":
+            return WatchPhaseObjectivePayload(kind: .time, targetValue: Double(max(plannedMinutes, 1)), label: "Time")
+        default:
+            break
+        }
+
         switch goalRawValue {
         case "distance":
-            return WatchPhaseObjectivePayload(kind: .distance, targetValue: max(targetValueText.firstNumberValue ?? 1, 0.1), label: targetValueText)
+            return WatchPhaseObjectivePayload(kind: .distance, targetValue: max(plannedDistance ?? targetValueText.firstNumberValue ?? 1, 0.1), label: targetValueText)
         case "energy":
             return WatchPhaseObjectivePayload(kind: .energy, targetValue: max(targetValueText.firstNumberValue ?? Double(max(plannedMinutes * 8, 40)), 1), label: targetValueText)
         case "heartRateZone":
@@ -3729,6 +3779,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private func buildWorkoutGoal(for stage: WatchProgramMicroStagePayload) -> WorkoutGoal {
         switch stage.objective.kind {
+        case .open:
+            return .open
         case .distance, .routeDistance:
             return .distance(max(stage.objective.targetValue, 0.1), .kilometers)
         case .energy:
@@ -3739,9 +3791,16 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
     }
 
     private func buildWorkoutAlert(for stage: WatchProgramMicroStagePayload) -> (any WorkoutAlert)? {
-        switch stage.objective.kind {
+        let role = stage.roleRawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "warmup" || role == "cooldown" {
+            return nil
+        }
+
+        guard let metricKind = alertMetricKind(for: stage) else { return nil }
+
+        switch metricKind {
         case .heartRateZone:
-            let zone = Int(stage.objective.secondaryValue ?? 3)
+            let zone = Int(stage.targetValueText?.firstNumberValue ?? stage.objective.secondaryValue ?? 3)
             return .heartRate(zone: zone)
         case .power:
             return buildPowerAlert(for: stage)
@@ -3751,7 +3810,7 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return buildSpeedAlert(for: stage)
         case .pace:
             return buildPaceAlert(for: stage)
-        case .time, .distance, .energy, .routeDistance:
+        case .open, .time, .distance, .energy, .routeDistance:
             return nil
         }
     }
@@ -3818,6 +3877,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
 
     private func fallbackGoalRawValue(for kind: WatchPhaseObjectivePayload.Kind) -> String? {
         switch kind {
+        case .open:
+            return nil
         case .distance, .routeDistance:
             return "distance"
         case .energy:
@@ -3866,6 +3927,8 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return label
         }
         switch objective.kind {
+        case .open:
+            return "open"
         case .power:
             return "power target"
         case .cadence:
@@ -3876,6 +3939,31 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             return "pace target"
         default:
             return "target"
+        }
+    }
+
+    private func alertMetricKind(for stage: WatchProgramMicroStagePayload) -> WatchPhaseObjectivePayload.Kind? {
+        switch stage.goalRawValue?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "heartRateZone":
+            return .heartRateZone
+        case "power":
+            return .power
+        case "cadence":
+            return .cadence
+        case "speed":
+            return .speed
+        case "pace":
+            return .pace
+        case "distance":
+            return .distance
+        case "energy":
+            return .energy
+        case "time":
+            return .time
+        case "open":
+            return .open
+        default:
+            return nil
         }
     }
 

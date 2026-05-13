@@ -350,9 +350,23 @@ final class HealthStateEngine: ObservableObject {
     @Published var mindfulnessMinutesByDay: [Date: Double] = [:] // [date: minutes of mindfulness]
 
     // MARK: - Workout Analytics
-    @Published var workoutAnalytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
+    @Published var workoutAnalytics: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = [] {
+        didSet { _oldestLoadedWorkoutDateDirty = true }
+    }
     @Published var hasInitializedWorkoutAnalytics: Bool = false // Track if initial load completed
     @Published var hasNewDataAvailable: Bool = false // Track if new data differs from cache
+
+    /// Memoized oldest start date across the in-memory `workoutAnalytics`. Lets the
+    /// dashboard / strain views check coverage without scanning every workout.
+    private var _oldestLoadedWorkoutDate: Date?
+    private var _oldestLoadedWorkoutDateDirty: Bool = true
+    var oldestLoadedWorkoutDate: Date? {
+        if _oldestLoadedWorkoutDateDirty {
+            _oldestLoadedWorkoutDate = workoutAnalytics.map { $0.workout.startDate }.min()
+            _oldestLoadedWorkoutDateDirty = false
+        }
+        return _oldestLoadedWorkoutDate
+    }
     
     // MARK: - Analytics Cache Management
     private var workoutAnalyticsCacheTimestamp: Date? = nil
@@ -1007,21 +1021,25 @@ final class HealthStateEngine: ObservableObject {
         let localURL = metricsSnapshotURL()
         let cloudKey = metricsSnapshotCloudKey
         let cloudSnapshot = cloudTrimmedSnapshot(from: snapshot)
-        let fullEncoded = try? JSONEncoder().encode(snapshot)
         metricsSnapshotWriteTask?.cancel()
+        // The full snapshot encode is the heaviest part of this call (megabytes for
+        // long histories). Run it off the main actor; only the produced `Data` and the
+        // cloud upload land on `@MainActor` again. The cloud snapshot is smaller and
+        // can encode alongside it on the same detached task.
         #if !targetEnvironment(macCatalyst)
-        metricsSnapshotWriteTask = Task.detached(priority: .utility) { [fullEncoded] in
+        metricsSnapshotWriteTask = Task.detached(priority: .utility) { [weak self, snapshot, cloudSnapshot, localURL, cloudKey] in
+            // Heavy JSON encode and disk write off the main actor.
+            let fullEncoded = try? JSONEncoder().encode(snapshot)
+            let cloudEncoded = try? JSONEncoder().encode(cloudSnapshot)
             if let url = localURL, let fullEncoded {
                 try? fullEncoded.write(to: url, options: .atomic)
             }
-        }
-        #endif
-
-        #if !targetEnvironment(macCatalyst)
-        Task { @MainActor in
-            if let cloudData = try? JSONEncoder().encode(cloudSnapshot) {
-                NSUbiquitousKeyValueStore.default.set(cloudData, forKey: cloudKey)
-                NSUbiquitousKeyValueStore.default.synchronize()
+            // Hop back to MainActor for the touch-points that require it.
+            await MainActor.run {
+                if let cloudEncoded {
+                    NSUbiquitousKeyValueStore.default.set(cloudEncoded, forKey: cloudKey)
+                    NSUbiquitousKeyValueStore.default.synchronize()
+                }
             }
             if let fullEncoded {
                 do {
@@ -1030,10 +1048,10 @@ final class HealthStateEngine: ObservableObject {
                         data: fullEncoded
                     )
                 } catch {
-                    CloudKitManager.shared.reportHealthSyncError("Metrics snapshot CK upload: \(error.localizedDescription)")
+                    await CloudKitManager.shared.reportHealthSyncError("Metrics snapshot CK upload: \(error.localizedDescription)")
                 }
             }
-            await pushDetailedHealthHandoffsToCloudKit()
+            await self?.pushDetailedHealthHandoffsToCloudKit()
         }
         #endif
     }
@@ -2185,7 +2203,23 @@ final class HealthStateEngine: ObservableObject {
     @Published var activityLoad: Double = 0    // arbitrary training load
     @Published var hrvHistory: [Double] = []   // last 30 HRV values
     @Published var hrvSampleHistory: [HRVSamplePoint] = []
-    @Published var dailyHRV: [DailyHRVPoint] = []
+    @Published var dailyHRV: [DailyHRVPoint] = [] {
+        didSet { _cachedHRVByDayDirty = true }
+    }
+
+    // MARK: - Memoized lookups for the recovery/readiness pipeline
+    private var _cachedHRVByDay: [Date: Double] = [:]
+    private var _cachedHRVByDayDirty: Bool = true
+
+    /// `dailyHRV` reshaped as a `[Date: Double]` lookup. Built lazily and reused across
+    /// pipeline calls so per-day score helpers do not rebuild it on every invocation.
+    var cachedHRVByDay: [Date: Double] {
+        if _cachedHRVByDayDirty {
+            _cachedHRVByDay = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) })
+            _cachedHRVByDayDirty = false
+        }
+        return _cachedHRVByDay
+    }
     @Published var sleepHRVAverage: Double?
     // Track last completed sleep session
     @Published var lastSleepStart: Date?
@@ -3365,6 +3399,57 @@ final class HealthStateEngine: ObservableObject {
         scheduleMetricsSnapshotSave()
     }
 
+    /// Incrementally refresh `workoutAnalytics` by fetching only the workouts created
+    /// **since** the existing cache's latest known workout. This is the default refresh
+    /// path for `WorkoutHistoryView`/Dashboard background refresh: a full 10-year
+    /// HK re-query (`replaceWorkoutCacheWithNewData(days: 3650)`) is reserved for the
+    /// explicit "rebuild everything" affordance.
+    func refreshWorkoutAnalyticsIncrementally() async {
+        if Self.usesAggregatedCloudHealthPath {
+            await reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: true)
+            scheduleMetricsSnapshotSave()
+            return
+        }
+
+        let now = Date()
+        let calendar = Calendar.current
+        // Fall back to a sane default (a year) if we have no cache yet to anchor against.
+        let fallbackStart = calendar.date(byAdding: .day, value: -365, to: now) ?? now
+        // Overlap a day on either side to catch boundary edits / timezone wiggles.
+        let anchor = lastCachedWorkoutDate ?? earliestRequestedWorkoutDate
+        let start: Date = {
+            guard let anchor else { return fallbackStart }
+            return calendar.date(byAdding: .day, value: -1, to: anchor) ?? anchor
+        }()
+
+        let fetched = await hkManager.fetchWorkoutsWithAnalytics(
+            from: start,
+            to: now,
+            allowDuringForegroundCritical: true
+        )
+
+        // Merge by canonical workout ID so re-fetched workouts replace stale analytics.
+        var mergedByID = Dictionary(uniqueKeysWithValues: workoutAnalytics.map { (canonicalWorkoutID(for: $0.workout), $0) })
+        for workout in fetched {
+            mergedByID[canonicalWorkoutID(for: workout.workout)] = workout
+        }
+        let merged = mergedByID.values.sorted { lhs, rhs in
+            lhs.workout.startDate > rhs.workout.startDate
+        }
+
+        workoutAnalytics = merged
+        workoutAnalyticsCacheTimestamp = Date()
+        if lastCachedWorkoutDate == nil {
+            earliestRequestedWorkoutDate = min(earliestRequestedWorkoutDate ?? start, start)
+        }
+        lastCachedWorkoutDate = merged.map { $0.workout.startDate }.max() ?? lastCachedWorkoutDate
+        hasInitializedWorkoutAnalytics = true
+        hasNewDataAvailable = false
+        savePersistentCacheMetadata(merged)
+        scheduleScoresRefresh()
+        scheduleMetricsSnapshotSave()
+    }
+
     func clearWorkoutAnalyticsCache() {
         historicalBatchLoadTask?.cancel()
         smartDifferentialRefreshTask?.cancel()
@@ -3465,17 +3550,20 @@ final class HealthStateEngine: ObservableObject {
     private func needsCoverage<T>(for values: [Date: T], from start: Date, to end: Date) -> Bool {
         let normalizedStart = Calendar.current.startOfDay(for: start)
         let normalizedEnd = Calendar.current.startOfDay(for: end)
-        let coveredDates = values.keys.sorted()
-
-        guard let earliest = coveredDates.first, let latest = coveredDates.last else {
-            return true
+        // Single O(n) min/max scan – `keys.sorted()` was allocating + sorting every time
+        // a view ran a coverage check across 6+ daily metric maps.
+        var earliest: Date?
+        var latest: Date?
+        for key in values.keys {
+            if earliest == nil || key < earliest! { earliest = key }
+            if latest == nil || key > latest! { latest = key }
         }
-
+        guard let earliest, let latest else { return true }
         return normalizedStart < earliest || normalizedEnd > latest
     }
 
     func needsRecoveryMetricsCoverage(from start: Date, to end: Date) -> Bool {
-        needsCoverage(for: Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) }), from: start, to: end)
+        needsCoverage(for: cachedHRVByDay, from: start, to: end)
             || needsCoverage(for: dailyRestingHeartRate, from: start, to: end)
             || needsCoverage(for: sleepStages, from: start, to: end)
             || needsCoverage(for: respiratoryRate, from: start, to: end)

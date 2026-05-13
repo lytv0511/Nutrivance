@@ -98,6 +98,7 @@ struct WatchProgramPlanPayload: Codable, Identifiable, Hashable {
 
 struct WatchPhaseObjectivePayload: Codable, Hashable {
     enum Kind: String, Codable, Hashable {
+        case open
         case time
         case distance
         case energy
@@ -133,7 +134,9 @@ struct WatchProgramMicroStagePayload: Codable, Identifiable, Hashable {
     let notes: String
     let roleRawValue: String?
     let goalRawValue: String?
+    let foundationRawValue: String?
     let plannedMinutes: Int
+    let plannedDistance: Double?
     let repeats: Int
     let repeatSetLabel: String?
     let targetValueText: String?
@@ -147,7 +150,9 @@ struct WatchProgramMicroStagePayload: Codable, Identifiable, Hashable {
         notes: String,
         roleRawValue: String? = nil,
         goalRawValue: String? = nil,
+        foundationRawValue: String? = nil,
         plannedMinutes: Int,
+        plannedDistance: Double? = nil,
         repeats: Int,
         repeatSetLabel: String? = nil,
         targetValueText: String? = nil,
@@ -160,7 +165,9 @@ struct WatchProgramMicroStagePayload: Codable, Identifiable, Hashable {
         self.notes = notes
         self.roleRawValue = roleRawValue
         self.goalRawValue = goalRawValue
+        self.foundationRawValue = foundationRawValue
         self.plannedMinutes = plannedMinutes
+        self.plannedDistance = plannedDistance
         self.repeats = repeats
         self.repeatSetLabel = repeatSetLabel
         self.targetValueText = targetValueText

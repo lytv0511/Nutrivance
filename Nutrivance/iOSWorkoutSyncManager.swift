@@ -9,24 +9,6 @@ import WatchConnectivity
 import ActivityKit
 #endif
 
-// MARK: - Workout Activity State
-
-struct WorkoutActivityState: Codable, Hashable {
-    var elapsedSeconds: Int
-    var elapsedReferenceDate: Date
-    var isPaused: Bool
-    var currentHeartRate: Int
-    var heartRateDisplay: String?
-    var totalCalories: Double
-    var caloriesDisplay: String?
-    var totalDistanceKilometers: Double
-    var distanceDisplay: String?
-    var currentPaceMinutesPerKm: Double?
-    var elevationGainMeters: Int
-    var currentHeartRateZone: Int?
-    var activePhaseTitle: String?
-}
-
 // MARK: - Timer Sync Keys
 
 struct WorkoutTimerSyncKeys {

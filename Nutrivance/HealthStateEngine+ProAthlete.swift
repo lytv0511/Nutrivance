@@ -18,6 +18,37 @@ struct ProAthleteProfileValues: Sendable {
     let enableAsymmetricStrainPenalty: Bool
     let enableTaperLogic: Bool
 
+    init(
+        isProAthleteMode: Bool,
+        enableStrainSensitiveHRV: Bool,
+        chronicLoadPercentile: Double,
+        enableHRVBellCurve: Bool,
+        hrvZScoreCap: Double,
+        enableSleepQualityCoeff: Bool,
+        enableSubjectiveDataCollection: Bool,
+        enableACWRLogic: Bool,
+        acwrOptimalMin: Double,
+        acwrOptimalMax: Double,
+        acwrDangerThreshold: Double,
+        enableAsymmetricStrainPenalty: Bool,
+        enableTaperLogic: Bool
+    ) {
+        self.isProAthleteMode = isProAthleteMode
+        self.enableStrainSensitiveHRV = enableStrainSensitiveHRV
+        self.chronicLoadPercentile = chronicLoadPercentile
+        self.enableHRVBellCurve = enableHRVBellCurve
+        self.hrvZScoreCap = hrvZScoreCap
+        self.enableSleepQualityCoeff = enableSleepQualityCoeff
+        self.enableSubjectiveDataCollection = enableSubjectiveDataCollection
+        self.enableACWRLogic = enableACWRLogic
+        self.acwrOptimalMin = acwrOptimalMin
+        self.acwrOptimalMax = acwrOptimalMax
+        self.acwrDangerThreshold = acwrDangerThreshold
+        self.enableAsymmetricStrainPenalty = enableAsymmetricStrainPenalty
+        self.enableTaperLogic = enableTaperLogic
+    }
+
+    @MainActor
     init(from profile: PerformanceProfileSettings) {
         self.isProAthleteMode = profile.isProAthleteMode
         self.enableStrainSensitiveHRV = profile.enableStrainSensitiveHRV

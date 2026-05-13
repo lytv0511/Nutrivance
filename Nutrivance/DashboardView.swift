@@ -138,9 +138,36 @@ private enum DashboardSnapshotPersistence {
         return nil
     }
 
+    /// Synchronous fallback (used outside of the dashboard's debounced path).
     static func save(_ snapshot: DashboardView.DashboardLoadSnapshot) {
         guard let encoded = try? JSONEncoder().encode(snapshot) else { return }
         UserDefaults.standard.set(encoded, forKey: storageKey)
+    }
+
+    /// Encode + write off the main actor – used by the dashboard so a snapshot save
+    /// does not block UI when `engine.workoutAnalytics` churns.
+    static func saveDetached(_ snapshot: DashboardView.DashboardLoadSnapshot) {
+        Task.detached(priority: .utility) {
+            guard let encoded = try? JSONEncoder().encode(snapshot) else { return }
+            UserDefaults.standard.set(encoded, forKey: storageKey)
+        }
+    }
+}
+
+/// Clock-driven hue phase wrapper for the dashboard background. By owning the animation
+/// inside its own view body, the dashboard's outer body no longer invalidates on every
+/// `withAnimation(.repeatForever)` tick (which was the root cause of dashboard lag).
+private struct DashboardBurningGradientBackground: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 15.0, paused: false)) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            // Match the previous 8s round-trip cadence (`withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true))`).
+            let period = 8.0
+            let s = sin((elapsed / period) * (2 * Double.pi))
+            let phase = (s + 1) * 0.5 * 20.0
+            GradientBackgrounds()
+                .burningGradient(animationPhase: .constant(phase))
+        }
     }
 }
 
@@ -150,8 +177,24 @@ struct DashboardView: View {
     @EnvironmentObject private var navigationState: NavigationState
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedChartRange: ChartRange = .month
-    @State private var animationPhase: Double = 0
+    // The dashboard background is now driven by `DashboardBurningGradientBackground`'s
+    // internal `TimelineView`, so `animationPhase` no longer needs to live on the parent
+    // view (it was driving a `.repeatForever` animation that invalidated the whole body).
+
     @State private var selectedTrainingLoadPoint: TrainingLoadChartPoint? = nil
+
+    // Memoized per-day caches over `engine.workoutAnalytics`, recomputed only when
+    // workouts actually change. Used by the preview pager and chart so per-frame
+    // `engine.workoutAnalytics.filter` calls vanish from the render path.
+    @State private var workoutsByDay: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] = [:]
+    @State private var loadByDay: [Date: Double] = [:]
+    @State private var lastSnapshotPersistTask: Task<Void, Never>? = nil
+
+    private static let dashboardWeekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE"
+        return formatter
+    }()
     
     enum DetailViewType {
         case none
@@ -209,6 +252,10 @@ struct DashboardView: View {
         activeDaysLast28: 0,
         daysSinceLastWorkout: nil
     )
+    @State private var scrollPosition: Int? = 0
+    @State private var selectedWorkoutForDetail: (workout: HKWorkout, analytics: WorkoutAnalytics)? = nil
+    @State private var showWorkoutDetail = false
+    @State private var currentWorkoutHistoryTabIndex: Int = 0
 
     init() {
         let saved = DashboardLayoutPersistence.load()
@@ -285,29 +332,25 @@ struct DashboardView: View {
     private func calculateLatestLoadSnapshot() -> DashboardLoadSnapshot {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        let workouts = engine.workoutAnalytics
-
-        var loadByDay: [Date: Double] = [:]
-        for (workout, analytics) in workouts {
-            let day = calendar.startOfDay(for: workout.startDate)
-            loadByDay[day, default: 0] += sessionLoad(for: workout, analytics: analytics)
-        }
+        // Reads from the memoized `loadByDay` map – no per-call workout rescan or
+        // `sessionLoad` recompute (which itself iterates the workout's zone breakdown).
+        let dayLoads = loadByDay
 
         let acuteTotal = (0..<7).reduce(0.0) { partial, offset in
             let day = calendar.date(byAdding: .day, value: -offset, to: today) ?? today
-            return partial + (loadByDay[day] ?? 0)
+            return partial + (dayLoads[day] ?? 0)
         }
         let chronicTotal = (0..<28).reduce(0.0) { partial, offset in
             let day = calendar.date(byAdding: .day, value: -offset, to: today) ?? today
-            return partial + (loadByDay[day] ?? 0)
+            return partial + (dayLoads[day] ?? 0)
         }
         let activeDaysLast28 = (0..<28).reduce(0) { partial, offset in
             let day = calendar.date(byAdding: .day, value: -offset, to: today) ?? today
-            return partial + ((loadByDay[day] ?? 0) > 0 ? 1 : 0)
+            return partial + ((dayLoads[day] ?? 0) > 0 ? 1 : 0)
         }
         let daysSinceLastWorkout = (0..<28).first { offset in
             let day = calendar.date(byAdding: .day, value: -offset, to: today) ?? today
-            return (loadByDay[day] ?? 0) > 0
+            return (dayLoads[day] ?? 0) > 0
         }
         let acuteLoad = acuteTotal / 7.0
         let chronicLoad = chronicTotal / 28.0
@@ -352,13 +395,41 @@ struct DashboardView: View {
         let snapshot = calculateLatestLoadSnapshot()
         if snapshot != liveLoadSnapshot {
             liveLoadSnapshot = snapshot
-            DashboardSnapshotPersistence.save(snapshot)
+            // Debounce the encode + UserDefaults write to 0.5s on a detached task so a
+            // burst of `workoutAnalytics` mutations does not write JSON synchronously
+            // on the main thread for every change.
+            lastSnapshotPersistTask?.cancel()
+            lastSnapshotPersistTask = Task { [snapshot] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+                DashboardSnapshotPersistence.saveDetached(snapshot)
+            }
         }
     }
 
+    /// Rebuilds the per-day workout and load lookups. Triggered only when
+    /// `engine.workoutAnalytics` actually changes (count / last end date).
+    private func recomputeWorkoutDayCaches() {
+        let calendar = Calendar.current
+        var workoutsByDayBuf: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] = [:]
+        var loadByDayBuf: [Date: Double] = [:]
+        for pair in engine.workoutAnalytics {
+            let day = calendar.startOfDay(for: pair.workout.startDate)
+            workoutsByDayBuf[day, default: []].append(pair)
+            loadByDayBuf[day, default: 0] += sessionLoad(for: pair.workout, analytics: pair.analytics)
+        }
+        // Sort each day's workouts once (newest first) so `workoutsForPreview` is O(1).
+        for (day, list) in workoutsByDayBuf {
+            workoutsByDayBuf[day] = list.sorted { $0.workout.startDate > $1.workout.startDate }
+        }
+        workoutsByDay = workoutsByDayBuf
+        loadByDay = loadByDayBuf
+    }
+
     private var hasEnoughLoadedWorkoutsForDashboard: Bool {
-        guard !engine.workoutAnalytics.isEmpty else { return false }
-        guard let oldestLoadedWorkout = engine.workoutAnalytics.map({ $0.workout.startDate }).min() else { return false }
+        // Uses the engine's memoized `oldestLoadedWorkoutDate` so this property does
+        // not re-scan every workout on every render pass.
+        guard let oldestLoadedWorkout = engine.oldestLoadedWorkoutDate else { return false }
         let requiredStart = Calendar.current.date(byAdding: .day, value: -35, to: Date()) ?? Date()
         return oldestLoadedWorkout <= requiredStart
     }
@@ -444,13 +515,7 @@ struct DashboardView: View {
                 .coordinateSpace(name: "dashboardBase")
             }
             .background(
-                GradientBackgrounds()
-                    .burningGradient(animationPhase: $animationPhase)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                            animationPhase = 20
-                        }
-                    }
+                DashboardBurningGradientBackground()
             )
             .onReceiveViewControl(.nutrivanceViewControlChartRange7d) {
                 guard navigationState.isGloballyActiveRootTab(.dashboard) else { return }
@@ -515,6 +580,7 @@ struct DashboardView: View {
             .task {
                 guard !hasStartedBackgroundRefresh else { return }
                 hasStartedBackgroundRefresh = true
+                recomputeWorkoutDayCaches()
                 updateLiveLoadSnapshot()
                 dashboardRefreshTask?.cancel()
                 dashboardRefreshTask = Task(priority: .utility) {
@@ -526,9 +592,11 @@ struct DashboardView: View {
                 DashboardLayoutPersistence.save(newValue)
             }
             .onChange(of: engine.workoutAnalytics.count) { _, _ in
+                recomputeWorkoutDayCaches()
                 updateLiveLoadSnapshot()
             }
             .onChange(of: engine.workoutAnalytics.last?.workout.endDate) { _, _ in
+                recomputeWorkoutDayCaches()
                 updateLiveLoadSnapshot()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
@@ -568,6 +636,10 @@ struct DashboardView: View {
 
         if shouldFetchWorkoutHistoryNow && !hasEnoughLoadedWorkoutsForDashboard {
             await engine.refreshWorkoutAnalytics(days: 35)
+        } else if shouldFetchWorkoutHistoryNow {
+            // Cheaply pick up any newly recorded workouts; the dashboard already has enough
+            // coverage so we don't need the multi-day window – just the delta since last refresh.
+            await engine.refreshWorkoutAnalyticsIncrementally()
         }
 
         guard !Task.isCancelled else { return }
@@ -859,11 +931,13 @@ struct DashboardView: View {
         .accessibilityLabel("Training load summary")
     }
 
-    @ViewBuilder
-    private func workoutHistoryPreviewSection() -> some View {
+private func workoutHistoryPreviewSection() -> some View {
         VStack(alignment: .leading, spacing: 14) {
             NavigationLink {
-                WorkoutHistoryView()
+                let selectedDayOffset = -currentWorkoutHistoryTabIndex
+                let calendar = Calendar.current
+                let selectedDate = calendar.date(byAdding: .day, value: selectedDayOffset, to: calendar.startOfDay(for: Date())) ?? Date()
+                WorkoutHistoryView(initialScrollWorkoutID: selectedDate.timeIntervalSince1970.formatted())
             } label: {
                 HStack {
                     Text("Workout History")
@@ -877,8 +951,7 @@ struct DashboardView: View {
             .buttonStyle(.plain)
             .dashboardKeyboardFocusable()
 
-            workoutPreviewGroup(title: "Today", workouts: workoutsForPreview(dayOffset: 0))
-            workoutPreviewGroup(title: "Yesterday", workouts: workoutsForPreview(dayOffset: -1))
+            workoutHistoryTabView()
         }
         .padding()
         .background(
@@ -891,38 +964,67 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func workoutPreviewGroup(
-        title: String,
-        workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)]
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+    private func workoutHistoryTabView() -> some View {
+        TabView(selection: $currentWorkoutHistoryTabIndex) {
+            ForEach(0..<7, id: \.self) { dayOffset in
+                let workouts = workoutsForPreview(dayOffset: -dayOffset)
+                let dateLabel = dateLabel(for: -dayOffset)
 
-            if workouts.isEmpty {
-                Text("No workouts")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 6)
-            } else {
-                ForEach(workouts, id: \.analytics.workout.uuid) { pair in
-                    NavigationLink {
-                        WorkoutHistoryView(
-                            initialScrollWorkoutID: workoutRowIdentifier(for: pair.workout)
-                        )
-                    } label: {
-                        DashboardWorkoutPreviewCard(
-                            workout: pair.workout,
-                            analytics: pair.analytics
-                        )
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(dateLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    if workouts.isEmpty {
+                        Text("No workouts")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 6)
+                    } else {
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(workouts, id: \.analytics.workout.uuid) { pair in
+                                    Button(action: {
+                                        selectedWorkoutForDetail = pair
+                                        showWorkoutDetail = true
+                                    }) {
+                                        DashboardWorkoutPreviewCard(
+                                            workout: pair.workout,
+                                            analytics: pair.analytics
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .dashboardKeyboardFocusable()
+                                }
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .dashboardKeyboardFocusable()
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+                .tag(dayOffset)
             }
         }
+        .frame(height: 220)
+        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
     }
+
+    private func dateLabel(for dayOffset: Int) -> String {
+        let calendar = Calendar.current
+        let targetDate = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: Date())) ?? Date()
+
+        if dayOffset == 0 {
+            return "Today"
+        } else if dayOffset == -1 {
+            return "Yesterday"
+        } else {
+            // Hoisted formatter – `DateFormatter` allocation showed up in time profiles
+            // because `workoutHistoryTabView` rebuilt one per day for 7 days per render.
+            return Self.dashboardWeekdayFormatter.string(from: targetDate)
+        }
+    }
+
+
     
     @ViewBuilder
     private func feelGoodScoreSection() -> some View {
@@ -1136,15 +1238,10 @@ struct DashboardView: View {
         let calendar = Calendar.current
         let endDay = calendar.startOfDay(for: endDate)
         let dates = (0..<days).compactMap { calendar.date(byAdding: .day, value: -$0, to: endDay) }.reversed()
-
-        var dailyLoads: [Date: Double] = [:]
-        for pair in engine.workoutAnalytics {
-            let day = calendar.startOfDay(for: pair.workout.startDate)
-            dailyLoads[day, default: 0] += sessionLoad(for: pair.workout, analytics: pair.analytics)
-        }
-
+        // Reads from the memoized `loadByDay` map – populated once per workout-data
+        // change instead of recomputed per chart render.
         return dates.map { day in
-            TrainingLoadChartPoint(date: day, value: dailyLoads[day, default: 0])
+            TrainingLoadChartPoint(date: day, value: loadByDay[day, default: 0])
         }
     }
 
@@ -1275,9 +1372,10 @@ struct DashboardView: View {
     private func workoutsForPreview(dayOffset: Int) -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
         let calendar = Calendar.current
         let targetDay = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: Date())) ?? Date()
-        return engine.workoutAnalytics
-            .filter { calendar.isDate($0.workout.startDate, inSameDayAs: targetDay) }
-            .sorted { $0.workout.startDate > $1.workout.startDate }
+        // O(1) lookup into the memoized day map (already pre-sorted in
+        // `recomputeWorkoutDayCaches`). Previously this filtered + sorted every workout
+        // on every dashboard render – seven times per body invocation.
+        return workoutsByDay[targetDay] ?? []
     }
 
     @ViewBuilder
@@ -1292,6 +1390,56 @@ struct DashboardView: View {
         case .allostatic, .autonomic:
             StressView()
         }
+    }
+}
+
+private func activityTypeSymbol(for type: HKWorkoutActivityType) -> String {
+    switch type {
+    case .running: return "figure.run"
+    case .cycling: return "bicycle"
+    case .swimming: return "figure.pool.swim"
+    case .walking: return "figure.walk"
+    case .hiking: return "figure.hiking"
+    case .elliptical: return "figure.elliptical"
+    case .rowing: return "figure.rower"
+    case .stairClimbing: return "figure.stairs"
+    case .functionalStrengthTraining, .traditionalStrengthTraining: return "dumbbell"
+    default: return "figure.mixed.cardio"
+    }
+}
+
+private func activityTypeName(for type: HKWorkoutActivityType) -> String {
+    switch type {
+    case .running: return "Running"
+    case .cycling: return "Cycling"
+    case .swimming: return "Swimming"
+    case .walking: return "Walking"
+    case .hiking: return "Hiking"
+    case .elliptical: return "Elliptical"
+    case .rowing: return "Rowing"
+    case .stairClimbing: return "Stair Climbing"
+    case .functionalStrengthTraining: return "Functional Strength"
+    case .traditionalStrengthTraining: return "Strength Training"
+    case .crossTraining: return "Cross Training"
+    case .yoga: return "Yoga"
+    case .pilates: return "Pilates"
+    case .flexibility: return "Stretching"
+    case .basketball: return "Basketball"
+    case .soccer: return "Soccer"
+    case .tennis: return "Tennis"
+    case .americanFootball: return "American Football"
+    case .softball: return "Softball"
+    case .baseball: return "Baseball"
+    case .badminton: return "Badminton"
+    case .volleyball: return "Volleyball"
+    case .skatingSports: return "Skating"
+    case .boxing: return "Boxing"
+    case .kickboxing: return "Kickboxing"
+    case .martialArts: return "Martial Arts"
+    case .dance: return "Dance"
+    case .golf: return "Golf"
+    case .bowling: return "Bowling"
+    default: return "Workout"
     }
 }
 
@@ -1313,10 +1461,10 @@ private struct DashboardWorkoutPreviewCard: View {
 
     var body: some View {
         HStack {
-            Image(systemName: workout.workoutActivityType.activityTypeSymbol)
+            Image(systemName: activityTypeSymbol(for: workout.workoutActivityType))
                 .foregroundColor(.orange)
             VStack(alignment: .leading) {
-                Text(workout.workoutActivityType.name.capitalized)
+                Text(activityTypeName(for: workout.workoutActivityType))
                     .font(.headline)
                     .foregroundStyle(.primary)
                 Text(Self.dateFormatter.string(from: workout.startDate)) + Text(" • ") + Text(Self.timeFormatter.string(from: workout.startDate)) + Text(" • \(Int(workout.duration / 60)) min")

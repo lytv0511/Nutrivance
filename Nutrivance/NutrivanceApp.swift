@@ -127,6 +127,7 @@ private struct WatchProgramPlanPayload: Codable {
 
 private struct WatchPhaseObjectivePayload: Codable {
     enum Kind: String, Codable {
+        case open
         case time
         case distance
         case energy
@@ -162,7 +163,9 @@ private struct WatchProgramMicroStagePayload: Codable {
     let notes: String
     let roleRawValue: String?
     let goalRawValue: String?
+    let foundationRawValue: String?
     let plannedMinutes: Int
+    let plannedDistance: Double?
     let repeats: Int
     let repeatSetLabel: String?
     let targetValueText: String?
@@ -529,7 +532,9 @@ private func watchProgramPlanPayload(from plan: ProgramWorkoutPlanRecord) -> Wat
                         notes: stage.notes,
                         roleRawValue: stage.role.rawValue,
                         goalRawValue: stage.goal.rawValue,
+                        foundationRawValue: stage.foundationType.rawValue,
                         plannedMinutes: max(stage.plannedMinutes, 1),
+                        plannedDistance: stage.plannedDistance,
                         repeats: max(stage.repeats, 1),
                         repeatSetLabel: stage.repeatSetLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stage.repeatSetLabel,
                         targetValueText: stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stage.targetValueText,

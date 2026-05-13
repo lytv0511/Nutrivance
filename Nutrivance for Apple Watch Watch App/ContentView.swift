@@ -2026,7 +2026,7 @@ private func planTrackingLiveContextLine(manager: WatchWorkoutManager) -> String
     case .heartRateZone:
         guard let hr = manager.currentHeartRate else { return nil }
         return "HR now: \(Int(hr.rounded())) bpm"
-    case .pace, .time, .distance, .energy, .routeDistance:
+    case .open, .pace, .time, .distance, .energy, .routeDistance:
         return nil
     }
 }

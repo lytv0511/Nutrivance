@@ -91,7 +91,7 @@ struct PerformanceSettingsView: View {
                                         settingRow(
                                             title: "HRV Bell-Curve Cap",
                                             description: "Flag extremely high HRV as parasympathetic overactivity",
-                                            isOn: $profile.enableHRVBellCurveCap,
+                                            isOn: $profile.enableHRVBellCurve,
                                             icon: "waveform.circle.fill",
                                             iconColor: .red
                                         )
@@ -127,7 +127,7 @@ struct PerformanceSettingsView: View {
                                         settingRow(
                                             title: "Sleep Quality Penalty",
                                             description: "Penalize fragmented sleep despite adequate duration",
-                                            isOn: $profile.enableSleepQualityPenalty,
+                                            isOn: $profile.enableSleepQualityCoeff,
                                             icon: "moon.zzz.fill",
                                             iconColor: .indigo
                                         )
@@ -242,7 +242,7 @@ struct PerformanceSettingsView: View {
                                         settingRow(
                                             title: "Taper Detection",
                                             description: "Cap readiness at 88 to prevent over-enthusiasm during planned rest",
-                                            isOn: $profile.enableTaperDetection,
+                                            isOn: $profile.enableTaperLogic,
                                             icon: "pause.fill",
                                             iconColor: .yellow
                                         )

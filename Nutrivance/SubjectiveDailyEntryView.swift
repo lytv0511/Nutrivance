@@ -9,8 +9,16 @@ struct SubjectiveDailyEntryView: View {
     @State private var notes: String = ""
     @State private var showConfirmation = false
     
-    let onSave: (() -> Void)? = nil
-    let onCancel: (() -> Void)? = nil
+    let onSave: (() -> Void)?
+    let onCancel: (() -> Void)?
+
+    init(
+        onSave: (() -> Void)? = nil,
+        onCancel: (() -> Void)? = nil
+    ) {
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -181,6 +189,12 @@ struct SubjectiveDailyEntryCompact: View {
             if !isExpanded {
                 // Collapsed state: show quick summary
                 HStack {
+                    let summaryRatings: [(rating: Int, color: Color)] = [
+                        (rating: sorenessRating, color: .orange),
+                        (rating: stressRating, color: .red),
+                        (rating: sleepQualityRating, color: .indigo)
+                    ]
+
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Quick Check-In")
                             .font(.subheadline.weight(.semibold))
@@ -192,12 +206,12 @@ struct SubjectiveDailyEntryCompact: View {
                     Spacer()
                     
                     HStack(spacing: 8) {
-                        ForEach([(sorenessRating, Color.orange), (stressRating, Color.red), (sleepQualityRating, Color.indigo)], id: \.0) { (rating, color) in
+                        ForEach(summaryRatings, id: \.rating) { item in
                             VStack(spacing: 2) {
-                                Text("\(rating)")
+                                Text("\(item.rating)")
                                     .font(.caption.weight(.bold))
                                 Circle()
-                                    .fill(color)
+                                    .fill(item.color)
                                     .frame(width: 6, height: 6)
                             }
                         }

@@ -8,6 +8,9 @@ struct ReadinessCheckView: View {
     @State private var isLoading = false
     @State private var snapshot = ReadinessSnapshot.empty
     @State private var proAthleteReadinessData: (score: Double, acwrStatus: String, taperDetected: Bool, asymmetricStrainMultiplier: Double)?
+    /// Caches the per-day load snapshots produced by `buildSnapshot()` so the
+    /// pro-athlete pass does not recompute `sharedDailyLoadSnapshots` for the same window.
+    @State private var cachedReadinessLoadSnapshots: [SharedWorkoutSummarySnapshot] = []
     /// Same calendar day: rebuild from engine only when returning to this screen (no redundant coverage / CloudKit).
     @State private var lastCompletedCoverageTaskID: String?
 
@@ -474,12 +477,16 @@ struct ReadinessCheckView: View {
         isLoading = false
     }
 
+    /// Builds the readiness snapshot. The heavy fan-out — ~21 per-day pipeline calls
+    /// that previously each rebuilt a HRV dictionary — now reuses a single
+    /// `RecoveryComputationContext`, and the per-day load snapshots are cached for
+    /// `updateProAthleteData` to read back without recomputing.
     @MainActor
     private func buildSnapshot() -> ReadinessSnapshot {
         let calendar = Calendar.current
         let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
         let readinessWindow = sharedDateSequence(from: start, to: today)
-        let hrvLookup = Dictionary(uniqueKeysWithValues: healthEngine.dailyHRV.map { ($0.date, $0.average) })
+        let context = RecoveryComputationContext.make(engine: healthEngine)
         let readinessDisplayWindow = (
             start: start,
             end: today,
@@ -490,38 +497,43 @@ struct ReadinessCheckView: View {
             estimatedMaxHeartRate: healthEngine.estimatedMaxHeartRate,
             displayWindow: readinessDisplayWindow
         )
+        cachedReadinessLoadSnapshots = loadSnapshots
         let strainLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.strainScore) })
 
+        let recoveryFallback = healthEngine.recoveryScore
+        let strainFallback = healthEngine.strainScore
+        let readinessFallback = healthEngine.readinessScore
+
         let recoverySeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
-            (day, sharedRecoveryScore(for: day, engine: healthEngine) ?? healthEngine.recoveryScore)
+            (day, sharedRecoveryScore(for: day, context: context) ?? recoveryFallback)
         })
         let strainSeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
-            (day, strainLookup[day] ?? healthEngine.strainScore)
+            (day, strainLookup[day] ?? strainFallback)
         })
         let hrvTrendSeries = readinessWindow.map { day in
-            (day, sharedReadinessTrendComponent(for: day, engine: healthEngine))
+            (day, sharedReadinessTrendComponent(for: day, context: context))
         }
         let readinessSeries = readinessWindow.map { day in
             (
                 day,
                 sharedReadinessScore(
                     for: day,
-                    recoveryScore: recoverySeriesMap[day] ?? healthEngine.recoveryScore,
-                    strainScore: strainSeriesMap[day] ?? healthEngine.strainScore,
-                    engine: healthEngine
-                ) ?? healthEngine.readinessScore
+                    recoveryScore: recoverySeriesMap[day] ?? recoveryFallback,
+                    strainScore: strainSeriesMap[day] ?? strainFallback,
+                    context: context
+                ) ?? readinessFallback
             )
         }
 
-        let effectHRVToday = effectHRV(on: today, hrvLookup: hrvLookup)
-        let basalRhrToday = basalRhr(on: today)
-        let sleepToday = sleepDuration(on: today)
-        let sleepEfficiencyToday = sleepEfficiency(on: today, sleepDuration: sleepToday)
-        let recoveryInputsToday = recoveryInputs(for: today, hrvLookup: hrvLookup)
+        let effectHRVToday = ReadinessCheckView.effectHRV(on: today, context: context)
+        let basalRhrToday = ReadinessCheckView.basalRhr(on: today, context: context)
+        let sleepToday = ReadinessCheckView.sleepDuration(on: today, context: context)
+        let sleepEfficiencyToday = ReadinessCheckView.sleepEfficiency(on: today, context: context, sleepDuration: sleepToday)
+        let recoveryInputsToday = sharedRecoveryInputs(for: today, context: context)
         let hrvTrendSupport = hrvTrendSeries.last?.1 ?? healthEngine.hrvTrendScore
-        let readinessValue = readinessSeries.last?.1 ?? healthEngine.readinessScore
-        let recoveryValue = recoverySeriesMap[today] ?? healthEngine.recoveryScore
-        let strainValue = strainSeriesMap[today] ?? healthEngine.strainScore
+        let readinessValue = readinessSeries.last?.1 ?? readinessFallback
+        let recoveryValue = recoverySeriesMap[today] ?? recoveryFallback
+        let strainValue = strainSeriesMap[today] ?? strainFallback
 
         return ReadinessSnapshot(
             readinessValue: readinessValue,
@@ -549,27 +561,58 @@ struct ReadinessCheckView: View {
             )
         )
     }
+
+    // Per-day helpers used by both `buildSnapshot` and the (in-progress) detached path.
+    nonisolated static func effectHRV(on day: Date, context: RecoveryComputationContext) -> Double? {
+        let normalizedDay = Calendar.current.startOfDay(for: day)
+        return context.effectHRV[normalizedDay] ?? context.hrvByDay[normalizedDay]
+    }
+
+    nonisolated static func basalRhr(on day: Date, context: RecoveryComputationContext) -> Double? {
+        let normalizedDay = Calendar.current.startOfDay(for: day)
+        return context.basalSleepingHeartRate[normalizedDay] ?? context.dailyRestingHeartRate[normalizedDay]
+    }
+
+    nonisolated static func sleepDuration(on day: Date, context: RecoveryComputationContext) -> Double? {
+        let normalizedDay = Calendar.current.startOfDay(for: day)
+        return context.anchoredSleepDuration[normalizedDay] ?? context.dailySleepDuration[normalizedDay]
+    }
+
+    nonisolated static func sleepEfficiency(on day: Date, context: RecoveryComputationContext, sleepDuration: Double?) -> Double? {
+        let normalizedDay = Calendar.current.startOfDay(for: day)
+        guard let sleepDuration else { return nil }
+        let timeInBed = context.anchoredTimeInBed[normalizedDay] ?? sleepDuration
+        guard timeInBed > 0 else { return nil }
+        return sleepDuration / timeInBed
+    }
     
     @MainActor
     private func updateProAthleteData() {
-        guard performanceProfile.isProAthleteMode else { 
+        guard performanceProfile.isProAthleteMode else {
             proAthleteReadinessData = nil
-            return 
+            return
         }
-        
+
         let today = Calendar.current.startOfDay(for: Date())
-        let readinessDisplayWindow = (
-            start: Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today,
-            end: today,
-            endExclusive: Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
-        )
-        let loadSnapshots = sharedDailyLoadSnapshots(
-            workouts: healthEngine.workoutAnalytics,
-            estimatedMaxHeartRate: healthEngine.estimatedMaxHeartRate,
-            displayWindow: readinessDisplayWindow
-        )
+        // Reuse the load snapshots already produced by `buildSnapshot()` instead of
+        // recomputing `sharedDailyLoadSnapshots` for the same 7-day window.
+        let loadSnapshots: [SharedWorkoutSummarySnapshot] = {
+            if !cachedReadinessLoadSnapshots.isEmpty { return cachedReadinessLoadSnapshots }
+            let readinessDisplayWindow = (
+                start: Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today,
+                end: today,
+                endExclusive: Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+            )
+            let computed = sharedDailyLoadSnapshots(
+                workouts: healthEngine.workoutAnalytics,
+                estimatedMaxHeartRate: healthEngine.estimatedMaxHeartRate,
+                displayWindow: readinessDisplayWindow
+            )
+            cachedReadinessLoadSnapshots = computed
+            return computed
+        }()
         let todayLoad = loadSnapshots.first(where: { $0.date == today })
-        
+
         proAthleteReadinessData = sharedProAthleteReadinessScore(
             for: today,
             recoveryScore: snapshot.recoveryValue,
@@ -649,46 +692,9 @@ struct ReadinessCheckView: View {
         ]
     }
 
-    private func recoveryInputs(for day: Date, hrvLookup: [Date: Double]) -> HealthStateEngine.ProRecoveryInputs {
-        let normalizedDay = Calendar.current.startOfDay(for: day)
-        return HealthStateEngine.proRecoveryInputs(
-            latestHRV: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.effectHRV) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: hrvLookup),
-            restingHeartRate: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.dailyRestingHeartRate),
-            sleepDurationHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.dailySleepDuration),
-            timeInBedHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: healthEngine.dailySleepDuration),
-            hrvBaseline60Day: healthEngine.hrvBaseline60Day,
-            rhrBaseline60Day: healthEngine.rhrBaseline60Day,
-            sleepBaseline60Day: healthEngine.sleepBaseline60Day,
-            hrvBaseline7Day: healthEngine.hrvBaseline7Day,
-            rhrBaseline7Day: healthEngine.rhrBaseline7Day,
-            sleepBaseline7Day: healthEngine.sleepBaseline7Day,
-            bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: healthEngine.sleepStartHours, around: normalizedDay)
-        )
-    }
-
-    private func effectHRV(on day: Date, hrvLookup: [Date: Double]) -> Double? {
-        let normalizedDay = Calendar.current.startOfDay(for: day)
-        return healthEngine.effectHRV[normalizedDay] ?? hrvLookup[normalizedDay]
-    }
-
-    private func basalRhr(on day: Date) -> Double? {
-        let normalizedDay = Calendar.current.startOfDay(for: day)
-        return healthEngine.basalSleepingHeartRate[normalizedDay] ?? healthEngine.dailyRestingHeartRate[normalizedDay]
-    }
-
-    private func sleepDuration(on day: Date) -> Double? {
-        let normalizedDay = Calendar.current.startOfDay(for: day)
-        return healthEngine.anchoredSleepDuration[normalizedDay] ?? healthEngine.dailySleepDuration[normalizedDay]
-    }
-
-    private func sleepEfficiency(on day: Date, sleepDuration: Double?) -> Double? {
-        let normalizedDay = Calendar.current.startOfDay(for: day)
-        guard let sleepDuration else { return nil }
-        let timeInBed = healthEngine.anchoredTimeInBed[normalizedDay] ?? sleepDuration
-        guard timeInBed > 0 else { return nil }
-        return sleepDuration / timeInBed
-    }
-
+    // The per-day helpers (`recoveryInputs`, `effectHRV`, `basalRhr`, `sleepDuration`,
+    // `sleepEfficiency`) are now `nonisolated static` versions defined alongside
+    // `buildSnapshot()` so they operate on a `RecoveryComputationContext`.
 }
 
 private struct ReadinessSnapshot {

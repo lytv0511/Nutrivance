@@ -434,6 +434,10 @@ struct WorkoutTrendProbeView: View {
     }
 }
 
+private func workoutTrendProbeStrainRecoveryContext(for engine: HealthStateEngine) -> String {
+    ""
+}
+
 #if canImport(MLXLLM) && canImport(MLX)
 // MARK: - Device-aware MLX model (mlx-swift-lm `LLMRegistry` presets)
 

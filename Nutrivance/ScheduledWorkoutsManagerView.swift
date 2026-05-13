@@ -1,7 +1,7 @@
 import SwiftUI
 import HealthKit
 
-#if canImport(WorkoutKit)
+#if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
 import WorkoutKit
 
 struct ScheduledWorkoutsManagerView: View {

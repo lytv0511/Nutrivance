@@ -10,6 +10,138 @@
 		151F147A2D77BE1900B51F88 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 151F14792D77BE1900B51F88 /* UIKit.framework */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
 		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		15C822C92F9C5D4700FECFDC /* AchievementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E22F95EDB0007CDCDB /* AchievementsView.swift */; };
+		15C822CA2F9C5D4700FECFDC /* ActivityRingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E32F95EDB0007CDCDB /* ActivityRingsView.swift */; };
+		15C822CB2F9C5D4700FECFDC /* AddMealView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E42F95EDB0007CDCDB /* AddMealView.swift */; };
+		15C822CC2F9C5D4700FECFDC /* Assets.xcassets in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E52F95EDB0007CDCDB /* Assets.xcassets */; };
+		15C822CD2F9C5D4700FECFDC /* BarcodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E62F95EDB0007CDCDB /* BarcodeScannerView.swift */; };
+		15C822CE2F9C5D4700FECFDC /* BreathingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E72F95EDB0007CDCDB /* BreathingView.swift */; };
+		15C822CF2F9C5D4700FECFDC /* CaloriesBurnedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E82F95EDB0007CDCDB /* CaloriesBurnedView.swift */; };
+		15C822D02F9C5D4700FECFDC /* CameraOCRView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95E92F95EDB0007CDCDB /* CameraOCRView.swift */; };
+		15C822D12F9C5D4700FECFDC /* CatalystKeyboardNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95EA2F95EDB0007CDCDB /* CatalystKeyboardNavigation.swift */; };
+		15C822D22F9C5D4700FECFDC /* CatalystTrainingLoadSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95EB2F95EDB0007CDCDB /* CatalystTrainingLoadSync.swift */; };
+		15C822D32F9C5D4700FECFDC /* ChartInteractionSmoothing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95EC2F95EDB0007CDCDB /* ChartInteractionSmoothing.swift */; };
+		15C822D42F9C5D4700FECFDC /* CloudKitImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95ED2F95EDB0007CDCDB /* CloudKitImportView.swift */; };
+		15C822D52F9C5D4700FECFDC /* CloudKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95EE2F95EDB0007CDCDB /* CloudKitManager.swift */; };
+		15C822D62F9C5D4700FECFDC /* CoachComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95EF2F95EDB0007CDCDB /* CoachComparisonView.swift */; };
+		15C822D72F9C5D4700FECFDC /* CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F02F95EDB0007CDCDB /* CoachView.swift */; };
+		15C822D82F9C5D4700FECFDC /* ComingSoonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F12F95EDB0007CDCDB /* ComingSoonView.swift */; };
+		15C822D92F9C5D4700FECFDC /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F22F95EDB0007CDCDB /* ContentView.swift */; };
+		15C822DA2F9C5D4700FECFDC /* ContentView_iPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F32F95EDB0007CDCDB /* ContentView_iPad.swift */; };
+		15C822DB2F9C5D4700FECFDC /* ContentView_iPad_alt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F42F95EDB0007CDCDB /* ContentView_iPad_alt.swift */; };
+		15C822DC2F9C5D4700FECFDC /* ContentView_iPad_compact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F52F95EDB0007CDCDB /* ContentView_iPad_compact.swift */; };
+		15C822DD2F9C5D4700FECFDC /* ContentView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F62F95EDB0007CDCDB /* ContentView_iPhone.swift */; };
+		15C822DE2F9C5D4700FECFDC /* ContentView_iPhone_alt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F72F95EDB0007CDCDB /* ContentView_iPhone_alt.swift */; };
+		15C822DF2F9C5D4700FECFDC /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F82F95EDB0007CDCDB /* DashboardView.swift */; };
+		15C822E02F9C5D4700FECFDC /* DistanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95F92F95EDB0007CDCDB /* DistanceView.swift */; };
+		15C822E12F9C5D4700FECFDC /* DragAndDrop_Mac.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95FA2F95EDB0007CDCDB /* DragAndDrop_Mac.swift */; };
+		15C822E22F9C5D4700FECFDC /* ExerciseLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95FB2F95EDB0007CDCDB /* ExerciseLibraryView.swift */; };
+		15C822E32F9C5D4700FECFDC /* FeelGoodScoreDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95FC2F95EDB0007CDCDB /* FeelGoodScoreDetailView.swift */; };
+		15C822E42F9C5D4700FECFDC /* FriendActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95FD2F95EDB0007CDCDB /* FriendActivityView.swift */; };
+		15C822E52F9C5D4700FECFDC /* FuelCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95FE2F95EDB0007CDCDB /* FuelCheckView.swift */; };
+		15C822E62F9C5D4700FECFDC /* GoalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A95FF2F95EDB0007CDCDB /* GoalsView.swift */; };
+		15C822E72F9C5D4700FECFDC /* GradientBackgrounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96002F95EDB0007CDCDB /* GradientBackgrounds.swift */; };
+		15C822E82F9C5D4700FECFDC /* HealthAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96012F95EDB0007CDCDB /* HealthAnalysisService.swift */; };
+		15C822E92F9C5D4700FECFDC /* HealthCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96022F95EDB0007CDCDB /* HealthCard.swift */; };
+		15C822EA2F9C5D4700FECFDC /* HealthInsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96032F95EDB0007CDCDB /* HealthInsightsView.swift */; };
+		15C822EB2F9C5D4700FECFDC /* HealthKitCloudSyncProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96042F95EDB0007CDCDB /* HealthKitCloudSyncProducer.swift */; };
+		15C822EC2F9C5D4700FECFDC /* HealthKitImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96052F95EDB0007CDCDB /* HealthKitImportView.swift */; };
+		15C822ED2F9C5D4700FECFDC /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96062F95EDB0007CDCDB /* HealthKitManager.swift */; };
+		15C822EE2F9C5D4700FECFDC /* HealthMetricCloudKitSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96072F95EDB0007CDCDB /* HealthMetricCloudKitSchema.swift */; };
+		15C822EF2F9C5D4700FECFDC /* HealthStateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96082F95EDB0007CDCDB /* HealthStateEngine.swift */; };
+		15C822F02F9C5D4700FECFDC /* HealthStateEngine+PersonalizedMET.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96092F95EDB0007CDCDB /* HealthStateEngine+PersonalizedMET.swift */; };
+		15C822F12F9C5D4700FECFDC /* HealthStateEngine+ProAthlete.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A960A2F95EDB0007CDCDB /* HealthStateEngine+ProAthlete.swift */; };
+		15C822F22F9C5D4700FECFDC /* HeartZonesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A960B2F95EDB0007CDCDB /* HeartZonesView.swift */; };
+		15C822F32F9C5D4700FECFDC /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A960C2F95EDB0007CDCDB /* HistoryView.swift */; };
+		15C822F42F9C5D4700FECFDC /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A960D2F95EDB0007CDCDB /* HomeView.swift */; };
+		15C822F52F9C5D4700FECFDC /* HydrationStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A960E2F95EDB0007CDCDB /* HydrationStatusView.swift */; };
+		15C822F62F9C5D4700FECFDC /* ImagePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A960F2F95EDB0007CDCDB /* ImagePicker.swift */; };
+		15C822F72F9C5D4700FECFDC /* Info.plist in Sources */ = {isa = PBXBuildFile; fileRef = 159A96102F95EDB0007CDCDB /* Info.plist */; };
+		15C822F82F9C5D4700FECFDC /* iOSWorkoutSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96112F95EDB0007CDCDB /* iOSWorkoutSyncManager.swift */; };
+		15C822F92F9C5D4700FECFDC /* Item.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96122F95EDB0007CDCDB /* Item.swift */; };
+		15C822FA2F9C5D4700FECFDC /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96132F95EDB0007CDCDB /* JournalView.swift */; };
+		15C822FB2F9C5D4700FECFDC /* LeaderboardsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96142F95EDB0007CDCDB /* LeaderboardsView.swift */; };
+		15C822FC2F9C5D4700FECFDC /* LiveChallengesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96152F95EDB0007CDCDB /* LiveChallengesView.swift */; };
+		15C822FD2F9C5D4700FECFDC /* LogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96162F95EDB0007CDCDB /* LogView.swift */; };
+		15C822FE2F9C5D4700FECFDC /* MacCatalystDataCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96172F95EDB0007CDCDB /* MacCatalystDataCache.swift */; };
+		15C822FF2F9C5D4700FECFDC /* MacCatalystHealthDataPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96182F95EDB0007CDCDB /* MacCatalystHealthDataPolicy.swift */; };
+		15C823002F9C5D4700FECFDC /* MacCatalystPickerCompat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96192F95EDB0007CDCDB /* MacCatalystPickerCompat.swift */; };
+		15C823012F9C5D4700FECFDC /* MacroBalanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A961A2F95EDB0007CDCDB /* MacroBalanceView.swift */; };
+		15C823022F9C5D4700FECFDC /* MeditationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A961B2F95EDB0007CDCDB /* MeditationView.swift */; };
+		15C823032F9C5D4700FECFDC /* MindfulnessRealmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A961C2F95EDB0007CDCDB /* MindfulnessRealmView.swift */; };
+		15C823042F9C5D4700FECFDC /* MobilityTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A961D2F95EDB0007CDCDB /* MobilityTestView.swift */; };
+		15C823052F9C5D4700FECFDC /* MoodTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A961E2F95EDB0007CDCDB /* MoodTrackerView.swift */; };
+		15C823062F9C5D4700FECFDC /* MovanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A961F2F95EDB0007CDCDB /* MovanceView.swift */; };
+		15C823072F9C5D4700FECFDC /* MovementAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96202F95EDB0007CDCDB /* MovementAnalysisView.swift */; };
+		15C823082F9C5D4700FECFDC /* NutrientCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96212F95EDB0007CDCDB /* NutrientCardView.swift */; };
+		15C823092F9C5D4700FECFDC /* NutrientCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96222F95EDB0007CDCDB /* NutrientCharts.swift */; };
+		15C8230A2F9C5D4700FECFDC /* NutrientData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96232F95EDB0007CDCDB /* NutrientData.swift */; };
+		15C8230B2F9C5D4700FECFDC /* NutrientDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96242F95EDB0007CDCDB /* NutrientDetailView.swift */; };
+		15C8230C2F9C5D4700FECFDC /* NutrientInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96252F95EDB0007CDCDB /* NutrientInfo.swift */; };
+		15C8230D2F9C5D4700FECFDC /* NutrientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96262F95EDB0007CDCDB /* NutrientModel.swift */; };
+		15C8230E2F9C5D4700FECFDC /* NutrientRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96272F95EDB0007CDCDB /* NutrientRow.swift */; };
+		15C8230F2F9C5D4700FECFDC /* NutritionDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96282F95EDB0007CDCDB /* NutritionDetection.swift */; };
+		15C823102F9C5D4700FECFDC /* NutritionResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96292F95EDB0007CDCDB /* NutritionResultsView.swift */; };
+		15C823112F9C5D4700FECFDC /* NutritionScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A962A2F95EDB0007CDCDB /* NutritionScannerView.swift */; };
+		15C823122F9C5D4700FECFDC /* NutritionUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A962B2F95EDB0007CDCDB /* NutritionUnit.swift */; };
+		15C823132F9C5D4700FECFDC /* Nutrivance.entitlements in Sources */ = {isa = PBXBuildFile; fileRef = 159A962C2F95EDB0007CDCDB /* Nutrivance.entitlements */; };
+		15C823142F9C5D4700FECFDC /* NutrivanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A962D2F95EDB0007CDCDB /* NutrivanceApp.swift */; };
+		15C823152F9C5D4700FECFDC /* NutrivanceCatalystMenuBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A962E2F95EDB0007CDCDB /* NutrivanceCatalystMenuBuilder.swift */; };
+		15C823162F9C5D4700FECFDC /* NutrivanceIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A962F2F95EDB0007CDCDB /* NutrivanceIntents.swift */; };
+		15C823172F9C5D4700FECFDC /* NutrivanceLabsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96302F95EDB0007CDCDB /* NutrivanceLabsView.swift */; };
+		15C823182F9C5D4700FECFDC /* NutrivanceSceneMenuRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96312F95EDB0007CDCDB /* NutrivanceSceneMenuRouter.swift */; };
+		15C823192F9C5D4700FECFDC /* NutrivanceSceneRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96322F95EDB0007CDCDB /* NutrivanceSceneRoot.swift */; };
+		15C8231A2F9C5D4700FECFDC /* NutrivanceTuningCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96332F95EDB0007CDCDB /* NutrivanceTuningCore.swift */; };
+		15C8231B2F9C5D4700FECFDC /* NutrivanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96342F95EDB0007CDCDB /* NutrivanceView.swift */; };
+		15C8231C2F9C5D4700FECFDC /* PastQuestsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96352F95EDB0007CDCDB /* PastQuestsView.swift */; };
+		15C8231D2F9C5D4700FECFDC /* PathfinderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96362F95EDB0007CDCDB /* PathfinderView.swift */; };
+		15C8231E2F9C5D4700FECFDC /* PerformanceFoodsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96372F95EDB0007CDCDB /* PerformanceFoodsView.swift */; };
+		15C8231F2F9C5D4700FECFDC /* PerformanceProfileSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96382F95EDB0007CDCDB /* PerformanceProfileSettings.swift */; };
+		15C823202F9C5D4700FECFDC /* PerformanceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96392F95EDB0007CDCDB /* PerformanceSettingsView.swift */; };
+		15C823212F9C5D4700FECFDC /* PersonalizedMETCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A963A2F95EDB0007CDCDB /* PersonalizedMETCard.swift */; };
+		15C823222F9C5D4700FECFDC /* PersonalizedMETDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A963B2F95EDB0007CDCDB /* PersonalizedMETDetailView.swift */; };
+		15C823232F9C5D4700FECFDC /* PersonalizedMETProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A963C2F95EDB0007CDCDB /* PersonalizedMETProfile.swift */; };
+		15C823242F9C5D4700FECFDC /* PostWorkoutWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A963D2F95EDB0007CDCDB /* PostWorkoutWindowView.swift */; };
+		15C823252F9C5D4700FECFDC /* PresetButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A963E2F95EDB0007CDCDB /* PresetButton.swift */; };
+		15C823262F9C5D4700FECFDC /* Preview Assets.xcassets in Sources */ = {isa = PBXBuildFile; fileRef = 159A963F2F95EDB0007CDCDB /* Preview Assets.xcassets */; };
+		15C823272F9C5D4700FECFDC /* PreWorkoutTimingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96412F95EDB0007CDCDB /* PreWorkoutTimingView.swift */; };
+		15C823282F9C5D4700FECFDC /* ProAthleteInfoBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96422F95EDB0007CDCDB /* ProAthleteInfoBadge.swift */; };
+		15C823292F9C5D4700FECFDC /* ProgramBuilderForApple.md in Sources */ = {isa = PBXBuildFile; fileRef = 159A96432F95EDB0007CDCDB /* ProgramBuilderForApple.md */; };
+		15C8232A2F9C5D4700FECFDC /* ProgramBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96442F95EDB0007CDCDB /* ProgramBuilderView.swift */; };
+		15C8232B2F9C5D4700FECFDC /* ReadinessCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96452F95EDB0007CDCDB /* ReadinessCheckView.swift */; };
+		15C8232C2F9C5D4700FECFDC /* RecoveryReadinessPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96462F95EDB0007CDCDB /* RecoveryReadinessPipeline.swift */; };
+		15C8232D2F9C5D4700FECFDC /* RecoveryScoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96472F95EDB0007CDCDB /* RecoveryScoreView.swift */; };
+		15C8232E2F9C5D4700FECFDC /* ResourcesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96482F95EDB0007CDCDB /* ResourcesView.swift */; };
+		15C8232F2F9C5D4700FECFDC /* RingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96492F95EDB0007CDCDB /* RingDetailView.swift */; };
+		15C823302F9C5D4700FECFDC /* SavedMealsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A964A2F95EDB0007CDCDB /* SavedMealsView.swift */; };
+		15C823312F9C5D4700FECFDC /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A964B2F95EDB0007CDCDB /* SceneDelegate.swift */; };
+		15C823322F9C5D4700FECFDC /* ScheduledWorkoutsManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A964C2F95EDB0007CDCDB /* ScheduledWorkoutsManagerView.swift */; };
+		15C823332F9C5D4700FECFDC /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A964D2F95EDB0007CDCDB /* SearchView.swift */; };
+		15C823342F9C5D4700FECFDC /* SearchView_iPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A964E2F95EDB0007CDCDB /* SearchView_iPhone.swift */; };
+		15C823352F9C5D4700FECFDC /* ShareWorkoutsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A964F2F95EDB0007CDCDB /* ShareWorkoutsView.swift */; };
+		15C823362F9C5D4700FECFDC /* SleepAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96502F95EDB0007CDCDB /* SleepAnalysisView.swift */; };
+		15C823372F9C5D4700FECFDC /* SleepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96512F95EDB0007CDCDB /* SleepView.swift */; };
+		15C823382F9C5D4700FECFDC /* SpirivanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96522F95EDB0007CDCDB /* SpirivanceView.swift */; };
+		15C823392F9C5D4700FECFDC /* StepCountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96532F95EDB0007CDCDB /* StepCountView.swift */; };
+		15C8233A2F9C5D4700FECFDC /* StrainModelContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96542F95EDB0007CDCDB /* StrainModelContext.swift */; };
+		15C8233B2F9C5D4700FECFDC /* StrainRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */; };
+		15C8233C2F9C5D4700FECFDC /* StressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96562F95EDB0007CDCDB /* StressView.swift */; };
+		15C8233D2F9C5D4700FECFDC /* SubcategoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */; };
+		15C8233E2F9C5D4700FECFDC /* SubjectiveDailyEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96582F95EDB0007CDCDB /* SubjectiveDailyEntry.swift */; };
+		15C8233F2F9C5D4700FECFDC /* SubjectiveDailyEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96592F95EDB0007CDCDB /* SubjectiveDailyEntryView.swift */; };
+		15C823402F9C5D4700FECFDC /* TappableChartPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A965A2F95EDB0007CDCDB /* TappableChartPreview.swift */; };
+		15C823412F9C5D4700FECFDC /* TodaysPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A965B2F95EDB0007CDCDB /* TodaysPlanView.swift */; };
+		15C823422F9C5D4700FECFDC /* TrainingCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A965C2F95EDB0007CDCDB /* TrainingCalendarView.swift */; };
+		15C823432F9C5D4700FECFDC /* UnifiedLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A965D2F95EDB0007CDCDB /* UnifiedLogView.swift */; };
+		15C823442F9C5D4700FECFDC /* WidgetType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A965E2F95EDB0007CDCDB /* WidgetType.swift */; };
+		15C823452F9C5D4700FECFDC /* WorkoutBlockAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A965F2F95EDB0007CDCDB /* WorkoutBlockAnalyzer.swift */; };
+		15C823462F9C5D4700FECFDC /* WorkoutGeneratorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96602F95EDB0007CDCDB /* WorkoutGeneratorView.swift */; };
+		15C823472F9C5D4700FECFDC /* WorkoutHighlightDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96612F95EDB0007CDCDB /* WorkoutHighlightDetector.swift */; };
+		15C823482F9C5D4700FECFDC /* WorkoutHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96622F95EDB0007CDCDB /* WorkoutHistoryView.swift */; };
+		15C823492F9C5D4700FECFDC /* WorkoutInsight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96632F95EDB0007CDCDB /* WorkoutInsight.swift */; };
+		15C8234A2F9C5D4700FECFDC /* WorkoutLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96642F95EDB0007CDCDB /* WorkoutLiveActivity.swift */; };
+		15C8234B2F9C5D4700FECFDC /* WorkoutLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96652F95EDB0007CDCDB /* WorkoutLiveActivityAttributes.swift */; };
+		15C8234C2F9C5D4700FECFDC /* WorkoutTrendProbeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96662F95EDB0007CDCDB /* WorkoutTrendProbeView.swift */; };
 		15D149C82F87F30A007BA63A /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = 15D149C72F87F30A007BA63A /* MLX */; };
 		15D149CA2F87F30A007BA63A /* MLXFFT in Frameworks */ = {isa = PBXBuildFile; productRef = 15D149C92F87F30A007BA63A /* MLXFFT */; };
 		15D149CC2F87F30A007BA63A /* MLXFast in Frameworks */ = {isa = PBXBuildFile; productRef = 15D149CB2F87F30A007BA63A /* MLXFast */; };
@@ -853,6 +985,137 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				15C822C92F9C5D4700FECFDC /* AchievementsView.swift in Sources */,
+				15C822CA2F9C5D4700FECFDC /* ActivityRingsView.swift in Sources */,
+				15C822CB2F9C5D4700FECFDC /* AddMealView.swift in Sources */,
+				15C822CC2F9C5D4700FECFDC /* Assets.xcassets in Sources */,
+				15C822CD2F9C5D4700FECFDC /* BarcodeScannerView.swift in Sources */,
+				15C822CE2F9C5D4700FECFDC /* BreathingView.swift in Sources */,
+				15C822CF2F9C5D4700FECFDC /* CaloriesBurnedView.swift in Sources */,
+				15C822D02F9C5D4700FECFDC /* CameraOCRView.swift in Sources */,
+				15C822D12F9C5D4700FECFDC /* CatalystKeyboardNavigation.swift in Sources */,
+				15C822D22F9C5D4700FECFDC /* CatalystTrainingLoadSync.swift in Sources */,
+				15C822D32F9C5D4700FECFDC /* ChartInteractionSmoothing.swift in Sources */,
+				15C822D42F9C5D4700FECFDC /* CloudKitImportView.swift in Sources */,
+				15C822D52F9C5D4700FECFDC /* CloudKitManager.swift in Sources */,
+				15C822D62F9C5D4700FECFDC /* CoachComparisonView.swift in Sources */,
+				15C822D72F9C5D4700FECFDC /* CoachView.swift in Sources */,
+				15C822D82F9C5D4700FECFDC /* ComingSoonView.swift in Sources */,
+				15C822D92F9C5D4700FECFDC /* ContentView.swift in Sources */,
+				15C822DA2F9C5D4700FECFDC /* ContentView_iPad.swift in Sources */,
+				15C822DB2F9C5D4700FECFDC /* ContentView_iPad_alt.swift in Sources */,
+				15C822DC2F9C5D4700FECFDC /* ContentView_iPad_compact.swift in Sources */,
+				15C822DD2F9C5D4700FECFDC /* ContentView_iPhone.swift in Sources */,
+				15C822DE2F9C5D4700FECFDC /* ContentView_iPhone_alt.swift in Sources */,
+				15C822DF2F9C5D4700FECFDC /* DashboardView.swift in Sources */,
+				15C822E02F9C5D4700FECFDC /* DistanceView.swift in Sources */,
+				15C822E12F9C5D4700FECFDC /* DragAndDrop_Mac.swift in Sources */,
+				15C822E22F9C5D4700FECFDC /* ExerciseLibraryView.swift in Sources */,
+				15C822E32F9C5D4700FECFDC /* FeelGoodScoreDetailView.swift in Sources */,
+				15C822E42F9C5D4700FECFDC /* FriendActivityView.swift in Sources */,
+				15C822E52F9C5D4700FECFDC /* FuelCheckView.swift in Sources */,
+				15C822E62F9C5D4700FECFDC /* GoalsView.swift in Sources */,
+				15C822E72F9C5D4700FECFDC /* GradientBackgrounds.swift in Sources */,
+				15C822E82F9C5D4700FECFDC /* HealthAnalysisService.swift in Sources */,
+				15C822E92F9C5D4700FECFDC /* HealthCard.swift in Sources */,
+				15C822EA2F9C5D4700FECFDC /* HealthInsightsView.swift in Sources */,
+				15C822EB2F9C5D4700FECFDC /* HealthKitCloudSyncProducer.swift in Sources */,
+				15C822EC2F9C5D4700FECFDC /* HealthKitImportView.swift in Sources */,
+				15C822ED2F9C5D4700FECFDC /* HealthKitManager.swift in Sources */,
+				15C822EE2F9C5D4700FECFDC /* HealthMetricCloudKitSchema.swift in Sources */,
+				15C822EF2F9C5D4700FECFDC /* HealthStateEngine.swift in Sources */,
+				15C822F02F9C5D4700FECFDC /* HealthStateEngine+PersonalizedMET.swift in Sources */,
+				15C822F12F9C5D4700FECFDC /* HealthStateEngine+ProAthlete.swift in Sources */,
+				15C822F22F9C5D4700FECFDC /* HeartZonesView.swift in Sources */,
+				15C822F32F9C5D4700FECFDC /* HistoryView.swift in Sources */,
+				15C822F42F9C5D4700FECFDC /* HomeView.swift in Sources */,
+				15C822F52F9C5D4700FECFDC /* HydrationStatusView.swift in Sources */,
+15C822F62F9C5D4700FECFDC /* ImagePicker.swift in Sources */,
+				15C822F82F9C5D4700FECFDC /* iOSWorkoutSyncManager.swift in Sources */,
+				15C822F92F9C5D4700FECFDC /* Item.swift in Sources */,
+				15C822FA2F9C5D4700FECFDC /* JournalView.swift in Sources */,
+				15C822FB2F9C5D4700FECFDC /* LeaderboardsView.swift in Sources */,
+				15C822FC2F9C5D4700FECFDC /* LiveChallengesView.swift in Sources */,
+				15C822FD2F9C5D4700FECFDC /* LogView.swift in Sources */,
+				15C822FE2F9C5D4700FECFDC /* MacCatalystDataCache.swift in Sources */,
+				15C822FF2F9C5D4700FECFDC /* MacCatalystHealthDataPolicy.swift in Sources */,
+				15C823002F9C5D4700FECFDC /* MacCatalystPickerCompat.swift in Sources */,
+				15C823012F9C5D4700FECFDC /* MacroBalanceView.swift in Sources */,
+				15C823022F9C5D4700FECFDC /* MeditationView.swift in Sources */,
+				15C823032F9C5D4700FECFDC /* MindfulnessRealmView.swift in Sources */,
+				15C823042F9C5D4700FECFDC /* MobilityTestView.swift in Sources */,
+				15C823052F9C5D4700FECFDC /* MoodTrackerView.swift in Sources */,
+				15C823062F9C5D4700FECFDC /* MovanceView.swift in Sources */,
+				15C823072F9C5D4700FECFDC /* MovementAnalysisView.swift in Sources */,
+				15C823082F9C5D4700FECFDC /* NutrientCardView.swift in Sources */,
+				15C823092F9C5D4700FECFDC /* NutrientCharts.swift in Sources */,
+				15C8230A2F9C5D4700FECFDC /* NutrientData.swift in Sources */,
+				15C8230B2F9C5D4700FECFDC /* NutrientDetailView.swift in Sources */,
+				15C8230C2F9C5D4700FECFDC /* NutrientInfo.swift in Sources */,
+				15C8230D2F9C5D4700FECFDC /* NutrientModel.swift in Sources */,
+				15C8230E2F9C5D4700FECFDC /* NutrientRow.swift in Sources */,
+				15C8230F2F9C5D4700FECFDC /* NutritionDetection.swift in Sources */,
+				15C823102F9C5D4700FECFDC /* NutritionResultsView.swift in Sources */,
+				15C823112F9C5D4700FECFDC /* NutritionScannerView.swift in Sources */,
+				15C823122F9C5D4700FECFDC /* NutritionUnit.swift in Sources */,
+				15C823132F9C5D4700FECFDC /* Nutrivance.entitlements in Sources */,
+				15C823142F9C5D4700FECFDC /* NutrivanceApp.swift in Sources */,
+				15C823152F9C5D4700FECFDC /* NutrivanceCatalystMenuBuilder.swift in Sources */,
+				15C823162F9C5D4700FECFDC /* NutrivanceIntents.swift in Sources */,
+				15C823172F9C5D4700FECFDC /* NutrivanceLabsView.swift in Sources */,
+				15C823182F9C5D4700FECFDC /* NutrivanceSceneMenuRouter.swift in Sources */,
+				15C823192F9C5D4700FECFDC /* NutrivanceSceneRoot.swift in Sources */,
+				15C8231A2F9C5D4700FECFDC /* NutrivanceTuningCore.swift in Sources */,
+				15C8231B2F9C5D4700FECFDC /* NutrivanceView.swift in Sources */,
+				15C8231C2F9C5D4700FECFDC /* PastQuestsView.swift in Sources */,
+				15C8231D2F9C5D4700FECFDC /* PathfinderView.swift in Sources */,
+				15C8231E2F9C5D4700FECFDC /* PerformanceFoodsView.swift in Sources */,
+				15C8231F2F9C5D4700FECFDC /* PerformanceProfileSettings.swift in Sources */,
+				15C823202F9C5D4700FECFDC /* PerformanceSettingsView.swift in Sources */,
+				15C823212F9C5D4700FECFDC /* PersonalizedMETCard.swift in Sources */,
+				15C823222F9C5D4700FECFDC /* PersonalizedMETDetailView.swift in Sources */,
+				15C823232F9C5D4700FECFDC /* PersonalizedMETProfile.swift in Sources */,
+				15C823242F9C5D4700FECFDC /* PostWorkoutWindowView.swift in Sources */,
+				15C823252F9C5D4700FECFDC /* PresetButton.swift in Sources */,
+				15C823262F9C5D4700FECFDC /* Preview Assets.xcassets in Sources */,
+				15C823272F9C5D4700FECFDC /* PreWorkoutTimingView.swift in Sources */,
+				15C823282F9C5D4700FECFDC /* ProAthleteInfoBadge.swift in Sources */,
+				15C823292F9C5D4700FECFDC /* ProgramBuilderForApple.md in Sources */,
+				15C8232A2F9C5D4700FECFDC /* ProgramBuilderView.swift in Sources */,
+				15C8232B2F9C5D4700FECFDC /* ReadinessCheckView.swift in Sources */,
+				15C8232C2F9C5D4700FECFDC /* RecoveryReadinessPipeline.swift in Sources */,
+				15C8232D2F9C5D4700FECFDC /* RecoveryScoreView.swift in Sources */,
+				15C8232E2F9C5D4700FECFDC /* ResourcesView.swift in Sources */,
+				15C8232F2F9C5D4700FECFDC /* RingDetailView.swift in Sources */,
+				15C823302F9C5D4700FECFDC /* SavedMealsView.swift in Sources */,
+				15C823312F9C5D4700FECFDC /* SceneDelegate.swift in Sources */,
+				15C823322F9C5D4700FECFDC /* ScheduledWorkoutsManagerView.swift in Sources */,
+				15C823332F9C5D4700FECFDC /* SearchView.swift in Sources */,
+				15C823342F9C5D4700FECFDC /* SearchView_iPhone.swift in Sources */,
+				15C823352F9C5D4700FECFDC /* ShareWorkoutsView.swift in Sources */,
+				15C823362F9C5D4700FECFDC /* SleepAnalysisView.swift in Sources */,
+				15C823372F9C5D4700FECFDC /* SleepView.swift in Sources */,
+				15C823382F9C5D4700FECFDC /* SpirivanceView.swift in Sources */,
+				15C823392F9C5D4700FECFDC /* StepCountView.swift in Sources */,
+				15C8233A2F9C5D4700FECFDC /* StrainModelContext.swift in Sources */,
+				15C8233B2F9C5D4700FECFDC /* StrainRecoveryView.swift in Sources */,
+				15C8233C2F9C5D4700FECFDC /* StressView.swift in Sources */,
+				15C8233D2F9C5D4700FECFDC /* SubcategoryDetailView.swift in Sources */,
+				15C8233E2F9C5D4700FECFDC /* SubjectiveDailyEntry.swift in Sources */,
+				15C8233F2F9C5D4700FECFDC /* SubjectiveDailyEntryView.swift in Sources */,
+				15C823402F9C5D4700FECFDC /* TappableChartPreview.swift in Sources */,
+				15C823412F9C5D4700FECFDC /* TodaysPlanView.swift in Sources */,
+				15C823422F9C5D4700FECFDC /* TrainingCalendarView.swift in Sources */,
+				15C823432F9C5D4700FECFDC /* UnifiedLogView.swift in Sources */,
+				15C823442F9C5D4700FECFDC /* WidgetType.swift in Sources */,
+				15C823452F9C5D4700FECFDC /* WorkoutBlockAnalyzer.swift in Sources */,
+				15C823462F9C5D4700FECFDC /* WorkoutGeneratorView.swift in Sources */,
+				15C823472F9C5D4700FECFDC /* WorkoutHighlightDetector.swift in Sources */,
+				15C823482F9C5D4700FECFDC /* WorkoutHistoryView.swift in Sources */,
+				15C823492F9C5D4700FECFDC /* WorkoutInsight.swift in Sources */,
+				15C8234A2F9C5D4700FECFDC /* WorkoutLiveActivity.swift in Sources */,
+				15C8234B2F9C5D4700FECFDC /* WorkoutLiveActivityAttributes.swift in Sources */,
+				15C8234C2F9C5D4700FECFDC /* WorkoutTrendProbeView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

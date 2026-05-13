@@ -19,8 +19,11 @@ extension HealthStateEngine {
         
         guard !recentWorkouts.isEmpty else { return nil }
         
-        // Find peak HR achieved during any workout
-        let peakHRObserved = recentWorkouts.compactMap { $0.analytics.heartRateData?.max { $0.hr < $1.hr }?.hr }.max() ?? estimatedMaxHeartRate * 0.85
+        // Find peak HR achieved during any workout.
+        let workoutPeakHeartRates = recentWorkouts.compactMap { workout in
+            workout.analytics.heartRates.map(\.1).max()
+        }
+        let peakHRObserved = workoutPeakHeartRates.max() ?? estimatedMaxHeartRate * 0.85
         
         // Calculate MET at peak effort
         let hrReserve = estimatedMaxHeartRate - rhrBaseline
@@ -51,7 +54,8 @@ extension HealthStateEngine {
         estimatedMaxHeartRate: Double,
         rhrAtWorkout: Double
     ) -> WorkoutPersonalizedMET? {
-        guard let heartRateData = analytics.heartRateData, !heartRateData.isEmpty else {
+        let heartRateData = analytics.heartRates.map(\.1)
+        guard !heartRateData.isEmpty else {
             return nil
         }
         
@@ -63,8 +67,8 @@ extension HealthStateEngine {
         guard hrReserve > 0 else { return nil }
         
         // Get workout metrics
-        let avgHeartRate = heartRateData.map { $0.hr }.average ?? 0
-        let peakHeartRate = (heartRateData.max { $0.hr < $1.hr }?.hr) ?? avgHeartRate
+        let avgHeartRate = heartRateData.average ?? 0
+        let peakHeartRate = heartRateData.max() ?? avgHeartRate
         let durationHours = workout.duration / 3600.0
         
         // Calculate effort ratio and current MET
@@ -83,7 +87,7 @@ extension HealthStateEngine {
         return WorkoutPersonalizedMET(
             workoutID: UUID(),
             workoutDate: workout.startDate,
-            workoutType: workout.workoutActivityType.name,
+            workoutType: workout.workoutActivityType.displayName,
             duration: workout.duration,
             averageHeartRate: avgHeartRate,
             peakHeartRate: peakHeartRate,
@@ -224,17 +228,8 @@ extension HealthStateEngine {
     }
 }
 
-// MARK: - Helper Extensions
-
-extension Array where Element == Double {
-    fileprivate var average: Double? {
-        guard !isEmpty else { return nil }
-        return reduce(0, +) / Double(count)
-    }
-}
-
 extension HKWorkoutActivityType {
-    var name: String {
+    var displayName: String {
         switch self {
         case .running: return "Running"
         case .cycling: return "Cycling"
@@ -263,7 +258,6 @@ extension HKWorkoutActivityType {
         case .hockey: return "Hockey"
         case .hunting: return "Hunting"
         case .kickboxing: return "Kickboxing"
-        case .kiteSurfing: return "Kite Surfing"
         case .lacrosse: return "Lacrosse"
         case .martialArts: return "Martial Arts"
         case .mindAndBody: return "Mind & Body"
@@ -271,11 +265,11 @@ extension HKWorkoutActivityType {
         case .paddleSports: return "Paddle Sports"
         case .pilates: return "Pilates"
         case .racquetball: return "Racquetball"
-        case .rockClimbing: return "Rock Climbing"
+        case .climbing: return "Rock Climbing"
         case .rowing: return "Rowing"
         case .rugby: return "Rugby"
         case .skatingSports: return "Skating"
-        case .skiing: return "Skiing"
+        case .downhillSkiing: return "Skiing"
         case .snowboarding: return "Snowboarding"
         case .snowSports: return "Snow Sports"
         case .soccer: return "Soccer"
@@ -283,12 +277,11 @@ extension HKWorkoutActivityType {
         case .squash: return "Squash"
         case .stairClimbing: return "Stair Climbing"
         case .surfingSports: return "Surfing"
-        case .tabletennis: return "Table Tennis"
+        case .tableTennis: return "Table Tennis"
         case .tennis: return "Tennis"
         case .trackAndField: return "Track & Field"
         case .traditionalStrengthTraining: return "Strength Training"
         case .volleyball: return "Volleyball"
-        case .walking: return "Walking"
         case .waterFitness: return "Water Fitness"
         case .waterPolo: return "Water Polo"
         case .waterSports: return "Water Sports"

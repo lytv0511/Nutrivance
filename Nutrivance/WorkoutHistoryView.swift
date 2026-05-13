@@ -164,6 +164,13 @@ struct WorkoutHistoryView: View {
         _customZone4Upper = State(initialValue: bounds[3])
         _customZone5Upper = State(initialValue: bounds[4])
         _hasLoadedPersistedHRZoneSettings = State(initialValue: true)
+        
+        // Check if initialScrollWorkoutID is a date encoded as timeIntervalSince1970
+        if let idString = initialScrollWorkoutID, let timeInterval = Double(idString) {
+            let jumpDate = Date(timeIntervalSince1970: timeInterval)
+            _pendingJumpDate = State(initialValue: jumpDate)
+            _isJumpingToSelectedDate = State(initialValue: true)
+        }
     }
 
     private var hrZoneSettings: HRZoneUserSettings {
@@ -300,11 +307,7 @@ struct WorkoutHistoryView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 12) {
                         Button(action: {
-                            Task {
-                                isLoading = true
-                                await engine.refreshSyncedHealthDataFromICloud()
-                                isLoading = false
-                            }
+                            refreshWorkoutHistory()
                         }) {
                             HStack(spacing: 4) {
                                 Image(systemName: "arrow.clockwise")
@@ -410,11 +413,7 @@ struct WorkoutHistoryView: View {
                 reloadPersistedHRZoneSettings()
             }
             .onReceiveViewControl(.nutrivanceViewControlRefreshWorkouts) {
-                Task {
-                    isLoading = true
-                    await engine.refreshSyncedHealthDataFromICloud()
-                    isLoading = false
-                }
+                refreshWorkoutHistory()
             }
             .onReceiveViewControl(.nutrivanceViewControlHRZoneSettings) {
                 showHRZoneSettings = true
@@ -457,6 +456,28 @@ struct WorkoutHistoryView: View {
     private func reloadPersistedHRZoneSettings() {
         guard hasLoadedPersistedHRZoneSettings else { return }
         applyPersistedHRZoneSettings(HRZoneSettingsPersistence.load())
+    }
+
+    private func refreshWorkoutHistory() {
+        Task {
+            isLoading = true
+            // Incremental refresh: only fetch workouts since the last cached end date.
+            // The full 10-year `replaceWorkoutCacheWithNewData(days: 3650)` path is
+            // reserved for the explicit "rebuild everything" affordance below.
+            await engine.refreshWorkoutAnalyticsIncrementally()
+            isLoading = false
+        }
+    }
+
+    /// Explicit "rebuild everything" path — performs the full 10-year HK re-query.
+    /// Kept available for long-press / settings affordances; not used by the default
+    /// pull-to-refresh / toolbar refresh.
+    private func rebuildEntireWorkoutCache() {
+        Task {
+            isLoading = true
+            await engine.replaceWorkoutCacheWithNewData()
+            isLoading = false
+        }
     }
 
     private func applyPersistedHRZoneSettings(_ saved: HRZonePersistedSettings?) {
@@ -568,7 +589,7 @@ struct WorkoutCard: View {
     }()
 
     private var workoutEffortScore: Double? {
-        workoutEffortScoreValue(from: workout)
+        analytics.workoutEffortScore ?? workoutEffortScoreValue(from: workout)
     }
 
     private var estimatedWorkoutEffortScore: Double? {
@@ -671,6 +692,10 @@ private actor WorkoutRouteStore {
         let loaded = await loadLocations(for: workout)
         cachedLocations[workout.uuid] = loaded
         return loaded
+    }
+
+    func uncachedLocations(for workout: HKWorkout) async -> [CLLocation] {
+        await loadLocations(for: workout)
     }
 
     private func loadLocations(for workout: HKWorkout) async -> [CLLocation] {
@@ -1309,7 +1334,7 @@ struct WorkoutDetailView: View {
     @State private var routeLookupLocations: [CLLocation] = []
     @State private var coloredSegments: [ColoredRouteSegment] = []
     @State private var isLoadingRoute = false
-    @State private var loadedRouteWorkoutID: UUID? = nil
+    @State private var loadedRouteWorkoutID: String? = nil
     @State private var historicalZoneProfile: HRZoneProfile? = nil
     @State private var historicalMaxHR: Double? = nil
     @State private var historicalRestingHR: Double? = nil
@@ -1388,6 +1413,90 @@ struct WorkoutDetailView: View {
     private var pausedDuration: TimeInterval? {
         let pause = elapsedDuration - activeDuration
         return pause > 0 ? pause : nil
+    }
+
+    private var workoutActivityTitle: String {
+        analytics.workout.workoutActivityType.name.localizedCapitalized
+    }
+
+    private var workoutNavigationTitle: String {
+        "\(workoutActivityTitle) \(workoutTitleDatePhrase(for: analytics.workout.startDate))"
+    }
+
+    private var workoutNavigationCaption: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("MMM d, yyyy, HH:mm")
+        return "\(formatter.string(from: analytics.workout.startDate)), \(workoutDurationCaption)"
+    }
+
+    private var workoutDurationCaption: String {
+        let roundedMinutes = max(1, Int((activeDuration / 60).rounded()))
+        return "\(roundedMinutes) min"
+    }
+
+    private func workoutTitleDatePhrase(for date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        let targetWeek = calendar.dateInterval(of: .weekOfYear, for: date)
+        let currentWeek = calendar.dateInterval(of: .weekOfYear, for: now)
+
+            if let targetWeek, let currentWeek {
+                if targetWeek == currentWeek {
+                    return "\(workoutWeekdayName(for: date)) \(workoutDayPeriod(for: date))"
+                }
+
+                if let previousWeek = calendar.date(byAdding: .weekOfYear, value: -1, to: currentWeek.start),
+                   let previousWeekInterval = calendar.dateInterval(of: .weekOfYear, for: previousWeek),
+                   targetWeek == previousWeekInterval {
+                    return "Last \(workoutWeekdayName(for: date)) \(workoutDayPeriod(for: date))"
+                }
+            }
+
+        return "on \(workoutMonthDayOrdinal(for: date))"
+    }
+
+    private func workoutWeekdayName(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("EEEE")
+        return formatter.string(from: date)
+    }
+
+    private func workoutMonthDayOrdinal(for date: Date) -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        let formatter = DateFormatter()
+        formatter.locale = Locale.autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("MMM")
+
+        let day = calendar.component(.day, from: date)
+        let suffix: String
+        switch day % 100 {
+        case 11, 12, 13:
+            suffix = "th"
+        default:
+            switch day % 10 {
+            case 1: suffix = "st"
+            case 2: suffix = "nd"
+            case 3: suffix = "rd"
+            default: suffix = "th"
+            }
+        }
+
+        return "\(formatter.string(from: date)) \(day)\(suffix)"
+    }
+
+    private func workoutDayPeriod(for date: Date) -> String {
+        let hour = Calendar.autoupdatingCurrent.component(.hour, from: date)
+        switch hour {
+        case 5..<12:
+            return "morning"
+        case 12..<17:
+            return "afternoon"
+        case 17..<22:
+            return "evening"
+        default:
+            return "night"
+        }
     }
 
     private var distanceMeters: Double? {
@@ -2054,28 +2163,6 @@ struct WorkoutDetailView: View {
 
                 if allowsMapExpansion {
                     VStack(spacing: 10) {
-                        Button {
-                            showMapDetail = true
-                        } label: {
-                            HStack {
-                                Text("View Details")
-                                    .fontWeight(.semibold)
-                                Spacer()
-                                Image(systemName: "slider.horizontal.3")
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .frame(maxWidth: .infinity)
-                            .background(Color.orange.opacity(0.15))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.orange.opacity(0.28), lineWidth: 1)
-                            )
-                            .cornerRadius(12)
-                        }
-                        .buttonStyle(.plain)
-                        .catalystDesktopFocusable()
-
                         Button {
                             showExpandedMap = true
                         } label: {
@@ -2976,6 +3063,24 @@ struct WorkoutDetailView: View {
                 highlightedCoordinate: selectedRouteLocation?.coordinate
             )
         }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(workoutNavigationTitle)
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(1)
+                    Text(workoutNavigationCaption)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     private func sameTypeWorkoutsBeforeCurrent(withinDays days: Int) -> [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
@@ -3359,7 +3464,7 @@ struct WorkoutDetailView: View {
     }
 
     private func loadRoute() {
-        let workoutID = analytics.workout.uuid
+        let workoutID = workoutRowIdentifier(for: analytics.workout)
         
         guard workoutID != loadedRouteWorkoutID else { return }
         
@@ -3376,7 +3481,7 @@ struct WorkoutDetailView: View {
         isLoadingRoute = true
         
         Task {
-            let allLocations = await WorkoutRouteStore.shared.locations(for: analytics.workout)
+            let allLocations = await WorkoutRouteStore.shared.uncachedLocations(for: analytics.workout)
             let displayLocations = sampledLocations(from: allLocations, maxPoints: 700)
             let displaySegments = buildColoredRouteSegments(
                 locations: displayLocations,
@@ -3732,7 +3837,7 @@ struct MapDetailView: View {
         coloredSegments = []
         isLoadingRoute = true
 
-        let allLocations = await WorkoutRouteStore.shared.locations(for: analytics.workout)
+        let allLocations = await WorkoutRouteStore.shared.uncachedLocations(for: analytics.workout)
         let displayLocations = sampledLocations(from: allLocations, maxPoints: 700)
         let displaySegments = buildColoredRouteSegments(
             locations: displayLocations,

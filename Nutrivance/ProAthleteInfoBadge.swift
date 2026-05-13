@@ -246,6 +246,21 @@ enum ProAthleteBadgeType {
     }
 }
 
+extension ProAthleteInfoBadge {
+    /// Builds a badge using preset title, copy, and styling from ``ProAthleteBadgeType``.
+    init(badgeType: ProAthleteBadgeType, isActive: Bool = true, onDisable: (() -> Void)? = nil) {
+        self.init(
+            title: badgeType.title,
+            icon: badgeType.icon,
+            tint: badgeType.tint,
+            rationale: badgeType.rationale,
+            impact: badgeType.impact,
+            isActive: isActive,
+            onDisable: onDisable
+        )
+    }
+}
+
 #Preview {
     VStack(spacing: 12) {
         ProAthleteInfoBadge(

@@ -5,21 +5,12 @@
 //  Attributes for Workout Live Activity - used by main app
 //
 
-import ActivityKit
 import Foundation
+#if !targetEnvironment(macCatalyst)
+import ActivityKit
+#endif
 
-struct WorkoutLiveActivityAttributes: ActivityAttributes {
-    public typealias ContentState = WorkoutActivityState
-    
-    let workoutType: String
-    let activityIcon: String
-    let startTime: Date
-    let targetMinutes: Int?
-    let userInitials: String
-    let maxHeartRate: Int?
-}
-
-struct WorkoutActivityState: Codable, Hashable {
+public struct WorkoutActivityState: Codable, Hashable {
     var elapsedSeconds: Int
     var elapsedReferenceDate: Date
     var isPaused: Bool
@@ -33,26 +24,26 @@ struct WorkoutActivityState: Codable, Hashable {
     var elevationGainMeters: Int
     var currentHeartRateZone: Int?
     var activePhaseTitle: String?
-    
+
     var formattedElapsedTime: String {
         let hours = elapsedSeconds / 3600
         let minutes = (elapsedSeconds % 3600) / 60
         let seconds = elapsedSeconds % 60
-        
+
         if hours > 0 {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
         } else {
             return String(format: "%d:%02d", minutes, seconds)
         }
     }
-    
+
     var formattedDistance: String {
         if let distanceDisplay, !distanceDisplay.isEmpty {
             return distanceDisplay
         }
-        String(format: "%.1f km", totalDistanceKilometers)
+        return String(format: "%.1f km", totalDistanceKilometers)
     }
-    
+
     var formattedPace: String? {
         guard let pace = currentPaceMinutesPerKm, pace > 0 else { return nil }
         let minutes = Int(pace)
@@ -74,3 +65,18 @@ struct WorkoutActivityState: Codable, Hashable {
         return "\(currentHeartRate)"
     }
 }
+
+public struct WorkoutLiveActivityAttributes: Codable, Hashable {
+    public typealias ContentState = WorkoutActivityState
+
+    let workoutType: String
+    let activityIcon: String
+    let startTime: Date
+    let targetMinutes: Int?
+    let userInitials: String
+    let maxHeartRate: Int?
+}
+
+#if !targetEnvironment(macCatalyst)
+extension WorkoutLiveActivityAttributes: ActivityAttributes {}
+#endif
