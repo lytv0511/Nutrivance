@@ -91,7 +91,7 @@ enum NutrivanceCatalystMenuBuilder {
             children: [
                 // Matches `NutrivanceApp` / system back: ⌘[ (not ⌘⇧[).
                 navKey("Back", input: "[", cmd, plist: "back"),
-                navKey("Program Builder", input: "b", cmdShift, plist: "programBuilder"),
+                navKey("Daily Mission", input: "b", cmdShift, plist: "programBuilder"),
                 navKey("Dashboard", input: "d", cmdShift, plist: "dashboard"),
                 navKey("Mindfulness Realm", input: "r", cmdShift, plist: "mindfulnessRealm"),
                 navKey("Today's Plan", input: "p", cmdShift, plist: "todaysPlan"),

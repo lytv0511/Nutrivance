@@ -78,7 +78,7 @@ struct NutrivanceSceneRoot: View {
                 searchState.isSearching = true
             }
         case "programBuilder":
-            navigationState.navigate(focus: .fitness, view: "Program Builder", tab: .programBuilder)
+            navigationState.navigate(focus: .fitness, view: "Daily Mission", tab: .programBuilder)
         case "dashboard":
             navigationState.navigate(focus: .fitness, view: "Dashboard", tab: .dashboard)
         case "mindfulnessRealm":

@@ -126,6 +126,7 @@
 		15C8233A2F9C5D4700FECFDC /* StrainModelContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96542F95EDB0007CDCDB /* StrainModelContext.swift */; };
 		15C8233B2F9C5D4700FECFDC /* StrainRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */; };
 		15C8233C2F9C5D4700FECFDC /* StressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96562F95EDB0007CDCDB /* StressView.swift */; };
+		A7E4B2D22F95EDB0007CDC02 /* BodyStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E4B2D12F95EDB0007CDC01 /* BodyStatusView.swift */; };
 		15C8233D2F9C5D4700FECFDC /* SubcategoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */; };
 		15C8233E2F9C5D4700FECFDC /* SubjectiveDailyEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96582F95EDB0007CDCDB /* SubjectiveDailyEntry.swift */; };
 		15C8233F2F9C5D4700FECFDC /* SubjectiveDailyEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96592F95EDB0007CDCDB /* SubjectiveDailyEntryView.swift */; };
@@ -324,6 +325,7 @@
 		159A96542F95EDB0007CDCDB /* StrainModelContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrainModelContext.swift; sourceTree = "<group>"; };
 		159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrainRecoveryView.swift; sourceTree = "<group>"; };
 		159A96562F95EDB0007CDCDB /* StressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressView.swift; sourceTree = "<group>"; };
+		A7E4B2D12F95EDB0007CDC01 /* BodyStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyStatusView.swift; sourceTree = "<group>"; };
 		159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubcategoryDetailView.swift; sourceTree = "<group>"; };
 		159A96582F95EDB0007CDCDB /* SubjectiveDailyEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubjectiveDailyEntry.swift; sourceTree = "<group>"; };
 		159A96592F95EDB0007CDCDB /* SubjectiveDailyEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubjectiveDailyEntryView.swift; sourceTree = "<group>"; };
@@ -766,6 +768,7 @@
 				159A96532F95EDB0007CDCDB /* StepCountView.swift */,
 				159A96542F95EDB0007CDCDB /* StrainModelContext.swift */,
 				159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */,
+				A7E4B2D12F95EDB0007CDC01 /* BodyStatusView.swift */,
 				159A96562F95EDB0007CDCDB /* StressView.swift */,
 				159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */,
 				159A96582F95EDB0007CDCDB /* SubjectiveDailyEntry.swift */,
@@ -1099,6 +1102,7 @@
 				15C823392F9C5D4700FECFDC /* StepCountView.swift in Sources */,
 				15C8233A2F9C5D4700FECFDC /* StrainModelContext.swift in Sources */,
 				15C8233B2F9C5D4700FECFDC /* StrainRecoveryView.swift in Sources */,
+				A7E4B2D22F95EDB0007CDC02 /* BodyStatusView.swift in Sources */,
 				15C8233C2F9C5D4700FECFDC /* StressView.swift in Sources */,
 				15C8233D2F9C5D4700FECFDC /* SubcategoryDetailView.swift in Sources */,
 				15C8233E2F9C5D4700FECFDC /* SubjectiveDailyEntry.swift in Sources */,

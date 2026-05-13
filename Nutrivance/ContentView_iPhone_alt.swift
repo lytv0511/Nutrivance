@@ -113,7 +113,7 @@ struct ContentView_iPhone_alt: View {
             
                 Tab("Workout", systemImage: "figure.run", value: RootTabSelection.programBuilder) {
                     NavigationStack {
-                        ProgramBuilderView()
+                        DailyMissionView()
                     }
                 }
                 .customizationID( "iPhone.tab.builder")

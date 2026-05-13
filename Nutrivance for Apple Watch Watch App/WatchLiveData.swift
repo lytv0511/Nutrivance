@@ -3,6 +3,32 @@ import HealthKit
 import WatchConnectivity
 import SwiftUI
 
+// MARK: - Last synced dashboard (offline)
+
+/// Persists the latest `WatchDashboardPayload` from the iPhone so the watch can show real data when the phone is unreachable.
+enum WatchCachedDashboard {
+    private static let fileName = "last_dashboard_payload.json"
+
+    static func cacheURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let folder = base.appendingPathComponent("NutrivanceWatch", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.appendingPathComponent(fileName)
+    }
+
+    static func save(_ payload: WatchDashboardPayload) {
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        try? data.write(to: cacheURL(), options: [.atomic])
+    }
+
+    static func load() -> WatchDashboardPayload? {
+        let url = cacheURL()
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(WatchDashboardPayload.self, from: data)
+    }
+}
+
 struct WatchDashboardPayload: Codable {
     let generatedAt: Date
     let strainWeek: [WatchMetricPointPayload]
@@ -239,7 +265,12 @@ extension WatchDashboardStore {
 
         Task { @MainActor in
             await Task.yield()
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            self.healthBridge.refresh()
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 280_000_000)
             self.connectivityBridge.requestImmediateRefresh()
         }
 
@@ -249,7 +280,7 @@ extension WatchDashboardStore {
         }
 
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             self.healthBridge.refresh()
         }
     }
@@ -276,7 +307,7 @@ extension WatchDashboardStore {
                 regulation: $0.regulation
             )
         }
-        workouts = payload.workouts.map {
+        let syncedWorkouts = payload.workouts.map {
             WorkoutSession(
                 id: $0.id,
                 title: $0.title,
@@ -293,6 +324,11 @@ extension WatchDashboardStore {
                 note: $0.note
             )
         }
+        // Prefer recent sessions already materialized from on-watch HealthKit when they overlap the phone list.
+        workouts = Self.mergedWorkoutsFromPhonePreferringLocalHealthKit(
+            syncedFromPhone: syncedWorkouts,
+            alreadyOnWatch: workouts
+        )
         vitals = payload.vitals.map {
             VitalGauge(
                 title: $0.title,
@@ -303,10 +339,10 @@ extension WatchDashboardStore {
                 maximum: $0.maximum
             )
         }
-        for window in CoachWindow.allCases {
-            if let summary = payload.coachSummaries[window.rawValue], !summary.isEmpty {
-                coachSummaries[window] = summary
-            }
+        coachSummaries = [:]
+        for (key, value) in payload.coachSummaries {
+            guard let window = CoachWindow(rawValue: key), !value.isEmpty else { continue }
+            coachSummaries[window] = value
         }
 
         recommendedSleepHours = payload.recommendedSleepHours
@@ -324,6 +360,53 @@ extension WatchDashboardStore {
         syncedCurrentRecovery = payload.currentRecovery
         syncedCurrentReadiness = payload.currentReadiness
         markSynced(at: payload.generatedAt)
+        WatchCachedDashboard.save(payload)
+    }
+
+    /// Merges iPhone-reported workouts with sessions already on the watch (typically from local HK queries).
+    /// For recent local HealthKit sessions, keep watch-derived load/strain/HR when present so the watch does not show stale or generic phone-only rows.
+    fileprivate static func mergedWorkoutsFromPhonePreferringLocalHealthKit(
+        syncedFromPhone: [WorkoutSession],
+        alreadyOnWatch: [WorkoutSession]
+    ) -> [WorkoutSession] {
+        let calendar = Calendar.current
+        let cutoff = calendar.date(byAdding: .day, value: -5, to: Date()) ?? Date()
+
+        func isLocalHealthKitSession(_ w: WorkoutSession) -> Bool {
+            w.subtitle.localizedCaseInsensitiveContains("healthkit")
+        }
+
+        var byID = Dictionary(uniqueKeysWithValues: syncedFromPhone.map { ($0.id, $0) })
+
+        for local in alreadyOnWatch {
+            if let synced = byID[local.id] {
+                if isLocalHealthKitSession(local), local.startDate >= cutoff {
+                    let phoneTitle = synced.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let usePhoneTitle = !phoneTitle.isEmpty && phoneTitle != "Workout"
+                    byID[local.id] = WorkoutSession(
+                        id: local.id,
+                        title: usePhoneTitle ? synced.title : local.title,
+                        subtitle: local.subtitle,
+                        startDate: local.startDate,
+                        durationMinutes: max(local.durationMinutes, synced.durationMinutes),
+                        calories: max(local.calories, synced.calories),
+                        distanceKilometers: local.distanceKilometers ?? synced.distanceKilometers,
+                        averageHeartRate: local.averageHeartRate > 0 ? local.averageHeartRate : synced.averageHeartRate,
+                        maxHeartRate: local.maxHeartRate > 0 ? local.maxHeartRate : synced.maxHeartRate,
+                        strain: local.strain > 0 ? local.strain : synced.strain,
+                        load: local.load > 0 ? local.load : synced.load,
+                        zoneMinutes: local.zoneMinutes.contains(where: { $0 > 0.5 }) ? local.zoneMinutes : synced.zoneMinutes,
+                        note: synced.note.count > local.note.count && !synced.note.isEmpty ? synced.note : local.note
+                    )
+                } else {
+                    byID[local.id] = synced
+                }
+            } else {
+                byID[local.id] = local
+            }
+        }
+
+        return byID.values.sorted { $0.startDate > $1.startDate }
     }
 
     func applyLocalMindfulness(minutesByDay: [Date: Double]) {
@@ -372,7 +455,7 @@ extension WatchDashboardStore {
                 mergedByID[workout.id] = WorkoutSession(
                     id: synced.id,
                     title: synced.title,
-                    subtitle: synced.subtitle == "Local HealthKit" ? workout.subtitle : synced.subtitle,
+                    subtitle: synced.subtitle.localizedCaseInsensitiveContains("healthkit") ? workout.subtitle : synced.subtitle,
                     startDate: synced.startDate,
                     durationMinutes: synced.durationMinutes,
                     calories: max(synced.calories, workout.calories),
@@ -414,6 +497,8 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
 
         if !session.receivedApplicationContext.isEmpty {
             applyApplicationContext(session.receivedApplicationContext)
+        } else if let cached = WatchCachedDashboard.load() {
+            store.applySyncedPayload(cached)
         }
     }
 
@@ -445,6 +530,12 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
     ) {
         guard error == nil else { return }
         Task { @MainActor in
+            if let data = session.receivedApplicationContext[Keys.dashboardPayload] as? Data,
+               let payload = try? JSONDecoder().decode(WatchDashboardPayload.self, from: data) {
+                self.store?.applySyncedPayload(payload)
+            } else if let cached = WatchCachedDashboard.load() {
+                self.store?.applySyncedPayload(cached)
+            }
             self.requestImmediateRefresh()
         }
     }
@@ -499,7 +590,7 @@ final class WatchHealthBridge {
             async let exerciseMinutes = fetchTodaySum(for: .appleExerciseTime, unit: .minute())
             async let distanceMeters = fetchTodaySum(for: .distanceWalkingRunning, unit: .meter())
             async let mindfulnessByDay = fetchMindfulnessMinutesByDay(days: 7)
-            async let localWorkouts = fetchRecentWorkouts(days: 2)
+            async let localWorkouts = fetchRecentWorkouts(days: 14)
             async let localSleepSnapshot = fetchSleepSnapshot(days: 14)
 
             store?.applyLocalStats(

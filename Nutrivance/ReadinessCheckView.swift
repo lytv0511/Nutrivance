@@ -14,6 +14,11 @@ struct ReadinessCheckView: View {
     /// Same calendar day: rebuild from engine only when returning to this screen (no redundant coverage / CloudKit).
     @State private var lastCompletedCoverageTaskID: String?
 
+    // Body Status + Morning Readiness
+    @State private var bodyStatusModel: BodyStatusModel = .empty
+    @State private var morningReadiness: MorningReadinessSnapshot? = nil
+    @State private var showBodyStatus = false
+
     private var today: Date {
         Calendar.current.startOfDay(for: Date())
     }
@@ -168,6 +173,23 @@ struct ReadinessCheckView: View {
                                 detail: readinessDirectiveDetail,
                                 tint: readinessClassification.color
                             )
+                        }
+
+                        // MARK: - Body Status Snippet
+                        MetricSectionGroup(title: "Body Status") {
+                            BodyStatusSnippetView(
+                                model: bodyStatusModel,
+                                hrvTrendSupport: hrvTrendSupport
+                            ) {
+                                showBodyStatus = true
+                            }
+                        }
+
+                        // MARK: - Readiness This Morning
+                        if let morning = morningReadiness {
+                            MetricSectionGroup(title: "Readiness This Morning") {
+                                MorningReadinessCard(data: morning)
+                            }
                         }
 
                         MetricSectionGroup(title: "How It Is Built") {
@@ -366,6 +388,9 @@ struct ReadinessCheckView: View {
                 guard navigationState.isGloballyActiveRootTab(.readiness) else { return }
                 scheduleForceRefresh()
             }
+            .sheet(isPresented: $showBodyStatus) {
+                BodyStatusView()
+            }
             .task(id: refreshTaskID) {
                 withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                     animationPhase = 20
@@ -373,11 +398,15 @@ struct ReadinessCheckView: View {
                 if lastCompletedCoverageTaskID == refreshTaskID {
                     snapshot = buildSnapshot()
                     updateProAthleteData()
+                    bodyStatusModel = computeBodyStatus(engine: healthEngine)
+                    morningReadiness = buildMorningReadiness(engine: healthEngine)
                     return
                 }
                 await refreshCoverage(forceNetwork: false)
                 lastCompletedCoverageTaskID = refreshTaskID
                 updateProAthleteData()
+                bodyStatusModel = computeBodyStatus(engine: healthEngine)
+                morningReadiness = buildMorningReadiness(engine: healthEngine)
             }
         }
     }
@@ -386,6 +415,8 @@ struct ReadinessCheckView: View {
         Task {
             await refreshCoverage(forceNetwork: true)
             lastCompletedCoverageTaskID = refreshTaskID
+            bodyStatusModel = computeBodyStatus(engine: healthEngine)
+            morningReadiness = buildMorningReadiness(engine: healthEngine)
         }
     }
 
@@ -695,6 +726,59 @@ struct ReadinessCheckView: View {
     // The per-day helpers (`recoveryInputs`, `effectHRV`, `basalRhr`, `sleepDuration`,
     // `sleepEfficiency`) are now `nonisolated static` versions defined alongside
     // `buildSnapshot()` so they operate on a `RecoveryComputationContext`.
+
+    // MARK: - Morning Readiness
+
+    /// Computes a readiness score anchored to the last sleep session's biometrics —
+    /// captured before any training or daily stress could affect the numbers.
+    /// Returns nil when no HRV was detected during that sleep window.
+    @MainActor
+    private func buildMorningReadiness(engine: HealthStateEngine) -> MorningReadinessSnapshot? {
+        // Require HRV detected during sleep — otherwise the score is unreliable
+        guard let morningHRV = engine.readinessEffectHRV ?? engine.readinessHRV else { return nil }
+
+        let inputs = HealthStateEngine.proRecoveryInputs(
+            latestHRV: morningHRV,
+            restingHeartRate: engine.readinessBasalHeartRate ?? engine.restingHeartRate,
+            sleepDurationHours: engine.readinessSleepDuration,
+            timeInBedHours: engine.readinessTimeInBed ?? engine.readinessSleepDuration,
+            hrvBaseline60Day: engine.hrvBaseline60Day,
+            rhrBaseline60Day: engine.rhrBaseline60Day,
+            sleepBaseline60Day: engine.sleepBaseline60Day,
+            hrvBaseline7Day: engine.hrvBaseline7Day,
+            rhrBaseline7Day: engine.rhrBaseline7Day,
+            sleepBaseline7Day: engine.sleepBaseline7Day
+        )
+
+        guard !inputs.isInconclusive else { return nil }
+
+        let morningRecovery = HealthStateEngine.proRecoveryScore(from: inputs)
+        // At wake time there is no accumulated strain drag yet
+        let morningReadinessScore = HealthStateEngine.proReadinessScore(
+            recoveryScore: morningRecovery,
+            strainScore: 0,
+            hrvTrendComponent: engine.hrvTrendScore
+        )
+
+        let capturedDesc: String = {
+            guard let wakeTime = engine.lastSleepEnd else { return "Last sleep session" }
+            let fmt = DateFormatter()
+            fmt.dateFormat = "h:mm a"
+            return "Captured at \(fmt.string(from: wakeTime))"
+        }()
+
+        return MorningReadinessSnapshot(
+            readinessScore: morningReadinessScore,
+            recoveryScore: morningRecovery,
+            effectHRV: morningHRV,
+            sleepHours: engine.readinessSleepDuration,
+            sleepEfficiency: engine.readinessSleepEfficiency,
+            basalHR: engine.readinessBasalHeartRate,
+            hrvZScore: inputs.hrvZScore,
+            sleepRatio: inputs.sleepRatio,
+            capturedDescription: capturedDesc
+        )
+    }
 }
 
 private struct ReadinessSnapshot {
@@ -961,4 +1045,151 @@ private struct ReadinessOrb: View {
 private func readinessFormatted(_ value: Double?, digits: Int) -> String {
     guard let value else { return "–" }
     return String(format: "%.\(digits)f", value)
+}
+
+// MARK: - Morning Readiness Data Model
+
+private struct MorningReadinessSnapshot {
+    let readinessScore: Double
+    let recoveryScore: Double
+    let effectHRV: Double
+    let sleepHours: Double?
+    let sleepEfficiency: Double?
+    let basalHR: Double?
+    let hrvZScore: Double?
+    let sleepRatio: Double?
+    let capturedDescription: String
+
+    var classification: (title: String, color: Color) {
+        switch readinessScore {
+        case 85...: return ("Full Send", .green)
+        case 70..<85: return ("Perform", .cyan)
+        case 50..<70: return ("Adapt", .orange)
+        default: return ("Recover", .red)
+        }
+    }
+}
+
+// MARK: - Morning Readiness Card
+
+private struct MorningReadinessCard: View {
+    let data: MorningReadinessSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack(alignment: .center, spacing: 14) {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.10), lineWidth: 7)
+                    Circle()
+                        .trim(from: 0, to: data.readinessScore / 100)
+                        .stroke(
+                            data.classification.color,
+                            style: StrokeStyle(lineWidth: 7, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                    Text("\(Int(data.readinessScore.rounded()))")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(data.classification.color)
+                }
+                .frame(width: 58, height: 58)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("Morning Readiness")
+                            .font(.subheadline.weight(.semibold))
+                        Text(data.classification.title)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(data.classification.color)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(data.classification.color.opacity(0.14), in: Capsule())
+                    }
+                    Text(data.capturedDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Text("Snapshot of your physiology at wake-up — before today's training or daily stress could affect your scores. Use this to assess true daily readiness rather than a post-workout dip.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Signal grid
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                MorningReadinessTile(
+                    icon: "waveform.path.ecg", tint: .cyan,
+                    label: "Effect HRV",
+                    value: String(format: "%.0f ms", data.effectHRV),
+                    sub: data.hrvZScore.map { String(format: "z=%.2f", $0) } ?? nil
+                )
+                MorningReadinessTile(
+                    icon: "heart.fill", tint: .green,
+                    label: "Recovery",
+                    value: String(format: "%.0f / 100", data.recoveryScore),
+                    sub: "Pre-activity baseline"
+                )
+                if let sleep = data.sleepHours {
+                    MorningReadinessTile(
+                        icon: "moon.zzz.fill", tint: .indigo,
+                        label: "Sleep",
+                        value: String(format: "%.1f h", sleep),
+                        sub: data.sleepEfficiency.map { String(format: "%.0f%% efficient", $0 * 100) } ?? nil
+                    )
+                }
+                if let rhr = data.basalHR {
+                    MorningReadinessTile(
+                        icon: "bed.double.fill", tint: .blue,
+                        label: "Basal HR",
+                        value: String(format: "%.0f bpm", rhr),
+                        sub: "During sleep"
+                    )
+                }
+            }
+
+            // Interpretation note
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Strain is excluded from morning readiness — this score reflects your body's state before any load was applied today.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(18)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(data.classification.color.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+private struct MorningReadinessTile: View {
+    let icon: String
+    let tint: Color
+    let label: String
+    let value: String
+    let sub: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.caption).foregroundStyle(tint)
+                Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.primary)
+            if let sub {
+                Text(sub).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
 }

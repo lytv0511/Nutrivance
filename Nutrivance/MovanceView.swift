@@ -46,7 +46,7 @@ struct MovanceView: View {
     ]
     var filteredItems: [String] {
         let fitnessItems = [
-            "Program Builder", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
+            "Daily Mission", "Training Roadmap", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
             "Recovery Score", "Readiness", "Strain vs Recovery", "Nutrivance Labs", "Past Quests", "Heart Zones"
         ]
         if searchState.searchText.isEmpty {
@@ -112,8 +112,10 @@ struct MovanceView: View {
                                 ForEach(filteredItems, id: \.self) { item in
                                     NavigationLink(tag: item, selection: $selectedItem) {
                                         switch item {
-                                        case "Program Builder":
-                                            ProgramBuilderView()
+                                        case "Daily Mission":
+                                            DailyMissionView()
+                                        case "Training Roadmap":
+                                            TrainingRoadmapView()
                                         case "Dashboard":
                                             DashboardView()
                                         case "Today's Plan":
@@ -212,8 +214,10 @@ struct MovanceView: View {
             return AnyView(MovementAnalysisView())
         case "Exercise Library":
             return AnyView(ExerciseLibraryView())
-        case "Program Builder":
-            return AnyView(ProgramBuilderView())
+        case "Daily Mission":
+            return AnyView(DailyMissionView())
+        case "Training Roadmap":
+            return AnyView(TrainingRoadmapView())
         case "Workout Generator":
             return AnyView(WorkoutGeneratorView())
         case "Recovery Score":
@@ -310,7 +314,7 @@ struct MovanceView: View {
             }
             
             Section(header: Text("Smart Training")) {
-                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Daily Mission", "Training Roadmap", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -455,7 +459,8 @@ private func getIconName(for item: String) -> String {
     case "Movement Analysis": return "figure.walk.motion"
     case "Fuel Check": return "fuelpump.fill"
     case "Exercise Library": return "books.vertical.fill"
-    case "Program Builder": return "hammer.fill"
+    case "Daily Mission": return "hammer.fill"
+    case "Training Roadmap": return "calendar.badge.plus"
     case "Workout Generator": return "wand.and.stars"
     
     // Recovery & Analysis

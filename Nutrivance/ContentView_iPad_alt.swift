@@ -45,9 +45,9 @@ struct ContentView_iPad_alt: View {
             }
             .customizationID("iPad.tab.search")
             .defaultVisibility(.visible, for: .tabBar)
-            Tab("Program Builder", systemImage: "figure.run", value: RootTabSelection.programBuilder) {
+            Tab("Daily Mission", systemImage: "figure.run", value: RootTabSelection.programBuilder) {
                 NavigationStack {
-                    ProgramBuilderView()
+                    DailyMissionView()
                 }
             }
             .customizationID("iPad.tab.programBuilder")

@@ -1625,6 +1625,33 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         launchStatusMessage = "WorkoutKit not available."
         #endif
     }
+
+    #if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
+    func scheduleWorkoutPlansInAppleWorkout(
+        title: String,
+        phases: [ProgramWorkoutPlanPhase],
+        scheduledDate: Date
+    ) async throws -> Int {
+        guard #available(iOS 17.0, *) else {
+            throw WorkoutBuildError.customWorkoutFailed
+        }
+        guard WorkoutScheduler.isSupported else {
+            throw WorkoutBuildError.customWorkoutFailed
+        }
+
+        let authState = try await WorkoutScheduler.shared.requestAuthorization()
+        guard authState == .authorized else {
+            throw WorkoutBuildError.customWorkoutFailed
+        }
+
+        let workoutPlans = try buildWorkoutPlansFromPhases(phases, title: title)
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: scheduledDate)
+        for plan in workoutPlans {
+            try await WorkoutScheduler.shared.schedule(plan, at: components)
+        }
+        return workoutPlans.count
+    }
+    #endif
     
     #if os(watchOS)
     func openWorkoutPreviewOnWatchOS(
@@ -3013,7 +3040,7 @@ extension CompanionWorkoutLiveManager: HKWorkoutSessionDelegate {
                     Task { @MainActor in
                         await finalizeLocalWorkoutSave()
                         if pendingLocalEndAction == .newWorkout {
-                            launchStatusMessage = "Workout finished. Choose the next one from Program Builder."
+                            launchStatusMessage = "Workout finished. Choose the next one from Daily Mission."
                         }
                         finishSession()
                     }

@@ -2101,7 +2101,7 @@ struct NutrivanceApp: App {
                 }
                 .keyboardShortcut("U", modifiers: [.command, .shift])
 
-                Button("Program Builder") {
+                Button("Daily Mission") {
                     NutrivanceSceneMenuRouter.postMainMenuCommand("programBuilder")
                 }
                 .keyboardShortcut("B", modifiers: [.command, .shift])

@@ -47,7 +47,7 @@ enum BrowserPageID: String, CaseIterable, Codable, Hashable {
     var title: String {
         switch self {
         case .search: return "Start Page"
-        case .programBuilder: return "Program Builder"
+        case .programBuilder: return "Daily Mission"
         case .dashboard: return "Dashboard"
         case .todaysPlan: return "Today's Plan"
         case .trainingCalendar: return "Training Calendar"
@@ -3303,7 +3303,7 @@ private struct BrowserPageHost: View {
             case .search:
                 SearchView()
             case .programBuilder:
-                ProgramBuilderView()
+                DailyMissionView()
             case .dashboard:
                 DashboardView()
             case .todaysPlan:

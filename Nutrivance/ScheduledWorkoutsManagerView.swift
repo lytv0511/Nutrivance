@@ -50,7 +50,7 @@ struct ScheduledWorkoutsManagerView: View {
                         .foregroundStyle(.orange)
                     Text("No Scheduled Workouts")
                         .font(.headline)
-                    Text("Workouts you schedule from the Program Builder will appear here.")
+                    Text("Workouts you schedule from Daily Mission or Training Roadmap will appear here.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

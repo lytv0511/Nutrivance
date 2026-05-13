@@ -259,7 +259,7 @@ func sharedProAthleteRecoveryScore(
     for day: Date,
     context: RecoveryComputationContext,
     profile: ProAthleteProfileValues,
-    subjectiveBoost: Double,
+    subjectiveBoost: Double?,
     chronicLoad: Double,
     athleteHistoricalMaxChronicLoad: Double?
 ) -> (score: Double, hrvWarning: Bool, sleepQualityWarning: Bool, subjectiveBoost: Double?)? {

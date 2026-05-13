@@ -4141,17 +4141,13 @@ final class WatchDashboardStore: ObservableObject {
     @Published var incomingPlan: WatchProgramPlanPayload?
     @Published var savedPlans: [WatchProgramPlanPayload]
     @Published var vitals: [VitalGauge]
-    @Published var coachSummaries: [CoachWindow: String]
-    @Published var recommendedSleepHours: Double = 8.3
-    @Published var sleepDebtHours: Double = 1.4
-    @Published var sleepScheduleText = "10:30 PM - 7:00 AM"
-    @Published var sleepHours = 7.6
-    @Published var sleepConsistency = 88.0
-    @Published var sleepStages: [(name: String, hours: Double, color: Color)] = [
-        ("Core", 4.2, Color.blue),
-        ("REM", 1.7, Color.purple),
-        ("Deep", 1.1, Color.indigo)
-    ]
+    @Published var coachSummaries: [CoachWindow: String] = [:]
+    @Published var recommendedSleepHours: Double = 0
+    @Published var sleepDebtHours: Double = 0
+    @Published var sleepScheduleText = ""
+    @Published var sleepHours = 0.0
+    @Published var sleepConsistency = 0.0
+    @Published var sleepStages: [(name: String, hours: Double, color: Color)] = []
     // Synced current values from iOS
     @Published var syncedCurrentStrain: Double = 0
     @Published var syncedCurrentRecovery: Double = 0
@@ -4160,10 +4156,10 @@ final class WatchDashboardStore: ObservableObject {
     let wakeScheduler = WatchWakeScheduler()
     let workoutManager = WatchWorkoutManager.shared
     @Published var stats: [(title: String, value: String, symbol: String, tint: Color)] = [
-        ("Calories", "742 kcal", "flame.fill", .orange),
-        ("Steps", "11,082", "figure.walk", .green),
-        ("Active", "96 min", "bolt.heart.fill", .cyan),
-        ("Move", "8.6 km", "location.fill", .yellow)
+        ("Calories", "—", "flame.fill", .orange),
+        ("Steps", "—", "figure.walk", .green),
+        ("Active", "—", "bolt.heart.fill", .cyan),
+        ("Move", "—", "location.fill", .yellow)
     ]
     @Published private(set) var lastSyncedAt: Date?
 
@@ -4177,114 +4173,34 @@ final class WatchDashboardStore: ObservableObject {
         let wake = calendar.date(bySettingHour: 7, minute: 0, second: 0, of: today) ?? Date()
 
         wakeUpTime = wake
-        latestMoodIndex = 3
-        moodNote = "Focused and steady."
+        latestMoodIndex = -1
+        moodNote = ""
         queuedWorkout = nil
-        journalSnippets = [
-            JournalSnippet(date: calendar.date(byAdding: .hour, value: -3, to: Date()) ?? Date(), text: "Morning run felt smooth."),
-            JournalSnippet(date: calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date(), text: "Recovery improved after extra sleep.")
-        ]
+        journalSnippets = []
 
-        strainWeek = Self.makeWeek(values: [11.2, 12.8, 10.7, 14.1, 13.6, 9.8, 12.4], anchoredTo: today)
-        recoveryWeek = Self.makeWeek(values: [72, 76, 69, 81, 79, 74, 84], anchoredTo: today)
-        readinessWeek = Self.makeWeek(values: [68, 71, 65, 78, 80, 73, 82], anchoredTo: today)
-        mindfulnessWeek = Self.makeWeek(values: [55, 62, 60, 74, 70, 78, 82], anchoredTo: today)
-        trainingLoadWeek = Self.makeWeek(values: [64, 72, 69, 81, 88, 76, 84], anchoredTo: today)
-        hrvWeek = Self.makeWeek(values: [48, 52, 49, 57, 60, 54, 58], anchoredTo: today)
-        hrrWeek = Self.makeWeek(values: [21, 24, 23, 27, 29, 25, 28], anchoredTo: today)
-        rhrWeek = Self.makeWeek(values: [58, 57, 56, 55, 54, 55, 53], anchoredTo: today)
+        let emptyWeek = Self.makeWeek(values: Array(repeating: 0, count: 7), anchoredTo: today)
+        strainWeek = emptyWeek
+        recoveryWeek = emptyWeek
+        readinessWeek = emptyWeek
+        mindfulnessWeek = emptyWeek
+        trainingLoadWeek = emptyWeek
+        hrvWeek = emptyWeek
+        hrrWeek = emptyWeek
+        rhrWeek = emptyWeek
         stressWeek = Self.makeStressWeek(
-            stress: [58, 49, 64, 42, 38, 46, 40],
-            energy: [52, 60, 48, 66, 70, 62, 68],
-            regulation: [61, 69, 58, 74, 77, 71, 79],
+            stress: Array(repeating: 0, count: 7),
+            energy: Array(repeating: 0, count: 7),
+            regulation: Array(repeating: 0, count: 7),
             anchoredTo: today
         )
         incomingPlan = nil
         savedPlans = []
+        workouts = []
+        vitals = []
 
-        let morningRunStart = calendar.date(bySettingHour: 7, minute: 10, second: 0, of: Date()) ?? Date()
-        let lunchStrengthStart = calendar.date(bySettingHour: 12, minute: 30, second: 0, of: Date()) ?? Date()
-        let eveningWalkStart = calendar.date(bySettingHour: 18, minute: 5, second: 0, of: Date()) ?? Date()
-        let yesterdayRideStart = calendar.date(byAdding: .day, value: -1, to: calendar.date(bySettingHour: 17, minute: 20, second: 0, of: Date()) ?? Date()) ?? Date()
-
-        workouts = [
-            WorkoutSession(
-                id: UUID(),
-                title: "Morning Run",
-                subtitle: "Outdoor • Tempo",
-                startDate: morningRunStart,
-                durationMinutes: 41,
-                calories: 468,
-                distanceKilometers: 7.1,
-                averageHeartRate: 152,
-                maxHeartRate: 176,
-                strain: 14.2,
-                load: 82,
-                zoneMinutes: [6, 9, 12, 10, 4],
-                note: "Strong middle block with controlled finish."
-            ),
-            WorkoutSession(
-                id: UUID(),
-                title: "Strength",
-                subtitle: "Upper body",
-                startDate: lunchStrengthStart,
-                durationMinutes: 34,
-                calories: 244,
-                distanceKilometers: nil,
-                averageHeartRate: 126,
-                maxHeartRate: 149,
-                strain: 9.6,
-                load: 68,
-                zoneMinutes: [10, 12, 9, 3, 0],
-                note: "Stable pacing with enough rest between sets."
-            ),
-            WorkoutSession(
-                id: UUID(),
-                title: "Evening Walk",
-                subtitle: "Recovery",
-                startDate: eveningWalkStart,
-                durationMinutes: 28,
-                calories: 118,
-                distanceKilometers: 2.4,
-                averageHeartRate: 101,
-                maxHeartRate: 118,
-                strain: 4.1,
-                load: 38,
-                zoneMinutes: [19, 7, 2, 0, 0],
-                note: "Easy recovery walk to downshift before bed."
-            ),
-            WorkoutSession(
-                id: UUID(),
-                title: "Bike Ride",
-                subtitle: "Yesterday",
-                startDate: yesterdayRideStart,
-                durationMinutes: 52,
-                calories: 522,
-                distanceKilometers: 18.6,
-                averageHeartRate: 148,
-                maxHeartRate: 168,
-                strain: 13.4,
-                load: 79,
-                zoneMinutes: [5, 11, 16, 12, 8],
-                note: "Progressive build with strong finish."
-            )
-        ]
-
-        vitals = [
-            VitalGauge(title: "Sleep HR", value: 52, displayValue: "52 bpm", minimum: 42, normalRange: 48...60, maximum: 72),
-            VitalGauge(title: "Respiratory", value: 14.3, displayValue: "14.3 br/min", minimum: 10, normalRange: 12...18, maximum: 22),
-            VitalGauge(title: "Wrist Temp", value: 0.2, displayValue: "+0.2 C", minimum: -1.0, normalRange: -0.3...0.3, maximum: 1.0),
-            VitalGauge(title: "SpO2", value: 97, displayValue: "97%", minimum: 88, normalRange: 95...100, maximum: 100),
-            VitalGauge(title: "Sleep Hours", value: 7.6, displayValue: "7.6 h", minimum: 4, normalRange: 7...9, maximum: 10),
-            VitalGauge(title: "Consistency", value: 88, displayValue: "88%", minimum: 50, normalRange: 75...100, maximum: 100)
-        ]
-
-        coachSummaries = [
-            .day: "Today favored controlled loading. Strain landed in range, recovery bounced back, and mindfulness improved after the evening downshift. Keep tomorrow moderate unless sleep shortens.",
-            .week: "This week balanced quality work and recovery well. The best days paired moderate strain with rising readiness, while low-stress evenings kept vitals near normal. Hold the current load progression.",
-            .month: "This month shows a solid aerobic base with steadier recovery patterns. Readiness is trending upward when sleep consistency stays above target, so the biggest upside is protecting bedtime regularity."
-        ]
-
+        if let cached = WatchCachedDashboard.load() {
+            applySyncedPayload(cached)
+        }
     }
 
     var currentStrain: Double { syncedCurrentStrain > 0 ? syncedCurrentStrain : strainWeek.last?.value ?? 0 }
@@ -4440,7 +4356,7 @@ private struct StrainDashboardPage: View {
                     WeeklyBarChart(
                         points: store.strainWeek,
                         accent: .orange,
-                        highlightedIndex: store.strainWeek.count - 1
+                        highlightedIndex: store.strainWeek.isEmpty ? nil : store.strainWeek.count - 1
                     )
                     .frame(height: chartHeight)
 
@@ -7028,7 +6944,8 @@ private struct CoachSummaryView: View {
                 }
 
                 SectionCard(title: "Coach Summary") {
-                    Text(store.coachSummary(for: selectedWindow))
+                    let summary = store.coachSummary(for: selectedWindow)
+                    Text(summary.isEmpty ? "No summary yet. Open Nutrivance on your iPhone while the watch is paired to sync the latest coach report." : summary)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.82))
                 }
@@ -7045,9 +6962,17 @@ private struct VitalsDetailView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
-                ForEach(store.vitals) { vital in
-                    SectionCard(title: vital.title) {
-                        VitalGaugeRow(gauge: vital)
+                if store.vitals.isEmpty {
+                    SectionCard(title: "Vitals") {
+                        Text("No vitals synced yet. Open Nutrivance on your iPhone to refresh, or grant Health access on the watch for local activity stats.")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.82))
+                    }
+                } else {
+                    ForEach(store.vitals) { vital in
+                        SectionCard(title: vital.title) {
+                            VitalGaugeRow(gauge: vital)
+                        }
                     }
                 }
             }
@@ -7215,7 +7140,7 @@ private struct MoodLoggerView: View {
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 6)
-                                .background(index == store.latestMoodIndex ? Color.yellow.opacity(0.28) : Color.white.opacity(0.06))
+                                .background(index == store.latestMoodIndex && store.latestMoodIndex >= 0 ? Color.yellow.opacity(0.28) : Color.white.opacity(0.06))
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
                             .buttonStyle(.plain)
@@ -7224,9 +7149,15 @@ private struct MoodLoggerView: View {
                 }
 
                 SectionCard(title: "Current Mood") {
-                    Text(moods[store.latestMoodIndex].label)
-                        .font(.headline.weight(.semibold))
-                    Text(store.moodNote)
+                    if store.latestMoodIndex >= 0 && store.latestMoodIndex < moods.count {
+                        Text(moods[store.latestMoodIndex].label)
+                            .font(.headline.weight(.semibold))
+                    } else {
+                        Text("Not logged")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+                    Text(store.moodNote.isEmpty ? "Tap a number above to log today’s mood." : store.moodNote)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.72))
                 }

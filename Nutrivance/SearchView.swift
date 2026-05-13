@@ -168,7 +168,7 @@ struct SearchView: View {
     private let nutritionItems: [String] = []
 
     private let fitnessItems = [
-        "Program Builder", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
+        "Daily Mission", "Training Roadmap", "Dashboard", "Today's Plan", "Training Calendar", "Workout History",
         "Recovery Score", "Readiness", "Strain vs Recovery", "Nutrivance Labs", "Past Quests", "Heart Zones"
     ]
 
@@ -211,7 +211,8 @@ struct SearchView: View {
         // "antioxidants": ["antioxidants", "antioxidant", "free radicals"],
         // "electrolytes": ["electrolytes", "sodium", "potassium", "chloride"],
         "dashboard": ["dashboard", "metrics", "fitness"],
-        "program builder": ["program builder", "workout builder", "builder", "plan workout", "workout planner"],
+        "daily mission": ["daily mission", "program builder", "workout builder", "builder", "plan workout", "workout planner"],
+        "training roadmap": ["training roadmap", "roadmap", "training plan", "schedule workouts", "calendar workout"],
         "journal": ["journal", "write"],
         "mood": ["mood tracker", "emotion tracker", "mental health", "feeling"],
         "sleep": ["sleep", "rest", "resting", "recovery"],
@@ -308,7 +309,7 @@ struct SearchView: View {
             gradients.forestGradient(animationPhase: $animationPhase)
         case "Heart Zones":
             gradients.burningGradientFull(animationPhase: $animationPhase)
-        case "Program Builder", "Pathfinder", "Past Quests", "Nutrivance Labs":
+        case "Daily Mission", "Training Roadmap", "Pathfinder", "Past Quests", "Nutrivance Labs":
             gradients.programBuilderMeshBackground()
         case "Today's Plan":
             gradients.warmGradientFull(animationPhase: $animationPhase)
@@ -398,8 +399,10 @@ struct SearchView: View {
         //     return (.nutrition, "Electrolytes", .electrolytes)
         case "Dashboard":
             return (.fitness, "Dashboard", .dashboard)
-        case "Program Builder":
-            return (.fitness, "Program Builder", .programBuilder)
+        case "Daily Mission":
+            return (.fitness, "Daily Mission", .programBuilder)
+        case "Training Roadmap":
+            return nil
         case "Today's Plan":
             return (.fitness, "Today's Plan", .todaysPlan)
         case "Training Calendar":
@@ -655,8 +658,10 @@ struct SearchView: View {
             return AnyView(MovementAnalysisView())
         case "Exercise Library":
             return AnyView(ExerciseLibraryView())
-        case "Program Builder":
-            return AnyView(ProgramBuilderView())
+        case "Daily Mission":
+            return AnyView(DailyMissionView())
+        case "Training Roadmap":
+            return AnyView(TrainingRoadmapView())
         case "Workout Generator":
             return AnyView(WorkoutGeneratorView())
         case "Nutrivance Labs":
@@ -790,7 +795,7 @@ struct SearchView: View {
             }
             
             Section(header: Text("Smart Training")) {
-                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Program Builder", "Workout Generator"], id: \.self) { item in
+                ForEach(["Coach", "Movement Analysis", "Exercise Library", "Daily Mission", "Training Roadmap", "Workout Generator"], id: \.self) { item in
                     if filteredItems.contains(item) {
                         Label(item, systemImage: getIconName(for: item))
                             .tag(item)
@@ -936,7 +941,8 @@ private func getIconName(for item: String) -> String {
     case "Movement Analysis": return "figure.walk.motion"
     case "Fuel Check": return "fuelpump.fill"
     case "Exercise Library": return "books.vertical.fill"
-    case "Program Builder": return "hammer.fill"
+    case "Daily Mission": return "hammer.fill"
+    case "Training Roadmap": return "calendar.badge.plus"
     case "Workout Generator": return "wand.and.stars"
     
     // Recovery & Analysis

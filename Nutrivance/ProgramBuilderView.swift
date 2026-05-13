@@ -52,6 +52,11 @@ private enum ProgramBuilderTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum ProgramBuilderPresentationStyle {
+    case dailyMission
+    case simplified
+}
+
 private struct ProgramStageCardHeightPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
@@ -69,6 +74,10 @@ private struct ProgramLaunchButtonHeightPreferenceKey: PreferenceKey {
 }
 
 struct ProgramBuilderView: View {
+    let presentationStyle: ProgramBuilderPresentationStyle
+    let onPlanCommitted: ((ProgramWorkoutPlanRecord) -> Void)?
+    let onDismiss: (() -> Void)?
+
     @StateObject private var engine = HealthStateEngine.shared
     @StateObject private var planner = ProgramBuilderAIPlanner()
     @StateObject private var liveWorkoutManager = CompanionWorkoutLiveManager.shared
@@ -120,6 +129,17 @@ struct ProgramBuilderView: View {
     @State private var isScheduledWorkoutsSheetPresented = false
     @State private var isWorkoutPreviewSheetPresented = false
     @State private var workoutPreviewLaunchContext: (title: String, activity: ProgramWorkoutType)?
+    @State private var isActivityLibraryPresented = false
+
+    init(
+        presentationStyle: ProgramBuilderPresentationStyle = .dailyMission,
+        onPlanCommitted: ((ProgramWorkoutPlanRecord) -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
+        self.presentationStyle = presentationStyle
+        self.onPlanCommitted = onPlanCommitted
+        self.onDismiss = onDismiss
+    }
 
     private var catalog: [ProgramWorkoutType] {
         ProgramWorkoutType.catalog + customActivities
@@ -257,24 +277,33 @@ struct ProgramBuilderView: View {
 
     var body: some View {
         buildMainView()
-            .navigationTitle("Program Builder")
+            .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button {
-                        isScheduledWorkoutsSheetPresented = true
-                    } label: {
-                        Image(systemName: "calendar.badge.clock")
+                    if presentationStyle == .dailyMission {
+                        Button {
+                            isScheduledWorkoutsSheetPresented = true
+                        } label: {
+                            Image(systemName: "calendar.badge.clock")
+                        }
+                        Button {
+                            navigateToWorkoutViewsLayout = true
+                        } label: {
+                            Image(systemName: "square.grid.2x2")
+                        }
+                        Button {
+                            navigateToMetricLayout = true
+                        } label: {
+                            Image(systemName: "gauge")
+                        }
                     }
-                    Button {
-                        navigateToWorkoutViewsLayout = true
-                    } label: {
-                        Image(systemName: "square.grid.2x2")
-                    }
-                    Button {
-                        navigateToMetricLayout = true
-                    } label: {
-                        Image(systemName: "gauge")
+                }
+                if presentationStyle == .simplified, let onDismiss {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Close") {
+                            onDismiss()
+                        }
                     }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
@@ -304,13 +333,17 @@ struct ProgramBuilderView: View {
             .sheet(isPresented: $isWorkoutPreviewSheetPresented) {
                 workoutPreviewConfirmationSheet
             }
+            .sheet(isPresented: $isActivityLibraryPresented) {
+                simplifiedActivityLibrarySheet
+            }
             .task(id: coachContextID) {
-            await planner.refreshCoachAdvice(
-                for: buildPlannerRequest(),
-                engine: engine,
-                usesImperial: usesImperialDistance
-            )
-        }
+                guard presentationStyle == .dailyMission else { return }
+                await planner.refreshCoachAdvice(
+                    for: buildPlannerRequest(),
+                    engine: engine,
+                    usesImperial: usesImperialDistance
+                )
+            }
         .task(id: routeTemplateRefreshID) {
             await loadRouteTemplateAvailability()
         }
@@ -358,6 +391,15 @@ struct ProgramBuilderView: View {
         .foregroundStyle(.orange)
         .tint(.orange)
         .background(GradientBackgrounds().programBuilderMeshBackground())
+    }
+
+    private var navigationTitle: String {
+        switch presentationStyle {
+        case .dailyMission:
+            return "Daily Mission"
+        case .simplified:
+            return "Build Workout"
+        }
     }
 
     private var scheduledWorkoutsSheet: some View {
@@ -633,110 +675,54 @@ struct ProgramBuilderView: View {
 
     private var leftColumn: some View {
         VStack(alignment: .leading, spacing: 20) {
-            ProgramSectionCard {
-                ProgramBuilderCoachSection(
-                    planner: planner,
-                    request: buildPlannerRequest(),
-                    refreshAction: {
-                        Task {
-                            await planner.refreshCoachAdvice(
-                                for: buildPlannerRequest(),
-                                engine: engine,
-                                usesImperial: usesImperialDistance
-                            )
-                        }
-                    }
-                )
-            }
-
-            ProgramSectionCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("What do you want to do today?")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
-
-                    Text("Pick from your usual patterns, then shape the session the way you actually want it today.")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.72))
-
-                    AdaptiveChipGrid(todaySuggestions) { suggestion in
-                        ProgramSuggestionChip(
-                            title: suggestion.title,
-                            symbol: suggestion.symbol,
-                            isSelected: selectedActivityIDs.contains(suggestion.id),
-                            tint: suggestion.tint
-                        ) {
-                            toggleActivity(suggestion.id)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-                }
-            }
-
-            ProgramSectionCard {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 12) {
-                        Text("Search Every Activity")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.white)
-
-                        Spacer()
-
-                        if isPhoneLayout {
-                            Button {
-                                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                                    isSearchSectionExpanded.toggle()
-                                }
-                            } label: {
-                                Image(systemName: isSearchSectionExpanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")
-                                    .font(.title3)
-                                    .foregroundStyle(.white.opacity(0.86))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    if !isPhoneLayout || isSearchSectionExpanded {
-                        TextField("Search running, ski touring, yoga, triathlon...", text: $searchText)
-                            .textInputAutocapitalization(.words)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
-                            )
-
-                        HStack(spacing: 10) {
-                            TextField("Add your own activity", text: $customActivityName)
-                                .textInputAutocapitalization(.words)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                            Button("Add") {
-                                addCustomActivity()
-                            }
-                            .buttonStyle(.glass)
-                            .foregroundStyle(.white)
-                            .disabled(customActivityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
-
-                        LazyVStack(spacing: 10) {
-                            ForEach(filteredCatalog) { activity in
-                                ProgramWorkoutTypeRow(
-                                    activity: activity,
-                                    isSelected: selectedActivityIDs.contains(activity.id),
-                                    action: { toggleActivity(activity.id) }
+            switch presentationStyle {
+            case .dailyMission:
+                ProgramSectionCard {
+                    ProgramBuilderCoachSection(
+                        planner: planner,
+                        request: buildPlannerRequest(),
+                        refreshAction: {
+                            Task {
+                                await planner.refreshCoachAdvice(
+                                    for: buildPlannerRequest(),
+                                    engine: engine,
+                                    usesImperial: usesImperialDistance
                                 )
                             }
                         }
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    } else if isPhoneLayout {
-                        Text("Collapsed for easier picking from your suggested workouts.")
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.62))
+                    )
+                }
+
+                ProgramSectionCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("What do you want to do today?")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.white)
+
+                        Text("Pick from your usual patterns, then shape the session the way you actually want it today.")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.72))
+
+                        AdaptiveChipGrid(todaySuggestions) { suggestion in
+                            ProgramSuggestionChip(
+                                title: suggestion.title,
+                                symbol: suggestion.symbol,
+                                isSelected: selectedActivityIDs.contains(suggestion.id),
+                                tint: suggestion.tint
+                            ) {
+                                toggleActivity(suggestion.id)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
                     }
+                }
+
+                ProgramSectionCard {
+                    searchEveryActivitySection
+                }
+            case .simplified:
+                ProgramSectionCard {
+                    simplifiedActivitySelectionSection
                 }
             }
         }
@@ -774,6 +760,20 @@ struct ProgramBuilderView: View {
                             .tint(.white.opacity(0.18))
                             .disabled(selectedActivities.isEmpty)
 
+                            if presentationStyle == .simplified, onPlanCommitted != nil {
+                                Button {
+                                    Task {
+                                        await commitCurrentPlan()
+                                    }
+                                } label: {
+                                    Label("Use Workout", systemImage: "plus.circle.fill")
+                                        .font(.subheadline.weight(.bold))
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+                                .disabled(selectedActivities.isEmpty)
+                            }
+
                             Spacer()
                         }
                         .padding(.top, 4)
@@ -781,53 +781,209 @@ struct ProgramBuilderView: View {
                 }
             }
 
-            ProgramSectionCard {
-                workoutLaunchSection
+            if presentationStyle == .dailyMission {
+                ProgramSectionCard {
+                    workoutLaunchSection
+                }
+
+                ProgramSectionCard {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Stage Manager")
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(.white)
+                                Text("Generate 3 workout-stage suggestions from your activity, intensity profile, and optional intent.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.72))
+                            }
+                            Spacer()
+                            Button("Ban List") {
+                                isStageManagerBanSheetPresented = true
+                            }
+                            .buttonStyle(.glass)
+                            .foregroundStyle(.white)
+                        }
+
+                        if selectedActivities.isEmpty {
+                            ProgramEmptyState(
+                                title: "No workout selected",
+                                subtitle: "Pick at least one workout type first. Stage Manager uses this as a hard constraint."
+                            )
+                        } else {
+                            stageManagerActivitySelector
+                            if let activity = selectedStageActivityForSuggestions {
+                                stageManagerCard(for: activity)
+                            }
+                        }
+
+                        if let planSyncStatusMessage, !planSyncStatusMessage.isEmpty {
+                            Text(planSyncStatusMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                    }
+                }
+
+                ProgramSectionCard {
+                    workoutRepositorySection
+                }
+            } else if let planSyncStatusMessage, !planSyncStatusMessage.isEmpty {
+                ProgramSectionCard {
+                    Text(planSyncStatusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.82))
+                }
             }
+        }
+    }
 
-            ProgramSectionCard {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Stage Manager")
-                                .font(.title3.weight(.bold))
-                                .foregroundStyle(.white)
-                            Text("Generate 3 workout-stage suggestions from your activity, intensity profile, and optional intent.")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.72))
-                        }
-                        Spacer()
-                        Button("Ban List") {
-                            isStageManagerBanSheetPresented = true
-                        }
-                        .buttonStyle(.glass)
-                        .foregroundStyle(.white)
-                    }
+    private var searchEveryActivitySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Text("Search Every Activity")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
 
-                    if selectedActivities.isEmpty {
-                        ProgramEmptyState(
-                            title: "No workout selected",
-                            subtitle: "Pick at least one workout type first. Stage Manager uses this as a hard constraint."
-                        )
-                    } else {
-                        stageManagerActivitySelector
-                        if let activity = selectedStageActivityForSuggestions {
-                            stageManagerCard(for: activity)
-                        }
-                    }
+                Spacer()
 
-                    if let planSyncStatusMessage, !planSyncStatusMessage.isEmpty {
-                        Text(planSyncStatusMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.8))
+                if isPhoneLayout {
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                            isSearchSectionExpanded.toggle()
+                        }
+                    } label: {
+                        Image(systemName: isSearchSectionExpanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.86))
                     }
+                    .buttonStyle(.plain)
                 }
             }
 
-            ProgramSectionCard {
-                workoutRepositorySection
+            if !isPhoneLayout || isSearchSectionExpanded {
+                TextField("Search running, ski touring, yoga, triathlon...", text: $searchText)
+                    .textInputAutocapitalization(.words)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    )
+
+                HStack(spacing: 10) {
+                    TextField("Add your own activity", text: $customActivityName)
+                        .textInputAutocapitalization(.words)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                    Button("Add") {
+                        addCustomActivity()
+                    }
+                    .buttonStyle(.glass)
+                    .foregroundStyle(.white)
+                    .disabled(customActivityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                LazyVStack(spacing: 10) {
+                    ForEach(filteredCatalog) { activity in
+                        ProgramWorkoutTypeRow(
+                            activity: activity,
+                            isSelected: selectedActivityIDs.contains(activity.id),
+                            action: { toggleActivity(activity.id) }
+                        )
+                    }
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if isPhoneLayout {
+                Text("Collapsed for easier picking from your suggested workouts.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.62))
             }
         }
+    }
+
+    private var simplifiedActivitySelectionSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Workout Setup")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("Choose the activities in this workout block, then shape the overview and stages.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                Spacer()
+                Button("Add Activity") {
+                    searchText = ""
+                    isActivityLibraryPresented = true
+                }
+                .buttonStyle(.glass)
+                .foregroundStyle(.white)
+            }
+
+            if selectedActivities.isEmpty {
+                ProgramEmptyState(
+                    title: "No activities yet",
+                    subtitle: "Tap Add Activity to start building this workout."
+                )
+            } else {
+                UniformChipWidthGrid(
+                    activities: selectedActivities,
+                    allocationText: { activityID in
+                        "\(allocationMinutes(for: activityID)) min"
+                    },
+                    removeAction: { activityID in
+                        removeActivity(activityID)
+                    }
+                )
+            }
+        }
+    }
+
+    private var simplifiedActivityLibrarySheet: some View {
+        NavigationStack {
+            List {
+                Section("Activities") {
+                    ForEach(filteredCatalog) { activity in
+                        Button {
+                            toggleActivity(activity.id)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: activity.symbol)
+                                    .foregroundStyle(activity.tint)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(activity.title)
+                                        .foregroundStyle(.primary)
+                                    Text(activity.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if selectedActivityIDs.contains(activity.id) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $searchText, prompt: "Search activities")
+            .navigationTitle("Add Activity")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        isActivityLibraryPresented = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     private var selectedStageActivityForSuggestions: ProgramWorkoutType? {
@@ -1804,6 +1960,17 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
         planSyncStatusMessage = "Saved to Workout Repository."
     }
 
+    private func commitCurrentPlan() async {
+        guard let plan = await buildPlanRecord(expiresAt: nil) else {
+            planSyncStatusMessage = "Generate a workout before adding it to the roadmap."
+            return
+        }
+        planStore.saveRepositoryPlan(plan)
+        onPlanCommitted?(plan)
+        planSyncStatusMessage = "Workout added to your roadmap."
+        onDismiss?()
+    }
+
     private func sendCurrentPlanToIPhone() async {
         guard let temporaryPlan = await buildPlanRecord(expiresAt: Date().addingTimeInterval(24 * 60 * 60)) else {
             planSyncStatusMessage = "Generate a workout before sending it to iPhone."
@@ -1903,7 +2070,7 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
             coordinates: plan.routeCoordinateValues
         )
         planSyncStatusMessage = plan.expiresAt == nil
-            ? "Loaded repository plan into Program Builder."
+            ? "Loaded repository plan into Daily Mission."
             : "Loaded temporary plan from \(plan.sourceDeviceLabel)."
         rebalanceWeights(for: selectedActivityIDs)
         syncTargetMetric()
@@ -7788,4 +7955,536 @@ private func describeProgramWorkout(_ workout: ProgramRecentWorkout) -> String {
     }
     text += "."
     return text
+}
+
+struct DailyMissionView: View {
+    var body: some View {
+        ProgramBuilderView(presentationStyle: .dailyMission)
+    }
+}
+
+struct SimplifiedProgramBuilder: View {
+    let onPlanCommitted: ((ProgramWorkoutPlanRecord) -> Void)?
+    let onDismiss: (() -> Void)?
+
+    init(
+        onPlanCommitted: ((ProgramWorkoutPlanRecord) -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
+        self.onPlanCommitted = onPlanCommitted
+        self.onDismiss = onDismiss
+    }
+
+    var body: some View {
+        ProgramBuilderView(
+            presentationStyle: .simplified,
+            onPlanCommitted: onPlanCommitted,
+            onDismiss: onDismiss
+        )
+    }
+}
+
+typealias SimipliedProgramBuilder = SimplifiedProgramBuilder
+
+private struct RoadmapRepeatRule: Codable, Hashable {
+    enum Frequency: String, Codable, CaseIterable, Identifiable {
+        case daily
+        case weekly
+
+        var id: String { rawValue }
+        var title: String { self == .daily ? "Every Day" : "Every Week" }
+        var dayInterval: Int { self == .daily ? 1 : 7 }
+    }
+
+    let frequency: Frequency
+    let untilDate: Date
+}
+
+private struct RoadmapWorkoutAssignment: Identifiable, Codable, Hashable {
+    let id: UUID
+    let plan: ProgramWorkoutPlanRecord
+    let createdAt: Date
+
+    init(id: UUID = UUID(), plan: ProgramWorkoutPlanRecord, createdAt: Date = Date()) {
+        self.id = id
+        self.plan = plan
+        self.createdAt = createdAt
+    }
+}
+
+private struct RoadmapDayPlan: Identifiable, Codable, Hashable {
+    let id: Date
+    let date: Date
+    var assignments: [RoadmapWorkoutAssignment]
+
+    init(date: Date, assignments: [RoadmapWorkoutAssignment] = []) {
+        let normalized = Calendar.current.startOfDay(for: date)
+        self.id = normalized
+        self.date = normalized
+        self.assignments = assignments
+    }
+}
+
+@MainActor
+private final class TrainingRoadmapStore: ObservableObject {
+    static let shared = TrainingRoadmapStore()
+
+    @Published private(set) var days: [RoadmapDayPlan] = []
+    @Published private(set) var scheduledAssignmentIDs: Set<UUID> = []
+
+    private let daysKey = "training_roadmap_days_v1"
+    private let scheduledKey = "training_roadmap_scheduled_ids_v1"
+
+    private init() {
+        load()
+    }
+
+    func add(plan: ProgramWorkoutPlanRecord, to date: Date) {
+        guard let index = indexForDay(date) else { return }
+        days[index].assignments.append(RoadmapWorkoutAssignment(plan: plan))
+        persist()
+    }
+
+    func remove(assignmentID: UUID, from date: Date) {
+        guard let index = indexForDay(date) else { return }
+        days[index].assignments.removeAll { $0.id == assignmentID }
+        persist()
+    }
+
+    func applyRepeat(
+        assignment: RoadmapWorkoutAssignment,
+        from date: Date,
+        rule: RoadmapRepeatRule
+    ) {
+        guard let startIndex = indexForDay(date) else { return }
+        var currentDate = Calendar.current.date(byAdding: .day, value: rule.frequency.dayInterval, to: days[startIndex].date)
+        while let nextDate = currentDate, nextDate <= rule.untilDate {
+            if let index = indexForDay(nextDate),
+               !days[index].assignments.contains(where: { $0.plan.id == assignment.plan.id }) {
+                days[index].assignments.append(RoadmapWorkoutAssignment(plan: assignment.plan))
+            }
+            currentDate = Calendar.current.date(byAdding: .day, value: rule.frequency.dayInterval, to: nextDate)
+        }
+        persist()
+    }
+
+    func markScheduled(_ assignmentID: UUID) {
+        scheduledAssignmentIDs.insert(assignmentID)
+        persist()
+    }
+
+    func isScheduled(_ assignmentID: UUID) -> Bool {
+        scheduledAssignmentIDs.contains(assignmentID)
+    }
+
+    private func indexForDay(_ date: Date) -> Int? {
+        let target = Calendar.current.startOfDay(for: date)
+        return days.firstIndex { Calendar.current.isDate($0.date, inSameDayAs: target) }
+    }
+
+    private func load() {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: daysKey),
+           let decoded = try? JSONDecoder().decode([RoadmapDayPlan].self, from: data) {
+            days = normalizedDays(from: decoded)
+        } else {
+            days = normalizedDays(from: [])
+        }
+
+        if let scheduledData = defaults.data(forKey: scheduledKey),
+           let decoded = try? JSONDecoder().decode(Set<UUID>.self, from: scheduledData) {
+            scheduledAssignmentIDs = decoded
+        }
+    }
+
+    private func normalizedDays(from stored: [RoadmapDayPlan]) -> [RoadmapDayPlan] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return (0..<28).map { offset in
+            let dayDate = calendar.date(byAdding: .day, value: offset, to: today) ?? today
+            let normalized = calendar.startOfDay(for: dayDate)
+            return stored.first(where: { calendar.isDate($0.date, inSameDayAs: normalized) }) ?? RoadmapDayPlan(date: normalized)
+        }
+    }
+
+    private func persist() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(days) {
+            defaults.set(data, forKey: daysKey)
+        }
+        if let scheduledData = try? JSONEncoder().encode(scheduledAssignmentIDs) {
+            defaults.set(scheduledData, forKey: scheduledKey)
+        }
+    }
+}
+
+struct TrainingRoadmapView: View {
+    @StateObject private var roadmapStore = TrainingRoadmapStore.shared
+    @StateObject private var planStore = ProgramWorkoutPlanStore.shared
+    @StateObject private var liveWorkoutManager = CompanionWorkoutLiveManager.shared
+
+    @State private var selectedPage = 0
+    @State private var selectedDayForAction: RoadmapDayPlan?
+    @State private var selectedDayForRepositoryPicker: RoadmapDayPlan?
+    @State private var selectedDayForBuilder: RoadmapDayPlan?
+    @State private var selectedAssignmentForRepeat: (day: RoadmapDayPlan, assignment: RoadmapWorkoutAssignment)?
+    @State private var repeatFrequency: RoadmapRepeatRule.Frequency = .daily
+    @State private var repeatUntilDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
+    @State private var statusMessage: String?
+    @State private var isScheduling = false
+
+    private let roadmapColumns = Array(repeating: GridItem(.flexible(), spacing: 14), count: 1)
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                TabView(selection: $selectedPage) {
+                    ForEach(0..<4, id: \.self) { page in
+                        LazyVGrid(columns: roadmapColumns, spacing: 14) {
+                            ForEach(pageDays(page)) { day in
+                                roadmapDayCard(day)
+                            }
+                        }
+                        .tag(page)
+                        .padding(.horizontal, 4)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .frame(minHeight: 640)
+
+                roadmapRepositorySection
+
+                if let statusMessage, !statusMessage.isEmpty {
+                    Text(statusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                }
+            }
+            .padding(16)
+        }
+        .navigationTitle("Training Roadmap")
+        .background(GradientBackgrounds().programBuilderMeshBackground())
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(isScheduling ? "Saving..." : "Save") {
+                    Task {
+                        await scheduleRoadmap()
+                    }
+                }
+                .disabled(isScheduling)
+            }
+        }
+        .confirmationDialog(
+            "Add Workout",
+            isPresented: Binding(
+                get: { selectedDayForAction != nil },
+                set: { if !$0 { selectedDayForAction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Add from Repository") {
+                selectedDayForRepositoryPicker = selectedDayForAction
+            }
+            Button("Create Workout") {
+                selectedDayForBuilder = selectedDayForAction
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let selectedDayForAction {
+                Text("Choose how to add a workout block for \(selectedDayForAction.date.formatted(date: .abbreviated, time: .omitted)).")
+            }
+        }
+        .sheet(item: $selectedDayForRepositoryPicker) { day in
+            roadmapRepositoryPicker(for: day)
+        }
+        .sheet(item: $selectedDayForBuilder) { day in
+            NavigationStack {
+                SimplifiedProgramBuilder(
+                    onPlanCommitted: { plan in
+                        roadmapStore.add(plan: plan, to: day.date)
+                        selectedDayForBuilder = nil
+                        statusMessage = "Added \(plan.title) to \(day.date.formatted(date: .abbreviated, time: .omitted))."
+                    },
+                    onDismiss: {
+                        selectedDayForBuilder = nil
+                    }
+                )
+            }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { selectedAssignmentForRepeat != nil },
+                set: { if !$0 { selectedAssignmentForRepeat = nil } }
+            )
+        ) {
+            repeatEditorSheet
+        }
+    }
+
+    private func pageDays(_ page: Int) -> [RoadmapDayPlan] {
+        let start = page * 7
+        let end = min(start + 7, roadmapStore.days.count)
+        return Array(roadmapStore.days[start..<end])
+    }
+
+    @ViewBuilder
+    private func roadmapDayCard(_ day: RoadmapDayPlan) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(day.date.formatted(.dateTime.weekday(.wide)))
+                        .font(.headline.weight(.bold))
+                    Text(day.date.formatted(.dateTime.month(.abbreviated).day()))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    selectedDayForAction = day
+                } label: {
+                    Label("Add", systemImage: "plus.circle.fill")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
+            }
+
+            if day.assignments.isEmpty {
+                Text("Drop a workout here or tap Add.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 18)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(day.assignments) { assignment in
+                        roadmapAssignmentChip(day: day, assignment: assignment)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            selectedDayForAction = day
+        }
+        .dropDestination(for: String.self) { items, _ in
+            guard let first = items.first,
+                  let planID = UUID(uuidString: first),
+                  let plan = planStore.repositoryPlans.first(where: { $0.id == planID }) else {
+                return false
+            }
+            roadmapStore.add(plan: plan, to: day.date)
+            statusMessage = "Added \(plan.title) to \(day.date.formatted(date: .abbreviated, time: .omitted))."
+            return true
+        }
+    }
+
+    private func roadmapAssignmentChip(day: RoadmapDayPlan, assignment: RoadmapWorkoutAssignment) -> some View {
+        let activities = activityTitles(for: assignment.plan)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                Text(assignment.plan.title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if roadmapStore.isScheduled(assignment.id) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(activities, id: \.self) { activity in
+                        Text(activity)
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.orange.opacity(0.14), in: Capsule())
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contextMenu {
+            Button("Delete", role: .destructive) {
+                roadmapStore.remove(assignmentID: assignment.id, from: day.date)
+            }
+            Button("Repeat Daily…") {
+                selectedAssignmentForRepeat = (day, assignment)
+                repeatFrequency = .daily
+                repeatUntilDate = Calendar.current.date(byAdding: .day, value: 7, to: day.date) ?? day.date
+            }
+            Button("Repeat Weekly…") {
+                selectedAssignmentForRepeat = (day, assignment)
+                repeatFrequency = .weekly
+                repeatUntilDate = Calendar.current.date(byAdding: .day, value: 21, to: day.date) ?? day.date
+            }
+        }
+    }
+
+    private var roadmapRepositorySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Workout Repository")
+                        .font(.title3.weight(.bold))
+                    Text("Drag favorite workout blocks onto a day card, or load them from the add menu.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(planStore.repositoryPlans.count)")
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.16), in: Capsule())
+            }
+
+            if planStore.repositoryPlans.isEmpty {
+                Text("Save workouts from Daily Mission or Build Workout and they will appear here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(planStore.repositoryPlans) { plan in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(plan.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                Text(activityTitles(for: plan).joined(separator: " • "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .padding(12)
+                            .frame(width: 200, alignment: .leading)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .draggable(plan.id.uuidString)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private func roadmapRepositoryPicker(for day: RoadmapDayPlan) -> some View {
+        NavigationStack {
+            List(planStore.repositoryPlans) { plan in
+                Button {
+                    roadmapStore.add(plan: plan, to: day.date)
+                    selectedDayForRepositoryPicker = nil
+                    statusMessage = "Added \(plan.title) to \(day.date.formatted(date: .abbreviated, time: .omitted))."
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(plan.title)
+                            .foregroundStyle(.primary)
+                        Text(activityTitles(for: plan).joined(separator: " • "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Workout Repository")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        selectedDayForRepositoryPicker = nil
+                    }
+                }
+            }
+        }
+    }
+
+    private var repeatEditorSheet: some View {
+        NavigationStack {
+            Form {
+                Picker("Repeat", selection: $repeatFrequency) {
+                    ForEach(RoadmapRepeatRule.Frequency.allCases) { frequency in
+                        Text(frequency.title).tag(frequency)
+                    }
+                }
+                DatePicker("Until", selection: $repeatUntilDate, in: Date()..., displayedComponents: .date)
+            }
+            .navigationTitle("Repeat Workout")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        selectedAssignmentForRepeat = nil
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        if let selected = selectedAssignmentForRepeat {
+                            roadmapStore.applyRepeat(
+                                assignment: selected.assignment,
+                                from: selected.day.date,
+                                rule: RoadmapRepeatRule(frequency: repeatFrequency, untilDate: repeatUntilDate)
+                            )
+                        }
+                        selectedAssignmentForRepeat = nil
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func activityTitles(for plan: ProgramWorkoutPlanRecord) -> [String] {
+        let values = plan.resolvedPhases.map(\.title)
+        var seen: Set<String> = []
+        return values.filter { seen.insert($0).inserted }
+    }
+
+    private func scheduleRoadmap() async {
+        #if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
+        isScheduling = true
+        defer { isScheduling = false }
+
+        var scheduledCount = 0
+        for day in roadmapStore.days {
+            for (index, assignment) in day.assignments.enumerated() where !roadmapStore.isScheduled(assignment.id) {
+                let scheduledDate = scheduledDate(for: day.date, assignmentIndex: index)
+                do {
+                    _ = try await liveWorkoutManager.scheduleWorkoutPlansInAppleWorkout(
+                        title: assignment.plan.title,
+                        phases: assignment.plan.resolvedPhases,
+                        scheduledDate: scheduledDate
+                    )
+                    roadmapStore.markScheduled(assignment.id)
+                    scheduledCount += 1
+                } catch {
+                    statusMessage = "Stopped while scheduling \(assignment.plan.title)."
+                    return
+                }
+            }
+        }
+
+        statusMessage = scheduledCount == 0
+            ? "No new workouts needed scheduling."
+            : "Scheduled \(scheduledCount) workout\(scheduledCount == 1 ? "" : "s") in Apple Workout."
+        #else
+        statusMessage = "Workout scheduling is unavailable on this device."
+        #endif
+    }
+
+    private func scheduledDate(for day: Date, assignmentIndex: Int) -> Date {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: day)
+        let hourOffset = 6 + (assignmentIndex * 2)
+        return calendar.date(byAdding: .hour, value: hourOffset, to: startOfDay) ?? day
+    }
 }
