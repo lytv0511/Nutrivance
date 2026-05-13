@@ -342,6 +342,7 @@ struct PastQuestsView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var store = StageQuestStore.shared
     @StateObject private var engine = HealthStateEngine.shared
+    @StateObject private var completionStore = ScheduledWorkoutCompletionStore.shared
     @State private var selectedWorkoutID = "cycling"
     @State private var selectedWindow: StageHistoryWindow = .d28
     @State private var anchorDate = Date()
@@ -460,6 +461,10 @@ struct PastQuestsView: View {
             }
         }
         .onAppear(perform: restoreFilterState)
+        .onAppear {
+            completionStore.refreshCompletionMatches(with: engine.workoutAnalytics)
+            completionStore.ingestCompletionsIntoPastQuests(using: store)
+        }
         .onChange(of: selectedWorkoutID) { _, _ in persistFilterState() }
         .onChange(of: selectedWindow) { _, _ in persistFilterState() }
         .onChange(of: anchorDate) { _, _ in persistFilterState() }

@@ -1655,7 +1655,34 @@ final class CompanionWorkoutLiveManager: NSObject, ObservableObject {
         for plan in workoutPlans {
             try await WorkoutScheduler.shared.schedule(plan, at: components)
         }
+        ScheduledWorkoutCompletionStore.shared.recordScheduledPlan(
+            title: title,
+            scheduledDate: scheduledDate,
+            phases: phases,
+            assignmentID: nil
+        )
         return workoutPlans.count
+    }
+
+    func openWorkoutPlanInWorkoutApp(
+        title: String,
+        phases: [ProgramWorkoutPlanPhase]
+    ) async throws {
+        guard #available(iOS 17.0, *) else {
+            throw WorkoutBuildError.customWorkoutFailed
+        }
+        guard WorkoutScheduler.isSupported else {
+            throw WorkoutBuildError.customWorkoutFailed
+        }
+
+        let workoutPlans = try buildWorkoutPlansFromPhases(phases, title: title)
+        guard let firstPlan = workoutPlans.first else {
+            throw WorkoutBuildError.noValidPhases
+        }
+
+        let now = Date()
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: now)
+        try await WorkoutScheduler.shared.schedule(firstPlan, at: components)
     }
     #endif
     

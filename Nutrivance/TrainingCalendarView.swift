@@ -3,6 +3,7 @@ import HealthKit
 
 struct TrainingCalendarView: View {
     @ObservedObject private var engine = HealthStateEngine.shared
+    @StateObject private var completionStore = ScheduledWorkoutCompletionStore.shared
     @EnvironmentObject private var navigationState: NavigationState
 
     @State private var detectedWidth: CGFloat = 0
@@ -146,6 +147,10 @@ struct TrainingCalendarView: View {
         workoutsByDay[selectedDay] ?? []
     }
 
+    private var selectedDayScheduledEntries: [ScheduledWorkoutCompletionEntry] {
+        completionStore.entries(for: selectedDay)
+    }
+
     private var activeWorkoutDaysSorted: [Date] {
         workoutDaySet.sorted()
     }
@@ -276,6 +281,9 @@ struct TrainingCalendarView: View {
             }
             .onChange(of: sportFilter) { _, _ in
                 clampSelectedDayToVisibleMonth()
+            }
+            .onChange(of: engine.workoutAnalytics.count) { _, _ in
+                refreshScheduledCompletionState()
             }
             .onChange(of: persistedHRZoneSettings) { _, newValue in
                 persistHRZoneSettingsIfReady(newValue)
@@ -750,6 +758,38 @@ struct TrainingCalendarView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !selectedDayScheduledEntries.isEmpty {
+                    let completedCount = selectedDayScheduledEntries.filter { $0.matchedWorkoutUUID != nil }.count
+                    Text("\(completedCount)/\(selectedDayScheduledEntries.count) planned")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.orange.opacity(0.18), in: Capsule())
+                }
+            }
+
+            if !selectedDayScheduledEntries.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(selectedDayScheduledEntries) { entry in
+                        HStack(spacing: 10) {
+                            Image(systemName: entry.matchedWorkoutUUID == nil ? "circle.dashed" : "checkmark.circle.fill")
+                                .foregroundStyle(entry.matchedWorkoutUUID == nil ? .orange : .green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.title)
+                                    .font(.caption.weight(.semibold))
+                                Text(entry.matchedWorkoutUUID == nil ? "Planned" : "Completed")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("\(entry.phases.flatMap { $0.microStages ?? [] }.count) blocks")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
 
             if selectedDayWorkouts.isEmpty {
@@ -864,6 +904,11 @@ struct TrainingCalendarView: View {
         }
     }
 
+    private func refreshScheduledCompletionState() {
+        completionStore.refreshCompletionMatches(with: engine.workoutAnalytics)
+        completionStore.ingestCompletionsIntoPastQuests()
+    }
+
     @ViewBuilder
     private func calendarMetricPill(title: String, tint: Color) -> some View {
         Text(title)
@@ -917,6 +962,7 @@ struct TrainingCalendarView: View {
     private func loadMonthIfNeeded(for month: Date, forceFetch: Bool) async {
         let interval = calendar.dateInterval(of: .month, for: month) ?? monthInterval
         guard forceFetch || engine.needsWorkoutAnalyticsCoverage(from: interval.start, to: interval.end) else {
+            refreshScheduledCompletionState()
             clampSelectedDayToVisibleMonth()
             return
         }
@@ -924,6 +970,7 @@ struct TrainingCalendarView: View {
         isLoadingMonth = true
         await engine.ensureWorkoutAnalyticsCoverage(from: interval.start, to: interval.end, forceFetch: forceFetch)
         isLoadingMonth = false
+        refreshScheduledCompletionState()
         clampSelectedDayToVisibleMonth()
     }
 }

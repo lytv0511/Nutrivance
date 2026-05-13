@@ -102,6 +102,217 @@ private struct RoadmapBubbleTail: Shape {
     }
 }
 
+struct ScheduledWorkoutCompletionEntry: Identifiable, Codable, Hashable {
+    let id: UUID
+    let title: String
+    let scheduledDate: Date
+    let assignmentID: UUID?
+    let phases: [ProgramWorkoutPlanPhase]
+    var matchedWorkoutUUID: String?
+    var matchedWorkoutStartDate: Date?
+    var didImportPastQuests: Bool
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        scheduledDate: Date,
+        assignmentID: UUID?,
+        phases: [ProgramWorkoutPlanPhase],
+        matchedWorkoutUUID: String? = nil,
+        matchedWorkoutStartDate: Date? = nil,
+        didImportPastQuests: Bool = false,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.scheduledDate = scheduledDate
+        self.assignmentID = assignmentID
+        self.phases = phases
+        self.matchedWorkoutUUID = matchedWorkoutUUID
+        self.matchedWorkoutStartDate = matchedWorkoutStartDate
+        self.didImportPastQuests = didImportPastQuests
+        self.createdAt = createdAt
+    }
+}
+
+@MainActor
+final class ScheduledWorkoutCompletionStore: ObservableObject {
+    static let shared = ScheduledWorkoutCompletionStore()
+
+    @Published private(set) var entries: [ScheduledWorkoutCompletionEntry] = []
+
+    private let key = "scheduled_workout_completion_entries_v1"
+
+    private init() {
+        load()
+    }
+
+    func recordScheduledPlan(
+        title: String,
+        scheduledDate: Date,
+        phases: [ProgramWorkoutPlanPhase],
+        assignmentID: UUID?
+    ) {
+        let normalized = Calendar.current.startOfDay(for: scheduledDate)
+        let hasExisting = entries.contains {
+            $0.assignmentID == assignmentID
+            && assignmentID != nil
+        }
+        guard !hasExisting else { return }
+
+        entries.append(
+            ScheduledWorkoutCompletionEntry(
+                title: title,
+                scheduledDate: normalized,
+                assignmentID: assignmentID,
+                phases: phases
+            )
+        )
+        persist()
+    }
+
+    func refreshCompletionMatches(with workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) {
+        guard !entries.isEmpty else { return }
+        let calendar = Calendar.current
+        var updated = entries
+
+        for index in updated.indices where updated[index].matchedWorkoutUUID == nil {
+            let targetDay = calendar.startOfDay(for: updated[index].scheduledDate)
+            let primaryActivityIDs = Set(updated[index].phases.map(\.activityID))
+            let dayCandidates = workouts.filter { pair in
+                let sameDay = calendar.isDate(pair.workout.startDate, inSameDayAs: targetDay)
+                guard sameDay else { return false }
+                if primaryActivityIDs.isEmpty { return true }
+                return primaryActivityIDs.contains(normalizedWorkoutID(from: pair.workout.workoutActivityType.name))
+            }
+
+            guard let nearest = dayCandidates.min(by: {
+                abs($0.workout.startDate.timeIntervalSince(updated[index].scheduledDate))
+                < abs($1.workout.startDate.timeIntervalSince(updated[index].scheduledDate))
+            }) else { continue }
+
+            updated[index].matchedWorkoutUUID = nearest.workout.uuid.uuidString
+            updated[index].matchedWorkoutStartDate = nearest.workout.startDate
+        }
+
+        entries = pruneOldEntries(updated)
+        persist()
+    }
+
+    func ingestCompletionsIntoPastQuests(using questStore: StageQuestStore = .shared) {
+        guard !entries.isEmpty else { return }
+        var updated = entries
+
+        for entryIndex in updated.indices {
+            guard updated[entryIndex].matchedWorkoutUUID != nil,
+                  updated[entryIndex].didImportPastQuests == false else { continue }
+
+            let completionDate = updated[entryIndex].matchedWorkoutStartDate ?? updated[entryIndex].scheduledDate
+            for phase in updated[entryIndex].phases {
+                for stage in phase.microStages ?? [] {
+                    let values = parsedStageValueRange(stage)
+                    let record = StageQuestRecord(
+                        id: UUID(),
+                        completedAt: completionDate,
+                        workoutID: normalizedWorkoutID(from: phase.activityID),
+                        goalRawValue: stage.goal.rawValue,
+                        roleRawValue: stage.role.rawValue,
+                        valueMin: values.min,
+                        valueMax: values.max,
+                        minutes: max(stage.plannedMinutes, 1),
+                        repeats: max(stage.repeats, 1)
+                    )
+                    questStore.append(record: record)
+                }
+            }
+            updated[entryIndex].didImportPastQuests = true
+        }
+
+        entries = updated
+        persist()
+    }
+
+    func entries(for day: Date) -> [ScheduledWorkoutCompletionEntry] {
+        let calendar = Calendar.current
+        return entries
+            .filter { calendar.isDate($0.scheduledDate, inSameDayAs: day) }
+            .sorted { $0.scheduledDate < $1.scheduledDate }
+    }
+
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([ScheduledWorkoutCompletionEntry].self, from: data) else {
+            entries = []
+            return
+        }
+        entries = pruneOldEntries(decoded)
+    }
+
+    private func persist() {
+        guard let encoded = try? JSONEncoder().encode(entries) else { return }
+        UserDefaults.standard.set(encoded, forKey: key)
+    }
+
+    private func pruneOldEntries(_ source: [ScheduledWorkoutCompletionEntry]) -> [ScheduledWorkoutCompletionEntry] {
+        let floor = Calendar.current.date(byAdding: .day, value: -45, to: Date()) ?? Date.distantPast
+        return source
+            .filter { $0.scheduledDate >= floor }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
+    private func normalizedWorkoutID(from name: String) -> String {
+        name.lowercased().replacingOccurrences(of: " ", with: "-")
+    }
+
+    private func parsedStageValueRange(_ stage: ProgramCustomWorkoutMicroStage) -> (min: Double, max: Double) {
+        let raw = stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !raw.isEmpty else {
+            return fallbackRange(for: stage)
+        }
+
+        if stage.goal == .heartRateZone {
+            if let regex = try? NSRegularExpression(pattern: #"zone\s*(\d+)"#, options: [.caseInsensitive]) {
+                let nsRange = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+                if let match = regex.firstMatch(in: raw, options: [], range: nsRange),
+                   match.numberOfRanges > 1,
+                   let zoneRange = Range(match.range(at: 1), in: raw),
+                   let zone = Double(raw[zoneRange]) {
+                    return (zone, zone)
+                }
+            }
+        }
+
+        let numericTokens = raw
+            .replacingOccurrences(of: ",", with: "")
+            .components(separatedBy: CharacterSet(charactersIn: "0123456789.-").inverted)
+            .filter { !$0.isEmpty }
+            .compactMap(Double.init)
+
+        if numericTokens.count >= 2 {
+            return (min(numericTokens[0], numericTokens[1]), max(numericTokens[0], numericTokens[1]))
+        }
+        if let value = numericTokens.first {
+            return (value, value)
+        }
+
+        return fallbackRange(for: stage)
+    }
+
+    private func fallbackRange(for stage: ProgramCustomWorkoutMicroStage) -> (min: Double, max: Double) {
+        switch stage.goal {
+        case .time:
+            let value = Double(max(stage.plannedMinutes, 1))
+            return (value, value)
+        case .distance:
+            let distance = stage.plannedDistance ?? Double(max(stage.plannedMinutes, 1))
+            return (distance, distance)
+        default:
+            return (0, 0)
+        }
+    }
+}
+
 struct ProgramBuilderView: View {
     let presentationStyle: ProgramBuilderPresentationStyle
     let onPlanCommitted: ((ProgramWorkoutPlanRecord) -> Void)?
@@ -6503,6 +6714,9 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
         case updatedAt
         case expiresAt
         case sourceDeviceLabel
+        case isHighlighted
+        case highlightColorHex
+        case highlightSymbolName
     }
 
     let id: UUID
@@ -6533,6 +6747,9 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
     var updatedAt: Date
     var expiresAt: Date?
     let sourceDeviceLabel: String
+    let isHighlighted: Bool
+    let highlightColorHex: String?
+    let highlightSymbolName: String?
 
     init(
         id: UUID,
@@ -6562,7 +6779,10 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
         createdAt: Date,
         updatedAt: Date,
         expiresAt: Date?,
-        sourceDeviceLabel: String
+        sourceDeviceLabel: String,
+        isHighlighted: Bool = false,
+        highlightColorHex: String? = nil,
+        highlightSymbolName: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -6592,6 +6812,9 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
         self.updatedAt = updatedAt
         self.expiresAt = expiresAt
         self.sourceDeviceLabel = sourceDeviceLabel
+        self.isHighlighted = isHighlighted
+        self.highlightColorHex = highlightColorHex
+        self.highlightSymbolName = highlightSymbolName
     }
 
     init(from decoder: Decoder) throws {
@@ -6624,6 +6847,9 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
         sourceDeviceLabel = try container.decode(String.self, forKey: .sourceDeviceLabel)
+        isHighlighted = try container.decodeIfPresent(Bool.self, forKey: .isHighlighted) ?? false
+        highlightColorHex = try container.decodeIfPresent(String.self, forKey: .highlightColorHex)
+        highlightSymbolName = try container.decodeIfPresent(String.self, forKey: .highlightSymbolName)
     }
 
     var blueprint: ProgramGeneratedBlueprint {
@@ -6672,6 +6898,82 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
     var expirationDescription: String {
         guard let expiresAt else { return "No expiration" }
         return expiresAt.formatted(date: .omitted, time: .shortened)
+    }
+
+    func renamed(to newTitle: String) -> ProgramWorkoutPlanRecord {
+        ProgramWorkoutPlanRecord(
+            id: id,
+            title: newTitle,
+            summary: summary,
+            todayFocus: todayFocus,
+            blocks: blocks,
+            cautionNote: cautionNote,
+            selectedActivityIDs: selectedActivityIDs,
+            availableMinutes: availableMinutes,
+            modeRawValue: modeRawValue,
+            selectedPlanDepthRawValue: selectedPlanDepthRawValue,
+            allocationWeights: allocationWeights,
+            targetMetricRawValue: targetMetricRawValue,
+            selectedZone: selectedZone,
+            targetValueText: targetValueText,
+            routeObjectiveName: routeObjectiveName,
+            routeRepeats: routeRepeats,
+            selectedRouteTemplateID: selectedRouteTemplateID,
+            primaryActivityID: primaryActivityID,
+            activityRawValue: activityRawValue,
+            locationRawValue: locationRawValue,
+            routeName: routeName,
+            trailhead: trailhead,
+            routeCoordinates: routeCoordinates,
+            phases: phases,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            expiresAt: expiresAt,
+            sourceDeviceLabel: sourceDeviceLabel,
+            isHighlighted: isHighlighted,
+            highlightColorHex: highlightColorHex,
+            highlightSymbolName: highlightSymbolName
+        )
+    }
+
+    func withHighlight(
+        isHighlighted: Bool,
+        colorHex: String?,
+        symbolName: String?
+    ) -> ProgramWorkoutPlanRecord {
+        ProgramWorkoutPlanRecord(
+            id: id,
+            title: title,
+            summary: summary,
+            todayFocus: todayFocus,
+            blocks: blocks,
+            cautionNote: cautionNote,
+            selectedActivityIDs: selectedActivityIDs,
+            availableMinutes: availableMinutes,
+            modeRawValue: modeRawValue,
+            selectedPlanDepthRawValue: selectedPlanDepthRawValue,
+            allocationWeights: allocationWeights,
+            targetMetricRawValue: targetMetricRawValue,
+            selectedZone: selectedZone,
+            targetValueText: targetValueText,
+            routeObjectiveName: routeObjectiveName,
+            routeRepeats: routeRepeats,
+            selectedRouteTemplateID: selectedRouteTemplateID,
+            primaryActivityID: primaryActivityID,
+            activityRawValue: activityRawValue,
+            locationRawValue: locationRawValue,
+            routeName: routeName,
+            trailhead: trailhead,
+            routeCoordinates: routeCoordinates,
+            phases: phases,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            expiresAt: expiresAt,
+            sourceDeviceLabel: sourceDeviceLabel,
+            isHighlighted: isHighlighted,
+            highlightColorHex: colorHex,
+            highlightSymbolName: symbolName
+        )
     }
 }
 
@@ -6769,6 +7071,15 @@ final class ProgramWorkoutPlanStore: ObservableObject {
 
     func deleteRepositoryPlan(id: UUID) {
         repositoryPlans.removeAll { $0.id == id }
+        persistAll()
+    }
+
+    func renameRepositoryPlan(id: UUID, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = repositoryPlans.firstIndex(where: { $0.id == id }) else { return }
+        repositoryPlans[index] = repositoryPlans[index].renamed(to: trimmed)
+        repositoryPlans.sort { $0.updatedAt > $1.updatedAt }
         persistAll()
     }
 
@@ -8233,10 +8544,20 @@ private final class TrainingRoadmapStore: ObservableObject {
     }
 }
 
+private enum RepositorySortOption: String, CaseIterable, Identifiable {
+    case newest = "Newest"
+    case durationDescending = "Duration (High-Low)"
+    case durationAscending = "Duration (Low-High)"
+
+    var id: String { rawValue }
+}
+
 struct TrainingRoadmapView: View {
     @StateObject private var roadmapStore = TrainingRoadmapStore.shared
     @StateObject private var planStore = ProgramWorkoutPlanStore.shared
     @StateObject private var liveWorkoutManager = CompanionWorkoutLiveManager.shared
+    @StateObject private var completionStore = ScheduledWorkoutCompletionStore.shared
+    @EnvironmentObject private var unitPreferences: UnitPreferencesStore
 
     @State private var expandedWeekIndices: Set<Int> = [0]
     @State private var selectedDayForAction: RoadmapDayPlan?
@@ -8246,6 +8567,12 @@ struct TrainingRoadmapView: View {
     @State private var repeatFrequency: RoadmapRepeatRule.Frequency = .daily
     @State private var repeatUntilDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
     @State private var statusMessage: String?
+    @State private var renamingRepositoryPlan: ProgramWorkoutPlanRecord?
+    @State private var renameRepositoryTitleText: String = ""
+    @State private var repositoryFilterActivityID: String? = nil
+    @State private var repositorySortOption: RepositorySortOption = .newest
+    @State private var symbolEditingPlan: ProgramWorkoutPlanRecord?
+    @State private var customSymbolNameText: String = ""
     @State private var isScheduling = false
     @State private var isRepositoryDragActive = false
     @State private var draggingRepositoryPlanID: UUID?
@@ -8256,10 +8583,44 @@ struct TrainingRoadmapView: View {
 
     private let proxyOverlayColumns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 7)
     private var isPadDevice: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private let highlightColorChoices: [(name: String, hex: String)] = [
+        ("Orange", "#F59E0B"),
+        ("Red", "#EF4444"),
+        ("Green", "#22C55E"),
+        ("Blue", "#3B82F6"),
+        ("Purple", "#8B5CF6"),
+        ("Pink", "#EC4899")
+    ]
+
+    private var repositoryActivityFilters: [(id: String, title: String)] {
+        let ids = Set(planStore.repositoryPlans.flatMap { $0.selectedActivityIDs })
+        return ids.compactMap { id in
+            guard let activity = ProgramWorkoutType.resolve(id: id) else { return nil }
+            return (id: id, title: activity.title)
+        }
+        .sorted { $0.title < $1.title }
+    }
+
+    private var displayedRepositoryPlans: [ProgramWorkoutPlanRecord] {
+        var plans = planStore.repositoryPlans
+        if let filterID = repositoryFilterActivityID {
+            plans = plans.filter { $0.selectedActivityIDs.contains(filterID) || $0.primaryActivityID == filterID }
+        }
+        switch repositorySortOption {
+        case .newest:
+            plans.sort { $0.updatedAt > $1.updatedAt }
+        case .durationDescending:
+            plans.sort { $0.availableMinutes > $1.availableMinutes }
+        case .durationAscending:
+            plans.sort { $0.availableMinutes < $1.availableMinutes }
+        }
+        return plans
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                roadmapShareMenu
                 ForEach(roadmapWeekSections()) { week in
                     DisclosureGroup(
                         isExpanded: Binding(
@@ -8371,12 +8732,90 @@ struct TrainingRoadmapView: View {
         ) {
             repeatEditorSheet
         }
+        .sheet(item: $renamingRepositoryPlan) { plan in
+            NavigationStack {
+                Form {
+                    TextField("Workout title", text: $renameRepositoryTitleText)
+                        .textInputAutocapitalization(.words)
+                }
+                .navigationTitle("Rename Workout")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            renamingRepositoryPlan = nil
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            planStore.renameRepositoryPlan(id: plan.id, title: renameRepositoryTitleText)
+                            statusMessage = "Renamed workout to \(renameRepositoryTitleText.trimmingCharacters(in: .whitespacesAndNewlines))."
+                            renamingRepositoryPlan = nil
+                        }
+                        .disabled(renameRepositoryTitleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }
+        .sheet(item: $symbolEditingPlan) { plan in
+            NavigationStack {
+                Form {
+                    TextField("SF Symbol name", text: $customSymbolNameText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                    if !customSymbolNameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Label("Preview", systemImage: customSymbolNameText.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                }
+                .navigationTitle("Custom Symbol")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            symbolEditingPlan = nil
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            let trimmed = customSymbolNameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let updated = plan.withHighlight(
+                                isHighlighted: true,
+                                colorHex: plan.highlightColorHex ?? "#F59E0B",
+                                symbolName: trimmed.isEmpty ? nil : trimmed
+                            )
+                            planStore.saveRepositoryPlan(updated)
+                            symbolEditingPlan = nil
+                        }
+                    }
+                }
+            }
+        }
         .onChange(of: isRepositoryDragActive) { _, active in
             if !active {
                 targetedProxyDate = nil
                 isDropHoveringRepositorySection = false
                 isDropHoveringDayCards = false
             }
+        }
+    }
+
+    @ViewBuilder
+    private var roadmapShareMenu: some View {
+        Menu {
+            ForEach(roadmapWeekSections()) { week in
+                if let weekURL = workoutShareFileURL(for: week) {
+                    ShareLink(
+                        item: weekURL,
+                        preview: SharePreview("Week \(week.index + 1) Schedule", image: Image(systemName: "calendar.badge.clock"))
+                    ) {
+                        Label("Share Week \(week.index + 1) as .workout", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+        } label: {
+            Label("Share Weekly Schedule", systemImage: "square.and.arrow.up.on.square")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.15), in: Capsule())
         }
     }
 
@@ -8583,6 +9022,7 @@ struct TrainingRoadmapView: View {
 
     private func roadmapAssignmentChip(day: RoadmapDayPlan, assignment: RoadmapWorkoutAssignment) -> some View {
         let activities = activityTitles(for: assignment.plan)
+        let stageRows = stageDetailRows(for: assignment.plan)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top) {
                 Text(assignment.plan.title)
@@ -8605,12 +9045,35 @@ struct TrainingRoadmapView: View {
                     }
                 }
             }
+
+            if !stageRows.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(stageRows.prefix(2), id: \.self) { row in
+                        Text(row)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.top, 2)
+            }
         }
         .padding(12)
         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contextMenu {
             Button("Delete", role: .destructive) {
                 roadmapStore.remove(assignmentID: assignment.id, from: day.date)
+            }
+            Button("Open in Workout App") {
+                openInWorkoutApp(assignment.plan)
+            }
+            if let shareURL = workoutShareFileURL(for: assignment.plan) {
+                ShareLink(
+                    item: shareURL,
+                    preview: SharePreview(assignment.plan.title, image: Image(systemName: "figure.run"))
+                ) {
+                    Label("Share .workout", systemImage: "square.and.arrow.up")
+                }
             }
             Button("Repeat Daily…") {
                 selectedAssignmentForRepeat = (day, assignment)
@@ -8643,6 +9106,43 @@ struct TrainingRoadmapView: View {
                     .background(Color.orange.opacity(0.16), in: Capsule())
             }
 
+            HStack(spacing: 10) {
+                Menu {
+                    Button("All Workout Types") { repositoryFilterActivityID = nil }
+                    ForEach(repositoryActivityFilters, id: \.id) { filter in
+                        Button(filter.title) {
+                            repositoryFilterActivityID = filter.id
+                        }
+                    }
+                } label: {
+                    Label(
+                        repositoryFilterActivityID.flatMap { id in
+                            ProgramWorkoutType.resolve(id: id)?.title
+                        } ?? "Filter Workout Type",
+                        systemImage: "line.3.horizontal.decrease.circle"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.08), in: Capsule())
+                }
+
+                Menu {
+                    ForEach(RepositorySortOption.allCases) { option in
+                        Button(option.rawValue) {
+                            repositorySortOption = option
+                        }
+                    }
+                } label: {
+                    Label(repositorySortOption.rawValue, systemImage: "arrow.up.arrow.down.circle")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color.white.opacity(0.08), in: Capsule())
+                }
+                Spacer()
+            }
+
             if planStore.repositoryPlans.isEmpty {
                 Text("Save workouts from Daily Mission or Build Workout and they will appear here.")
                     .font(.footnote)
@@ -8651,13 +9151,13 @@ struct TrainingRoadmapView: View {
             } else {
                 if isPadDevice {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
-                        ForEach(planStore.repositoryPlans) { plan in
+                        ForEach(displayedRepositoryPlans) { plan in
                             repositoryPlanCard(plan)
                         }
                     }
                 } else {
                     LazyVStack(spacing: 10) {
-                        ForEach(planStore.repositoryPlans) { plan in
+                        ForEach(displayedRepositoryPlans) { plan in
                             repositoryPlanCard(plan)
                         }
                     }
@@ -8728,22 +9228,42 @@ struct TrainingRoadmapView: View {
 
     @ViewBuilder
     private func repositoryPlanCard(_ plan: ProgramWorkoutPlanRecord) -> some View {
+        let stageRows = stageDetailRows(for: plan)
+        let highlightColor = repositoryHighlightColor(for: plan)
         VStack(alignment: .leading, spacing: 6) {
-            Text(plan.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
+            HStack(spacing: 8) {
+                if plan.isHighlighted {
+                    Image(systemName: plan.highlightSymbolName ?? "star.fill")
+                        .foregroundStyle(highlightColor)
+                }
+                Text(plan.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
             Text(activityTitles(for: plan).joined(separator: " • "))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+
+            if !stageRows.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(stageRows.prefix(2), id: \.self) { row in
+                        Text(row)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.top, 2)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background((plan.isHighlighted ? highlightColor.opacity(0.16) : Color.white.opacity(0.08)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(
-                    draggingRepositoryPlanID == plan.id ? Color.orange.opacity(0.6) : Color.clear,
+                    draggingRepositoryPlanID == plan.id ? Color.orange.opacity(0.6) : (plan.isHighlighted ? highlightColor.opacity(0.55) : Color.clear),
                     lineWidth: 1.2
                 )
         )
@@ -8772,11 +9292,61 @@ struct TrainingRoadmapView: View {
             draggingRepositoryPlanID = plan.id
             return NSItemProvider(object: plan.id.uuidString as NSString)
         }
+        .contextMenu {
+            Button("Rename") {
+                renamingRepositoryPlan = plan
+                renameRepositoryTitleText = plan.title
+            }
+            Button("Delete", role: .destructive) {
+                planStore.deleteRepositoryPlan(id: plan.id)
+                if draggingRepositoryPlanID == plan.id {
+                    isRepositoryDragActive = false
+                    draggingRepositoryPlanID = nil
+                }
+                statusMessage = "Deleted \(plan.title) from repository."
+            }
+            Menu(plan.isHighlighted ? "Edit Highlight" : "Highlight") {
+                Button(plan.isHighlighted ? "Remove Highlight" : "Enable Highlight") {
+                    let updated = plan.withHighlight(
+                        isHighlighted: !plan.isHighlighted,
+                        colorHex: plan.highlightColorHex ?? "#F59E0B",
+                        symbolName: plan.highlightSymbolName
+                    )
+                    planStore.saveRepositoryPlan(updated)
+                }
+                Divider()
+                ForEach(highlightColorChoices, id: \.hex) { choice in
+                    Button(choice.name) {
+                        let updated = plan.withHighlight(
+                            isHighlighted: true,
+                            colorHex: choice.hex,
+                            symbolName: plan.highlightSymbolName
+                        )
+                        planStore.saveRepositoryPlan(updated)
+                    }
+                }
+                Button("Custom Symbol…") {
+                    symbolEditingPlan = plan
+                    customSymbolNameText = plan.highlightSymbolName ?? ""
+                }
+            }
+            Button("Open in Workout App") {
+                openInWorkoutApp(plan)
+            }
+            if let shareURL = workoutShareFileURL(for: plan) {
+                ShareLink(
+                    item: shareURL,
+                    preview: SharePreview(plan.title, image: Image(systemName: "figure.run"))
+                ) {
+                    Label("Share .workout", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
     }
 
     private func roadmapRepositoryPicker(for day: RoadmapDayPlan) -> some View {
         NavigationStack {
-            List(planStore.repositoryPlans) { plan in
+            List(displayedRepositoryPlans) { plan in
                 Button {
                     roadmapStore.add(plan: plan, to: day.date)
                     selectedDayForRepositoryPicker = nil
@@ -8799,6 +9369,19 @@ struct TrainingRoadmapView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func repositoryHighlightColor(for plan: ProgramWorkoutPlanRecord) -> Color {
+        guard plan.isHighlighted else { return .clear }
+        guard let hex = plan.highlightColorHex else { return .orange }
+        switch hex.uppercased() {
+        case "#EF4444": return .red
+        case "#22C55E": return .green
+        case "#3B82F6": return .blue
+        case "#8B5CF6": return .purple
+        case "#EC4899": return .pink
+        default: return .orange
         }
     }
 
@@ -8842,6 +9425,86 @@ struct TrainingRoadmapView: View {
         return values.filter { seen.insert($0).inserted }
     }
 
+    private func stageDetailRows(for plan: ProgramWorkoutPlanRecord) -> [String] {
+        plan.resolvedPhases.map { phase in
+            let normalizedStages = (phase.microStages ?? []).filter { $0.plannedMinutes > 0 }
+            if normalizedStages.isEmpty {
+                return "\(phase.title): \(phase.plannedMinutes)m total"
+            }
+
+            let preview = normalizedStages.prefix(3).map { stage in
+                let foundation = stageFoundationSummary(stage)
+                let alert = stageAlertSummary(stage)
+                if alert.isEmpty {
+                    return "\(stage.role.title) \(foundation)"
+                }
+                return "\(stage.role.title) \(foundation) • Alert \(alert)"
+            }.joined(separator: " • ")
+
+            let remaining = normalizedStages.count - min(3, normalizedStages.count)
+            if remaining > 0 {
+                return "\(phase.title): \(preview) +\(remaining)"
+            }
+            return "\(phase.title): \(preview)"
+        }
+    }
+
+    private func stageFoundationSummary(_ stage: ProgramCustomWorkoutMicroStage) -> String {
+        switch stage.foundationType {
+        case .open:
+            return "open"
+        case .time:
+            return "\(max(stage.plannedMinutes, 1))m"
+        case .distance:
+            guard let distanceKm = stage.plannedDistance else { return "distance" }
+            if unitPreferences.resolvedDistanceUnit == .miles {
+                return String(format: "%.1fmi", distanceKm * 0.621371)
+            }
+            return String(format: "%.1fkm", distanceKm)
+        }
+    }
+
+    private func stageAlertSummary(_ stage: ProgramCustomWorkoutMicroStage) -> String {
+        let target = stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label: String
+        switch stage.goal {
+        case .heartRateZone:
+            label = "HR"
+        case .power:
+            label = "Power"
+        case .cadence:
+            label = "Cadence"
+        case .speed:
+            label = "Speed"
+        case .pace:
+            label = "Pace"
+        case .distance:
+            label = "Distance"
+        case .energy:
+            label = "Energy"
+        case .open, .time:
+            return ""
+        }
+
+        if target.isEmpty {
+            return label
+        }
+
+        let behaviorPrefix: String
+        switch stage.targetBehavior {
+        case .range:
+            behaviorPrefix = "in"
+        case .aboveThreshold:
+            behaviorPrefix = ">= "
+        case .belowThreshold:
+            behaviorPrefix = "<= "
+        case .completionGoal:
+            behaviorPrefix = ""
+        }
+
+        return behaviorPrefix.isEmpty ? "\(label) \(target)" : "\(label) \(behaviorPrefix)\(target)"
+    }
+
     private func scheduleRoadmap() async {
         #if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
         isScheduling = true
@@ -8858,6 +9521,12 @@ struct TrainingRoadmapView: View {
                         scheduledDate: scheduledDate
                     )
                     roadmapStore.markScheduled(assignment.id)
+                    completionStore.recordScheduledPlan(
+                        title: assignment.plan.title,
+                        scheduledDate: day.date,
+                        phases: assignment.plan.resolvedPhases,
+                        assignmentID: assignment.id
+                    )
                     scheduledCount += 1
                 } catch {
                     statusMessage = "Stopped while scheduling \(assignment.plan.title)."
@@ -8879,5 +9548,84 @@ struct TrainingRoadmapView: View {
         let startOfDay = calendar.startOfDay(for: day)
         let hourOffset = 6 + (assignmentIndex * 2)
         return calendar.date(byAdding: .hour, value: hourOffset, to: startOfDay) ?? day
+    }
+
+    private func openInWorkoutApp(_ plan: ProgramWorkoutPlanRecord) {
+        #if canImport(WorkoutKit) && !targetEnvironment(macCatalyst)
+        Task {
+            do {
+                try await liveWorkoutManager.openWorkoutPlanInWorkoutApp(
+                    title: plan.title,
+                    phases: plan.resolvedPhases
+                )
+                statusMessage = "Opened \(plan.title) in Workout app."
+            } catch {
+                statusMessage = "Could not open Workout app for \(plan.title)."
+            }
+        }
+        #else
+        statusMessage = "Opening Workout app is unavailable on this device."
+        #endif
+    }
+
+    private func workoutShareFileURL(for plan: ProgramWorkoutPlanRecord) -> URL? {
+        struct ShareBundle: Codable {
+            let schemaVersion: Int
+            let kind: String
+            let exportedAt: Date
+            let plans: [ProgramWorkoutPlanRecord]
+        }
+
+        let payload = ShareBundle(
+            schemaVersion: 1,
+            kind: "single-plan",
+            exportedAt: Date(),
+            plans: [plan]
+        )
+        return writeWorkoutShareFile(payload: payload, baseName: plan.title)
+    }
+
+    private func workoutShareFileURL(for week: RoadmapWeekSection) -> URL? {
+        struct ShareDay: Codable {
+            let date: Date
+            let plans: [ProgramWorkoutPlanRecord]
+        }
+        struct ShareBundle: Codable {
+            let schemaVersion: Int
+            let kind: String
+            let exportedAt: Date
+            let weekIndex: Int
+            let days: [ShareDay]
+        }
+
+        let payload = ShareBundle(
+            schemaVersion: 1,
+            kind: "week-schedule",
+            exportedAt: Date(),
+            weekIndex: week.index + 1,
+            days: week.days.map { day in
+                ShareDay(date: day.date, plans: day.assignments.map(\.plan))
+            }
+        )
+        return writeWorkoutShareFile(payload: payload, baseName: "week-\(week.index + 1)-schedule")
+    }
+
+    private func writeWorkoutShareFile<T: Encodable>(payload: T, baseName: String) -> URL? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(payload) else { return nil }
+
+        let sanitized = baseName
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9\\-]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let fileName = (sanitized.isEmpty ? "workout" : sanitized) + ".workout"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName, isDirectory: false)
+        do {
+            try data.write(to: url, options: [.atomic])
+            return url
+        } catch {
+            return nil
+        }
     }
 }
