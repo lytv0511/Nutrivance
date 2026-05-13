@@ -528,15 +528,21 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
     ) {
-        guard error == nil else { return }
         Task { @MainActor in
-            if let data = session.receivedApplicationContext[Keys.dashboardPayload] as? Data,
-               let payload = try? JSONDecoder().decode(WatchDashboardPayload.self, from: data) {
-                self.store?.applySyncedPayload(payload)
-            } else if let cached = WatchCachedDashboard.load() {
-                self.store?.applySyncedPayload(cached)
+            if error == nil {
+                if let data = session.receivedApplicationContext[Keys.dashboardPayload] as? Data,
+                   let payload = try? JSONDecoder().decode(WatchDashboardPayload.self, from: data) {
+                    self.store?.applySyncedPayload(payload)
+                } else if let cached = WatchCachedDashboard.load() {
+                    self.store?.applySyncedPayload(cached)
+                }
+                self.requestImmediateRefresh()
             }
-            self.requestImmediateRefresh()
+            WatchWorkoutManager.shared.handlePhoneWatchConnectivityActivation(
+                activationState: activationState,
+                error: error,
+                session: session
+            )
         }
     }
 
@@ -545,6 +551,23 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
             if session.isReachable {
                 self.requestImmediateRefresh()
             }
+            WatchWorkoutManager.shared.handlePhoneWatchConnectivityReachabilityChanged(session: session)
+        }
+    }
+
+    nonisolated func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String : Any],
+        replyHandler: @escaping ([String : Any]) -> Void
+    ) {
+        Task { @MainActor in
+            WatchWorkoutManager.shared.handlePhoneWatchConnectivityMessage(message, replyHandler: replyHandler)
+        }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
+        Task { @MainActor in
+            WatchWorkoutManager.shared.handlePhoneWatchConnectivityUserInfo(userInfo)
         }
     }
 

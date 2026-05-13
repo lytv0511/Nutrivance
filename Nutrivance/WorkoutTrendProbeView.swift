@@ -539,11 +539,46 @@ enum WorkoutTrendMLXCoach {
     private static var cachedContainer: ModelContainer?
     private static var cachedSelectionKey: String?
     private static var loadTask: Task<ModelContainer, Error>?
+    /// See `WorkoutDetailMLXCoach`: MLX refuses a second `loadModelContainer` after some init failures.
+    private static var mlxLoaderPoisonedForKey: String?
 
     static func resetCachedModel() {
         cachedContainer = nil
         cachedSelectionKey = nil
         loadTask = nil
+        mlxLoaderPoisonedForKey = nil
+    }
+
+    private static func mlxErrorFingerprint(_ error: Error) -> String {
+        var parts = [error.localizedDescription, String(describing: error)]
+        let ns = error as NSError
+        parts.append(ns.domain)
+        parts.append(String(ns.code))
+        parts.append(ns.debugDescription)
+        return parts.joined(separator: " ")
+    }
+
+    private static func isMLXFatalReuseAfterInitFailure(_ error: Error) -> Bool {
+        let compact = mlxErrorFingerprint(error).lowercased().filter { $0.isLetter || $0.isNumber }
+        if compact.contains("invalidreuseafterinitializationfailure") { return true }
+        return compact.contains("invalidreuse") && compact.contains("initialization")
+    }
+
+    private static func isLikelyTransientModelFetchError(_ error: Error) -> Bool {
+        let blob = mlxErrorFingerprint(error)
+        if blob.localizedCaseInsensitiveContains("download") { return true }
+        if blob.localizedCaseInsensitiveContains("network") { return true }
+        if blob.localizedCaseInsensitiveContains("offline") { return true }
+        if blob.localizedCaseInsensitiveContains("cancelled") { return true }
+        if blob.localizedCaseInsensitiveContains("canceled") { return true }
+        if blob.localizedCaseInsensitiveContains("timed out") { return true }
+        return false
+    }
+
+    private static func shouldPoisonMLXLoader(after error: Error) -> Bool {
+        if isMLXFatalReuseAfterInitFailure(error) { return true }
+        if isLikelyTransientModelFetchError(error) { return false }
+        return true
     }
 
     private static func memoryCacheLimitBytes(forSelectionKey key: String) -> Int {
@@ -571,10 +606,29 @@ enum WorkoutTrendMLXCoach {
             cachedContainer = nil
             loadTask = nil
             cachedSelectionKey = nil
+            mlxLoaderPoisonedForKey = nil
+        }
+
+        if mlxLoaderPoisonedForKey == choice.key {
+            throw NSError(
+                domain: "WorkoutTrendMLXCoach",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "The on-device coach model failed to initialize. Fully quit Nutrivance from the app switcher and reopen before trying again."]
+            )
         }
 
         if let cachedContainer { return cachedContainer }
-        if let loadTask { return try await loadTask.value }
+        if let loadTask {
+            do {
+                return try await loadTask.value
+            } catch {
+                Self.loadTask = nil
+                if shouldPoisonMLXLoader(after: error) {
+                    mlxLoaderPoisonedForKey = choice.key
+                }
+                throw error
+            }
+        }
 
         Memory.cacheLimit = memoryCacheLimitBytes(forSelectionKey: choice.key)
 
@@ -593,9 +647,13 @@ enum WorkoutTrendMLXCoach {
             cachedContainer = container
             cachedSelectionKey = choice.key
             loadTask = nil
+            mlxLoaderPoisonedForKey = nil
             return container
         } catch {
             loadTask = nil
+            if shouldPoisonMLXLoader(after: error) {
+                mlxLoaderPoisonedForKey = choice.key
+            }
             throw error
         }
     }

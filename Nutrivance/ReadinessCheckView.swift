@@ -396,7 +396,8 @@ struct ReadinessCheckView: View {
                     animationPhase = 20
                 }
                 if lastCompletedCoverageTaskID == refreshTaskID {
-                    snapshot = buildSnapshot()
+                    // Same calendar day as the last completed coverage pass: keep the cached snapshot
+                    // to avoid recomputing the full readiness pipeline on every navigation back.
                     updateProAthleteData()
                     bodyStatusModel = computeBodyStatus(engine: healthEngine)
                     morningReadiness = buildMorningReadiness(engine: healthEngine)
@@ -469,11 +470,10 @@ struct ReadinessCheckView: View {
 
     @MainActor
     private func refreshCoverage(forceNetwork: Bool) async {
-        snapshot = buildSnapshot()
-        
         #if targetEnvironment(macCatalyst)
-        // On Mac, snapshot is built from cached data (iPhone sync). 
+        // On Mac, snapshot is built from cached data (iPhone sync).
         // Don't block UI; sync in background.
+        snapshot = buildSnapshot()
         DispatchQueue.global(qos: .background).async {
             NSUbiquitousKeyValueStore.default.synchronize()
         }
@@ -495,17 +495,22 @@ struct ReadinessCheckView: View {
 
         let needRecovery = healthEngine.needsRecoveryMetricsCoverage(from: recoveryStart, to: end)
         let needWorkouts = healthEngine.needsWorkoutAnalyticsCoverage(from: workoutStart, to: end)
-        guard needRecovery || needWorkouts else { return }
 
-        isLoading = true
-        if needRecovery {
-            await healthEngine.ensureRecoveryMetricsCoverage(from: recoveryStart, to: end)
+        if needRecovery || needWorkouts {
+            isLoading = true
+            if needRecovery {
+                await healthEngine.ensureRecoveryMetricsCoverage(from: recoveryStart, to: end)
+            }
+            if needWorkouts {
+                await healthEngine.ensureWorkoutAnalyticsCoverage(from: workoutStart, to: end)
+            }
+            isLoading = false
         }
-        if needWorkouts {
-            await healthEngine.ensureWorkoutAnalyticsCoverage(from: workoutStart, to: end)
+
+        // Rebuild snapshot only when we fetched new coverage or we have not built a window yet.
+        if needRecovery || needWorkouts || snapshot.readinessWindow.isEmpty {
+            snapshot = buildSnapshot()
         }
-        snapshot = buildSnapshot()
-        isLoading = false
     }
 
     /// Builds the readiness snapshot. The heavy fan-out — ~21 per-day pipeline calls

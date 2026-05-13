@@ -71,6 +71,7 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
             } else {
                 self.syncError = nil
             }
+            WatchDashboardSyncBridge.shared.handleSessionActivationResult(activationState, error: error)
         }
     }
     
@@ -90,6 +91,15 @@ class iOSWorkoutSyncManager: NSObject, WCSessionDelegate, ObservableObject {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
     ) {
+        // Apple Watch dashboard asks for `["request": "dashboardSnapshot"]`; must not reply with `[:]`
+        // or the watch never receives `dashboardPayload` (WatchDashboardSyncBridge owns that reply).
+        if message["request"] as? String == "dashboardSnapshot" {
+            Task { @MainActor in
+                _ = WatchDashboardSyncBridge.shared.handleIncomingMessage(message, replyHandler: replyHandler)
+            }
+            return
+        }
+
         Task { @MainActor in
             self.handleIncomingMessage(message)
         }

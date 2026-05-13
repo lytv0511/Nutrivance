@@ -3150,11 +3150,12 @@ private struct StrainRecoveryAISummarySection: View {
         )
     }
 
+    /// Stable across incremental engine syncs; only changes when the summary request identity
+    /// or generate-vs-wait gate flips (avoids re-running snapshot + suggestion refresh on every count tick).
     private var generationTaskID: String {
         [
             selectedSuggestionRequestID,
-            summaryGenerationReadiness.triggerToken,
-            String(suggestions.count)
+            summaryGenerationReadiness.canGenerate ? "gen-ready" : "gen-waiting"
         ].joined(separator: "|")
     }
 
@@ -3207,16 +3208,6 @@ private struct StrainRecoveryAISummarySection: View {
         selectedBackend == .appleIntelligence && deviceSupportsAppleIntelligence()
     }
 
-    private var suggestionsContextID: String {
-        let period = summaryReportPeriod(for: timeFilter, requestedDate: anchorDate)
-        return [
-            timeFilter.rawValue,
-            sportFilter ?? "all",
-            Calendar.current.startOfDay(for: period.canonicalAnchorDate).formatted(date: .numeric, time: .omitted),
-            String(engine.workoutAnalytics.count)
-        ].joined(separator: "|")
-    }
-
     @MainActor
     private func refreshLocalSnapshots(forceReload: Bool = false) {
         if forceReload {
@@ -3224,6 +3215,18 @@ private struct StrainRecoveryAISummarySection: View {
         }
         cacheSnapshot = StrainRecoverySummaryPersistence.load(forceReload: forceReload)
         syncSettingsSnapshot = StrainRecoverySummaryPersistence.loadSyncSettings(forceReload: forceReload)
+    }
+
+    @MainActor
+    private func scheduleDebouncedSuggestionsRefresh() {
+        deferredSuggestionsRefreshTask?.cancel()
+        deferredSuggestionsRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            showsAllSuggestions = false
+            refreshSuggestionsSnapshot()
+            scheduleAutoSummaryLoad()
+        }
     }
 
     @MainActor
@@ -3763,22 +3766,12 @@ private struct StrainRecoveryAISummarySection: View {
                 }
             }
         }
-        .task(id: suggestionsContextID) {
-            deferredSuggestionsRefreshTask?.cancel()
-            deferredSuggestionsRefreshTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
-                showsAllSuggestions = false
-                refreshSuggestionsSnapshot()
-                scheduleAutoSummaryLoad()
-            }
+        .onChange(of: engine.workoutAnalytics.count) { _, _ in
+            scheduleDebouncedSuggestionsRefresh()
         }
         .onAppear {
             AppResourceCoordinator.shared.setStrainRecoveryForegroundCritical(true)
-            refreshLocalSnapshots()
-            refreshSuggestionsSnapshot()
             ensureSummaryPrerequisitesIfNeeded()
-            scheduleAutoSummaryLoad()
         }
         .onChange(of: summaryGenerationReadiness.triggerToken) { _, _ in
             scheduleAutoSummaryLoad()
@@ -7661,13 +7654,6 @@ private func precomputeCoachPayload(
     let displayWorkouts = allWorkouts.filter { $0.workout.startDate >= window.start && $0.workout.startDate < window.endExclusive }
 
     let zoneProfiles = await bulkResolveZoneProfiles(workouts: allWorkouts)
-    for (uuid, profile) in zoneProfiles {
-        if let workout = allWorkouts.first(where: { $0.workout.uuid == uuid })?.workout {
-            let z4Bounds = profile.zones.first(where: { $0.zoneNumber == 4 })
-            let z5Bounds = profile.zones.first(where: { $0.zoneNumber == 5 })
-            print("[CoachAI][zone-diag] \(workout.workoutActivityType.name) \(workout.startDate.formatted(date: .abbreviated, time: .shortened)) schema=\(profile.schema.rawValue) maxHR=\(profile.maxHR.map { String(format: "%.0f", $0) } ?? "?") Z4=[\(z4Bounds.map { String(format: "%.0f-%.0f", $0.range.lowerBound, $0.range.upperBound) } ?? "?")] Z5=[\(z5Bounds.map { String(format: "%.0f-%.0f", $0.range.lowerBound, $0.range.upperBound) } ?? "?")]")
-        }
-    }
 
     let loadSnapshots = dailyLoadSnapshots(
         workouts: allWorkouts,

@@ -3145,6 +3145,7 @@ extension CompanionWorkoutLiveManager: WCSessionDelegate {
         print("[Companion] WCSession activation completed: state=\(activationState.rawValue), error=\(error?.localizedDescription ?? "none")")
         Task { @MainActor in
             self.refreshRemoteContextIfNeeded()
+            WatchDashboardSyncBridge.shared.handleSessionActivationResult(activationState, error: error)
         }
     }
 

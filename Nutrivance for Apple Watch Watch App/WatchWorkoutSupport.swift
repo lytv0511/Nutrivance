@@ -1198,13 +1198,6 @@ final class WatchWorkoutManager: NSObject, ObservableObject {
             restorePersistedSessionIfNeeded()
             await recoverActiveWorkoutSessionIfNeeded()
             normalizePostWorkoutDestinationAfterStartup()
-#if canImport(WatchConnectivity)
-            if WCSession.isSupported() {
-                let session = WCSession.default
-                session.delegate = self
-                session.activate()
-            }
-#endif
             refreshRecoveredWorkoutContext()
             if #available(watchOS 10.0, *) {
                 schedulerAuthorizationState = await WorkoutScheduler.shared.requestAuthorization()
@@ -4245,75 +4238,75 @@ extension WatchWorkoutManager: HKLiveWorkoutBuilderDelegate {
 }
 
 #if canImport(WatchConnectivity)
-extension WatchWorkoutManager: WCSessionDelegate {
-    nonisolated func session(
-        _ session: WCSession,
-        activationDidCompleteWith activationState: WCSessionActivationState,
-        error: Error?
+extension WatchWorkoutManager {
+    /// Called from `WatchConnectivityBridge` so `WCSession.default.delegate` stays unified (dashboard + workouts).
+    @MainActor
+    func handlePhoneWatchConnectivityActivation(
+        activationState: WCSessionActivationState,
+        error: Error?,
+        session: WCSession
     ) {
-        Task { @MainActor in
-            if let error = error {
-                print("[Watch] WCSession activation failed: \(error.localizedDescription)")
-                self.statusMessage = "iPhone connection failed: \(error.localizedDescription)"
-                return
-            }
-            
-            let stateString: String
-            switch activationState {
-            case .activated:
-                stateString = "ACTIVATED"
-            case .inactive:
-                stateString = "INACTIVE"
-            case .notActivated:
-                stateString = "NOT_ACTIVATED"
-            @unknown default:
-                stateString = "UNKNOWN(\(activationState.rawValue))"
-            }
-            
-            print("[Watch] WCSession activation completed: state=\(stateString), isReachable=\(session.isReachable)")
-            
-            switch activationState {
-            case .activated:
-                if session.isReachable {
-                    self.statusMessage = "Connected to iPhone"
-                    print("[Watch] iPhone is reachable, ready to receive commands")
-                    if self.isSessionActive || self.workoutSession != nil {
-                        Task { @MainActor [weak self] in
-                            guard let self else { return }
-                            self.isMirroringToPhone = await self.ensureCompanionMirroring()
-                            _ = await self.requestCompanionPresentation()
-                            self.broadcastCompanionSnapshot()
-                            self.persistCurrentSession()
-                        }
-                    }
-                } else {
-                    self.statusMessage = "iPhone not in range"
-                    print("[Watch] iPhone not immediately reachable, will receive via background transfer")
-                }
-            case .inactive:
-                self.statusMessage = "iPhone connection inactive"
-                print("[Watch] Connection is inactive, attempting to reactivate...")
-                // Attempt to reactivate
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    if WCSession.isSupported() {
-                        print("[Watch] Reactivating session...")
-                        WCSession.default.activate()
+        if let error = error {
+            print("[Watch] WCSession activation failed: \(error.localizedDescription)")
+            statusMessage = "iPhone connection failed: \(error.localizedDescription)"
+            return
+        }
+
+        let stateString: String
+        switch activationState {
+        case .activated:
+            stateString = "ACTIVATED"
+        case .inactive:
+            stateString = "INACTIVE"
+        case .notActivated:
+            stateString = "NOT_ACTIVATED"
+        @unknown default:
+            stateString = "UNKNOWN(\(activationState.rawValue))"
+        }
+
+        print("[Watch] WCSession activation completed: state=\(stateString), isReachable=\(session.isReachable)")
+
+        switch activationState {
+        case .activated:
+            if session.isReachable {
+                statusMessage = "Connected to iPhone"
+                print("[Watch] iPhone is reachable, ready to receive commands")
+                if isSessionActive || workoutSession != nil {
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.isMirroringToPhone = await self.ensureCompanionMirroring()
+                        _ = await self.requestCompanionPresentation()
+                        self.broadcastCompanionSnapshot()
+                        self.persistCurrentSession()
                     }
                 }
-            case .notActivated:
-                self.statusMessage = "WatchConnectivity unavailable"
-                print("[Watch] WatchConnectivity not supported on this device")
-            @unknown default:
-                self.statusMessage = "Unknown iPhone connection state"
-                print("[Watch] Unknown activation state: \(activationState.rawValue)")
+            } else {
+                statusMessage = "iPhone not in range"
+                print("[Watch] iPhone not immediately reachable, will receive via background transfer")
             }
+        case .inactive:
+            statusMessage = "iPhone connection inactive"
+            print("[Watch] Connection is inactive, attempting to reactivate...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                if WCSession.isSupported() {
+                    print("[Watch] Reactivating session...")
+                    WCSession.default.activate()
+                }
+            }
+        case .notActivated:
+            statusMessage = "WatchConnectivity unavailable"
+            print("[Watch] WatchConnectivity not supported on this device")
+        @unknown default:
+            statusMessage = "Unknown iPhone connection state"
+            print("[Watch] Unknown activation state: \(activationState.rawValue)")
         }
     }
 
-    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
-        Task { @MainActor in
-            guard session.isReachable, self.isSessionActive || self.workoutSession != nil else { return }
-            self.statusMessage = "Connected to iPhone"
+    func handlePhoneWatchConnectivityReachabilityChanged(session: WCSession) {
+        guard session.isReachable, isSessionActive || workoutSession != nil else { return }
+        statusMessage = "Connected to iPhone"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             self.isMirroringToPhone = await self.ensureCompanionMirroring()
             _ = await self.requestCompanionPresentation()
             self.broadcastCompanionSnapshot()
@@ -4321,85 +4314,78 @@ extension WatchWorkoutManager: WCSessionDelegate {
         }
     }
 
-    nonisolated func session(
-        _ session: WCSession,
-        didReceiveMessage message: [String : Any],
-        replyHandler: @escaping ([String : Any]) -> Void
-    ) {
-        Task { @MainActor in
-            print("[Watch] Received message from iPhone: keys=\(message.keys.joined(separator: ","))")
-            
-            if let command = message["workoutControl"] as? String {
-                print("[Watch] Processing workoutControl: \(command)")
-                self.handleCompanionControlCommand(command)
-                replyHandler([CompanionLaunchKeys.accepted: true])
-            } else if message["request"] as? String == "showLiveWorkout" {
-                print("[Watch] Received iPhone request to show live workout")
-                if self.isSessionActive {
-                    // Workout is already active; ensure this view gets foregrounded when possible
-                    self.statusMessage = "iPhone requested live workout display"
-                } else {
-                    self.statusMessage = "iPhone requested workout view"
-                }
-                replyHandler([CompanionLaunchKeys.accepted: true])
-            } else if message[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
-                print("[Watch] Re-sending active workout snapshot to iPhone")
-                self.refreshRecoveredWorkoutContext()
-                replyHandler([CompanionLaunchKeys.accepted: self.isSessionActive || self.workoutSession != nil])
-            } else if message["requestSnapshotSync"] as? Bool == true {
-                print("[Watch] iPhone requested snapshot sync after crash recovery")
-                self.refreshRecoveredWorkoutContext()
-                replyHandler([CompanionLaunchKeys.accepted: self.isSessionActive || self.workoutSession != nil])
-            } else if let effortScore = message[CompanionLifecycleKeys.effortScore] as? Int {
-                print("[Watch] Processing effortScore: \(effortScore)")
-                self.submitEffortScore(effortScore)
-                replyHandler([CompanionLaunchKeys.accepted: true])
-            } else if self.handleInjectedPhaseRequest(message) {
-                print("[Watch] Handled as injected phase request")
-                replyHandler([CompanionLaunchKeys.accepted: true])
-            } else if self.handleCompanionLaunchRequest(message) {
-                print("[Watch] Handled as companion launch request")
-                replyHandler([CompanionLaunchKeys.accepted: true])
+    @MainActor
+    func handlePhoneWatchConnectivityMessage(_ message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        print("[Watch] Received message from iPhone: keys=\(message.keys.joined(separator: ","))")
+
+        if let command = message["workoutControl"] as? String {
+            print("[Watch] Processing workoutControl: \(command)")
+            handleCompanionControlCommand(command)
+            replyHandler([CompanionLaunchKeys.accepted: true])
+        } else if message["request"] as? String == "showLiveWorkout" {
+            print("[Watch] Received iPhone request to show live workout")
+            if isSessionActive {
+                statusMessage = "iPhone requested live workout display"
             } else {
-                print("[Watch] Message not recognized, keys: \(Array(message.keys))")
-                replyHandler([:])
+                statusMessage = "iPhone requested workout view"
             }
+            replyHandler([CompanionLaunchKeys.accepted: true])
+        } else if message[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
+            print("[Watch] Re-sending active workout snapshot to iPhone")
+            refreshRecoveredWorkoutContext()
+            replyHandler([CompanionLaunchKeys.accepted: isSessionActive || workoutSession != nil])
+        } else if message["requestSnapshotSync"] as? Bool == true {
+            print("[Watch] iPhone requested snapshot sync after crash recovery")
+            refreshRecoveredWorkoutContext()
+            replyHandler([CompanionLaunchKeys.accepted: isSessionActive || workoutSession != nil])
+        } else if let effortScore = message[CompanionLifecycleKeys.effortScore] as? Int {
+            print("[Watch] Processing effortScore: \(effortScore)")
+            submitEffortScore(effortScore)
+            replyHandler([CompanionLaunchKeys.accepted: true])
+        } else if handleInjectedPhaseRequest(message) {
+            print("[Watch] Handled as injected phase request")
+            replyHandler([CompanionLaunchKeys.accepted: true])
+        } else if handleCompanionLaunchRequest(message) {
+            print("[Watch] Handled as companion launch request")
+            replyHandler([CompanionLaunchKeys.accepted: true])
+        } else {
+            print("[Watch] Message not recognized, keys: \(Array(message.keys))")
+            replyHandler([:])
         }
     }
 
-    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
-        Task { @MainActor in
-            print("[Watch] Received userInfo from iPhone: keys=\(userInfo.keys.joined(separator: ","))")
-            
-            if let command = userInfo["workoutControl"] as? String {
-                print("[Watch] Processing userInfo workoutControl: \(command)")
-                self.handleCompanionControlCommand(command)
-            } else if userInfo["request"] as? String == "showLiveWorkout" {
-                print("[Watch] Received iPhone userInfo request to show live workout")
-                if self.isSessionActive {
-                    self.statusMessage = "iPhone requested live workout display"
-                } else {
-                    self.statusMessage = "iPhone requested workout view"
-                }
-            } else if userInfo[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
-                print("[Watch] Re-sending active workout snapshot from userInfo request")
-                self.refreshRecoveredWorkoutContext()
-            } else if userInfo["requestSnapshotSync"] as? Bool == true {
-                print("[Watch] iPhone requested snapshot sync from userInfo after crash recovery")
-                self.refreshRecoveredWorkoutContext()
-            } else if let effortScore = userInfo[CompanionLifecycleKeys.effortScore] as? Int {
-                print("[Watch] Processing userInfo effortScore: \(effortScore)")
-                self.submitEffortScore(effortScore)
-            } else if self.handleInjectedPhaseRequest(userInfo) {
-                print("[Watch] Handled userInfo as injected phase request")
-                return
+    @MainActor
+    func handlePhoneWatchConnectivityUserInfo(_ userInfo: [String: Any]) {
+        print("[Watch] Received userInfo from iPhone: keys=\(userInfo.keys.joined(separator: ","))")
+
+        if let command = userInfo["workoutControl"] as? String {
+            print("[Watch] Processing userInfo workoutControl: \(command)")
+            handleCompanionControlCommand(command)
+        } else if userInfo["request"] as? String == "showLiveWorkout" {
+            print("[Watch] Received iPhone userInfo request to show live workout")
+            if isSessionActive {
+                statusMessage = "iPhone requested live workout display"
             } else {
-                print("[Watch] Trying companion launch request from userInfo")
-                if self.handleCompanionLaunchRequest(userInfo) {
-                    print("[Watch] Successfully handled as companion launch request")
-                } else {
-                    print("[Watch] UserInfo not recognized, keys: \(Array(userInfo.keys))")
-                }
+                statusMessage = "iPhone requested workout view"
+            }
+        } else if userInfo[CompanionLifecycleKeys.request] as? String == CompanionLifecycleKeys.liveWorkoutSnapshot {
+            print("[Watch] Re-sending active workout snapshot from userInfo request")
+            refreshRecoveredWorkoutContext()
+        } else if userInfo["requestSnapshotSync"] as? Bool == true {
+            print("[Watch] iPhone requested snapshot sync from userInfo after crash recovery")
+            refreshRecoveredWorkoutContext()
+        } else if let effortScore = userInfo[CompanionLifecycleKeys.effortScore] as? Int {
+            print("[Watch] Processing userInfo effortScore: \(effortScore)")
+            submitEffortScore(effortScore)
+        } else if handleInjectedPhaseRequest(userInfo) {
+            print("[Watch] Handled userInfo as injected phase request")
+            return
+        } else {
+            print("[Watch] Trying companion launch request from userInfo")
+            if handleCompanionLaunchRequest(userInfo) {
+                print("[Watch] Successfully handled as companion launch request")
+            } else {
+                print("[Watch] UserInfo not recognized, keys: \(Array(userInfo.keys))")
             }
         }
     }

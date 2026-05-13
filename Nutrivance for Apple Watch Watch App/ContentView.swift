@@ -4203,9 +4203,15 @@ final class WatchDashboardStore: ObservableObject {
         }
     }
 
-    var currentStrain: Double { syncedCurrentStrain > 0 ? syncedCurrentStrain : strainWeek.last?.value ?? 0 }
-    var currentRecovery: Double { syncedCurrentRecovery > 0 ? syncedCurrentRecovery : recoveryWeek.last?.value ?? 0 }
-    var currentReadiness: Double { syncedCurrentReadiness > 0 ? syncedCurrentReadiness : readinessWeek.last?.value ?? 0 }
+    var currentStrain: Double {
+        lastSyncedAt != nil ? syncedCurrentStrain : (strainWeek.last?.value ?? 0)
+    }
+    var currentRecovery: Double {
+        lastSyncedAt != nil ? syncedCurrentRecovery : (recoveryWeek.last?.value ?? 0)
+    }
+    var currentReadiness: Double {
+        lastSyncedAt != nil ? syncedCurrentReadiness : (readinessWeek.last?.value ?? 0)
+    }
     var currentMindfulness: Double { mindfulnessWeek.last?.value ?? 0 }
 
     var todayWorkouts: [WorkoutSession] {

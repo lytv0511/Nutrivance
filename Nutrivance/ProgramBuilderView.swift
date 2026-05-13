@@ -24,13 +24,15 @@ private struct UniformChipWidthGrid: View {
     let activities: [ProgramWorkoutType]
     let allocationText: (String) -> String
     let removeAction: (String) -> Void
+    var multiline: Bool = false
 
     var body: some View {
         AdaptiveChipGrid(activities) { activity in
             ProgramSelectedActivityChip(
                 activity: activity,
                 allocationText: allocationText(activity.id),
-                removeAction: { removeAction(activity.id) }
+                removeAction: { removeAction(activity.id) },
+                multiline: multiline
             )
         }
         .animation(.default, value: activities)
@@ -70,6 +72,14 @@ private struct ProgramLaunchButtonHeightPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+private struct RoadmapPageHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: max)
     }
 }
 
@@ -297,6 +307,22 @@ struct ProgramBuilderView: View {
                         } label: {
                             Image(systemName: "gauge")
                         }
+                    } else {
+                        Button {
+                            Task {
+                                await saveCurrentPlanToRepository()
+                            }
+                        } label: {
+                            Text("Repository")
+                        }
+                        .disabled(planner.generatedBlueprint == nil || selectedActivities.isEmpty)
+
+                        Button("Save") {
+                            Task {
+                                await commitCurrentPlan()
+                            }
+                        }
+                        .disabled(planner.generatedBlueprint == nil || selectedActivities.isEmpty)
                     }
                 }
                 if presentationStyle == .simplified, let onDismiss {
@@ -938,7 +964,8 @@ struct ProgramBuilderView: View {
                     },
                     removeAction: { activityID in
                         removeActivity(activityID)
-                    }
+                    },
+                    multiline: true
                 )
             }
         }
@@ -5342,33 +5369,63 @@ private struct ProgramSelectedActivityChip: View {
     let activity: ProgramWorkoutType
     let allocationText: String
     let removeAction: () -> Void
+    var multiline: Bool = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: activity.symbol)
-                .foregroundStyle(.white.opacity(0.9))
+        Group {
+            if multiline {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: activity.symbol)
+                            .foregroundStyle(.white.opacity(0.9))
 
-            Text(activity.title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                        Text(activity.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
 
-            Spacer(minLength: 8)
+                        Spacer(minLength: 8)
 
-            Text(allocationText)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(activity.tint)
+                        Button(action: removeAction) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                    }
 
-            Button(action: removeAction) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.white.opacity(0.45))
+                    Text(allocationText)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(activity.tint)
+                        .padding(.leading, 28)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    Image(systemName: activity.symbol)
+                        .foregroundStyle(.white.opacity(0.9))
+
+                    Text(activity.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+
+                    Spacer(minLength: 8)
+
+                    Text(allocationText)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(activity.tint)
+
+                    Button(action: removeAction) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(height: 44)
-        .fixedSize(horizontal: true, vertical: false)
+        .frame(minHeight: multiline ? 64 : 44)
+        .fixedSize(horizontal: !multiline, vertical: false)
         .background(Color.white.opacity(0.12), in: Capsule())
     }
 }
@@ -8132,6 +8189,7 @@ struct TrainingRoadmapView: View {
     @State private var repeatUntilDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
     @State private var statusMessage: String?
     @State private var isScheduling = false
+    @State private var pageHeights: [Int: CGFloat] = [:]
 
     private let roadmapColumns = Array(repeating: GridItem(.flexible(), spacing: 14), count: 1)
 
@@ -8147,10 +8205,21 @@ struct TrainingRoadmapView: View {
                         }
                         .tag(page)
                         .padding(.horizontal, 4)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: RoadmapPageHeightPreferenceKey.self,
+                                    value: [page: proxy.size.height]
+                                )
+                            }
+                        )
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .always))
-                .frame(minHeight: 640)
+                .frame(height: max(pageHeights[selectedPage] ?? 640, 640))
+                .onPreferenceChange(RoadmapPageHeightPreferenceKey.self) { heights in
+                    pageHeights.merge(heights, uniquingKeysWith: max)
+                }
 
                 roadmapRepositorySection
 
@@ -8235,9 +8304,13 @@ struct TrainingRoadmapView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(day.date.formatted(.dateTime.weekday(.wide)))
                         .font(.headline.weight(.bold))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(day.date.formatted(.dateTime.month(.abbreviated).day()))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
                 Spacer()
                 Button {
@@ -8265,7 +8338,7 @@ struct TrainingRoadmapView: View {
             }
         }
         .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 148, alignment: .topLeading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)

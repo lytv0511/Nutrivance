@@ -256,6 +256,17 @@ struct DashboardView: View {
     @State private var selectedWorkoutForDetail: (workout: HKWorkout, analytics: WorkoutAnalytics)? = nil
     @State private var showWorkoutDetail = false
     @State private var currentWorkoutHistoryTabIndex: Int = 0
+    @State private var hrZoneConfigurationMode: HRZoneConfigurationMode = .intelligent
+    @State private var selectedHRZoneSchema: HRZoneSchema = .lactatThreshold
+    @State private var fixedMaxHR: Double? = nil
+    @State private var fixedRestingHR: Double? = nil
+    @State private var fixedLTHR: Double? = nil
+    @State private var customZone1Upper: Double = 120
+    @State private var customZone2Upper: Double = 140
+    @State private var customZone3Upper: Double = 160
+    @State private var customZone4Upper: Double = 180
+    @State private var customZone5Upper: Double = 200
+    @State private var hasLoadedPersistedHRZoneSettings = false
 
     init() {
         let saved = DashboardLayoutPersistence.load()
@@ -272,6 +283,24 @@ struct DashboardView: View {
             activeDaysLast28: 0,
             daysSinceLastWorkout: nil
         ))
+        
+        // Load HR zone settings
+        let persisted = HRZoneSettingsPersistence.load() ?? .fallback
+        let mode = HRZoneConfigurationMode(rawValue: persisted.modeRawValue) ?? .intelligent
+        let schema = HRZoneSchema(rawValue: persisted.schemaRawValue) ?? .lactatThreshold
+        let bounds = persisted.customZoneUpperBounds.count == 5 ? persisted.customZoneUpperBounds : HRZonePersistedSettings.fallback.customZoneUpperBounds
+        
+        _hrZoneConfigurationMode = State(initialValue: mode)
+        _selectedHRZoneSchema = State(initialValue: schema)
+        _fixedMaxHR = State(initialValue: persisted.fixedMaxHR)
+        _fixedRestingHR = State(initialValue: persisted.fixedRestingHR)
+        _fixedLTHR = State(initialValue: persisted.fixedLTHR)
+        _customZone1Upper = State(initialValue: bounds[0])
+        _customZone2Upper = State(initialValue: bounds[1])
+        _customZone3Upper = State(initialValue: bounds[2])
+        _customZone4Upper = State(initialValue: bounds[3])
+        _customZone5Upper = State(initialValue: bounds[4])
+        _hasLoadedPersistedHRZoneSettings = State(initialValue: true)
     }
 
     private var layoutSettings: DashboardLayoutSettings {
@@ -279,6 +308,17 @@ struct DashboardView: View {
             groupSummaryCards: groupSummaryCards,
             dashboardItemOrder: dashboardItemOrder,
             summaryCardsOrder: summaryCardsOrder
+        )
+    }
+    
+    private var hrZoneSettings: HRZoneUserSettings {
+        HRZoneUserSettings(
+            mode: hrZoneConfigurationMode,
+            customSchema: selectedHRZoneSchema,
+            fixedMaxHR: fixedMaxHR,
+            fixedRestingHR: fixedRestingHR,
+            fixedLTHR: fixedLTHR,
+            customZoneUpperBounds: [customZone1Upper, customZone2Upper, customZone3Upper, customZone4Upper, customZone5Upper]
         )
     }
 
@@ -612,6 +652,15 @@ struct DashboardView: View {
             }
             .onDisappear {
                 dashboardRefreshTask?.cancel()
+            }
+            .navigationDestination(isPresented: $showWorkoutDetail) {
+                if let selectedWorkout = selectedWorkoutForDetail {
+                    WorkoutDetailView(
+                        analytics: selectedWorkout.analytics,
+                        hrZoneSettings: hrZoneSettings,
+                        showsMapSection: true
+                    )
+                }
             }
         }
     }

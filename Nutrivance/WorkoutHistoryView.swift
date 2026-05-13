@@ -937,6 +937,50 @@ enum WorkoutDetailMLXCoach {
     private static var cachedContainer: ModelContainer?
     private static var cachedSelectionKey: String?
     private static var loadTask: Task<ModelContainer, Error>?
+    /// MLX `loadModelContainer` can enter a broken singleton state after a failed init; retrying throws
+    /// "invalid reuse after initialization failure". Avoid calling `loadModelContainer` again for this model key until selection changes or the app restarts.
+    private static var mlxLoaderPoisonedForKey: String?
+
+    static func resetCachedModel() {
+        cachedContainer = nil
+        cachedSelectionKey = nil
+        loadTask = nil
+        mlxLoaderPoisonedForKey = nil
+    }
+
+    private static func mlxErrorFingerprint(_ error: Error) -> String {
+        var parts = [error.localizedDescription, String(describing: error)]
+        let ns = error as NSError
+        parts.append(ns.domain)
+        parts.append(String(ns.code))
+        parts.append(ns.debugDescription)
+        return parts.joined(separator: " ")
+    }
+
+    private static func isMLXFatalReuseAfterInitFailure(_ error: Error) -> Bool {
+        let compact = mlxErrorFingerprint(error).lowercased().filter { $0.isLetter || $0.isNumber }
+        if compact.contains("invalidreuseafterinitializationfailure") { return true }
+        return compact.contains("invalidreuse") && compact.contains("initialization")
+    }
+
+    /// After almost any failed `loadModelContainer`, MLX can reject a retry with "invalid reuse…". Do not retry
+    /// except for obvious transient fetch issues (user can call `resetCachedModel()` to try again).
+    private static func isLikelyTransientModelFetchError(_ error: Error) -> Bool {
+        let blob = mlxErrorFingerprint(error)
+        if blob.localizedCaseInsensitiveContains("download") { return true }
+        if blob.localizedCaseInsensitiveContains("network") { return true }
+        if blob.localizedCaseInsensitiveContains("offline") { return true }
+        if blob.localizedCaseInsensitiveContains("cancelled") { return true }
+        if blob.localizedCaseInsensitiveContains("canceled") { return true }
+        if blob.localizedCaseInsensitiveContains("timed out") { return true }
+        return false
+    }
+
+    private static func shouldPoisonMLXLoader(after error: Error) -> Bool {
+        if isMLXFatalReuseAfterInitFailure(error) { return true }
+        if isLikelyTransientModelFetchError(error) { return false }
+        return true
+    }
 
     static func quickSummary(
         payload: String,
@@ -983,12 +1027,32 @@ enum WorkoutDetailMLXCoach {
             cachedContainer = nil
             cachedSelectionKey = nil
             loadTask = nil
+            mlxLoaderPoisonedForKey = nil
+        }
+        if mlxLoaderPoisonedForKey == choice.key {
+            throw WorkoutDetailCoachError.failedToLoadModel(
+                "The on-device coach model failed to initialize. Fully quit Nutrivance from the app switcher and reopen before trying again."
+            )
         }
         if let cachedContainer {
             return cachedContainer
         }
         if let loadTask {
-            return try await loadTask.value
+            do {
+                return try await loadTask.value
+            } catch {
+                Self.loadTask = nil
+                if shouldPoisonMLXLoader(after: error) {
+                    mlxLoaderPoisonedForKey = choice.key
+                }
+                let message = error.localizedDescription
+                if message.localizedCaseInsensitiveContains("download")
+                    || message.localizedCaseInsensitiveContains("network")
+                    || message.localizedCaseInsensitiveContains("offline") {
+                    throw WorkoutDetailCoachError.failedToDownloadModel(message)
+                }
+                throw WorkoutDetailCoachError.failedToLoadModel(message)
+            }
         }
         Memory.cacheLimit = memoryCacheLimitBytes(forSelectionKey: choice.key)
         let task = Task {
@@ -1005,9 +1069,13 @@ enum WorkoutDetailMLXCoach {
             cachedContainer = loaded
             cachedSelectionKey = choice.key
             loadTask = nil
+            mlxLoaderPoisonedForKey = nil
             return loaded
         } catch {
             loadTask = nil
+            if shouldPoisonMLXLoader(after: error) {
+                mlxLoaderPoisonedForKey = choice.key
+            }
             let message = error.localizedDescription
             if message.localizedCaseInsensitiveContains("download")
                 || message.localizedCaseInsensitiveContains("network")

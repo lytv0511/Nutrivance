@@ -317,7 +317,7 @@ struct RecoveryScoreView: View {
                     animationPhase = 20
                 }
                 if lastCompletedCoverageTaskID == refreshTaskID {
-                    snapshotsByFilter = await buildSnapshots()
+                    // Same calendar day: reuse existing per-filter snapshots (avoid detached recompute on every return).
                     updateProAthleteData()
                     return
                 }
@@ -468,8 +468,6 @@ struct RecoveryScoreView: View {
         let start = calendar.date(byAdding: .day, value: -35, to: today) ?? today
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today
 
-        snapshotsByFilter = await buildSnapshots()
-
         if forceNetwork {
             isLoading = true
             await healthEngine.refreshSyncedHealthDataFromICloud()
@@ -478,12 +476,17 @@ struct RecoveryScoreView: View {
             return
         }
 
-        guard healthEngine.needsRecoveryMetricsCoverage(from: start, to: end) else { return }
+        let needsFetch = healthEngine.needsRecoveryMetricsCoverage(from: start, to: end)
+        if needsFetch {
+            isLoading = true
+            await healthEngine.ensureRecoveryMetricsCoverage(from: start, to: end)
+            isLoading = false
+        }
 
-        isLoading = true
-        await healthEngine.ensureRecoveryMetricsCoverage(from: start, to: end)
-        snapshotsByFilter = await buildSnapshots()
-        isLoading = false
+        // Recompute snapshots only after a fetch, or when nothing is cached yet.
+        if needsFetch || snapshotsByFilter.isEmpty {
+            snapshotsByFilter = await buildSnapshots()
+        }
     }
 
     /// Builds the per-filter snapshot grid for the recovery view.
