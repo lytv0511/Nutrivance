@@ -34,6 +34,8 @@ struct RecoveryComputationContext {
     let dailyRestingHeartRate: [Date: Double]
     let anchoredSleepDuration: [Date: Double]
     let anchoredTimeInBed: [Date: Double]
+    /// Per-day sleep efficiency from sleep analysis (asleep / in-bed), when available.
+    let sleepEfficiencyByDay: [Date: Double]
     let dailySleepDuration: [Date: Double]
     let sleepStartHours: [Date: Double]
     let hrvBaseline60Day: HealthStateEngine.RollingBaselineStats?
@@ -44,6 +46,9 @@ struct RecoveryComputationContext {
     let sleepBaseline7Day: Double?
     /// Fallback HRV trend score when the per-day deviation cannot be computed.
     let hrvTrendFallback: Double
+    let respiratoryRateByDay: [Date: Double]
+    let spO2ByDay: [Date: Double]
+    let wristTemperatureByDay: [Date: Double]
 
     @MainActor
     static func make(engine: HealthStateEngine) -> RecoveryComputationContext {
@@ -54,6 +59,7 @@ struct RecoveryComputationContext {
             dailyRestingHeartRate: engine.dailyRestingHeartRate,
             anchoredSleepDuration: engine.anchoredSleepDuration,
             anchoredTimeInBed: engine.anchoredTimeInBed,
+            sleepEfficiencyByDay: engine.sleepEfficiency,
             dailySleepDuration: engine.dailySleepDuration,
             sleepStartHours: engine.sleepStartHours,
             hrvBaseline60Day: engine.hrvBaseline60Day,
@@ -62,9 +68,29 @@ struct RecoveryComputationContext {
             hrvBaseline7Day: engine.hrvBaseline7Day,
             rhrBaseline7Day: engine.rhrBaseline7Day,
             sleepBaseline7Day: engine.sleepBaseline7Day,
-            hrvTrendFallback: engine.hrvTrendScore
+            hrvTrendFallback: engine.hrvTrendScore,
+            respiratoryRateByDay: engine.respiratoryRate,
+            spO2ByDay: engine.spO2,
+            wristTemperatureByDay: engine.wristTemperature
         )
     }
+}
+
+/// Same-calendar-day sleep for recovery math. Multi-day smoothing previously blended a 1.4h night with
+/// prior full nights, inflating recovery into the 80s.
+private func recoverySleepHoursForProInputs(on normalizedDay: Date, context: RecoveryComputationContext) -> Double? {
+    if let v = context.anchoredSleepDuration[normalizedDay], v > 0 { return v }
+    if let v = context.dailySleepDuration[normalizedDay], v > 0 { return v }
+    return HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredSleepDuration)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailySleepDuration)
+}
+
+private func recoveryTimeInBedHoursForProInputs(on normalizedDay: Date, context: RecoveryComputationContext, sleepHours: Double?) -> Double? {
+    if let t = context.anchoredTimeInBed[normalizedDay], t > 0 { return t }
+    return sleepHours
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredTimeInBed)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredSleepDuration)
+        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailySleepDuration)
 }
 
 func sharedDateSequence(from start: Date, to end: Date) -> [Date] {
@@ -85,30 +111,19 @@ func sharedDateSequence(from start: Date, to end: Date) -> [Date] {
 
 // MARK: - Context-aware overloads (no per-call dictionary churn)
 
+func sharedRecoveryScoreDetailed(
+    for day: Date,
+    context: RecoveryComputationContext
+) -> RecoveryScoreBreakdown? {
+    let inputs = sharedRecoveryInputs(for: day, context: context)
+    return RecoveryPhysiologyModel.computeRecoveryBreakdown(day: day, inputs: inputs, context: context)
+}
+
 func sharedRecoveryScore(
     for day: Date,
     context: RecoveryComputationContext
 ) -> Double? {
-    let normalizedDay = Calendar.current.startOfDay(for: day)
-    let inputs = HealthStateEngine.proRecoveryInputs(
-        latestHRV: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.effectHRV) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.hrvByDay),
-        restingHeartRate: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailyRestingHeartRate),
-        sleepDurationHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailySleepDuration),
-        timeInBedHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailySleepDuration),
-        hrvBaseline60Day: context.hrvBaseline60Day,
-        rhrBaseline60Day: context.rhrBaseline60Day,
-        sleepBaseline60Day: context.sleepBaseline60Day,
-        hrvBaseline7Day: context.hrvBaseline7Day,
-        rhrBaseline7Day: context.rhrBaseline7Day,
-        sleepBaseline7Day: context.sleepBaseline7Day,
-        bedtimeVarianceMinutes: HealthStateEngine.circularStandardDeviationMinutes(from: context.sleepStartHours, around: normalizedDay)
-    )
-
-    guard !inputs.isInconclusive else { return nil }
-    guard inputs.hrvZScore != nil || inputs.restingHeartRateZScore != nil || inputs.sleepRatio != nil else {
-        return nil
-    }
-    return HealthStateEngine.proRecoveryScore(from: inputs)
+    sharedRecoveryScoreDetailed(for: day, context: context)?.score
 }
 
 func sharedReadinessTrendComponent(
@@ -128,13 +143,44 @@ func sharedReadinessScore(
     for day: Date,
     recoveryScore: Double,
     strainScore: Double,
-    context: RecoveryComputationContext
+    context: RecoveryComputationContext,
+    acwr: Double? = nil
 ) -> Double? {
-    HealthStateEngine.proReadinessScore(
-        recoveryScore: recoveryScore,
+    let trend = sharedReadinessTrendComponent(for: day, context: context)
+    guard let breakdown = sharedRecoveryScoreDetailed(for: day, context: context) else {
+        return HealthStateEngine.proReadinessScore(
+            recoveryScore: recoveryScore,
+            strainScore: strainScore,
+            hrvTrendComponent: trend
+        )
+    }
+    let readinessBreakdown = sharedReadinessScoreDetailed(
+        for: day,
+        recoveryBreakdown: breakdown,
+        recoveryScoreForBlend: recoveryScore,
         strainScore: strainScore,
-        hrvTrendComponent: sharedReadinessTrendComponent(for: day, context: context)
+        acwr: acwr,
+        context: context
     )
+    return readinessBreakdown.score
+}
+
+func sharedReadinessScoreDetailed(
+    for day: Date,
+    recoveryBreakdown: RecoveryScoreBreakdown,
+    recoveryScoreForBlend: Double,
+    strainScore: Double,
+    acwr: Double?,
+    context: RecoveryComputationContext
+) -> ReadinessScoreBreakdown {
+    let input = ReadinessComputationInput(
+        recovery: recoveryBreakdown,
+        recoveryScoreForBlend: recoveryScoreForBlend,
+        strainScore: strainScore,
+        hrvTrendComponent: sharedReadinessTrendComponent(for: day, context: context),
+        acwr: acwr
+    )
+    return RecoveryPhysiologyModel.computeReadinessBreakdown(input: input)
 }
 
 func sharedRecoveryInputs(
@@ -142,11 +188,13 @@ func sharedRecoveryInputs(
     context: RecoveryComputationContext
 ) -> HealthStateEngine.ProRecoveryInputs {
     let normalizedDay = Calendar.current.startOfDay(for: day)
+    let sleepHours = recoverySleepHoursForProInputs(on: normalizedDay, context: context)
+    let timeInBed = recoveryTimeInBedHoursForProInputs(on: normalizedDay, context: context, sleepHours: sleepHours)
     return HealthStateEngine.proRecoveryInputs(
         latestHRV: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.effectHRV) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.hrvByDay),
         restingHeartRate: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailyRestingHeartRate),
-        sleepDurationHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailySleepDuration),
-        timeInBedHours: HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: context.dailySleepDuration),
+        sleepDurationHours: sleepHours,
+        timeInBedHours: timeInBed,
         hrvBaseline60Day: context.hrvBaseline60Day,
         rhrBaseline60Day: context.rhrBaseline60Day,
         sleepBaseline60Day: context.sleepBaseline60Day,
@@ -180,13 +228,15 @@ func sharedReadinessScore(
     for day: Date,
     recoveryScore: Double,
     strainScore: Double,
-    engine: HealthStateEngine
+    engine: HealthStateEngine,
+    acwr: Double? = nil
 ) -> Double? {
     sharedReadinessScore(
         for: day,
         recoveryScore: recoveryScore,
         strainScore: strainScore,
-        context: RecoveryComputationContext.make(engine: engine)
+        context: RecoveryComputationContext.make(engine: engine),
+        acwr: acwr
     )
 }
 
@@ -263,7 +313,7 @@ func sharedProAthleteRecoveryScore(
     chronicLoad: Double,
     athleteHistoricalMaxChronicLoad: Double?
 ) -> (score: Double, hrvWarning: Bool, sleepQualityWarning: Bool, subjectiveBoost: Double?)? {
-    guard sharedRecoveryScore(for: day, context: context) != nil else { return nil }
+    guard sharedRecoveryScoreDetailed(for: day, context: context) != nil else { return nil }
     let inputs = sharedRecoveryInputs(for: day, context: context)
     guard !inputs.isInconclusive else { return nil }
 

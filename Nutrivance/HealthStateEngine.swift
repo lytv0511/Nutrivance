@@ -1518,6 +1518,12 @@ final class HealthStateEngine: ObservableObject {
             let mergedStageWindows = mergedWindows(from: stageSleepWindows)
             let mergedInBedWindows = mergedWindows(from: inBedSleepWindows)
 
+            var asleepTotalsByDay: [Date: Double] = [:]
+            for (date, data) in stages {
+                let totalAsleep = (data["deep"] ?? 0) + (data["rem"] ?? 0) + (data["core"] ?? 0) + (data["unspecified"] ?? 0)
+                asleepTotalsByDay[date] = totalAsleep
+            }
+
             // Use stage-derived windows first (better historical coverage), fallback to inBed windows.
             let windowDays = Set(mergedStageWindows.keys).union(mergedInBedWindows.keys)
             var sleepWindows: [Date: [(start: Date, end: Date)]] = [:]
@@ -1609,6 +1615,8 @@ final class HealthStateEngine: ObservableObject {
                 self.fetchSleepAnchoredRecoveryHistory(
                     stageSleepWindows: mergedStageWindows,
                     inBedSleepWindows: mergedInBedWindows,
+                    asleepTotalsByDay: asleepTotalsByDay,
+                    stageEfficiencyByDay: efficiency,
                     queryStart: startDate,
                     queryEnd: endDate,
                     mergeIntoExisting: mergeIntoExisting,
@@ -1779,6 +1787,8 @@ final class HealthStateEngine: ObservableObject {
     private func fetchSleepAnchoredRecoveryHistory(
         stageSleepWindows: [Date: [(start: Date, end: Date)]],
         inBedSleepWindows: [Date: [(start: Date, end: Date)]],
+        asleepTotalsByDay: [Date: Double],
+        stageEfficiencyByDay: [Date: Double],
         queryStart: Date,
         queryEnd: Date,
         mergeIntoExisting: Bool = false,
@@ -1794,6 +1804,8 @@ final class HealthStateEngine: ObservableObject {
             let result = await self.computeSleepAnchoredRecoveryHistory(
                 stageSleepWindows: stageSleepWindows,
                 inBedSleepWindows: inBedSleepWindows,
+                asleepTotalsByDay: asleepTotalsByDay,
+                stageEfficiencyByDay: stageEfficiencyByDay,
                 queryStart: queryStart,
                 queryEnd: queryEnd,
                 hrvType: hrvType,
@@ -1860,6 +1872,8 @@ final class HealthStateEngine: ObservableObject {
     private func computeSleepAnchoredRecoveryHistory(
         stageSleepWindows: [Date: [(start: Date, end: Date)]],
         inBedSleepWindows: [Date: [(start: Date, end: Date)]],
+        asleepTotalsByDay: [Date: Double],
+        stageEfficiencyByDay: [Date: Double],
         queryStart: Date,
         queryEnd: Date,
         hrvType: HKQuantityType,
@@ -1926,15 +1940,31 @@ final class HealthStateEngine: ObservableObject {
             }
             let basalHeartRate = lowestFiveMinuteAverageHeartRate(from: sleepHeartRateSamples)
 
-            let asleepHours = longestWindow.end.timeIntervalSince(longestWindow.start) / 3600
+            let sessionSpanHours = longestWindow.end.timeIntervalSince(longestWindow.start) / 3600
+            let asleepHours = sessionSpanHours
+
             let inBedOverlapHours: Double = (inBedSleepWindows[day] ?? []).reduce(0) { partial, window in
                 let overlapStart = max(window.start, longestWindow.start)
                 let overlapEnd = min(window.end, longestWindow.end)
                 let overlap = max(0, overlapEnd.timeIntervalSince(overlapStart))
                 return partial + (overlap / 3600)
             }
-            let timeInBedHours = max(asleepHours, inBedOverlapHours)
-            let sleepEfficiency = timeInBedHours > 0 ? min(1.0, max(0.0, asleepHours / timeInBedHours)) : 1.0
+            let timeInBedHours = inBedOverlapHours > 0
+                ? max(inBedOverlapHours, asleepHours)
+                : max(sessionSpanHours, asleepHours)
+
+            let asleepForEfficiency = asleepTotalsByDay[day] ?? sessionSpanHours
+            let sleepEfficiency: Double
+            if let staged = stageEfficiencyByDay[day], staged > 0, staged <= 1.0 {
+                sleepEfficiency = staged
+            } else if inBedOverlapHours > 0 {
+                let denom = max(inBedOverlapHours, asleepForEfficiency)
+                sleepEfficiency = min(1.0, max(0.0, asleepForEfficiency / denom))
+            } else if sessionSpanHours > 1e-6 {
+                sleepEfficiency = min(1.0, max(0.0, asleepForEfficiency / sessionSpanHours))
+            } else {
+                sleepEfficiency = 1.0
+            }
 
             result[day] = SleepAnchoredRecoveryDay(
                 anchoredHRV: anchoredHRV,
@@ -2625,6 +2655,17 @@ final class HealthStateEngine: ObservableObject {
         return circularStandardDeviationRadians * (24.0 / (2.0 * Double.pi)) * 60.0
     }
 
+    /// Multiplier applied to base recovery after physiology scoring. Uses **same-night**
+    /// duration vs goal plus an absolute-hours curve so very short sleep cannot stay in the 80s
+    /// just because HRV looks fine (smoothed multi-day sleep used to hide single bad nights).
+    nonisolated static func recoverySleepScalar(sleepDurationHours: Double, sleepGoalHours: Double) -> Double {
+        let goal = max(sleepGoalHours, 0.1)
+        let ratio = min(1.0, max(0.0, sleepDurationHours / goal))
+        let ratioBlend = 0.38 + 0.62 * pow(ratio, 1.08)
+        let durationBlend = min(1.0, pow(max(0.03, sleepDurationHours) / 7.5, 0.92))
+        return min(1.0, max(0.08, ratioBlend * durationBlend))
+    }
+
     nonisolated static func smoothedValue(
         for day: Date,
         values: [Date: Double],
@@ -2702,10 +2743,11 @@ final class HealthStateEngine: ObservableObject {
         }()
         let sleepEfficiency: Double? = { () -> Double? in
             guard let sleepDurationHours, let timeInBedHours, timeInBedHours > 0 else { return nil }
+            guard timeInBedHours > sleepDurationHours + (1.0 / 60.0) else { return nil }
             return min(1.0, max(0.0, sleepDurationHours / timeInBedHours))
         }()
         let sleepRatio = sleepDurationHours.map { min(1.0, max(0.0, $0 / max(sleepGoalHours, 0.1))) }
-        let sleepScalar = sleepRatio.map { 0.85 + (0.15 * $0) }
+        let sleepScalar = sleepDurationHours.map { Self.recoverySleepScalar(sleepDurationHours: $0, sleepGoalHours: sleepGoalHours) }
         let composite = ((hrvZ ?? 0) * 0.85) - ((rhrPenaltyZ ?? 0) * 0.25)
         let baseRecoveryScore = normalizedCompositeScore(from: composite)
         let sleepDebtPenalty = 0.0
@@ -2757,7 +2799,8 @@ final class HealthStateEngine: ObservableObject {
     ) -> RecoveryDebugSnapshot {
         let normalizedSleepRatio = max(0, min(1, sleepRatio))
         let normalizedSleepEfficiency = max(0, min(1, sleepEfficiency))
-        let sleepScalar = 0.85 + (0.15 * normalizedSleepRatio)
+        let pseudoHours = max(0.03, normalizedSleepRatio * 8.0)
+        let sleepScalar = Self.recoverySleepScalar(sleepDurationHours: pseudoHours, sleepGoalHours: 8.0)
         let composite = (hrvZScore * 0.85) - (rhrPenaltyZScore * 0.25)
         let baseRecoveryScore = normalizedCompositeScore(from: composite)
         let circadianPenalty = bedtimeVarianceMinutes > 90
@@ -3035,6 +3078,14 @@ final class HealthStateEngine: ObservableObject {
             self.updateScores()
             self.scheduleMetricsSnapshotSave()
         }
+    }
+
+    /// Cancels the debounced score pass and recomputes immediately so UI snapshots (Readiness / Recovery)
+    /// read a `recoveryScore` consistent with the health series that were just merged.
+    func recomputePublishedScoresNow() {
+        scoreRefreshTask?.cancel()
+        scoreRefreshTask = nil
+        updateScores()
     }
 
     private func scheduleStartupWorkoutCoverageSync() {
@@ -4860,12 +4911,26 @@ final class HealthStateEngine: ObservableObject {
 
     private func calculateRecoveryScore() -> Double {
         let today = Calendar.current.startOfDay(for: Date())
+        let context = RecoveryComputationContext.make(engine: self)
+        if let breakdown = sharedRecoveryScoreDetailed(for: today, context: context) {
+            return breakdown.score
+        }
         let hrvLookup = Dictionary(uniqueKeysWithValues: dailyHRV.map { ($0.date, $0.average) })
+        let sleepForRecovery: Double? = {
+            if let v = anchoredSleepDuration[today], v > 0 { return v }
+            if let v = dailySleepDuration[today], v > 0 { return v }
+            return Self.smoothedValue(for: today, values: anchoredSleepDuration)
+                ?? readinessSleepDuration ?? sleepHours
+        }()
+        let timeInBedForRecovery: Double? = {
+            if let v = anchoredTimeInBed[today], v > 0 { return v }
+            return readinessTimeInBed ?? sleepForRecovery
+        }()
         let inputs = Self.proRecoveryInputs(
             latestHRV: Self.smoothedValue(for: today, values: effectHRV) ?? readinessEffectHRV ?? readinessHRV ?? latestHRV ?? Self.smoothedValue(for: today, values: hrvLookup),
             restingHeartRate: Self.smoothedValue(for: today, values: basalSleepingHeartRate) ?? readinessBasalHeartRate ?? restingHeartRate,
-            sleepDurationHours: Self.smoothedValue(for: today, values: anchoredSleepDuration) ?? readinessSleepDuration ?? sleepHours,
-            timeInBedHours: Self.smoothedValue(for: today, values: anchoredTimeInBed) ?? readinessTimeInBed ?? readinessSleepDuration ?? sleepHours,
+            sleepDurationHours: sleepForRecovery,
+            timeInBedHours: timeInBedForRecovery,
             hrvBaseline60Day: hrvBaseline60Day,
             rhrBaseline60Day: rhrBaseline60Day,
             sleepBaseline60Day: sleepBaseline60Day,

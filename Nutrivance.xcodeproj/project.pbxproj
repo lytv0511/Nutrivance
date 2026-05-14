@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E9F0A0022F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F0A0012F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift */; };
 		151F147A2D77BE1900B51F88 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 151F14792D77BE1900B51F88 /* UIKit.framework */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
 		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -127,6 +128,7 @@
 		15C8233B2F9C5D4700FECFDC /* StrainRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */; };
 		15C8233C2F9C5D4700FECFDC /* StressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96562F95EDB0007CDCDB /* StressView.swift */; };
 		A7E4B2D22F95EDB0007CDC02 /* BodyStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E4B2D12F95EDB0007CDC01 /* BodyStatusView.swift */; };
+		A7E4B2E22F95EDB0007CDC04 /* RecoveryPhysiologyModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E4B2E12F95EDB0007CDC03 /* RecoveryPhysiologyModel.swift */; };
 		15C8233D2F9C5D4700FECFDC /* SubcategoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */; };
 		15C8233E2F9C5D4700FECFDC /* SubjectiveDailyEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96582F95EDB0007CDCDB /* SubjectiveDailyEntry.swift */; };
 		15C8233F2F9C5D4700FECFDC /* SubjectiveDailyEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96592F95EDB0007CDCDB /* SubjectiveDailyEntryView.swift */; };
@@ -309,6 +311,7 @@
 		159A96442F95EDB0007CDCDB /* ProgramBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramBuilderView.swift; sourceTree = "<group>"; };
 		159A96452F95EDB0007CDCDB /* ReadinessCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadinessCheckView.swift; sourceTree = "<group>"; };
 		159A96462F95EDB0007CDCDB /* RecoveryReadinessPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryReadinessPipeline.swift; sourceTree = "<group>"; };
+		A7E4B2E12F95EDB0007CDC03 /* RecoveryPhysiologyModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPhysiologyModel.swift; sourceTree = "<group>"; };
 		159A96472F95EDB0007CDCDB /* RecoveryScoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryScoreView.swift; sourceTree = "<group>"; };
 		159A96482F95EDB0007CDCDB /* ResourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcesView.swift; sourceTree = "<group>"; };
 		159A96492F95EDB0007CDCDB /* RingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingDetailView.swift; sourceTree = "<group>"; };
@@ -376,6 +379,7 @@
 		15D7FFAF2CD1426A0048E050 /* NutrivanceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NutrivanceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NutrivanceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		15D7FFBD2CD1426A0048E050 /* NutrivanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITests.swift; sourceTree = "<group>"; };
+		E9F0A0012F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPhysiologyModelTests.swift; sourceTree = "<group>"; };
 		15D7FFBF2CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		15F581EA2F7763BE00F27319 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -631,6 +635,7 @@
 				15A70DA32CF10814007FBC5D /* WaterWidgetExtension.entitlements */,
 				15741EA42CEFE2F400CDE4F9 /* README.md */,
 				15D7FF9F2CD142690048E050 /* Nutrivance */,
+				E9F0A0032F9A210100ABCDEF /* NutrivanceTests */,
 				15D7FFBC2CD1426A0048E050 /* NutrivanceUITests */,
 				15AC8E8E2CDCF4FC0002101A /* WaterWidget */,
 				15753F9C2F74D9C900007262 /* Nutrivance for Apple Watch Watch App */,
@@ -753,6 +758,7 @@
 				159A96442F95EDB0007CDCDB /* ProgramBuilderView.swift */,
 				159A96452F95EDB0007CDCDB /* ReadinessCheckView.swift */,
 				159A96462F95EDB0007CDCDB /* RecoveryReadinessPipeline.swift */,
+				A7E4B2E12F95EDB0007CDC03 /* RecoveryPhysiologyModel.swift */,
 				159A96472F95EDB0007CDCDB /* RecoveryScoreView.swift */,
 				159A96482F95EDB0007CDCDB /* ResourcesView.swift */,
 				159A96492F95EDB0007CDCDB /* RingDetailView.swift */,
@@ -788,6 +794,14 @@
 				159A96662F95EDB0007CDCDB /* WorkoutTrendProbeView.swift */,
 			);
 			path = Nutrivance;
+			sourceTree = "<group>";
+		};
+		E9F0A0032F9A210100ABCDEF /* NutrivanceTests */ = {
+			isa = PBXGroup;
+			children = (
+				E9F0A0012F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift */,
+			);
+			path = NutrivanceTests;
 			sourceTree = "<group>";
 		};
 		15D7FFBC2CD1426A0048E050 /* NutrivanceUITests */ = {
@@ -1087,6 +1101,7 @@
 				15C8232A2F9C5D4700FECFDC /* ProgramBuilderView.swift in Sources */,
 				15C8232B2F9C5D4700FECFDC /* ReadinessCheckView.swift in Sources */,
 				15C8232C2F9C5D4700FECFDC /* RecoveryReadinessPipeline.swift in Sources */,
+				A7E4B2E22F95EDB0007CDC04 /* RecoveryPhysiologyModel.swift in Sources */,
 				15C8232D2F9C5D4700FECFDC /* RecoveryScoreView.swift in Sources */,
 				15C8232E2F9C5D4700FECFDC /* ResourcesView.swift in Sources */,
 				15C8232F2F9C5D4700FECFDC /* RingDetailView.swift in Sources */,
@@ -1127,6 +1142,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E9F0A0022F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

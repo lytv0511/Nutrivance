@@ -74,7 +74,7 @@ func computeBodyStatus(engine: HealthStateEngine) -> BodyStatusModel {
     let baseCharge = sleepQuality * 90 + 5
 
     // HRV quality multiplier: if morning HRV is above baseline, the morning level starts higher
-    let morningHRV: Double? = engine.readinessEffectHRV ?? engine.readinessHRV
+    let morningHRV: Double? = engine.readinessHRV ?? engine.readinessEffectHRV
     let hrvBaseline = engine.hrvBaseline7Day ?? engine.hrvBaseline60Day?.mean ?? 50.0
     let hrvFactor = morningHRV.map { min(1.25, max(0.60, $0 / max(hrvBaseline, 1.0))) } ?? 1.0
     let morningCharge = min(100.0, baseCharge * hrvFactor)

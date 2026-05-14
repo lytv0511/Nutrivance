@@ -96,6 +96,14 @@ struct ReadinessCheckView: View {
         snapshot.recoveryInputsToday
     }
 
+    private var recoveryBreakdownToday: RecoveryScoreBreakdown? {
+        snapshot.recoveryBreakdownToday
+    }
+
+    private var readinessBreakdownToday: ReadinessScoreBreakdown? {
+        snapshot.readinessBreakdownToday
+    }
+
     private var hrvTrendSupport: Double {
         snapshot.hrvTrendSupport
     }
@@ -210,10 +218,18 @@ struct ReadinessCheckView: View {
                                 chartUnit: "%"
                             ) {
                                 VStack(alignment: .leading, spacing: 6) {
+                                    if let b = recoveryBreakdownToday {
+                                        Text(String(format: "Core recovery %.0f + overnight context %.1f pts (cap −6) + agreement %.0f.", b.coreScore, b.secondaryDelta, b.agreementBonus))
+                                        Text(String(format: "Model confidence %.0f%% (HRV + sleep coverage).", b.confidence01 * 100))
+                                    }
                                     Text("Effect HRV z-score: \(readinessFormatted(recoveryInputsToday.hrvZScore, digits: 2))")
                                     Text("RHR penalty z-score: \(readinessFormatted(recoveryInputsToday.restingHeartRatePenaltyZScore, digits: 2))")
                                     Text("Sleep ratio: \(readinessFormatted(recoveryInputsToday.sleepRatio, digits: 2))")
                                     Text("Circadian penalty: \(String(format: "%.1f", recoveryInputsToday.circadianPenalty)) pts")
+                                    if let r = readinessBreakdownToday {
+                                        Text(String(format: "Readiness blends recovery at %.0f%% weight; zone: %@.", r.recoveryConfidence01 * 100, r.trainingZone))
+                                            .padding(.top, 4)
+                                    }
                                 }
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
@@ -246,7 +262,7 @@ struct ReadinessCheckView: View {
                                 chartLabel: "HRV Trend",
                                 chartUnit: "%"
                             ) {
-                                Text("This term rewards HRV that is holding up or improving versus baseline. It helps readiness avoid overreacting to one noisy data point.")
+                                Text("Same 0–100 term as the HRV Trend card above: from daily HRV vs your 7-day average (about 50 is neutral). Very low values usually mean last night was far under that average, not a missing sensor by itself.")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
@@ -473,6 +489,7 @@ struct ReadinessCheckView: View {
     @MainActor
     private func refreshCoverageOnUserDemand(forceNetwork: Bool) async {
         #if targetEnvironment(macCatalyst)
+        healthEngine.recomputePublishedScoresNow()
         snapshot = buildSnapshot()
         ReadinessDisplayDiskCache.save(snapshot, anchorDay: today)
         DispatchQueue.global(qos: .utility).async {
@@ -497,6 +514,7 @@ struct ReadinessCheckView: View {
             await healthEngine.ensureWorkoutAnalyticsCoverage(from: workoutStart, to: end)
         }
 
+        healthEngine.recomputePublishedScoresNow()
         snapshot = buildSnapshot()
         ReadinessDisplayDiskCache.save(snapshot, anchorDay: today)
     }
@@ -523,13 +541,17 @@ struct ReadinessCheckView: View {
         )
         cachedReadinessLoadSnapshots = loadSnapshots
         let strainLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.strainScore) })
+        let acwrLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.acwr) })
 
         let recoveryFallback = healthEngine.recoveryScore
         let strainFallback = healthEngine.strainScore
         let readinessFallback = healthEngine.readinessScore
 
+        let recoveryDetailByDay = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
+            (day, sharedRecoveryScoreDetailed(for: day, context: context))
+        })
         let recoverySeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
-            (day, sharedRecoveryScore(for: day, context: context) ?? recoveryFallback)
+            (day, recoveryDetailByDay[day].flatMap { $0 }?.score ?? recoveryFallback)
         })
         let strainSeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
             (day, strainLookup[day] ?? strainFallback)
@@ -538,15 +560,28 @@ struct ReadinessCheckView: View {
             (day, sharedReadinessTrendComponent(for: day, context: context))
         }
         let readinessSeries = readinessWindow.map { day in
-            (
-                day,
-                sharedReadinessScore(
+            let rb = recoveryDetailByDay[day].flatMap { $0 }
+            let rec = rb?.score ?? recoveryFallback
+            let readinessVal: Double = {
+                guard let breakdown = rb else {
+                    return sharedReadinessScore(
+                        for: day,
+                        recoveryScore: rec,
+                        strainScore: strainSeriesMap[day] ?? strainFallback,
+                        context: context,
+                        acwr: acwrLookup[day]
+                    ) ?? readinessFallback
+                }
+                return sharedReadinessScoreDetailed(
                     for: day,
-                    recoveryScore: recoverySeriesMap[day] ?? recoveryFallback,
+                    recoveryBreakdown: breakdown,
+                    recoveryScoreForBlend: rec,
                     strainScore: strainSeriesMap[day] ?? strainFallback,
+                    acwr: acwrLookup[day],
                     context: context
-                ) ?? readinessFallback
-            )
+                ).score
+            }()
+            return (day, readinessVal)
         }
 
         let effectHRVToday = ReadinessCheckView.effectHRV(on: today, context: context)
@@ -554,10 +589,22 @@ struct ReadinessCheckView: View {
         let sleepToday = ReadinessCheckView.sleepDuration(on: today, context: context)
         let sleepEfficiencyToday = ReadinessCheckView.sleepEfficiency(on: today, context: context, sleepDuration: sleepToday)
         let recoveryInputsToday = sharedRecoveryInputs(for: today, context: context)
+        let recoveryBreakdownToday = recoveryDetailByDay[today].flatMap { $0 }
         let hrvTrendSupport = hrvTrendSeries.last?.1 ?? healthEngine.hrvTrendScore
         let readinessValue = readinessSeries.last?.1 ?? readinessFallback
         let recoveryValue = recoverySeriesMap[today] ?? recoveryFallback
         let strainValue = strainSeriesMap[today] ?? strainFallback
+        let readinessBreakdownToday: ReadinessScoreBreakdown? = {
+            guard let rb = recoveryBreakdownToday else { return nil }
+            return sharedReadinessScoreDetailed(
+                for: today,
+                recoveryBreakdown: rb,
+                recoveryScoreForBlend: recoveryValue,
+                strainScore: strainValue,
+                acwr: acwrLookup[today],
+                context: context
+            )
+        }()
 
         return ReadinessSnapshot(
             readinessValue: readinessValue,
@@ -573,6 +620,8 @@ struct ReadinessCheckView: View {
             sleepToday: sleepToday,
             sleepEfficiencyToday: sleepEfficiencyToday,
             recoveryInputsToday: recoveryInputsToday,
+            recoveryBreakdownToday: recoveryBreakdownToday,
+            readinessBreakdownToday: readinessBreakdownToday,
             hrvTrendSupport: hrvTrendSupport,
             readinessDriverCards: makeReadinessDriverCards(
                 recoveryValue: recoveryValue,
@@ -581,7 +630,9 @@ struct ReadinessCheckView: View {
                 effectHRVToday: effectHRVToday,
                 basalRhrToday: basalRhrToday,
                 sleepEfficiencyToday: sleepEfficiencyToday,
-                recoveryInputsToday: recoveryInputsToday
+                recoveryInputsToday: recoveryInputsToday,
+                recoveryBreakdown: recoveryBreakdownToday,
+                readinessBreakdown: readinessBreakdownToday
             )
         )
     }
@@ -604,10 +655,14 @@ struct ReadinessCheckView: View {
 
     nonisolated static func sleepEfficiency(on day: Date, context: RecoveryComputationContext, sleepDuration: Double?) -> Double? {
         let normalizedDay = Calendar.current.startOfDay(for: day)
-        guard let sleepDuration else { return nil }
-        let timeInBed = context.anchoredTimeInBed[normalizedDay] ?? sleepDuration
-        guard timeInBed > 0 else { return nil }
-        return sleepDuration / timeInBed
+        if let direct = context.sleepEfficiencyByDay[normalizedDay], direct > 0, direct <= 1.0 {
+            return direct
+        }
+        guard let sleepDuration, sleepDuration > 0 else { return nil }
+        guard let timeInBed = context.anchoredTimeInBed[normalizedDay], timeInBed > 0 else { return nil }
+        // If time-in-bed equals sleep duration (missing real in-bed data), ratio is meaningless — avoid showing 100%.
+        guard timeInBed > sleepDuration + (1.0 / 60.0) else { return nil }
+        return min(1.0, max(0.0, sleepDuration / timeInBed))
     }
     
     @MainActor
@@ -648,7 +703,7 @@ struct ReadinessCheckView: View {
             profile: performanceProfile
         )
     }
-    
+
     private func makeReadinessDriverCards(
         recoveryValue: Double,
         strainValue: Double,
@@ -656,64 +711,21 @@ struct ReadinessCheckView: View {
         effectHRVToday: Double?,
         basalRhrToday: Double?,
         sleepEfficiencyToday: Double?,
-        recoveryInputsToday: HealthStateEngine.ProRecoveryInputs
+        recoveryInputsToday: HealthStateEngine.ProRecoveryInputs,
+        recoveryBreakdown: RecoveryScoreBreakdown?,
+        readinessBreakdown: ReadinessScoreBreakdown?
     ) -> [ReadinessFactorCardModel] {
-        [
-            ReadinessFactorCardModel(
-                title: "Recovery Support",
-                value: String(format: "%.0f", recoveryValue),
-                unit: "/100",
-                detail: "The biggest positive input. Better sleep, calmer basal HR, and stronger Effect HRV lift this.",
-                tint: .green,
-                contribution: nil,
-                contributionDirection: .higherIsBetter
-            ),
-            ReadinessFactorCardModel(
-                title: "Strain Drag",
-                value: String(format: "%.1f", strainValue),
-                unit: "/21",
-                detail: "Today's readiness gets pulled down when recent load is already heavy or spiky.",
-                tint: .orange,
-                contribution: nil,
-                contributionDirection: .lowerIsBetter
-            ),
-            ReadinessFactorCardModel(
-                title: "HRV Trend",
-                value: String(format: "%.0f", hrvTrendSupport),
-                unit: "/100",
-                detail: "This is the momentum term. It rewards HRV trends that are holding up relative to baseline.",
-                tint: .cyan,
-                contribution: hrvTrendSupport,
-                contributionDirection: .higherIsBetter
-            ),
-            ReadinessFactorCardModel(
-                title: "Effect HRV",
-                value: effectHRVToday.map { String(format: "%.0f", $0) } ?? "–",
-                unit: "ms",
-                detail: "Sleep-anchored HRV carries more weight than random daytime HRV noise.",
-                tint: .mint,
-                contribution: recoveryInputsToday.hrvZScore,
-                contributionDirection: .higherIsBetter
-            ),
-            ReadinessFactorCardModel(
-                title: "Basal Sleep HR",
-                value: basalRhrToday.map { String(format: "%.0f", $0) } ?? "–",
-                unit: "bpm",
-                detail: "Lower overnight heart rate relative to baseline usually means less recovery cost.",
-                tint: .blue,
-                contribution: recoveryInputsToday.restingHeartRatePenaltyZScore,
-                contributionDirection: .lowerIsBetter
-            ),
-            ReadinessFactorCardModel(
-                title: "Sleep Efficiency",
-                value: sleepEfficiencyToday.map { String(format: "%.0f", $0 * 100) } ?? "–",
-                unit: "%",
-                detail: "A cleaner night helps preserve the recovery score that readiness starts from.",
-                tint: .indigo,
-                contribution: recoveryInputsToday.sleepEfficiency.map { $0 * 100 },
-                contributionDirection: .higherIsBetter
-            )
-        ]
+        buildReadinessDriverCards(
+            recoveryValue: recoveryValue,
+            strainValue: strainValue,
+            hrvTrendSupport: hrvTrendSupport,
+            effectHRVToday: effectHRVToday,
+            basalRhrToday: basalRhrToday,
+            sleepEfficiencyToday: sleepEfficiencyToday,
+            recoveryInputsToday: recoveryInputsToday,
+            recoveryBreakdown: recoveryBreakdown,
+            readinessBreakdown: readinessBreakdown
+        )
     }
 
     // The per-day helpers (`recoveryInputs`, `effectHRV`, `basalRhr`, `sleepDuration`,
@@ -728,7 +740,8 @@ struct ReadinessCheckView: View {
     @MainActor
     private func buildMorningReadiness(engine: HealthStateEngine) -> MorningReadinessSnapshot? {
         // Require HRV detected during sleep — otherwise the score is unreliable
-        guard let morningHRV = engine.readinessEffectHRV ?? engine.readinessHRV else { return nil }
+        // Prefer raw sleep-anchored HRV for "this morning" — Effect HRV is smoothed across days and can drift from last night.
+        guard let morningHRV = engine.readinessHRV ?? engine.readinessEffectHRV else { return nil }
 
         let inputs = HealthStateEngine.proRecoveryInputs(
             latestHRV: morningHRV,
@@ -774,6 +787,185 @@ struct ReadinessCheckView: View {
     }
 }
 
+// MARK: - Readiness “How it is built” cards (shared live + disk restore)
+
+/// Pills must not reuse the z-score badge thresholds for unrelated scales (e.g. 0–100 confidence).
+fileprivate func readinessRecoveryDataQualityPill(confidence01: Double) -> (String, Color) {
+    let pct = confidence01 * 100
+    if pct >= 80 { return (String(format: "Data %.0f%%", pct), .mint) }
+    if pct >= 60 { return (String(format: "Data %.0f%%", pct), .yellow) }
+    return (String(format: "Data %.0f%%", pct), .orange)
+}
+
+fileprivate func readinessHrvTrendVersus7dPill(_ support0to100: Double) -> (String, Color) {
+    switch support0to100 {
+    case ..<20: return ("vs 7d: very low", .red)
+    case ..<38: return ("vs 7d: low", .orange)
+    case ..<48: return ("vs 7d: soft", .orange)
+    case ..<55: return ("vs 7d: neutral", .mint)
+    case ..<68: return ("vs 7d: good", .green)
+    default: return ("vs 7d: strong", .green)
+    }
+}
+
+fileprivate func readinessEffectHrvZPill(_ z: Double?) -> (String, Color) {
+    guard let z else { return ("HRV z n/a", .secondary) }
+    if abs(z) < 0.12 { return ("Near baseline", .mint) }
+    let label = String(format: "%+.1f SD", z)
+    if z >= 0.35 { return (label, .green) }
+    if z <= -0.35 { return (label, .orange) }
+    return (label, .mint)
+}
+
+fileprivate func readinessBasalPenaltyPill(_ penaltyZ: Double?) -> (String, Color) {
+    guard let penaltyZ else { return ("RHR n/a", .secondary) }
+    if penaltyZ < 0.08 { return ("HR cost: low", .green) }
+    if penaltyZ < 0.55 { return (String(format: "+%.1f SD cost", penaltyZ), .orange) }
+    return (String(format: "+%.1f SD cost", penaltyZ), .red)
+}
+
+fileprivate func readinessSleepEfficiencyPill(_ fraction: Double?) -> (String, Color) {
+    guard let fraction else { return ("No ratio yet", .secondary) }
+    let pct = fraction * 100
+    if pct >= 90 { return (String(format: "%.0f%% solid", pct), .mint) }
+    if pct >= 80 { return (String(format: "%.0f%% ok", pct), .green) }
+    if pct >= 70 { return (String(format: "%.0f%% thin", pct), .orange) }
+    return (String(format: "%.0f%% low", pct), .red)
+}
+
+fileprivate func buildReadinessDriverCards(
+    recoveryValue: Double,
+    strainValue: Double,
+    hrvTrendSupport: Double,
+    effectHRVToday: Double?,
+    basalRhrToday: Double?,
+    sleepEfficiencyToday: Double?,
+    recoveryInputsToday: HealthStateEngine.ProRecoveryInputs,
+    recoveryBreakdown: RecoveryScoreBreakdown?,
+    readinessBreakdown: ReadinessScoreBreakdown?
+) -> [ReadinessFactorCardModel] {
+    let confPct: String = {
+        guard let r = readinessBreakdown else { return "–" }
+        return String(format: "%.0f%%", r.confidence01 * 100)
+    }()
+    let zone = readinessBreakdown?.trainingZone ?? "–"
+    let limiter: String = {
+        guard let r = readinessBreakdown else { return "–" }
+        switch r.limitingFactor {
+        case .recovery: return "Recovery"
+        case .strain: return "Strain"
+        case .context: return "Context"
+        case .balanced: return "Balanced"
+        }
+    }()
+
+    let sleepEfficiencyDisplayed = sleepEfficiencyToday ?? recoveryInputsToday.sleepEfficiency
+    let hrvTrendDetail: String = {
+        let base = "0–100 support from HRV vs your 7-day average (~50 is neutral). This is separate from Effect HRV z-scores on the recovery card."
+        if hrvTrendSupport < 22 {
+            return base + " A very low score usually means last night’s HRV is far under that average, or baseline coverage is thin—not a “broken” meter."
+        }
+        return base
+    }()
+
+    return [
+        ReadinessFactorCardModel(
+            title: "Recovery Support",
+            value: String(format: "%.0f", recoveryValue),
+            unit: "/100",
+            detail: recoveryBreakdown.map {
+                String(format: "Core %.0f + secondaries %.1f + agreement %.0f. Data confidence %.0f%%.", $0.coreScore, $0.secondaryDelta, $0.agreementBonus, $0.confidence01 * 100)
+            } ?? "The biggest positive input. Better sleep, calmer basal HR, and stronger Effect HRV lift this.",
+            tint: .green,
+            accessoryPill: recoveryBreakdown.map { readinessRecoveryDataQualityPill(confidence01: $0.confidence01) },
+            contribution: nil,
+            contributionDirection: .higherIsBetter
+        ),
+        ReadinessFactorCardModel(
+            title: "Strain Drag",
+            value: String(format: "%.1f", strainValue),
+            unit: "/21",
+            detail: "Today's readiness gets pulled down when recent load is already heavy or spiky.",
+            tint: .orange,
+            accessoryPill: nil,
+            contribution: nil,
+            contributionDirection: .lowerIsBetter
+        ),
+        ReadinessFactorCardModel(
+            title: "Readiness confidence",
+            value: confPct,
+            unit: "confidence",
+            detail: "Blends recovery-signal coverage with load (ACWR) stability so low-quality days do not over-trust the headline score.",
+            tint: .yellow,
+            accessoryPill: nil,
+            contribution: nil,
+            contributionDirection: .higherIsBetter
+        ),
+        ReadinessFactorCardModel(
+            title: "Training zone",
+            value: zone,
+            unit: "",
+            detail: "Derived from the final readiness score and recent strain arc.",
+            tint: .teal,
+            accessoryPill: nil,
+            contribution: nil,
+            contributionDirection: .higherIsBetter
+        ),
+        ReadinessFactorCardModel(
+            title: "Limiting factor",
+            value: limiter,
+            unit: "",
+            detail: "Whether recovery reserve, load drag, or mixed signals is driving the score today.",
+            tint: .purple,
+            accessoryPill: nil,
+            contribution: nil,
+            contributionDirection: .consistency
+        ),
+        ReadinessFactorCardModel(
+            title: "HRV Trend",
+            value: String(format: "%.0f", hrvTrendSupport),
+            unit: "/100",
+            detail: hrvTrendDetail,
+            tint: .cyan,
+            accessoryPill: readinessHrvTrendVersus7dPill(hrvTrendSupport),
+            contribution: nil,
+            contributionDirection: .higherIsBetter
+        ),
+        ReadinessFactorCardModel(
+            title: "Effect HRV",
+            value: effectHRVToday.map { String(format: "%.0f", $0) } ?? "–",
+            unit: "ms",
+            detail: "Sleep-anchored HRV carries more weight than random daytime HRV noise. The pill is your HRV z-score vs baseline (standard deviations), not the 0–100 trend chip.",
+            tint: .mint,
+            accessoryPill: readinessEffectHrvZPill(recoveryInputsToday.hrvZScore),
+            contribution: nil,
+            contributionDirection: .higherIsBetter
+        ),
+        ReadinessFactorCardModel(
+            title: "Basal Sleep HR",
+            value: basalRhrToday.map { String(format: "%.0f", $0) } ?? "–",
+            unit: "bpm",
+            detail: "Overnight HR cost in the recovery model. The pill summarizes resting HR penalty z (above baseline), not bpm.",
+            tint: .blue,
+            accessoryPill: readinessBasalPenaltyPill(recoveryInputsToday.restingHeartRatePenaltyZScore),
+            contribution: nil,
+            contributionDirection: .lowerIsBetter
+        ),
+        ReadinessFactorCardModel(
+            title: "Sleep Efficiency",
+            value: sleepEfficiencyDisplayed.map { String(format: "%.0f", $0 * 100) } ?? "—",
+            unit: "%",
+            detail: sleepEfficiencyDisplayed == nil
+                ? "No reliable asleep / in-bed ratio yet. We also try the value baked into recovery inputs when HealthKit timing lines up."
+                : "A cleaner night helps preserve the recovery score that readiness starts from.",
+            tint: .indigo,
+            accessoryPill: readinessSleepEfficiencyPill(sleepEfficiencyDisplayed),
+            contribution: nil,
+            contributionDirection: .higherIsBetter
+        )
+    ]
+}
+
 private struct ReadinessSnapshot {
     let readinessValue: Double
     let recoveryValue: Double
@@ -788,6 +980,8 @@ private struct ReadinessSnapshot {
     let sleepToday: Double?
     let sleepEfficiencyToday: Double?
     let recoveryInputsToday: HealthStateEngine.ProRecoveryInputs
+    let recoveryBreakdownToday: RecoveryScoreBreakdown?
+    let readinessBreakdownToday: ReadinessScoreBreakdown?
     let hrvTrendSupport: Double
     let readinessDriverCards: [ReadinessFactorCardModel]
 
@@ -823,6 +1017,8 @@ private struct ReadinessSnapshot {
             bedtimeVarianceMinutes: nil,
             isInconclusive: true
         ),
+        recoveryBreakdownToday: nil,
+        readinessBreakdownToday: nil,
         hrvTrendSupport: 0,
         readinessDriverCards: []
     )
@@ -946,6 +1142,7 @@ private struct ReadinessFactorDiskCard: Codable {
             unit: unit,
             detail: detail,
             tint: Color(red: tr, green: tg, blue: tb, opacity: ta),
+            accessoryPill: nil,
             contribution: contribution,
             contributionDirection: dir
         )
@@ -971,9 +1168,11 @@ private struct ReadinessSnapshotDiskEnvelope: Codable {
     var recoveryInputs: PersistedProRecoveryInputs
     var hrvTrendSupport: Double
     var driverCards: [ReadinessFactorDiskCard]
+    var recoveryBreakdown: RecoveryScoreBreakdown?
+    var readinessBreakdown: ReadinessScoreBreakdown?
 
     init(snapshot: ReadinessSnapshot, anchorDay: Date) {
-        v = 1
+        v = 2
         anchor = anchorDay.timeIntervalSince1970
         savedAt = Date().timeIntervalSince1970
         readinessValue = snapshot.readinessValue
@@ -995,6 +1194,8 @@ private struct ReadinessSnapshotDiskEnvelope: Codable {
         recoveryInputs = PersistedProRecoveryInputs(snapshot.recoveryInputsToday)
         hrvTrendSupport = snapshot.hrvTrendSupport
         driverCards = snapshot.readinessDriverCards.map(ReadinessFactorDiskCard.init)
+        recoveryBreakdown = snapshot.recoveryBreakdownToday
+        readinessBreakdown = snapshot.readinessBreakdownToday
     }
 
     func asSnapshot() -> ReadinessSnapshot {
@@ -1019,14 +1220,26 @@ private struct ReadinessSnapshotDiskEnvelope: Codable {
             sleepToday: sleepToday,
             sleepEfficiencyToday: sleepEfficiencyToday,
             recoveryInputsToday: recoveryInputs.asInputs,
+            recoveryBreakdownToday: recoveryBreakdown,
+            readinessBreakdownToday: readinessBreakdown,
             hrvTrendSupport: hrvTrendSupport,
-            readinessDriverCards: driverCards.map(\.asModel)
+            readinessDriverCards: buildReadinessDriverCards(
+                recoveryValue: recoveryValue,
+                strainValue: strainValue,
+                hrvTrendSupport: hrvTrendSupport,
+                effectHRVToday: effectHRVToday,
+                basalRhrToday: basalRhrToday,
+                sleepEfficiencyToday: sleepEfficiencyToday,
+                recoveryInputsToday: recoveryInputs.asInputs,
+                recoveryBreakdown: recoveryBreakdown,
+                readinessBreakdown: readinessBreakdown
+            )
         )
     }
 }
 
 private enum ReadinessDisplayDiskCache {
-    private static let fileName = "readiness-display-v1.json"
+    private static let fileName = "readiness-display-v2.json"
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = [.sortedKeys]
@@ -1081,6 +1294,8 @@ private struct ReadinessFactorCardModel: Identifiable {
     let unit: String
     let detail: String
     let tint: Color
+    /// When set, shown as the top-right pill instead of `contribution` thresholds.
+    let accessoryPill: (text: String, color: Color)?
     let contribution: Double?
     let contributionDirection: ContributionDirection
     
@@ -1088,6 +1303,10 @@ private struct ReadinessFactorCardModel: Identifiable {
         case higherIsBetter
         case lowerIsBetter
         case consistency
+    }
+    
+    var displayPill: (text: String, color: Color)? {
+        accessoryPill ?? contributionBadge
     }
     
     var contributionBadge: (text: String, color: Color)? {
@@ -1137,7 +1356,7 @@ private struct ReadinessFactorCard: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                if let badge = model.contributionBadge {
+                if let badge = model.displayPill {
                     Text(badge.text)
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(badge.color)

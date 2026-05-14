@@ -6060,13 +6060,15 @@ private func readinessScore(
     for day: Date,
     recoveryScore: Double,
     strainScore: Double,
-    engine: HealthStateEngine
+    engine: HealthStateEngine,
+    acwr: Double? = nil
 ) -> Double? {
     sharedReadinessScore(
         for: day,
         recoveryScore: recoveryScore,
         strainScore: strainScore,
-        engine: engine
+        engine: engine,
+        acwr: acwr
     )
 }
 
@@ -6074,13 +6076,15 @@ private func readinessScore(
     for day: Date,
     recoveryScore: Double,
     strainScore: Double,
-    context: RecoveryComputationContext
+    context: RecoveryComputationContext,
+    acwr: Double? = nil
 ) -> Double? {
     sharedReadinessScore(
         for: day,
         recoveryScore: recoveryScore,
         strainScore: strainScore,
-        context: context
+        context: context,
+        acwr: acwr
     )
 }
 
@@ -6455,6 +6459,9 @@ private func periodScoreContext(
     let strainByDay: [Date: Double] = Dictionary(
         uniqueKeysWithValues: loadSnapshots.map { (calendar.startOfDay(for: $0.date), $0.strainScore) }
     )
+    let acwrByDay: [Date: Double] = Dictionary(
+        uniqueKeysWithValues: loadSnapshots.map { (calendar.startOfDay(for: $0.date), $0.acwr) }
+    )
     let recoverySeries = dateSequence(from: reportPeriod.start, to: reportPeriod.end).compactMap { day -> (Date, Double)? in
         recoveryScore(for: day, context: context).map { (day, $0) }
     }
@@ -6465,7 +6472,7 @@ private func periodScoreContext(
         let normalizedDay = calendar.startOfDay(for: day)
         guard let strain = strainByDay[normalizedDay],
               let recovery = recoveryByDay[normalizedDay],
-              let readiness = readinessScore(for: day, recoveryScore: recovery, strainScore: strain, context: context) else {
+              let readiness = readinessScore(for: day, recoveryScore: recovery, strainScore: strain, context: context, acwr: acwrByDay[normalizedDay]) else {
             return nil
         }
         return (day, readiness)
@@ -7404,7 +7411,13 @@ private func precomputeCoachPayload(
 
     let displayedStrain = selectedSnapshot?.strainScore ?? engine.strainScore
     let selectedRecoveryScore = recoveryScore(for: reportPeriod.end, context: context) ?? engine.recoveryScore
-    let selectedReadinessScore = readinessScore(for: reportPeriod.end, recoveryScore: selectedRecoveryScore, strainScore: displayedStrain, context: context) ?? engine.readinessScore
+    let selectedReadinessScore = readinessScore(
+        for: reportPeriod.end,
+        recoveryScore: selectedRecoveryScore,
+        strainScore: displayedStrain,
+        context: context,
+        acwr: selectedSnapshot?.acwr
+    ) ?? engine.readinessScore
 
     var payload = CoachMetricPayload(
         timeFilter: timeFilter,
@@ -7439,7 +7452,13 @@ private func precomputeCoachPayload(
             let yClass = recoveryClassification(for: yesterdayRecovery).title
             payload.secondaryContext.facts.append(("YesterdayRecovery", "\(yClass) (\(formatted(yesterdayRecovery, digits: 0)))"))
             if let yStrain = yesterdayStrainForReadiness,
-               let yReadiness = readinessScore(for: yesterday, recoveryScore: yesterdayRecovery, strainScore: yStrain, context: context) {
+               let yReadiness = readinessScore(
+                for: yesterday,
+                recoveryScore: yesterdayRecovery,
+                strainScore: yStrain,
+                context: context,
+                acwr: priorDaySnapshots.first?.acwr
+               ) {
                 payload.secondaryContext.facts.append(("YesterdayReadiness", "\(formatted(yReadiness, digits: 0))/100"))
                 let yLabel = yesterday.formatted(date: .abbreviated, time: .omitted)
                 payload.priorDayScoresLine = "[PRIOR_DAY] \(yLabel) Recovery: \(formatted(yesterdayRecovery, digits: 0))/100 \(yClass), Readiness: \(formatted(yReadiness, digits: 0))/100"
@@ -7456,6 +7475,9 @@ private func precomputeCoachPayload(
     let strainByDay: [Date: Double] = Dictionary(
         uniqueKeysWithValues: loadSnapshots.map { (calendar.startOfDay(for: $0.date), $0.strainScore) }
     )
+    let acwrByDay: [Date: Double] = Dictionary(
+        uniqueKeysWithValues: loadSnapshots.map { (calendar.startOfDay(for: $0.date), $0.acwr) }
+    )
     let recoverySeries = dateSequence(from: reportPeriod.start, to: reportPeriod.end).compactMap { day -> (Date, Double)? in
         recoveryScore(for: day, context: context).map { (day, $0) }
     }
@@ -7467,7 +7489,7 @@ private func precomputeCoachPayload(
         let normalizedDay = calendar.startOfDay(for: day)
         guard let strain = strainByDay[normalizedDay],
               let rec = recoveryByDay[normalizedDay],
-              let rdy = readinessScore(for: day, recoveryScore: rec, strainScore: strain, context: context) else { return nil }
+              let rdy = readinessScore(for: day, recoveryScore: rec, strainScore: strain, context: context, acwr: acwrByDay[normalizedDay]) else { return nil }
         return (day, rdy)
     }
 
@@ -7508,6 +7530,9 @@ private func precomputeCoachPayload(
         let past7dStrainByDay: [Date: Double] = Dictionary(
             uniqueKeysWithValues: past7dSnapshots.map { (calendar.startOfDay(for: $0.date), $0.strainScore) }
         )
+        let past7dAcwrByDay: [Date: Double] = Dictionary(
+            uniqueKeysWithValues: past7dSnapshots.map { (calendar.startOfDay(for: $0.date), $0.acwr) }
+        )
         payload.recoverySeries = dateSequence(from: past7dStart, to: requestedDay).compactMap { day -> (date: String, score: Double)? in
             recoveryScore(for: day, context: context).map { (fmtDate(day), $0.rounded()) }
         }
@@ -7515,7 +7540,7 @@ private func precomputeCoachPayload(
             let normalizedDay = calendar.startOfDay(for: day)
             guard let strainVal = past7dStrainByDay[normalizedDay],
                   let rec = recoveryScore(for: day, context: context),
-                  let rdy = readinessScore(for: day, recoveryScore: rec, strainScore: strainVal, context: context) else { return nil }
+                  let rdy = readinessScore(for: day, recoveryScore: rec, strainScore: strainVal, context: context, acwr: past7dAcwrByDay[normalizedDay]) else { return nil }
             return (fmtDate(day), rdy.rounded())
         }
 
@@ -8416,11 +8441,25 @@ struct RecoveryScoreSection: View {
 
     private var selectedInputs: HealthStateEngine.ProRecoveryInputs {
         let hrvLookup = Dictionary(uniqueKeysWithValues: engine.dailyHRV.map { ($0.date, $0.average) })
+        let day = Calendar.current.startOfDay(for: selectedDay)
+        let sleepHours: Double? = {
+            if let v = engine.anchoredSleepDuration[day], v > 0 { return v }
+            if let v = engine.dailySleepDuration[day], v > 0 { return v }
+            return HealthStateEngine.smoothedValue(for: day, values: engine.anchoredSleepDuration)
+                ?? HealthStateEngine.smoothedValue(for: day, values: engine.dailySleepDuration)
+        }()
+        let timeInBed: Double? = {
+            if let t = engine.anchoredTimeInBed[day], t > 0 { return t }
+            return sleepHours
+                ?? HealthStateEngine.smoothedValue(for: day, values: engine.anchoredTimeInBed)
+                ?? HealthStateEngine.smoothedValue(for: day, values: engine.anchoredSleepDuration)
+                ?? HealthStateEngine.smoothedValue(for: day, values: engine.dailySleepDuration)
+        }()
         return HealthStateEngine.proRecoveryInputs(
             latestHRV: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.effectHRV) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: hrvLookup),
             restingHeartRate: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.basalSleepingHeartRate) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.dailyRestingHeartRate),
-            sleepDurationHours: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.dailySleepDuration),
-            timeInBedHours: HealthStateEngine.smoothedValue(for: selectedDay, values: engine.anchoredTimeInBed) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.anchoredSleepDuration) ?? HealthStateEngine.smoothedValue(for: selectedDay, values: engine.dailySleepDuration),
+            sleepDurationHours: sleepHours,
+            timeInBedHours: timeInBed,
             hrvBaseline60Day: engine.hrvBaseline60Day,
             rhrBaseline60Day: engine.rhrBaseline60Day,
             sleepBaseline60Day: engine.sleepBaseline60Day,
@@ -8569,11 +8608,19 @@ struct ReadinessScoreSection: View {
         )
         cachedLoadSnapshots = loadSnapshots
         let strainLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.strainScore) })
+        let acwrLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.acwr) })
         let context = RecoveryComputationContext.make(engine: engine)
         let data = dateSequence(from: window.start, to: window.end).compactMap { day -> (Date, Double)? in
-            guard let strain = strainLookup[day],
+            let normalizedDay = Calendar.current.startOfDay(for: day)
+            guard let strain = strainLookup[normalizedDay],
                   let recovery = recoveryScore(for: day, context: context),
-                  let readiness = readinessScore(for: day, recoveryScore: recovery, strainScore: strain, context: context) else {
+                  let readiness = readinessScore(
+                    for: day,
+                    recoveryScore: recovery,
+                    strainScore: strain,
+                    context: context,
+                    acwr: acwrLookup[normalizedDay]
+                  ) else {
                 return nil
             }
             return (day, readiness)
@@ -8596,12 +8643,14 @@ struct ReadinessScoreSection: View {
             )
         }
         let selectedStrain = loadSnapshots.last(where: { Calendar.current.isDate($0.date, inSameDayAs: selectedDay) })?.strainScore ?? engine.strainScore
+        let selectedAcwr = loadSnapshots.last(where: { Calendar.current.isDate($0.date, inSameDayAs: selectedDay) })?.acwr
         let selectedRecovery = recoveryScore(for: selectedDay, engine: engine) ?? engine.recoveryScore
         return readinessScore(
             for: selectedDay,
             recoveryScore: selectedRecovery,
             strainScore: selectedStrain,
-            engine: engine
+            engine: engine,
+            acwr: selectedAcwr
         ) ?? engine.readinessScore
     }
 
