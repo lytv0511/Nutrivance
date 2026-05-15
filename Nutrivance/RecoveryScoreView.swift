@@ -350,12 +350,10 @@ struct RecoveryScoreView: View {
         }
     }
 
-    /// Build from in-memory engine only when there is no display cache for today (no HK / CloudKit pulls).
     @MainActor
     private func recomputeRecoveryFromEngineIfNeeded() async {
-        guard snapshotsByFilter.isEmpty else { return }
-        snapshotsByFilter = await buildSnapshots()
-        RecoveryDisplayDiskCache.save(snapshotsByFilter, anchorDay: today)
+        await refreshCoverageOnUserDemand(forceNetwork: false)
+        updateProAthleteData()
     }
 
     private var recoveryHero: some View {
@@ -487,6 +485,7 @@ struct RecoveryScoreView: View {
 
     @MainActor
     private func refreshCoverageOnUserDemand(forceNetwork: Bool) async {
+        await healthEngine.refreshRecentSleepForRecoveryScores()
         #if targetEnvironment(macCatalyst)
         healthEngine.recomputePublishedScoresNow()
         snapshotsByFilter = await buildSnapshots()

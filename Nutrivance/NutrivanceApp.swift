@@ -305,9 +305,7 @@ final class WatchDashboardSyncBridge: NSObject {
     ) -> Bool {
         switch message[Keys.request] as? String {
         case Keys.dashboardSnapshot:
-            if latestPayloadData == nil {
-                publishLatestSnapshot(reason: "watch-request")
-            }
+            scheduleSnapshotRefresh(reason: "watch-request", delayNanoseconds: 0)
             replyHandler([
                 Keys.dashboardPayload: latestPayloadData ?? Data()
             ])
@@ -376,6 +374,7 @@ final class WatchDashboardSyncBridge: NSObject {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled else { return }
+            await self.engine.refreshRecentSleepForRecoveryScores()
             self.publishLatestSnapshot(reason: reason)
         }
     }
@@ -408,23 +407,32 @@ final class WatchDashboardSyncBridge: NSObject {
             endingAt: today,
             days: 7
         )
-        let recoveryPairs: [(Date, Double)] = weekDays.compactMap { day in
-            watchRecoveryScore(for: day, engine: engine).map { (day, $0) }
-        }
-        let recoveryLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: recoveryPairs)
-        let readinessPairs: [(Date, Double)] = loadSnapshots.compactMap { snapshot in
-            guard let recovery = recoveryLookup[snapshot.date],
-                  let readiness = watchReadinessScore(
-                    for: snapshot.date,
-                    recoveryScore: recovery,
-                    strainScore: snapshot.strainScore,
-                    engine: engine
-                  ) else {
-                return nil
-            }
-            return (snapshot.date, readiness)
-        }
-        let readinessLookup = Dictionary(uniqueKeysWithValues: readinessPairs)
+        let context = RecoveryComputationContext.make(engine: engine)
+        let recoveryFallback = engine.recoveryScore
+        let strainFallback = engine.strainScore
+        let readinessFallback = engine.readinessScore
+
+        let recoveryLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: weekDays.map { day in
+            (day, sharedRecoveryScore(for: day, context: context) ?? recoveryFallback)
+        })
+        let strainByDay: [Date: Double] = Dictionary(
+            uniqueKeysWithValues: loadSnapshots.map { (calendar.startOfDay(for: $0.date), $0.strainScore) }
+        )
+        let acwrByDay: [Date: Double] = Dictionary(
+            uniqueKeysWithValues: loadSnapshots.map { (calendar.startOfDay(for: $0.date), $0.acwr) }
+        )
+        let readinessLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: weekDays.map { day in
+            let recovery = recoveryLookup[day] ?? recoveryFallback
+            let strain = strainByDay[day] ?? strainFallback
+            let readiness = sharedReadinessScore(
+                for: day,
+                recoveryScore: recovery,
+                strainScore: strain,
+                context: context,
+                acwr: acwrByDay[day]
+            ) ?? readinessFallback
+            return (day, readiness)
+        })
 
         let midpointSeries = watchFilteredDailyValues(engine.sleepMidpointHours, endingAt: today, days: 7)
         let sleepConsistencyScore = watchSleepConsistencyScore(
@@ -444,10 +452,10 @@ final class WatchDashboardSyncBridge: NSObject {
             return WatchMetricPointPayload(date: day, value: score)
         }
         
-        // Get today's current values
-        let currentStrain = loadSnapshots.last?.strainScore ?? 0
-        let currentRecovery = recoveryLookup[today] ?? 0
-        let currentReadiness = readinessLookup[today] ?? 0
+        // Get today's current values (same pipeline as ReadinessCheckView / StrainRecovery charts)
+        let currentStrain = loadSnapshots.last(where: { calendar.isDate($0.date, inSameDayAs: today) })?.strainScore ?? strainFallback
+        let currentRecovery = recoveryLookup[today] ?? recoveryFallback
+        let currentReadiness = readinessLookup[today] ?? readinessFallback
 
         return WatchDashboardPayload(
             generatedAt: Date(),
@@ -795,76 +803,6 @@ private func watchCoachSummaries() -> [String: String] {
             .first?
             .summaryText
     }
-}
-
-@MainActor
-private func watchRecoveryScore(
-    for day: Date,
-    engine: HealthStateEngine
-) -> Double? {
-    let normalizedDay = Calendar.current.startOfDay(for: day)
-    let hrvPairs: [(Date, Double)] = engine.dailyHRV.map { ($0.date, $0.average) }
-    let hrvLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: hrvPairs)
-    let latestHRV = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.effectHRV)
-        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: hrvLookup)
-    let restingHeartRate = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.basalSleepingHeartRate)
-        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailyRestingHeartRate)
-    let sleepDurationHours = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration)
-        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration)
-    let timeInBedHours = HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredTimeInBed)
-        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.anchoredSleepDuration)
-        ?? HealthStateEngine.smoothedValue(for: normalizedDay, values: engine.dailySleepDuration)
-    let bedtimeVarianceMinutes = HealthStateEngine.circularStandardDeviationMinutes(
-        from: engine.sleepStartHours,
-        around: normalizedDay
-    )
-    let inputs = HealthStateEngine.proRecoveryInputs(
-        latestHRV: latestHRV,
-        restingHeartRate: restingHeartRate,
-        sleepDurationHours: sleepDurationHours,
-        timeInBedHours: timeInBedHours,
-        hrvBaseline60Day: engine.hrvBaseline60Day,
-        rhrBaseline60Day: engine.rhrBaseline60Day,
-        sleepBaseline60Day: engine.sleepBaseline60Day,
-        hrvBaseline7Day: engine.hrvBaseline7Day,
-        rhrBaseline7Day: engine.rhrBaseline7Day,
-        sleepBaseline7Day: engine.sleepBaseline7Day,
-        bedtimeVarianceMinutes: bedtimeVarianceMinutes
-    )
-
-    guard !inputs.isInconclusive else { return nil }
-    guard inputs.hrvZScore != nil || inputs.restingHeartRateZScore != nil || inputs.sleepRatio != nil else {
-        return nil
-    }
-
-    return HealthStateEngine.proRecoveryScore(from: inputs)
-}
-
-@MainActor
-private func watchReadinessScore(
-    for day: Date,
-    recoveryScore: Double,
-    strainScore: Double,
-    engine: HealthStateEngine
-) -> Double? {
-    let normalizedDay = Calendar.current.startOfDay(for: day)
-    let hrvPairs: [(Date, Double)] = engine.dailyHRV.map { ($0.date, $0.average) }
-    let hrvLookup: [Date: Double] = Dictionary(uniqueKeysWithValues: hrvPairs)
-    let hrvValue = hrvLookup[normalizedDay]
-
-    let hrvTrendComponent: Double
-    if let hrvValue, let baseline = engine.hrvBaseline7Day, baseline > 0 {
-        let deviation = (hrvValue - baseline) / baseline
-        hrvTrendComponent = max(0, min(100, (deviation * 200) + 50))
-    } else {
-        hrvTrendComponent = engine.hrvTrendScore
-    }
-
-    return HealthStateEngine.proReadinessScore(
-        recoveryScore: recoveryScore,
-        strainScore: strainScore,
-        hrvTrendComponent: hrvTrendComponent
-    )
 }
 
 private func watchDailyLoadSnapshots(

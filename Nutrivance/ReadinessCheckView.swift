@@ -423,12 +423,11 @@ struct ReadinessCheckView: View {
         }
     }
 
-    /// Rebuild charts from whatever is already loaded in `HealthStateEngine` (no HK / CloudKit pulls).
+    /// Rebuild charts after merging the latest sleep window (same path as toolbar refresh, lighter than skipping when disk cache exists).
     @MainActor
     private func recomputeReadinessFromEngineIfNeeded() async {
-        guard snapshot.readinessWindow.isEmpty else { return }
-        snapshot = buildSnapshot()
-        ReadinessDisplayDiskCache.save(snapshot, anchorDay: today)
+        await refreshCoverageOnUserDemand(forceNetwork: false)
+        applyAuxiliaryReadinessChrome()
     }
 
     /// Pro-athlete / body / morning widgets from the engine (cheap vs full `buildSnapshot()` fan-out).
@@ -488,6 +487,7 @@ struct ReadinessCheckView: View {
 
     @MainActor
     private func refreshCoverageOnUserDemand(forceNetwork: Bool) async {
+        await healthEngine.refreshRecentSleepForRecoveryScores()
         #if targetEnvironment(macCatalyst)
         healthEngine.recomputePublishedScoresNow()
         snapshot = buildSnapshot()

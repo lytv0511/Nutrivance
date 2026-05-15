@@ -82,6 +82,14 @@ struct StrainRecoveryView: View {
         timeFilter == .day ? .week : timeFilter
     }
 
+    /// Stable per calendar day so a new day retriggers sleep merge (parity with Readiness / Recovery tabs).
+    private var sleepRefreshTaskID: String {
+        let cal = Calendar.current
+        let todayStart = cal.startOfDay(for: Date())
+        let c = cal.dateComponents([.year, .month, .day], from: todayStart)
+        return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
+    }
+
     @ViewBuilder
     private var strainRecoveryTimeAndSportFilters: some View {
         HStack {
@@ -444,6 +452,9 @@ struct StrainRecoveryView: View {
                     engine: engine,
                     aggressiveCachingController: aggressiveCachingController
                 )
+            }
+            .task(id: sleepRefreshTaskID) {
+                await engine.refreshRecentSleepForRecoveryScores()
             }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .background else { return }

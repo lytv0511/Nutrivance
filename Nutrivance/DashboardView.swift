@@ -173,6 +173,7 @@ private struct DashboardBurningGradientBackground: View {
 
 struct DashboardView: View {
     @StateObject var engine = HealthStateEngine.shared
+    @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     @EnvironmentObject private var unitPreferences: UnitPreferencesStore
     @EnvironmentObject private var navigationState: NavigationState
     @Environment(\.scenePhase) private var scenePhase
@@ -243,6 +244,9 @@ struct DashboardView: View {
     @State private var isRefreshingDashboardMetrics = false
     @State private var hasStartedBackgroundRefresh = false
     @State private var dashboardRefreshTask: Task<Void, Never>? = nil
+    /// Matches `ReadinessCheckView` / `RecoveryScoreView` headline math; refreshed via disk cache + debounced recompute.
+    @State private var dashboardAlignedRecoveryReadiness: (recovery: Double, readiness: Double)? = nil
+    @State private var dashboardHeadlineRefreshTask: Task<Void, Never>? = nil
     @State private var workoutCacheRebuildTask: Task<Void, Never>? = nil
     @State private var liveLoadSnapshot: DashboardLoadSnapshot = DashboardLoadSnapshot(
         acuteLoad: 0,
@@ -400,6 +404,7 @@ struct DashboardView: View {
             workoutsByDay = result.workoutsByDay
             loadByDay = result.loadByDay
             updateLiveLoadSnapshot()
+            scheduleDashboardHeadlineRefresh()
         }
     }
 
@@ -478,6 +483,70 @@ struct DashboardView: View {
         default:
             return true
         }
+    }
+
+    private static var dashboardHeadlineDebounceNanos: UInt64 {
+        #if targetEnvironment(macCatalyst)
+        520_000_000
+        #else
+        120_000_000
+        #endif
+    }
+
+    /// Coalesces headline refreshes so Mac Catalyst does not stutter when iCloud / CloudKit merges stream updates.
+    private func scheduleDashboardHeadlineRefresh(immediate: Bool = false) {
+        dashboardHeadlineRefreshTask?.cancel()
+        dashboardHeadlineRefreshTask = Task { @MainActor in
+            if !immediate {
+                try? await Task.sleep(nanoseconds: Self.dashboardHeadlineDebounceNanos)
+            }
+            guard !Task.isCancelled else { return }
+            await refreshDashboardHeadlinesNow()
+        }
+    }
+
+    /// Prefer on-disk metric caches (same files as Readiness / Recovery score screens), then fill gaps with off-main `computeAlignedRecoveryReadinessForDashboard`.
+    private func refreshDashboardHeadlinesNow() async {
+        let anchor = Calendar.current.startOfDay(for: Date())
+
+        let disk = await Task.detached(priority: .utility) {
+            MetricDisplayHeadlineCache.load(anchorDay: anchor)
+        }.value
+        guard !Task.isCancelled else { return }
+
+        if let recovery = disk.recovery1D, let readiness = disk.readiness {
+            dashboardAlignedRecoveryReadiness = (recovery, readiness)
+            return
+        }
+
+        let context = RecoveryComputationContext.make(engine: engine)
+        let pairs = engine.workoutAnalytics
+        let recoveryFallback = engine.recoveryScore
+        let strainFallback = engine.strainScore
+        let readinessFallback = engine.readinessScore
+        let estimatedMaxHR = engine.estimatedMaxHeartRate
+
+        var recovery = disk.recovery1D ?? recoveryFallback
+        var readiness = disk.readiness ?? readinessFallback
+
+        if disk.recovery1D == nil || disk.readiness == nil {
+            let computed = await Task.detached(priority: .userInitiated) {
+                computeAlignedRecoveryReadinessForDashboard(
+                    anchorDay: anchor,
+                    context: context,
+                    workouts: pairs,
+                    estimatedMaxHeartRate: estimatedMaxHR,
+                    recoveryFallback: recoveryFallback,
+                    strainFallback: strainFallback,
+                    readinessFallback: readinessFallback
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+            if disk.recovery1D == nil { recovery = computed.recovery }
+            if disk.readiness == nil { readiness = computed.readiness }
+        }
+
+        dashboardAlignedRecoveryReadiness = (recovery, readiness)
     }
 
     private func updateLiveLoadSnapshot() {
@@ -592,6 +661,9 @@ struct DashboardView: View {
                 .padding(.top)
                 .coordinateSpace(name: "dashboardBase")
             }
+            .onAppear {
+                scheduleDashboardHeadlineRefresh(immediate: true)
+            }
             .background(
                 DashboardBurningGradientBackground()
             )
@@ -677,6 +749,9 @@ struct DashboardView: View {
             .onChange(of: engine.workoutAnalytics.last?.workout.endDate) { _, _ in
                 enqueueWorkoutCacheRebuildFromEngine()
             }
+            .onChange(of: engine.cachedMetricsUpdatedAt) { _, _ in
+                scheduleDashboardHeadlineRefresh()
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
                 let saved = DashboardLayoutPersistence.load()
                 groupSummaryCards = saved.groupSummaryCards
@@ -684,14 +759,20 @@ struct DashboardView: View {
                 summaryCardsOrder = saved.summaryCardsOrder
             }
             .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    scheduleDashboardHeadlineRefresh(immediate: true)
+                    return
+                }
                 guard newPhase == .background else { return }
                 dashboardRefreshTask?.cancel()
                 workoutCacheRebuildTask?.cancel()
+                dashboardHeadlineRefreshTask?.cancel()
                 isRefreshingDashboardMetrics = false
             }
             .onDisappear {
                 dashboardRefreshTask?.cancel()
                 workoutCacheRebuildTask?.cancel()
+                dashboardHeadlineRefreshTask?.cancel()
             }
             .navigationDestination(isPresented: $showWorkoutDetail) {
                 if let selectedWorkout = selectedWorkoutForDetail {
@@ -718,6 +799,7 @@ struct DashboardView: View {
 
         await MainActor.run {
             engine.refreshStartupMetrics()
+            scheduleDashboardHeadlineRefresh()
         }
 
         guard !Task.isCancelled else { return }
@@ -1249,8 +1331,12 @@ private func workoutHistoryPreviewSection() -> some View {
 
     func valueFor(_ title: String) -> Double {
         switch title {
-        case "Recovery": return engine.recoveryScore
-        case "Readiness": return engine.readinessScore
+        case "Recovery":
+            let base = dashboardAlignedRecoveryReadiness?.recovery ?? engine.recoveryScore
+            return NutrivanceTuningEngine.display(base: base, metric: .recovery, store: tuningStore).adjusted
+        case "Readiness":
+            let base = dashboardAlignedRecoveryReadiness?.readiness ?? engine.readinessScore
+            return NutrivanceTuningEngine.display(base: base, metric: .readiness, store: tuningStore).adjusted
         case "Strain": return engine.strainScore
         case "Allostatic": return engine.allostaticStressScore
         case "Autonomic": return engine.autonomicBalanceScore

@@ -20,6 +20,15 @@ final class HealthStateEngine: ObservableObject {
     /// Max samples/segments uploaded per handoff blob (keeps CloudKit assets reasonable).
     private let cloudHandoffMaxHRVSamples = 100_000
     private let cloudHandoffMaxSleepSegments = 28_000
+    #if targetEnvironment(macCatalyst)
+    /// Catalyst is a read-only consumer of synced data; cap resident series so memory and UI stay stable.
+    private let catalystMaxHRVSamplesInMemory = 28_000
+    private let catalystMaxSleepTimelineSegmentsInMemory = 12_000
+    /// Automatic CloudKit engine pulls (not user pull-to-refresh) — avoids hammering the network + main thread.
+    private let catalystAutomaticEngineSyncMinInterval: TimeInterval = 135
+    private var lastAutomaticEngineSyncPullAt: Date?
+    private var cloudKVSExternalSnapshotCoalesceTask: Task<Void, Never>?
+    #endif
     private var lastAppliedHRVSamplesHandoffAt: Date = .distantPast
     private var lastAppliedSleepTimelineHandoffAt: Date = .distantPast
     private var lastAppliedSleepUIMetricsHandoffAt: Date = .distantPast
@@ -781,8 +790,8 @@ final class HealthStateEngine: ObservableObject {
     private func reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: Bool = false) async {
         NSUbiquitousKeyValueStore.default.synchronize()
         hydrateMetricsFromCacheIfAvailable()
+        await pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: userInitiatedRefresh, userInitiated: userInitiatedRefresh)
         updateScores()
-        await pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: userInitiatedRefresh)
     }
 
     /// Deferred CloudKit fetch that doesn't block initial UI render - runs in background
@@ -798,19 +807,32 @@ final class HealthStateEngine: ObservableObject {
         hydrateMetricsFromCacheIfAvailable()
         
         // Then schedule CloudKit fetch as background task, not blocking
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: 500_000_000)  // Wait 500ms after initial render
-            await self.pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: true)
-            self.scheduleScoresRefresh()
-            self.scheduleMetricsSnapshotSave()
+            #if targetEnvironment(macCatalyst)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            #else
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            #endif
+            guard !Task.isCancelled else { return }
+            await self.pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: true, userInitiated: false)
+            self.updateScores()
         }
     }
 
     /// Load **time series** snapshots from CloudKit (`EngineSyncBlob`) written by iOS (required on Mac Catalyst; optional on other platforms when `allowOnNonCatalyst` is set for user refresh).
-    private func pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: Bool = false) async {
+    private func pullEngineSyncBlobsFromCloudKit(allowOnNonCatalyst: Bool = false, userInitiated: Bool = false) async {
         guard Self.usesAggregatedCloudHealthPath || allowOnNonCatalyst else { return }
         guard await CloudKitManager.shared.accountCanUseCloudKit() else { return }
+
+        #if targetEnvironment(macCatalyst)
+        if !userInitiated {
+            if let last = lastAutomaticEngineSyncPullAt,
+               Date().timeIntervalSince(last) < catalystAutomaticEngineSyncMinInterval {
+                return
+            }
+        }
+        #endif
 
         if let (_, data) = await CloudKitManager.shared.fetchEngineSyncBlob(
             recordName: NutrivanceEngineSyncSchema.RecordName.metricsSnapshot
@@ -854,13 +876,21 @@ final class HealthStateEngine: ObservableObject {
             }
         }
 
-        updateScores()
-        scheduleScoresRefresh()
+        #if targetEnvironment(macCatalyst)
+        if !userInitiated {
+            lastAutomaticEngineSyncPullAt = Date()
+        }
+        #endif
     }
 
     private func clampSleepTimelineSegmentCount() {
-        guard sleepTimelineSegments.count > cloudHandoffMaxSleepSegments else { return }
-        sleepTimelineSegments = Array(sleepTimelineSegments.sorted { $0.start < $1.start }.suffix(cloudHandoffMaxSleepSegments))
+        #if targetEnvironment(macCatalyst)
+        let cap = min(cloudHandoffMaxSleepSegments, catalystMaxSleepTimelineSegmentsInMemory)
+        #else
+        let cap = cloudHandoffMaxSleepSegments
+        #endif
+        guard sleepTimelineSegments.count > cap else { return }
+        sleepTimelineSegments = Array(sleepTimelineSegments.sorted { $0.start < $1.start }.suffix(cap))
     }
 
     private func dedupeSleepTimelineSegments(_ segs: [EngineSleepTimelineSegment]) -> [EngineSleepTimelineSegment] {
@@ -875,7 +905,12 @@ final class HealthStateEngine: ObservableObject {
     }
 
     private func applyHRVSamplesHandoffPayload(_ payload: EngineHRVSamplesBlob) {
-        let sorted = payload.samples.sorted { $0.date < $1.date }
+        var sorted = payload.samples.sorted { $0.date < $1.date }
+        #if targetEnvironment(macCatalyst)
+        if sorted.count > catalystMaxHRVSamplesInMemory {
+            sorted = Array(sorted.suffix(catalystMaxHRVSamplesInMemory))
+        }
+        #endif
         hrvSampleHistory = sorted.map { HRVSamplePoint(date: $0.date, value: $0.value) }
         hrvHistory = sorted.map(\.value)
         let calendar = Calendar.current
@@ -1047,6 +1082,10 @@ final class HealthStateEngine: ObservableObject {
     #endif
 
     private func saveMetricsSnapshotNow() {
+        #if targetEnvironment(macCatalyst)
+        // Consumer-only: never re-encode megabyte snapshots or touch iCloud KVS from Mac (was burning CPU + memory every `updateScores()`).
+        return
+        #else
         guard isAppActive else { return }
         let snapshot = currentMetricsSnapshot()
         cachedMetricsUpdatedAt = snapshot.updatedAt
@@ -1060,7 +1099,6 @@ final class HealthStateEngine: ObservableObject {
         // long histories). Run it off the main actor; only the produced `Data` and the
         // cloud upload land on `@MainActor` again. The cloud snapshot is smaller and
         // can encode alongside it on the same detached task.
-        #if !targetEnvironment(macCatalyst)
         metricsSnapshotWriteTask = Task.detached(priority: .utility) { [weak self, snapshot, cloudSnapshot, localURL, cloudKey] in
             // Heavy JSON encode and disk write off the main actor.
             let fullEncoded = try? JSONEncoder().encode(snapshot)
@@ -1087,16 +1125,20 @@ final class HealthStateEngine: ObservableObject {
             }
             await self?.pushDetailedHealthHandoffsToCloudKit()
         }
-        #endif
+    #endif
     }
 
     private func scheduleMetricsSnapshotSave(delayNanoseconds: UInt64 = 600_000_000) {
+        #if targetEnvironment(macCatalyst)
+        return
+        #else
         metricsSnapshotSaveTask?.cancel()
         metricsSnapshotSaveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard let self, !Task.isCancelled, self.isAppActive else { return }
             self.saveMetricsSnapshotNow()
         }
+        #endif
     }
 
     private func beginBackgroundMetricsRefreshWindow() {
@@ -2855,7 +2897,13 @@ final class HealthStateEngine: ObservableObject {
     private var hasStartedInitialDifferentialRefresh = false
     private var smartDifferentialRefreshTask: Task<Void, Never>?
     private var historicalBatchLoadTask: Task<Void, Never>?
-    private let metricsRefreshCooldown: TimeInterval = 20
+    private var metricsRefreshCooldown: TimeInterval {
+        #if targetEnvironment(macCatalyst)
+        72
+        #else
+        20
+        #endif
+    }
     private let startupWorkoutCoverageDays = 42
     private let allowsAutomaticHistoricalBatchLoading = false
 
@@ -2869,12 +2917,26 @@ final class HealthStateEngine: ObservableObject {
         ) { [weak self] _ in
             guard let self else { return }
             guard self.isAppActive else { return }
+            #if targetEnvironment(macCatalyst)
+            self.cloudKVSExternalSnapshotCoalesceTask?.cancel()
+            self.cloudKVSExternalSnapshotCoalesceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                guard let self, !Task.isCancelled, self.isAppActive else { return }
+                guard let snapshot = self.loadMetricsSnapshotFromCloud() else { return }
+                if let cachedMetricsUpdatedAt = self.cachedMetricsUpdatedAt,
+                   cachedMetricsUpdatedAt >= snapshot.updatedAt {
+                    return
+                }
+                self.applyMetricsSnapshot(snapshot)
+            }
+            #else
             guard let snapshot = self.loadMetricsSnapshotFromCloud() else { return }
             if let cachedMetricsUpdatedAt = self.cachedMetricsUpdatedAt,
                cachedMetricsUpdatedAt >= snapshot.updatedAt {
                 return
             }
             self.applyMetricsSnapshot(snapshot)
+            #endif
         }
 
         Task { @MainActor [weak self] in
@@ -2922,6 +2984,9 @@ final class HealthStateEngine: ObservableObject {
 
     deinit {
         workoutCloudUploadTask?.cancel()
+        #if targetEnvironment(macCatalyst)
+        cloudKVSExternalSnapshotCoalesceTask?.cancel()
+        #endif
         if let cloudSnapshotObserver {
             NotificationCenter.default.removeObserver(cloudSnapshotObserver)
         }
@@ -2932,7 +2997,11 @@ final class HealthStateEngine: ObservableObject {
             isAppActive = true
             foregroundResumeTask?.cancel()
             foregroundResumeTask = Task { @MainActor [weak self] in
+                #if targetEnvironment(macCatalyst)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                #else
                 try? await Task.sleep(nanoseconds: 300_000_000)
+                #endif
                 guard let self, !Task.isCancelled, self.isAppActive else { return }
                 self.refreshStartupMetrics()
                 self.scheduleStartupWorkoutCoverageSync()
@@ -2954,6 +3023,10 @@ final class HealthStateEngine: ObservableObject {
         metricsRefreshCompletionTask?.cancel()
         smartDifferentialRefreshTask?.cancel()
         historicalBatchLoadTask?.cancel()
+        #if targetEnvironment(macCatalyst)
+        cloudKVSExternalSnapshotCoalesceTask?.cancel()
+        cloudKVSExternalSnapshotCoalesceTask = nil
+        #endif
 
         isRefreshingCachedMetrics = false
 
@@ -2994,10 +3067,11 @@ final class HealthStateEngine: ObservableObject {
         beginBackgroundMetricsRefreshWindow()
 
         if Self.usesAggregatedCloudHealthPath {
-            Task { [weak self] in
-                await self?.reloadAggregatedHealthSnapshotFromICloud()
-                self?.scheduleScoresRefresh()
-                self?.scheduleMetricsSnapshotSave(delayNanoseconds: 500_000_000)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: force)
+                self.scheduleScoresRefresh()
+                self.scheduleMetricsSnapshotSave(delayNanoseconds: 500_000_000)
             }
             return
         }
@@ -3042,7 +3116,7 @@ final class HealthStateEngine: ObservableObject {
         beginBackgroundMetricsRefreshWindow()
 
         if Self.usesAggregatedCloudHealthPath {
-            Task { [weak self] in
+            Task { @MainActor [weak self] in
                 await self?.reloadAggregatedHealthSnapshotFromICloud()
                 self?.scheduleScoresRefresh()
                 self?.scheduleMetricsSnapshotSave(delayNanoseconds: 400_000_000)
@@ -3073,7 +3147,11 @@ final class HealthStateEngine: ObservableObject {
     private func scheduleScoresRefresh() {
         scoreRefreshTask?.cancel()
         scoreRefreshTask = Task { @MainActor [weak self] in
+            #if targetEnvironment(macCatalyst)
+            try? await Task.sleep(nanoseconds: 550_000_000)
+            #else
             try? await Task.sleep(nanoseconds: 200_000_000)
+            #endif
             guard let self = self, !Task.isCancelled else { return }
             self.updateScores()
             self.scheduleMetricsSnapshotSave()
@@ -3086,6 +3164,26 @@ final class HealthStateEngine: ObservableObject {
         scoreRefreshTask?.cancel()
         scoreRefreshTask = nil
         updateScores()
+    }
+
+    /// Re-merges recent sleep analysis into engine-backed maps (anchored sleep, stages, etc.), then recomputes scores.
+    /// Coverage-based refresh can skip sleep when the day range already looks "filled" but last night is still landing from HealthKit.
+    func refreshRecentSleepForRecoveryScores(lookbackDays: Int = 5) async {
+        if Self.usesAggregatedCloudHealthPath {
+            await reloadAggregatedHealthSnapshotFromICloud(userInitiatedRefresh: true)
+            recomputePublishedScoresNow()
+            return
+        }
+        let calendar = Calendar.current
+        let end = Date()
+        let start = calendar.date(byAdding: .day, value: -lookbackDays, to: calendar.startOfDay(for: end)) ?? end
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            fetchSleepQuality(from: start, to: end, mergeIntoExisting: true) {
+                continuation.resume()
+            }
+        }
+        recomputePublishedScoresNow()
+        scheduleMetricsSnapshotSave()
     }
 
     private func scheduleStartupWorkoutCoverageSync() {

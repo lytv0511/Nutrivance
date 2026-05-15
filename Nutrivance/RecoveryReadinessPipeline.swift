@@ -303,6 +303,93 @@ func sharedDailyLoadSnapshots(
     }
 }
 
+// MARK: - Dashboard headline alignment
+
+/// Pure headline computation for the dashboard — safe to run on a detached task once inputs are captured.
+/// Uses the same window + helpers as `ReadinessCheckView.buildSnapshot()` for the anchor calendar day.
+nonisolated func computeAlignedRecoveryReadinessForDashboard(
+    anchorDay: Date,
+    context: RecoveryComputationContext,
+    workouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)],
+    estimatedMaxHeartRate: Double,
+    recoveryFallback: Double,
+    strainFallback: Double,
+    readinessFallback: Double
+) -> (recovery: Double, readiness: Double) {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: anchorDay)
+
+    let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+    let readinessWindow = sharedDateSequence(from: start, to: today)
+    let readinessDisplayWindow = (
+        start: start,
+        end: today,
+        endExclusive: calendar.date(byAdding: .day, value: 1, to: today) ?? today
+    )
+    let loadSnapshots = sharedDailyLoadSnapshots(
+        workouts: workouts,
+        estimatedMaxHeartRate: estimatedMaxHeartRate,
+        displayWindow: readinessDisplayWindow
+    )
+    let strainLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.strainScore) })
+    let acwrLookup = Dictionary(uniqueKeysWithValues: loadSnapshots.map { ($0.date, $0.acwr) })
+
+    let recoveryDetailByDay = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
+        (day, sharedRecoveryScoreDetailed(for: day, context: context))
+    })
+    let recoverySeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
+        (day, recoveryDetailByDay[day].flatMap { $0 }?.score ?? recoveryFallback)
+    })
+    let strainSeriesMap = Dictionary(uniqueKeysWithValues: readinessWindow.map { day in
+        (day, strainLookup[day] ?? strainFallback)
+    })
+
+    let readinessSeries: [(Date, Double)] = readinessWindow.map { day in
+        let rb = recoveryDetailByDay[day].flatMap { $0 }
+        let rec = rb?.score ?? recoveryFallback
+        let readinessVal: Double = {
+            guard let breakdown = rb else {
+                return sharedReadinessScore(
+                    for: day,
+                    recoveryScore: rec,
+                    strainScore: strainSeriesMap[day] ?? strainFallback,
+                    context: context,
+                    acwr: acwrLookup[day]
+                ) ?? readinessFallback
+            }
+            return sharedReadinessScoreDetailed(
+                for: day,
+                recoveryBreakdown: breakdown,
+                recoveryScoreForBlend: rec,
+                strainScore: strainSeriesMap[day] ?? strainFallback,
+                acwr: acwrLookup[day],
+                context: context
+            ).score
+        }()
+        return (day, readinessVal)
+    }
+
+    let readinessValue = readinessSeries.last?.1 ?? readinessFallback
+    let recoveryValue = recoverySeriesMap[today] ?? recoveryFallback
+    return (recoveryValue, readinessValue)
+}
+
+/// Convenience wrapper that snapshots the engine on the main actor.
+@MainActor
+func alignedRecoveryReadinessForDashboard(engine: HealthStateEngine) -> (recovery: Double, readiness: Double) {
+    let anchor = Calendar.current.startOfDay(for: Date())
+    let context = RecoveryComputationContext.make(engine: engine)
+    return computeAlignedRecoveryReadinessForDashboard(
+        anchorDay: anchor,
+        context: context,
+        workouts: engine.workoutAnalytics,
+        estimatedMaxHeartRate: engine.estimatedMaxHeartRate,
+        recoveryFallback: engine.recoveryScore,
+        strainFallback: engine.strainScore,
+        readinessFallback: engine.readinessScore
+    )
+}
+
 // MARK: - Pro-Athlete Aware Score Calculation
 
 func sharedProAthleteRecoveryScore(
@@ -462,3 +549,63 @@ enum NutrivanceViewMetricDisplayCacheURL {
         try directory().appendingPathComponent(fileName, isDirectory: false)
     }
 }
+
+// MARK: - Metric headline disk cache (Readiness / Recovery score views)
+
+/// Lightweight decode of the JSON files written by `ReadinessCheckView` and `RecoveryScoreView`
+/// so the dashboard can mirror their headline values without recomputing (especially on Mac Catalyst).
+enum MetricDisplayHeadlineCache {
+    private static let readinessFileName = "readiness-display-v2.json"
+    private static let recoveryFileName = "recovery-display-v1.json"
+    private static let decoder = JSONDecoder()
+
+    private struct ReadinessHeadlinesPartial: Codable {
+        let anchor: TimeInterval
+        let readinessValue: Double
+        let recoveryValue: Double
+    }
+
+    private struct RecoveryStorePartial: Codable {
+        let anchor: TimeInterval
+        let snapshots: [String: RecoverySnapshotPartial]
+    }
+
+    private struct RecoverySnapshotPartial: Codable {
+        let recoveryValue: Double
+    }
+
+    struct DiskHeadlines: Sendable, Equatable {
+        /// `readinessValue` from `readiness-display-v2.json` when the anchor day matches.
+        var readiness: Double?
+        /// 1D headline from `recovery-display-v1.json` when the anchor day matches (`RecoveryScoreView`).
+        var recovery1D: Double?
+    }
+
+    /// Reads Application Support metric cache files; safe to call from a background queue.
+    static func load(anchorDay: Date) -> DiskHeadlines {
+        let day = Calendar.current.startOfDay(for: anchorDay)
+        var readiness: Double?
+        var recovery1D: Double?
+
+        if let url = try? NutrivanceViewMetricDisplayCacheURL.fileURL(named: readinessFileName),
+           let data = try? Data(contentsOf: url),
+           let partial = try? decoder.decode(ReadinessHeadlinesPartial.self, from: data) {
+            let cachedDay = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: partial.anchor))
+            if cachedDay == day {
+                readiness = partial.readinessValue
+            }
+        }
+
+        if let url = try? NutrivanceViewMetricDisplayCacheURL.fileURL(named: recoveryFileName),
+           let data = try? Data(contentsOf: url),
+           let partial = try? decoder.decode(RecoveryStorePartial.self, from: data) {
+            let cachedDay = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: partial.anchor))
+            if cachedDay == day, let snap = partial.snapshots["1D"] {
+                recovery1D = snap.recoveryValue
+            }
+        }
+
+        return DiskHeadlines(readiness: readiness, recovery1D: recovery1D)
+    }
+}
+
