@@ -370,6 +370,17 @@ struct ProgramBuilderView: View {
     @State private var isWorkoutPreviewSheetPresented = false
     @State private var workoutPreviewLaunchContext: (title: String, activity: ProgramWorkoutType)?
     @State private var isActivityLibraryPresented = false
+    /// Staging repository-only edits in `WorkoutStagesView` without leaving the user on the loaded plan afterward.
+    @State private var isRepositoryStagedEditSession = false
+    @State private var repositoryEditSnapshot: ProgramBuilderDraftState?
+    @State private var repositoryPlanIdBeingEdited: UUID?
+    @State private var showRepositoryDeleteConfirmation = false
+    @State private var repositoryDeletePendingID: UUID?
+    @State private var repositoryDeletePendingTitle: String = ""
+    @StateObject private var dailyMissionPinStore = DailyMissionPinStore.shared
+    @State private var isDailyMissionRepoPinPickerPresented = false
+    @State private var isDailyMissionActivityPinPickerPresented = false
+    @State private var dailyMissionActivityPinSearchText = ""
 
     init(
         presentationStyle: ProgramBuilderPresentationStyle = .dailyMission,
@@ -580,6 +591,14 @@ struct ProgramBuilderView: View {
                     workoutStagesExpandedView
                 }
             }
+            .onChange(of: isWorkoutStagesViewPresented) { wasPresented, isPresented in
+                guard wasPresented, !isPresented, isRepositoryStagedEditSession else { return }
+                if let backup = repositoryEditSnapshot {
+                    restoreBuilderFromDraft(backup)
+                    planStore.saveDraft(backup)
+                }
+                clearRepositoryEditSessionFlags()
+            }
             .sheet(isPresented: $isStageManagerBanSheetPresented) {
                 stageManagerBanListSheet
             }
@@ -591,6 +610,12 @@ struct ProgramBuilderView: View {
             }
             .sheet(isPresented: $isActivityLibraryPresented) {
                 simplifiedActivityLibrarySheet
+            }
+            .sheet(isPresented: $isDailyMissionRepoPinPickerPresented) {
+                dailyMissionRepoPinPickerSheet
+            }
+            .sheet(isPresented: $isDailyMissionActivityPinPickerPresented) {
+                dailyMissionActivityPinPickerSheet
             }
             .task(id: coachContextID) {
                 guard presentationStyle == .dailyMission else { return }
@@ -626,6 +651,25 @@ struct ProgramBuilderView: View {
         }
         .onAppear {
             handleViewAppear()
+        }
+        .confirmationDialog(
+            "Delete saved workout?",
+            isPresented: $showRepositoryDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete from repository", role: .destructive) {
+                if let id = repositoryDeletePendingID {
+                    planStore.deleteRepositoryPlan(id: id)
+                    dailyMissionPinStore.removeRepository(planID: id)
+                    planSyncStatusMessage = "Deleted workout plan."
+                }
+                repositoryDeletePendingID = nil
+            }
+            Button("Cancel", role: .cancel) {
+                repositoryDeletePendingID = nil
+            }
+        } message: {
+            Text("“\(repositoryDeletePendingTitle)” will be removed from your Workout Repository on all devices. This cannot be undone.")
         }
         .onReceiveViewControl(.nutrivanceViewControlWorkoutViews) {
             guard navigationState.isGloballyActiveRootTab(.programBuilder) else { return }
@@ -888,6 +932,10 @@ struct ProgramBuilderView: View {
         syncStageActivitySelection()
         ensureMicroStagesAreReady()
         syncAvailableMinutesWithStages()
+        if presentationStyle == .dailyMission {
+            syncDailyMissionPinnedPlansWithRepository()
+            syncDailyMissionPinnedActivitiesWithCatalog()
+        }
     }
 
     private func syncAvailableMinutesWithStages() {
@@ -958,6 +1006,8 @@ struct ProgramBuilderView: View {
                         Text("Pick from your usual patterns, then shape the session the way you actually want it today.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.72))
+
+                        dailyMissionPinnedAndAddChipRow
 
                         AdaptiveChipGrid(todaySuggestions) { suggestion in
                             ProgramSuggestionChip(
@@ -2151,6 +2201,92 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
         }
     }
 
+    private func repositoryCardActivityTitles(for plan: ProgramWorkoutPlanRecord) -> [String] {
+        let values = plan.resolvedPhases.map(\.title)
+        var seen: Set<String> = []
+        return values.filter { seen.insert($0).inserted }
+    }
+
+    private func repositoryCardStageDetailRows(for plan: ProgramWorkoutPlanRecord) -> [String] {
+        plan.resolvedPhases.map { phase in
+            let normalizedStages = (phase.microStages ?? []).filter { $0.plannedMinutes > 0 }
+            if normalizedStages.isEmpty {
+                return "\(phase.title): \(phase.plannedMinutes)m total"
+            }
+
+            let preview = normalizedStages.prefix(3).map { stage in
+                let foundation = repositoryCardStageFoundationSummary(stage)
+                let alert = repositoryCardStageAlertSummary(stage)
+                if alert.isEmpty {
+                    return "\(stage.role.title) \(foundation)"
+                }
+                return "\(stage.role.title) \(foundation) • Alert \(alert)"
+            }.joined(separator: " • ")
+
+            let remaining = normalizedStages.count - min(3, normalizedStages.count)
+            if remaining > 0 {
+                return "\(phase.title): \(preview) +\(remaining)"
+            }
+            return "\(phase.title): \(preview)"
+        }
+    }
+
+    private func repositoryCardStageFoundationSummary(_ stage: ProgramCustomWorkoutMicroStage) -> String {
+        switch stage.foundationType {
+        case .open:
+            return "open"
+        case .time:
+            return "\(max(stage.plannedMinutes, 1))m"
+        case .distance:
+            guard let distanceKm = stage.plannedDistance else { return "distance" }
+            if unitPreferences.resolvedDistanceUnit == .miles {
+                return String(format: "%.1fmi", distanceKm * 0.621371)
+            }
+            return String(format: "%.1fkm", distanceKm)
+        }
+    }
+
+    private func repositoryCardStageAlertSummary(_ stage: ProgramCustomWorkoutMicroStage) -> String {
+        let target = stage.targetValueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label: String
+        switch stage.goal {
+        case .heartRateZone:
+            label = "HR"
+        case .power:
+            label = "Power"
+        case .cadence:
+            label = "Cadence"
+        case .speed:
+            label = "Speed"
+        case .pace:
+            label = "Pace"
+        case .distance:
+            label = "Distance"
+        case .energy:
+            label = "Energy"
+        case .open, .time:
+            return ""
+        }
+
+        if target.isEmpty {
+            return label
+        }
+
+        let behaviorPrefix: String
+        switch stage.targetBehavior {
+        case .range:
+            behaviorPrefix = "in"
+        case .aboveThreshold:
+            behaviorPrefix = ">= "
+        case .belowThreshold:
+            behaviorPrefix = "<= "
+        case .completionGoal:
+            behaviorPrefix = ""
+        }
+
+        return behaviorPrefix.isEmpty ? "\(label) \(target)" : "\(label) \(behaviorPrefix)\(target)"
+    }
+
     private var workoutRepositorySection: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -2181,21 +2317,40 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(planStore.repositoryPlans) { plan in
+                        let stageRows = repositoryCardStageDetailRows(for: plan)
                         VStack(alignment: .leading, spacing: 10) {
-                            HStack(alignment: .top) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(plan.title)
-                                        .font(.headline.weight(.bold))
-                                        .foregroundStyle(.white)
-                                    Text(plan.summary)
-                                        .font(.footnote)
-                                        .foregroundStyle(.white.opacity(0.72))
-                                        .lineLimit(2)
-                                    Text("Saved \(plan.sourceDeviceLabel) • \(plan.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption2)
-                                        .foregroundStyle(.white.opacity(0.55))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(plan.title)
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(.white)
+                                Text(plan.summary)
+                                    .font(.footnote)
+                                    .foregroundStyle(.white.opacity(0.72))
+                                    .lineLimit(2)
+                                Text("Saved \(plan.sourceDeviceLabel) • \(plan.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.55))
+
+                                Text(repositoryCardActivityTitles(for: plan).joined(separator: " • "))
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.62))
+                                    .lineLimit(2)
+
+                                if !stageRows.isEmpty {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        ForEach(Array(stageRows.prefix(2).enumerated()), id: \.offset) { _, row in
+                                            Text(row)
+                                                .font(.caption2)
+                                                .foregroundStyle(.white.opacity(0.55))
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                    .padding(.top, 2)
                                 }
-                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                beginRepositoryStageEdit(plan: plan)
                             }
 
                             HStack(spacing: 10) {
@@ -2206,8 +2361,9 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
                                 .foregroundStyle(.white)
 
                                 Button("Delete", role: .destructive) {
-                                    planStore.deleteRepositoryPlan(id: plan.id)
-                                    planSyncStatusMessage = "Deleted workout plan."
+                                    repositoryDeletePendingID = plan.id
+                                    repositoryDeletePendingTitle = plan.title
+                                    showRepositoryDeleteConfirmation = true
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -2326,7 +2482,7 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
         )
     }
 
-    private func applyPlan(_ plan: ProgramWorkoutPlanRecord) {
+    private func applyPlan(_ plan: ProgramWorkoutPlanRecord, silenceRepositorySideEffects: Bool = false) {
         selectedActivityIDs = plan.selectedActivityIDs
         availableMinutes = Double(plan.availableMinutes)
         selectedMode = ProgramBuilderMode(rawValue: plan.modeRawValue) ?? .guided
@@ -2357,13 +2513,243 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
             trailhead: plan.trailheadCoordinate,
             coordinates: plan.routeCoordinateValues
         )
-        planSyncStatusMessage = plan.expiresAt == nil
-            ? "Loaded repository plan into Daily Mission."
-            : "Loaded temporary plan from \(plan.sourceDeviceLabel)."
+        if !silenceRepositorySideEffects {
+            planSyncStatusMessage = plan.expiresAt == nil
+                ? "Loaded repository plan into Daily Mission."
+                : "Loaded temporary plan from \(plan.sourceDeviceLabel)."
+        }
         rebalanceWeights(for: selectedActivityIDs)
         syncTargetMetric()
         syncStageActivitySelection()
-        persistBuilderDraft()
+        if !silenceRepositorySideEffects {
+            persistBuilderDraft()
+        }
+    }
+
+    private func syncDailyMissionPinnedPlansWithRepository() {
+        let valid = Set(planStore.repositoryPlans.map(\.id))
+        dailyMissionPinStore.pruneRepositories(validIDs: valid)
+    }
+
+    private func syncDailyMissionPinnedActivitiesWithCatalog() {
+        let valid = Set(catalog.map(\.id))
+        dailyMissionPinStore.pruneActivities(validIDs: valid)
+    }
+
+    private var dailyMissionResolvedRepositoryPins: [ProgramWorkoutPlanRecord] {
+        dailyMissionPinStore.orderedRepositoryPlanIDs.compactMap { id in
+            planStore.repositoryPlans.first { $0.id == id }
+        }
+    }
+
+    private var dailyMissionResolvedActivityPins: [ProgramWorkoutType] {
+        dailyMissionPinStore.orderedActivityIDs.compactMap { id in
+            catalog.first { $0.id == id }
+        }
+    }
+
+    private func dailyMissionPinDisplaySymbol(for plan: ProgramWorkoutPlanRecord) -> String {
+        if let custom = plan.highlightSymbolName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !custom.isEmpty {
+            return custom
+        }
+        if let activity = ProgramWorkoutType.resolve(id: plan.primaryActivityID) {
+            return activity.symbol
+        }
+        if let first = plan.selectedActivityIDs.first,
+           let activity = ProgramWorkoutType.resolve(id: first) {
+            return activity.symbol
+        }
+        return "figure.run"
+    }
+
+    private func dailyMissionPinTint(for plan: ProgramWorkoutPlanRecord) -> Color {
+        guard plan.isHighlighted, let hex = plan.highlightColorHex else {
+            if let activity = ProgramWorkoutType.resolve(id: plan.primaryActivityID) {
+                return activity.tint
+            }
+            return .orange
+        }
+        switch hex.uppercased() {
+        case "#EF4444": return .red
+        case "#22C55E": return .green
+        case "#3B82F6": return .blue
+        case "#8B5CF6": return .purple
+        case "#EC4899": return .pink
+        default: return .orange
+        }
+    }
+
+    private func dailyMissionPinMatchesCurrentBuilder(_ plan: ProgramWorkoutPlanRecord) -> Bool {
+        Set(plan.selectedActivityIDs) == Set(selectedActivityIDs)
+            && plan.availableMinutes == Int(availableMinutes.rounded())
+            && plan.modeRawValue == selectedMode.rawValue
+    }
+
+    private func dailyMissionPinPickerActivitySubtitle(for plan: ProgramWorkoutPlanRecord) -> String {
+        let values = plan.resolvedPhases.map(\.title)
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }.joined(separator: " • ")
+    }
+
+    /// Adds a catalog activity to today’s builder without toggling off if it is already selected.
+    private func appendActivityFromDailyMissionPin(_ id: String) {
+        guard catalog.contains(where: { $0.id == id }) else { return }
+        if selectedActivityIDs.contains(id) {
+            selectedRouteWorkoutID = id
+            return
+        }
+        selectedActivityIDs.append(id)
+        activityMinutes[id] = activityMinutes[id] ?? 30
+        selectedRouteWorkoutID = id
+    }
+
+    @ViewBuilder
+    private var dailyMissionPinnedAndAddChipRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Repository")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.55))
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 124), spacing: 10)], alignment: .leading, spacing: 10) {
+                ForEach(dailyMissionResolvedRepositoryPins) { plan in
+                    ProgramSuggestionChip(
+                        title: plan.title,
+                        symbol: dailyMissionPinDisplaySymbol(for: plan),
+                        isSelected: dailyMissionPinMatchesCurrentBuilder(plan),
+                        tint: dailyMissionPinTint(for: plan)
+                    ) {
+                        applyPlan(plan)
+                    }
+                    .contextMenu {
+                        Button("Remove pin", role: .destructive) {
+                            dailyMissionPinStore.removeRepository(planID: plan.id)
+                        }
+                    }
+                }
+                ProgramAddDailyMissionPinChip(kind: .repositoryPlan) {
+                    syncDailyMissionPinnedPlansWithRepository()
+                    isDailyMissionRepoPinPickerPresented = true
+                }
+            }
+
+            Text("Activities")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.55))
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 124), spacing: 10)], alignment: .leading, spacing: 10) {
+                ForEach(dailyMissionResolvedActivityPins) { activity in
+                    ProgramSuggestionChip(
+                        title: activity.title,
+                        symbol: activity.symbol,
+                        isSelected: selectedActivityIDs.contains(activity.id),
+                        tint: activity.tint
+                    ) {
+                        appendActivityFromDailyMissionPin(activity.id)
+                    }
+                    .contextMenu {
+                        Button("Remove pin", role: .destructive) {
+                            dailyMissionPinStore.removeActivity(id: activity.id)
+                        }
+                    }
+                }
+                ProgramAddDailyMissionPinChip(kind: .activity) {
+                    syncDailyMissionPinnedActivitiesWithCatalog()
+                    dailyMissionActivityPinSearchText = ""
+                    isDailyMissionActivityPinPickerPresented = true
+                }
+            }
+        }
+    }
+
+    private var dailyMissionRepoPinPickerSheet: some View {
+        NavigationStack {
+            List {
+                ForEach(planStore.repositoryPlans.sorted { $0.updatedAt > $1.updatedAt }) { plan in
+                    let alreadyPinned = dailyMissionPinStore.containsRepository(planID: plan.id)
+                    Button {
+                        guard !alreadyPinned else { return }
+                        dailyMissionPinStore.addRepository(planID: plan.id)
+                        isDailyMissionRepoPinPickerPresented = false
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(plan.title)
+                                    .foregroundStyle(.primary)
+                                Text(dailyMissionPinPickerActivitySubtitle(for: plan))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            if alreadyPinned {
+                                Text("Pinned")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .disabled(alreadyPinned)
+                }
+            }
+            .navigationTitle("Workout Repository")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        isDailyMissionRepoPinPickerPresented = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var dailyMissionActivityPinCandidates: [ProgramWorkoutType] {
+        ProgramWorkoutType.searchResults(for: dailyMissionActivityPinSearchText, in: catalog)
+    }
+
+    private var dailyMissionActivityPinPickerSheet: some View {
+        NavigationStack {
+            List {
+                ForEach(dailyMissionActivityPinCandidates) { activity in
+                    let alreadyPinned = dailyMissionPinStore.containsActivity(id: activity.id)
+                    Button {
+                        guard !alreadyPinned else { return }
+                        dailyMissionPinStore.addActivity(id: activity.id)
+                        isDailyMissionActivityPinPickerPresented = false
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: activity.symbol)
+                                .foregroundStyle(activity.tint)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(activity.title)
+                                    .foregroundStyle(.primary)
+                                Text(activity.subtitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            if alreadyPinned {
+                                Text("Pinned")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .disabled(alreadyPinned)
+                }
+            }
+            .searchable(text: $dailyMissionActivityPinSearchText, prompt: "Search activities")
+            .navigationTitle("Pin Activity")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        isDailyMissionActivityPinPickerPresented = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     private func persistBuilderDraft() {
@@ -2391,6 +2777,112 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
             updatedAt: Date()
         )
         planStore.saveDraft(draft)
+    }
+
+    private func captureCurrentDraftSnapshot() -> ProgramBuilderDraftState {
+        ProgramBuilderDraftState(
+            selectedModeRawValue: selectedMode.rawValue,
+            selectedPlanDepthRawValue: selectedPlanDepth.rawValue,
+            selectedActivityIDs: selectedActivityIDs,
+            availableMinutes: availableMinutes,
+            allocationWeights: allocationWeights,
+            activityMinutes: activityMinutes,
+            selectedRouteWorkoutID: selectedRouteWorkoutID,
+            selectedTargetMetricRawValue: selectedTargetMetric.rawValue,
+            selectedZone: selectedZone,
+            targetValueText: targetValueText,
+            routeObjectiveName: routeObjectiveName,
+            routeRepeats: routeRepeats,
+            selectedRouteTemplateID: selectedRouteTemplateID,
+            selectedBuilderTabRawValue: selectedBuilderTab.rawValue,
+            selectedStageActivityID: selectedStageActivityID,
+            customMicroStagesByActivityID: customMicroStagesByActivityID,
+            customCircuitGroupsByActivityID: customCircuitGroupsByActivityID,
+            coachRegenerationNotesByActivityID: coachRegenerationNotesByActivityID,
+            coachAdvice: planner.coachAdvice,
+            generatedBlueprint: planner.generatedBlueprint,
+            updatedAt: Date()
+        )
+    }
+
+    private func restoreBuilderFromDraft(_ draft: ProgramBuilderDraftState) {
+        selectedMode = ProgramBuilderMode(rawValue: draft.selectedModeRawValue) ?? .guided
+        selectedPlanDepth = ProgramPlanDepth(rawValue: draft.selectedPlanDepthRawValue) ?? .simple
+        selectedActivityIDs = draft.selectedActivityIDs
+        availableMinutes = draft.availableMinutes
+        allocationWeights = draft.allocationWeights
+        selectedTargetMetric = ProgramTargetMetric(rawValue: draft.selectedTargetMetricRawValue) ?? .pace
+        selectedZone = draft.selectedZone
+        targetValueText = draft.targetValueText
+        routeObjectiveName = draft.routeObjectiveName
+        routeRepeats = draft.routeRepeats
+        selectedRouteTemplateID = draft.selectedRouteTemplateID
+        selectedRouteWorkoutID = draft.selectedRouteWorkoutID
+        activityMinutes = draft.activityMinutes
+        selectedBuilderTab = ProgramBuilderTab(rawValue: draft.selectedBuilderTabRawValue ?? ProgramBuilderTab.overview.rawValue) ?? .overview
+        selectedStageActivityID = draft.selectedStageActivityID
+        customMicroStagesByActivityID = draft.customMicroStagesByActivityID
+        customCircuitGroupsByActivityID = draft.customCircuitGroupsByActivityID
+        coachRegenerationNotesByActivityID = draft.coachRegenerationNotesByActivityID
+        if let coachAdvice = draft.coachAdvice, !coachAdvice.isEmpty {
+            planner.coachAdvice = coachAdvice
+        }
+        planner.generatedBlueprint = draft.generatedBlueprint
+        syncStageActivitySelection()
+    }
+
+    private func clearRepositoryEditSessionFlags() {
+        isRepositoryStagedEditSession = false
+        repositoryEditSnapshot = nil
+        repositoryPlanIdBeingEdited = nil
+    }
+
+    private func beginRepositoryStageEdit(plan: ProgramWorkoutPlanRecord) {
+        repositoryEditSnapshot = captureCurrentDraftSnapshot()
+        repositoryPlanIdBeingEdited = plan.id
+        isRepositoryStagedEditSession = true
+        applyPlan(plan, silenceRepositorySideEffects: true)
+        isWorkoutStagesViewPresented = true
+    }
+
+    @MainActor
+    private func finishRepositoryStageEditSaving(backup: ProgramBuilderDraftState?, repoId: UUID?) async {
+        defer { isWorkoutStagesViewPresented = false }
+
+        guard let backup, let repoId,
+              let original = planStore.repositoryPlans.first(where: { $0.id == repoId }) else {
+            if let backup {
+                restoreBuilderFromDraft(backup)
+                planStore.saveDraft(backup)
+            }
+            clearRepositoryEditSessionFlags()
+            return
+        }
+
+        guard let built = await buildPlanRecord(expiresAt: original.expiresAt) else {
+            restoreBuilderFromDraft(backup)
+            planStore.saveDraft(backup)
+            clearRepositoryEditSessionFlags()
+            planSyncStatusMessage = "Could not update repository workout."
+            return
+        }
+
+        let merged = original.mergingRepositoryIdentity(fromBuilt: built)
+        planStore.saveRepositoryPlan(merged)
+        restoreBuilderFromDraft(backup)
+        planStore.saveDraft(backup)
+        clearRepositoryEditSessionFlags()
+        planSyncStatusMessage = "Updated \"\(merged.title)\" in Workout Repository."
+    }
+
+    private func closeWorkoutStagesExpandedView() {
+        guard isRepositoryStagedEditSession else {
+            isWorkoutStagesViewPresented = false
+            return
+        }
+        let backup = repositoryEditSnapshot
+        let repoId = repositoryPlanIdBeingEdited
+        Task { await finishRepositoryStageEditSaving(backup: backup, repoId: repoId) }
     }
 
     private func restoreCachedDraftIfNeeded() {
@@ -3466,7 +3958,7 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Done") {
-                    isWorkoutStagesViewPresented = false
+                    closeWorkoutStagesExpandedView()
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -3479,6 +3971,7 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
                 }
             }
         }
+        .interactiveDismissDisabled(isRepositoryStagedEditSession)
     }
 
     @ViewBuilder
@@ -5723,6 +6216,57 @@ private struct ProgramSuggestionChip: View {
     }
 }
 
+private enum DailyMissionPinAddKind {
+    case repositoryPlan
+    case activity
+}
+
+private struct ProgramAddDailyMissionPinChip: View {
+    let kind: DailyMissionPinAddKind
+    let action: () -> Void
+
+    private var symbol: String {
+        switch kind {
+        case .repositoryPlan:
+            return "square.and.arrow.down.on.square"
+        case .activity:
+            return "figure.run"
+        }
+    }
+
+    private var accessibilityLabel: String {
+        switch kind {
+        case .repositoryPlan:
+            return "Add repository pin"
+        case .activity:
+            return "Add activity pin"
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                Text("Add")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.06), in: Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(
+                        style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                    )
+                    .foregroundStyle(Color.secondary.opacity(0.9))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
 private struct ProgramStatBadge: View {
     let title: String
     let value: String
@@ -6973,6 +7517,43 @@ struct ProgramWorkoutPlanRecord: Identifiable, Codable, Hashable {
             isHighlighted: isHighlighted,
             highlightColorHex: colorHex,
             highlightSymbolName: symbolName
+        )
+    }
+
+    /// Rebuilds workout content from `built` while preserving repository row identity (id, createdAt, expiration, highlight, source label).
+    func mergingRepositoryIdentity(fromBuilt built: ProgramWorkoutPlanRecord) -> ProgramWorkoutPlanRecord {
+        ProgramWorkoutPlanRecord(
+            id: id,
+            title: built.title,
+            summary: built.summary,
+            todayFocus: built.todayFocus,
+            blocks: built.blocks,
+            cautionNote: built.cautionNote,
+            selectedActivityIDs: built.selectedActivityIDs,
+            availableMinutes: built.availableMinutes,
+            modeRawValue: built.modeRawValue,
+            selectedPlanDepthRawValue: built.selectedPlanDepthRawValue,
+            allocationWeights: built.allocationWeights,
+            targetMetricRawValue: built.targetMetricRawValue,
+            selectedZone: built.selectedZone,
+            targetValueText: built.targetValueText,
+            routeObjectiveName: built.routeObjectiveName,
+            routeRepeats: built.routeRepeats,
+            selectedRouteTemplateID: built.selectedRouteTemplateID,
+            primaryActivityID: built.primaryActivityID,
+            activityRawValue: built.activityRawValue,
+            locationRawValue: built.locationRawValue,
+            routeName: built.routeName,
+            trailhead: built.trailhead,
+            routeCoordinates: built.routeCoordinates,
+            phases: built.phases,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            expiresAt: expiresAt,
+            sourceDeviceLabel: sourceDeviceLabel,
+            isHighlighted: isHighlighted,
+            highlightColorHex: highlightColorHex,
+            highlightSymbolName: highlightSymbolName
         )
     }
 }
@@ -8541,6 +9122,109 @@ private final class TrainingRoadmapStore: ObservableObject {
         if let scheduledData = try? JSONEncoder().encode(scheduledAssignmentIDs) {
             defaults.set(scheduledData, forKey: scheduledKey)
         }
+    }
+}
+
+@MainActor
+private final class DailyMissionPinStore: ObservableObject {
+    static let shared = DailyMissionPinStore()
+
+    @Published private(set) var orderedRepositoryPlanIDs: [UUID] = []
+    @Published private(set) var orderedActivityIDs: [String] = []
+
+    private let repoKey = "daily_mission_pinned_repo_ids_v2"
+    private let activityKey = "daily_mission_pinned_activity_ids_v1"
+    private let legacyRepoKey = "daily_mission_pinned_plan_ids_v1"
+    private let maxRepositoryPins = 12
+    private let maxActivityPins = 16
+
+    private init() {
+        load()
+    }
+
+    func containsRepository(planID: UUID) -> Bool {
+        orderedRepositoryPlanIDs.contains(planID)
+    }
+
+    func containsActivity(id: String) -> Bool {
+        orderedActivityIDs.contains(id)
+    }
+
+    func addRepository(planID: UUID) {
+        guard !orderedRepositoryPlanIDs.contains(planID) else { return }
+        var next = orderedRepositoryPlanIDs
+        next.append(planID)
+        while next.count > maxRepositoryPins {
+            next.removeFirst()
+        }
+        orderedRepositoryPlanIDs = next
+        persistRepositories()
+    }
+
+    func addActivity(id: String) {
+        guard !orderedActivityIDs.contains(id) else { return }
+        var next = orderedActivityIDs
+        next.append(id)
+        while next.count > maxActivityPins {
+            next.removeFirst()
+        }
+        orderedActivityIDs = next
+        persistActivities()
+    }
+
+    func removeRepository(planID: UUID) {
+        guard orderedRepositoryPlanIDs.contains(planID) else { return }
+        orderedRepositoryPlanIDs.removeAll { $0 == planID }
+        persistRepositories()
+    }
+
+    func removeActivity(id: String) {
+        guard orderedActivityIDs.contains(id) else { return }
+        orderedActivityIDs.removeAll { $0 == id }
+        persistActivities()
+    }
+
+    func pruneRepositories(validIDs: Set<UUID>) {
+        let filtered = orderedRepositoryPlanIDs.filter { validIDs.contains($0) }
+        guard filtered.count != orderedRepositoryPlanIDs.count else { return }
+        orderedRepositoryPlanIDs = filtered
+        persistRepositories()
+    }
+
+    func pruneActivities(validIDs: Set<String>) {
+        let filtered = orderedActivityIDs.filter { validIDs.contains($0) }
+        guard filtered.count != orderedActivityIDs.count else { return }
+        orderedActivityIDs = filtered
+        persistActivities()
+    }
+
+    private func load() {
+        let defaults = UserDefaults.standard
+
+        if let data = defaults.data(forKey: repoKey),
+           let decoded = try? JSONDecoder().decode([UUID].self, from: data) {
+            orderedRepositoryPlanIDs = decoded
+        } else if let legacy = defaults.data(forKey: legacyRepoKey),
+                  let decoded = try? JSONDecoder().decode([UUID].self, from: legacy) {
+            orderedRepositoryPlanIDs = decoded
+            defaults.removeObject(forKey: legacyRepoKey)
+            persistRepositories()
+        }
+
+        if let data = defaults.data(forKey: activityKey),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            orderedActivityIDs = decoded
+        }
+    }
+
+    private func persistRepositories() {
+        guard let data = try? JSONEncoder().encode(orderedRepositoryPlanIDs) else { return }
+        UserDefaults.standard.set(data, forKey: repoKey)
+    }
+
+    private func persistActivities() {
+        guard let data = try? JSONEncoder().encode(orderedActivityIDs) else { return }
+        UserDefaults.standard.set(data, forKey: activityKey)
     }
 }
 
