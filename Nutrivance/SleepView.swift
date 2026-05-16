@@ -3843,23 +3843,188 @@ struct SleepBarChart: View {
     }
 }
 
+// MARK: - Sleep Quality AI summary cache (local disk; same intent as StrainRecoverySummaryPersistence)
+
+private struct SleepQualityAISummaryCacheEntry: Codable, Sendable {
+    var summaryText: String
+    /// Matches `SleepQualityCard.sleepQualityTaskIdentity` (stable stage geometry).
+    var sleepQualityTaskIdentity: String
+    /// Broad enrichment fingerprint at save time (`aiTaskIdentity`).
+    var enrichmentFingerprint: String?
+    var savedAt: Date
+}
+
+private enum SleepQualityAISummaryPersistence {
+    private static let maxEntries = 45
+    private static let fileName = "sleep_quality_ai_summary_cache_v1.json"
+    private static var inMemory: [String: SleepQualityAISummaryCacheEntry]?
+
+    private static var cacheDirectoryURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Nutrivance", isDirectory: true)
+    }
+
+    private static var cacheFileURL: URL? {
+        cacheDirectoryURL?.appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    static func cacheKey(forWakeDay wakeDayStart: Date) -> String {
+        String(Int(wakeDayStart.timeIntervalSince1970))
+    }
+
+    static func load() -> [String: SleepQualityAISummaryCacheEntry] {
+        if let inMemory { return inMemory }
+        guard let url = cacheFileURL,
+              FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([String: SleepQualityAISummaryCacheEntry].self, from: data) else {
+            inMemory = [:]
+            return [:]
+        }
+        inMemory = decoded
+        return decoded
+    }
+
+    private static func prune(_ dict: [String: SleepQualityAISummaryCacheEntry]) -> [String: SleepQualityAISummaryCacheEntry] {
+        guard dict.count > maxEntries else { return dict }
+        let dropCount = dict.count - maxEntries
+        let sortedKeys = dict.sorted { $0.value.savedAt < $1.value.savedAt }.map(\.key)
+        var result = dict
+        for k in sortedKeys.prefix(dropCount) {
+            result.removeValue(forKey: k)
+        }
+        return result
+    }
+
+    private static func persist(_ dict: [String: SleepQualityAISummaryCacheEntry]) {
+        let pruned = prune(dict)
+        inMemory = pruned
+        guard let dir = cacheDirectoryURL else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let url = cacheFileURL else { return }
+        guard let data = try? JSONEncoder().encode(pruned) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+
+    /// Cached AI text for this wake day when stage-window identity still matches (do not call LLM).
+    static func summaryIfMatching(wakeDayStart: Date, sleepQualityTaskIdentity identity: String) -> String? {
+        let key = cacheKey(forWakeDay: wakeDayStart)
+        guard let entry = load()[key], entry.sleepQualityTaskIdentity == identity else { return nil }
+        let t = entry.summaryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    static func saveEntry(
+        wakeDayStart: Date,
+        summaryText: String,
+        sleepQualityTaskIdentity identity: String,
+        enrichmentFingerprint: String?
+    ) {
+        var dict = load()
+        dict[cacheKey(forWakeDay: wakeDayStart)] = SleepQualityAISummaryCacheEntry(
+            summaryText: summaryText,
+            sleepQualityTaskIdentity: identity,
+            enrichmentFingerprint: enrichmentFingerprint,
+            savedAt: Date()
+        )
+        persist(dict)
+    }
+}
+
 struct SleepQualityCard: View {
     let stages: [SleepStageData]
     @EnvironmentObject private var viewModel: SleepViewModel
 
     @State private var appleIntelligenceAnalysis = ""
     @State private var isAIAnalysisLoading = false
+    /// When true, prefer regenerating on-device copy instead of showing synced AI until a new result arrives.
+    @State private var bypassSyncedAISummaryForRegeneration = false
+    @State private var regenerationSerial = 0
 
     private var ruleBasedLine: String {
         ruleBasedSleepQualitySummary(stages: stages, last7AvgSleepHours: viewModel.last7AvgSleepHours)
     }
 
+    /// Broad fingerprint including enrichment (dip, vitals, 7-day avg). Used for merge metadata + staleness hints — not for scheduling generation (those load async and would retrigger endlessly).
     private var aiTaskIdentity: String {
         let dip = viewModel.heartRateDip.map { "\(Int($0.dipPercent ?? -1))_\($0.band.rawValue)_\($0.nocturnalSampleCount)" } ?? "nodip"
         let bc = viewModel.bedtimeConsistency.count
         let vitCount = viewModel.overnightVitals.count
         let vitOut = viewModel.overnightVitals.filter(\.isOutlier).count
         return "\(stages.count)_\(viewModel.last7AvgSleepHours ?? 0)_\(stages.first?.startTime.timeIntervalSince1970 ?? 0)_\(dip)_\(bc)_\(vitCount)_\(vitOut)"
+    }
+
+    /// Stable across async Sleep enrichment so `.task` does not rerun when dip/bedtime/vitals arrive after stages.
+    private var sleepQualityTaskIdentity: String {
+        let wd = wakeDayStartForStages.timeIntervalSince1970
+        guard let mn = stages.map(\.startTime).min(),
+              let mx = stages.map(\.endTime).max() else {
+            return "\(wd)_0_nobounds"
+        }
+        return "\(wd)_\(stages.count)_\(mn.timeIntervalSince1970)_\(mx.timeIntervalSince1970)"
+    }
+
+    /// Matches `recordSleepUIMetricsHandoffForCloudKit` wake-day labeling (nightStart + 12h → startOfDay).
+    private var wakeDayStartForStages: Date {
+        let cal = Calendar.current
+        guard let first = stages.map(\.startTime).min() else { return cal.startOfDay(for: Date()) }
+        let nightStart = sleepNightStart(for: first, calendar: cal)
+        guard let probe = cal.date(byAdding: .hour, value: 12, to: nightStart) else {
+            return cal.startOfDay(for: first)
+        }
+        return cal.startOfDay(for: probe)
+    }
+
+    private var handoffAISummary: String? {
+        let raw = HealthStateEngine.shared.sleepNightUIPackage(forWakeDay: wakeDayStartForStages)?
+            .aiSleepQualitySummary?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? nil : raw
+    }
+
+    /// Last on-device Apple Intelligence summary for this wake night (disk), when stage geometry matches.
+    private var diskCachedAISummary: String? {
+        SleepQualityAISummaryPersistence.summaryIfMatching(
+            wakeDayStart: wakeDayStartForStages,
+            sleepQualityTaskIdentity: sleepQualityTaskIdentity
+        )
+    }
+
+    /// Synced or disk AI predates current enrichment inputs (e.g. 7-day average moved).
+    private var sleepQualitySummaryStaleVersusEnrichment: Bool {
+        guard !bypassSyncedAISummaryForRegeneration else { return false }
+        if let fp = HealthStateEngine.shared.sleepNightUIPackage(forWakeDay: wakeDayStartForStages)?.aiSleepQualityFingerprint,
+           handoffAISummary != nil {
+            return fp != aiTaskIdentity
+        }
+        guard handoffAISummary == nil else { return false }
+        let sessionEmpty = appleIntelligenceAnalysis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard sessionEmpty, diskCachedAISummary != nil else { return false }
+        let key = SleepQualityAISummaryPersistence.cacheKey(forWakeDay: wakeDayStartForStages)
+        guard let entry = SleepQualityAISummaryPersistence.load()[key],
+              entry.sleepQualityTaskIdentity == sleepQualityTaskIdentity,
+              let efp = entry.enrichmentFingerprint else { return false }
+        return efp != aiTaskIdentity
+    }
+
+    /// Prefer AI copy at each tier: live session → CloudKit handoff → local disk cache → deterministic rules.
+    private var displayedSleepQualityAnalysis: String {
+        if sleepViewDeviceSupportsAppleIntelligence(), !appleIntelligenceAnalysis.isEmpty {
+            return appleIntelligenceAnalysis
+        }
+        if !bypassSyncedAISummaryForRegeneration, let h = handoffAISummary {
+            return h
+        }
+        if !bypassSyncedAISummaryForRegeneration, let d = diskCachedAISummary {
+            return d
+        }
+        return ruleBasedLine
+    }
+
+    private func regenerateSleepQualitySummary() {
+        bypassSyncedAISummaryForRegeneration = true
+        appleIntelligenceAnalysis = ""
+        regenerationSerial += 1
     }
 
     private func sleepQualityFactsForPrompt() -> String {
@@ -3948,16 +4113,38 @@ struct SleepQualityCard: View {
     }
 
     private func runSleepQualityAppleIntelligence() async {
-        guard sleepViewDeviceSupportsAppleIntelligence(), !stages.isEmpty else {
-            await MainActor.run { appleIntelligenceAnalysis = "" }
+        guard !stages.isEmpty else {
+            await MainActor.run {
+                appleIntelligenceAnalysis = ""
+                bypassSyncedAISummaryForRegeneration = false
+            }
             return
         }
+        guard sleepViewDeviceSupportsAppleIntelligence() else {
+            await MainActor.run {
+                appleIntelligenceAnalysis = ""
+                bypassSyncedAISummaryForRegeneration = false
+            }
+            return
+        }
+
+        if !bypassSyncedAISummaryForRegeneration {
+            let trimmedLocal = appleIntelligenceAnalysis.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedLocal.isEmpty { return }
+            if handoffAISummary != nil { return }
+            if diskCachedAISummary != nil { return }
+        }
+
         await MainActor.run { isAIAnalysisLoading = true }
         defer { Task { @MainActor in isAIAnalysisLoading = false } }
+
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             let model = SystemLanguageModel(useCase: .general)
-            guard model.isAvailable else { return }
+            guard model.isAvailable else {
+                await MainActor.run { bypassSyncedAISummaryForRegeneration = false }
+                return
+            }
             do {
                 let session = LanguageModelSession(model: model)
                 let prompt = """
@@ -3972,13 +4159,35 @@ struct SleepQualityCard: View {
                 \(sleepQualityFactsForPrompt())
                 """
                 let text = try await session.respond(to: prompt).content
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
-                    appleIntelligenceAnalysis = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    appleIntelligenceAnalysis = trimmed
+                    bypassSyncedAISummaryForRegeneration = false
+                    SleepQualityAISummaryPersistence.saveEntry(
+                        wakeDayStart: wakeDayStartForStages,
+                        summaryText: trimmed,
+                        sleepQualityTaskIdentity: sleepQualityTaskIdentity,
+                        enrichmentFingerprint: aiTaskIdentity
+                    )
+                    #if !targetEnvironment(macCatalyst)
+                    HealthStateEngine.shared.mergeSleepQualityAISummaryIntoHandoff(
+                        forWakeDay: wakeDayStartForStages,
+                        summary: trimmed,
+                        fingerprint: aiTaskIdentity
+                    )
+                    #endif
                 }
             } catch {
-                await MainActor.run { appleIntelligenceAnalysis = "" }
+                await MainActor.run {
+                    appleIntelligenceAnalysis = ""
+                    bypassSyncedAISummaryForRegeneration = false
+                }
             }
+        } else {
+            await MainActor.run { bypassSyncedAISummaryForRegeneration = false }
         }
+        #else
+        await MainActor.run { bypassSyncedAISummaryForRegeneration = false }
         #endif
     }
 
@@ -4090,26 +4299,37 @@ struct SleepQualityCard: View {
                     .foregroundColor(.white)
                 
                 Spacer()
+
+                if sleepViewDeviceSupportsAppleIntelligence() {
+                    Button(action: regenerateSleepQualitySummary) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.body.weight(.semibold))
+                            .foregroundColor(.yellow.opacity(0.95))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isAIAnalysisLoading || stages.isEmpty)
+                    .accessibilityLabel("Refresh sleep quality summary")
+                }
             }
             
             Group {
-                if sleepViewDeviceSupportsAppleIntelligence() {
-                    if isAIAnalysisLoading {
-                        ProgressView()
-                            .tint(.yellow)
-                    }
-                    Text(appleIntelligenceAnalysis.isEmpty ? ruleBasedLine : appleIntelligenceAnalysis)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .lineLimit(nil)
-                } else {
-                    Text(ruleBasedLine)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .lineLimit(nil)
+                if sleepViewDeviceSupportsAppleIntelligence(), isAIAnalysisLoading {
+                    ProgressView()
+                        .tint(.yellow)
+                }
+                Text(displayedSleepQualityAnalysis)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .lineLimit(nil)
+                if sleepQualitySummaryStaleVersusEnrichment,
+                   !bypassSyncedAISummaryForRegeneration {
+                    Text("Summary may not reflect your latest readings.")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .task(id: aiTaskIdentity) {
+            .task(id: "\(sleepQualityTaskIdentity)_\(regenerationSerial)") {
                 await runSleepQualityAppleIntelligence()
             }
 

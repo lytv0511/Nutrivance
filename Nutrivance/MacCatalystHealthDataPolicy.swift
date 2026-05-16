@@ -22,5 +22,5 @@ enum MacCatalystHealthDataPolicy {
     static let stressHistoryNotice = "On Mac, HealthKit isn’t available. Stress uses HRV samples synced from your iPhone (iCloud / app sync). Pull to refresh after your phone updates."
 
     /// Shown above Training Load on Catalyst — workout insights use the same cached engine data synced from iOS.
-    static let trainingLoadSyncedNotice = "Workout insights and training-load charts use data cached on this Mac from your iPhone or iPad (workouts, zones, and related metrics). Open Strain vs Recovery on iOS after training so the latest workouts sync, then return here or restart the app."
+    static let trainingLoadSyncedNotice = "On Mac, workouts and training-load charts use one sync path: iPhone/iPad uploads to iCloud Key-Value and CloudKit; Nutrivance merges when you bring this window forward or when iCloud reports remote changes. Open Strain vs Recovery on iOS after training so data uploads, then return here."
 }

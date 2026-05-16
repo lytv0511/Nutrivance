@@ -73,7 +73,7 @@ extension UserDefaults {
         guard PlatformContext.isMacCatalyst else { return }
         
         // Defer to background to avoid blocking main thread on launch
-        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.35) {
             let cloud = NSUbiquitousKeyValueStore.default
             cloud.synchronize()
             
@@ -110,3 +110,78 @@ extension UserDefaults {
         return [:]
     }
 }
+
+#if targetEnvironment(macCatalyst)
+
+// MARK: - Mac Catalyst health sync (single orchestration path)
+
+/// Mac Catalyst cannot read HealthKit; it consumes **one pipeline** driven by iPhone/iPad:
+/// 1. **NSUbiquitousKeyValueStore** — small metric snapshots + training-load payload keys.
+/// 2. **CloudKit `EngineSyncBlob`** — large handoffs (workout analytics bundle, detailed HRV/sleep series, metrics snapshot asset).
+///
+/// Previously, timers and notifications were spread across `HealthStateEngine`, `CatalystTrainingLoadSyncStore`,
+/// and ad‑hoc `Task.sleep` chains. All Catalyst scheduling for this pipeline goes through this coordinator.
+@MainActor
+final class MacCatalystHealthSyncCoordinator {
+    static let shared = MacCatalystHealthSyncCoordinator()
+
+    private var deferredLaunchMergeTask: Task<Void, Never>?
+    private var ubiquitousRemoteMergeTask: Task<Void, Never>?
+    private var foregroundResumeTask: Task<Void, Never>?
+
+    private init() {}
+
+    func cancelAllPending() {
+        deferredLaunchMergeTask?.cancel()
+        deferredLaunchMergeTask = nil
+        ubiquitousRemoteMergeTask?.cancel()
+        ubiquitousRemoteMergeTask = nil
+        foregroundResumeTask?.cancel()
+        foregroundResumeTask = nil
+    }
+
+    /// Call from `deinit` or other nonisolated contexts; hops to the main actor.
+    nonisolated static func cancelPendingTasksSchedulingOnMainActor() {
+        Task { @MainActor in
+            MacCatalystHealthSyncCoordinator.shared.cancelAllPending()
+        }
+    }
+
+    /// Post–first-frame merge: KVS + disk hydrate already ran; pull CloudKit blobs after a short deferral so launch stays responsive.
+    func scheduleDeferredLaunchMerge(engine: HealthStateEngine) {
+        deferredLaunchMergeTask?.cancel()
+        deferredLaunchMergeTask = Task { [weak engine] in
+            try? await Task.sleep(nanoseconds: 340_000_000)
+            guard let engine, !Task.isCancelled else { return }
+            await engine.macCatalystRunAggregatedCloudMerge(userInitiatedRefresh: false)
+            engine.macCatalystAfterRemoteMergeBookkeeping()
+        }
+    }
+
+    /// Coalesced handler for `NSUbiquitousKeyValueStore.didChangeExternallyNotification`.
+    func handleUbiquitousRemoteChange(engine: HealthStateEngine) {
+        ubiquitousRemoteMergeTask?.cancel()
+        ubiquitousRemoteMergeTask = Task { [weak engine] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let engine, !Task.isCancelled, engine.macCatalystIsAppActive else { return }
+            // Training-load series travel via KVS — refresh before CloudKit so strain charts react quickly.
+            CatalystTrainingLoadSyncStore.shared.pullLatestFromICloudForCoordinator()
+            await engine.macCatalystRunAggregatedCloudMerge(userInitiatedRefresh: false)
+            engine.macCatalystAfterRemoteMergeBookkeeping()
+        }
+    }
+
+    /// User brought the Mac window forward — treat as an explicit refresh (bypasses automatic CloudKit spacing).
+    func handleSceneBecameActive(engine: HealthStateEngine) {
+        foregroundResumeTask?.cancel()
+        foregroundResumeTask = Task { [weak engine] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard let engine, !Task.isCancelled, engine.macCatalystIsAppActive else { return }
+            CatalystTrainingLoadSyncStore.shared.pullLatestFromICloudForCoordinator()
+            engine.refreshStartupMetrics(force: true)
+            engine.macCatalystScheduleStartupWorkoutCoverageSync()
+        }
+    }
+}
+
+#endif

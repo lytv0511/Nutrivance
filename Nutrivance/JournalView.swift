@@ -58,6 +58,18 @@ struct JournalEntry: Identifiable, Codable, Equatable {
     var savedNudges: [JournalSavedNudge] = []
     /// Last assistant snapshot (inline chips, nudges, outline, people, quick checks) for instant reload; refined when the user writes again.
     var assistantCache: JournalAssistantCache?
+    /// Quick-check questions merged across edits/sessions (stableKey dedupe).
+    var persistedCorrelationClarifiers: [JournalCorrelationClarifier] = []
+    /// People hints persisted when fingerprint cache misses.
+    var persistedSuggestedPeople: [JournalSuggestedPerson] = []
+    /// Reflective nudge chips persisted across exits (preview dedupe).
+    var persistedReflectiveNudges: [JournalAssistantInlineSnapshot] = []
+    /// Optional pinned reflective nudge persisted across exits.
+    var persistedPinnedReflectiveNudge: JournalAssistantInlineSnapshot?
+    /// Draft correlations not yet written to Pathfinder correlation store at last autosave.
+    var journalDraftCorrelations: [EmotionCorrelation] = []
+    /// Correlation IDs already counted toward Pathfinder quest progress for this entry.
+    var pathfinderSyncedCorrelationIDs: [UUID] = []
     
     init(title: String = "", content: String = "") {
         self.id = UUID()
@@ -75,6 +87,9 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         case id, title, content, inspiration, date, imageData, kind, reportMetrics, statCards
         case personRelationshipHints, personProfiles, correlationAssociationOverrides, journalClarifierAnswers, savedNudges
         case assistantCache
+        case persistedCorrelationClarifiers, persistedSuggestedPeople
+        case persistedReflectiveNudges, persistedPinnedReflectiveNudge
+        case journalDraftCorrelations, pathfinderSyncedCorrelationIDs
     }
     
     init(from decoder: Decoder) throws {
@@ -99,6 +114,12 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         journalClarifierAnswers = try container.decodeIfPresent([String: Int].self, forKey: .journalClarifierAnswers) ?? [:]
         savedNudges = try container.decodeIfPresent([JournalSavedNudge].self, forKey: .savedNudges) ?? []
         assistantCache = try container.decodeIfPresent(JournalAssistantCache.self, forKey: .assistantCache)
+        persistedCorrelationClarifiers = try container.decodeIfPresent([JournalCorrelationClarifier].self, forKey: .persistedCorrelationClarifiers) ?? []
+        persistedSuggestedPeople = try container.decodeIfPresent([JournalSuggestedPerson].self, forKey: .persistedSuggestedPeople) ?? []
+        persistedReflectiveNudges = try container.decodeIfPresent([JournalAssistantInlineSnapshot].self, forKey: .persistedReflectiveNudges) ?? []
+        persistedPinnedReflectiveNudge = try container.decodeIfPresent(JournalAssistantInlineSnapshot.self, forKey: .persistedPinnedReflectiveNudge)
+        journalDraftCorrelations = try container.decodeIfPresent([EmotionCorrelation].self, forKey: .journalDraftCorrelations) ?? []
+        pathfinderSyncedCorrelationIDs = try container.decodeIfPresent([UUID].self, forKey: .pathfinderSyncedCorrelationIDs) ?? []
     }
     
     func encode(to encoder: Encoder) throws {
@@ -118,6 +139,12 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         try container.encode(journalClarifierAnswers, forKey: .journalClarifierAnswers)
         try container.encode(savedNudges, forKey: .savedNudges)
         try container.encodeIfPresent(assistantCache, forKey: .assistantCache)
+        try container.encode(persistedCorrelationClarifiers, forKey: .persistedCorrelationClarifiers)
+        try container.encode(persistedSuggestedPeople, forKey: .persistedSuggestedPeople)
+        try container.encode(persistedReflectiveNudges, forKey: .persistedReflectiveNudges)
+        try container.encodeIfPresent(persistedPinnedReflectiveNudge, forKey: .persistedPinnedReflectiveNudge)
+        try container.encode(journalDraftCorrelations, forKey: .journalDraftCorrelations)
+        try container.encode(pathfinderSyncedCorrelationIDs, forKey: .pathfinderSyncedCorrelationIDs)
     }
 }
 
@@ -643,6 +670,21 @@ private struct JournalMeshPhaseBackground: View {
     let style: Style
 
     var body: some View {
+        #if targetEnvironment(macCatalyst)
+        // Animated mesh drives full editor redraws every frame; static phase keeps Catalyst typing responsive.
+        let phase = Self.phase(for: Date())
+        Group {
+            switch style {
+            case .spirit:
+                GradientBackgrounds().spiritGradient(animationPhase: .constant(phase))
+            case .burning:
+                ZStack {
+                    GradientBackgrounds().burningGradient(animationPhase: .constant(phase))
+                    Color.black.opacity(0.22)
+                }
+            }
+        }
+        #else
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
             let phase = Self.phase(for: context.date)
             Group {
@@ -657,6 +699,7 @@ private struct JournalMeshPhaseBackground: View {
                 }
             }
         }
+        #endif
     }
 
     private static func phase(for date: Date) -> Double {
@@ -786,7 +829,8 @@ struct JournalView: View {
                     isPresented: $showingEditor,
                     onSave: { entry in
                         saveEntry(entry)
-                    }
+                    },
+                    onAutosave: { saveEntry($0) }
                 )
                 .presentationSizing(.page)
                 .presentationDragIndicator(.visible)
@@ -798,7 +842,8 @@ struct JournalView: View {
                     isPresented: $showingEditor,
                     onSave: { entry in
                         saveEntry(entry)
-                    }
+                    },
+                    onAutosave: { saveEntry($0) }
                 )
             }
             #endif
@@ -1253,8 +1298,11 @@ struct JournalSelectableTextEditor: UIViewRepresentable {
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !isProgrammaticUpdate else { return }
             parent.selection = textView.selectedRange
+            #if !targetEnvironment(macCatalyst)
+            // Caret-only moves should not rerun suggestion/correlation pipelines (major source of editor jank).
             let composing = textView.markedTextRange != nil
             parent.onEdit(textView.text ?? "", textView.selectedRange, composing)
+            #endif
         }
     }
 }
@@ -1582,8 +1630,42 @@ final class JournalInlineSuggestionEngine: ObservableObject {
         assistantRestoredContentFingerprint = fp
     }
 
+    /// Restores persisted reflective nudges when fingerprint cache misses (e.g. after heavy edits).
+    func restorePersistedReflectiveNudges(snaps: [JournalAssistantInlineSnapshot], pinned: JournalAssistantInlineSnapshot?) {
+        guard !snaps.isEmpty || pinned != nil else { return }
+        withAnimation(.easeOut(duration: 0.12)) {
+            if let pinned {
+                pinnedNudge = pinned.asInlineSuggestion()
+                nudgeSuggestions = []
+            } else {
+                pinnedNudge = nil
+                nudgeSuggestions = snaps.map { $0.asInlineSuggestion() }
+            }
+        }
+        assistantRestoredContentFingerprint = nil
+    }
+
+    /// Inner debounce after the editor already quiet-pauses typing; keep this moderate so chips update without stacking huge delays.
+    private var typingDebounceNanos: UInt64 {
+        PlatformContext.isMacCatalyst ? 420_000_000 : 260_000_000
+    }
+
+    private var backboneDebounceNanos: UInt64 {
+        PlatformContext.isMacCatalyst ? 1_600_000_000 : 650_000_000
+    }
+
+    private var runsHeavyJournalAI: Bool {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            return !PlatformContext.isMacCatalyst
+        }
+        #endif
+        return false
+    }
+
     func textDidChange(_ text: String, selection: NSRange, referenceDate: Date, isFitnessReport: Bool, inspirationContext: String, isComposing: Bool = false) {
         debounceTask?.cancel()
+        backboneTask?.cancel()
         if isComposing {
             return
         }
@@ -1591,9 +1673,9 @@ final class JournalInlineSuggestionEngine: ObservableObject {
         if let restored = assistantRestoredContentFingerprint, restored != fpNow {
             assistantRestoredContentFingerprint = nil
         }
-        refreshBackbone(text: text)
+        scheduleBackboneRefresh(text: text)
         debounceTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: typingDebounceNanos)
             guard !Task.isCancelled else { return }
 
             let unrelated = await paragraphsUnrelatedToCursorParagraph(text: text, selection: selection)
@@ -1607,7 +1689,7 @@ final class JournalInlineSuggestionEngine: ObservableObject {
 
             var newNudges: [InlineSuggestion] = []
             #if canImport(FoundationModels)
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, *), runsHeavyJournalAI {
                 let shouldRunAI = newSuggestions.count < 3 || prioritizeImportedInspiration
                 if shouldRunAI, let parts = await aiSuggestions(
                     ctx: ctx,
@@ -1649,10 +1731,17 @@ final class JournalInlineSuggestionEngine: ObservableObject {
                 }
             }
 
-            withAnimation(.easeOut(duration: 0.15)) {
+            if PlatformContext.isMacCatalyst {
                 suggestions = nextSuggestions
                 if pinnedNudge == nil {
                     nudgeSuggestions = nextNudges
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    suggestions = nextSuggestions
+                    if pinnedNudge == nil {
+                        nudgeSuggestions = nextNudges
+                    }
                 }
             }
             if !nextSuggestions.isEmpty || !nextNudges.isEmpty || pinnedNudge != nil {
@@ -1682,9 +1771,10 @@ final class JournalInlineSuggestionEngine: ObservableObject {
 
     // MARK: - Backbone
 
-    func refreshBackbone(text: String) {
+    private func scheduleBackboneRefresh(text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 60 else {
+            backboneTask?.cancel()
             if !backboneOutline.isEmpty { withAnimation { backboneOutline = [] } }
             return
         }
@@ -1695,11 +1785,23 @@ final class JournalInlineSuggestionEngine: ObservableObject {
 
         backboneTask?.cancel()
         backboneTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 600_000_000)
+            try? await Task.sleep(nanoseconds: backboneDebounceNanos)
+            guard !Task.isCancelled else { return }
+            refreshBackboneNow(text: trimmed, hash: hash)
+        }
+    }
+
+    func refreshBackbone(text: String) {
+        scheduleBackboneRefresh(text: text)
+    }
+
+    private func refreshBackboneNow(text trimmed: String, hash: UInt64) {
+        backboneTask?.cancel()
+        backboneTask = Task { @MainActor in
             guard !Task.isCancelled else { return }
 
             #if canImport(FoundationModels)
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, *), runsHeavyJournalAI {
                 if let sections = await generateBackbone(text: trimmed) {
                     guard !Task.isCancelled else { return }
                     backboneCache = (hash, sections)
@@ -1939,7 +2041,7 @@ final class JournalInlineSuggestionEngine: ObservableObject {
         }
 
         #if canImport(FoundationModels)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), runsHeavyJournalAI {
             let model = SystemLanguageModel(useCase: .general)
             if model.isAvailable {
                 let joined = paras.enumerated().map { "P\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
@@ -3411,6 +3513,10 @@ struct JournalEditorView: View {
     /// Drives presentation from the parent (`sheet` / `fullScreenCover`). Required on Mac Catalyst so Cancel/Save work when nested under the iPad browser shell.
     @Binding var isPresented: Bool
     var onSave: (JournalEntry) -> Void
+    /// Periodic / background autosave (draft to journal store + iCloud) without closing the editor.
+    var onAutosave: ((JournalEntry) -> Void)? = nil
+
+    @Environment(\.scenePhase) private var scenePhase
     @State private var referenceDate: Date = Date()
 
     // Stats picker state
@@ -3434,10 +3540,57 @@ struct JournalEditorView: View {
     @State private var lastJournalAssistantCachePersist = Date.distantPast
     /// Start of this editor presentation; used to log Mindful Minutes on dismiss.
     @State private var journalMindfulSessionStart: Date?
+    @State private var cachedTodaysWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = []
+    /// Local buffers reduce SwiftUI body churn while typing (especially Catalyst).
+    @State private var titleDraft = ""
+    @State private var contentDraft = ""
+    @State private var inspirationDraft = ""
+    @State private var titleDraftTask: Task<Void, Never>?
+    @State private var contentDraftTask: Task<Void, Never>?
+    @State private var inspirationDraftTask: Task<Void, Never>?
+    /// Coalesces assistant-cache serialization + `saveEntry` off the typing hot path.
+    @State private var journalDeferredPersistTask: Task<Void, Never>?
     private enum SuggestionField { case content, inspiration }
 
     private var trimmedReflection: String {
-        entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        contentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Secondary validation: items whose anchored snippets no longer appear in the live drafts (suggest manual cleanup only).
+    private var journalStaleAssistantPack: (correlations: [EmotionCorrelation], clarifiers: [JournalCorrelationClarifier]) {
+        journalStaleAssistantReview(fullCorpus: contentDraft + "\n\n" + inspirationDraft)
+    }
+
+    private var pathfinderSyncedCorrelationIDSet: Set<UUID> {
+        Set(entry.pathfinderSyncedCorrelationIDs)
+    }
+
+    /// Pause after last keystroke before syncing body fields / running assistant pipelines (keeps typing responsive).
+    private var journalTextDraftQuietNanos: UInt64 {
+        #if targetEnvironment(macCatalyst)
+        900_000_000
+        #else
+        520_000_000
+        #endif
+    }
+
+    /// Batch assistant-cache encode + parent `saveEntry` so typing never triggers full persistence on every pause window.
+    private func scheduleDebouncedJournalPersistence() {
+        journalDeferredPersistTask?.cancel()
+        journalDeferredPersistTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_250_000_000)
+            guard !Task.isCancelled else { return }
+            journalDeferredPersistTask = nil
+            saveJournalAssistantCacheToEntry(force: true)
+            onAutosave?(entry)
+        }
+    }
+
+    private func flushJournalPersistenceNow() {
+        journalDeferredPersistTask?.cancel()
+        journalDeferredPersistTask = nil
+        saveJournalAssistantCacheToEntry(force: true)
+        onAutosave?(entry)
     }
 
     /// Enough body text to infer a meaningful title.
@@ -3452,6 +3605,20 @@ struct JournalEditorView: View {
     @StateObject private var correlationEngine = JournalCorrelationEngine()
     @State private var editingCorrelationInJournal: EmotionCorrelation? = nil
     @State private var showAddCorrelationInJournal = false
+
+    /// Stable chip order: same merge as the engine uses, even before `onAppear` hydrates (prevents store-order vs engine-order swaps).
+    private var journalCorrelationStripItems: [EmotionCorrelation] {
+        let store = CorrelationStore.shared.correlations(forJournal: entry.id)
+        let live = correlationEngine.detectedCorrelations
+        if live.isEmpty {
+            return JournalCorrelationEngine.mergeDisplayedCorrelations(
+                store: store,
+                draftArchive: entry.journalDraftCorrelations,
+                incoming: []
+            )
+        }
+        return live
+    }
 
     #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
     @State private var showingSuggestions = false
@@ -3483,6 +3650,130 @@ struct JournalEditorView: View {
         return "\n\n[Logged stat cards]\n" + lines.joined(separator: "\n")
     }
 
+    private func mergePersistedNudgeSnapshots(_ persisted: [JournalAssistantInlineSnapshot], _ live: [JournalAssistantInlineSnapshot]) -> [JournalAssistantInlineSnapshot] {
+        var seen = Set(persisted.map(\.preview))
+        var out = persisted
+        for s in live where !seen.contains(s.preview) {
+            seen.insert(s.preview)
+            out.append(s)
+        }
+        return Array(out.prefix(24))
+    }
+
+    private func syncPersistedJournalSidecarsFromEngines() {
+        entry.persistedCorrelationClarifiers = correlationEngine.correlationClarifiers
+        entry.persistedSuggestedPeople = correlationEngine.suggestedPeople
+        let storeIDs = Set(CorrelationStore.shared.correlations(forJournal: entry.id).map(\.id))
+        entry.journalDraftCorrelations = correlationEngine.detectedCorrelations.filter { !storeIDs.contains($0.id) }
+        let liveNudgeSnaps = suggestionEngine.nudgeSuggestions.map { JournalAssistantInlineSnapshot(from: $0) }
+        entry.persistedReflectiveNudges = mergePersistedNudgeSnapshots(entry.persistedReflectiveNudges, liveNudgeSnaps)
+        entry.persistedPinnedReflectiveNudge = suggestionEngine.pinnedNudge.map { JournalAssistantInlineSnapshot(from: $0) }
+    }
+
+    private func flushAllTextDraftsToEntry() {
+        entry.title = titleDraft
+        entry.content = contentDraft
+        entry.inspiration = inspirationDraft
+    }
+
+    private func runJournalCorrelationAnalysis(contentOverride: String? = nil, inspirationOverride: String? = nil) {
+        let c = contentOverride ?? contentDraft
+        let i = inspirationOverride ?? inspirationDraft
+        correlationEngine.analyzeText(
+            journalContent: c,
+            journalInspiration: i,
+            journalEntryID: entry.id,
+            referenceDate: referenceDate,
+            statCardsContext: journalStatCardsCorrelationContext(),
+            persistedDraftCorrelations: entry.journalDraftCorrelations,
+            persistedQuickCheckClarifiers: entry.persistedCorrelationClarifiers,
+            persistedSuggestedPeople: entry.persistedSuggestedPeople
+        )
+    }
+
+    private func journalStaleAssistantReview(fullCorpus: String) -> (correlations: [EmotionCorrelation], clarifiers: [JournalCorrelationClarifier]) {
+        let corpus = fullCorpus.lowercased()
+        let staleCorr = correlationEngine.detectedCorrelations.filter { Self.correlationLikelyStale($0, corpus: corpus) }
+        let staleClar = correlationEngine.correlationClarifiers.filter { Self.clarifierLikelyStale($0, corpus: corpus) }
+        return (staleCorr, staleClar)
+    }
+
+    private static func clarifierLikelyStale(_ c: JournalCorrelationClarifier, corpus: String) -> Bool {
+        let hint = c.linkedContextHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hint.count >= 8 else { return false }
+        return !corpus.contains(hint.lowercased())
+    }
+
+    private static func correlationLikelyStale(_ c: EmotionCorrelation, corpus: String) -> Bool {
+        let note = c.contextNotes.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard note.count >= 14 else { return false }
+        let snippet = String(note.prefix(min(56, note.count)))
+        return !corpus.contains(snippet)
+    }
+
+    private func scheduleTitleDraftFlush() {
+        titleDraftTask?.cancel()
+        titleDraftTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 420_000_000)
+            guard !Task.isCancelled else { return }
+            if entry.title != titleDraft {
+                entry.title = titleDraft
+            }
+            scheduleDebouncedJournalPersistence()
+        }
+    }
+
+    private func scheduleContentDraftFlush() {
+        contentDraftTask?.cancel()
+        contentDraftTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: journalTextDraftQuietNanos)
+            guard !Task.isCancelled else { return }
+            if entry.content != contentDraft {
+                entry.content = contentDraft
+                journalContentSyncToken &+= 1
+            }
+            #if targetEnvironment(macCatalyst)
+            let r = NSRange(location: (contentDraft as NSString).length, length: 0)
+            contentSelection = r
+            handleJournalContentEdit(contentDraft, selection: r, isComposing: false)
+            #else
+            handleJournalContentEdit(contentDraft, selection: contentSelection, isComposing: false)
+            #endif
+            scheduleDebouncedJournalPersistence()
+        }
+    }
+
+    private func scheduleInspirationDraftFlush() {
+        inspirationDraftTask?.cancel()
+        inspirationDraftTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: journalTextDraftQuietNanos)
+            guard !Task.isCancelled else { return }
+            if entry.inspiration != inspirationDraft {
+                entry.inspiration = inspirationDraft
+                journalInspirationSyncToken &+= 1
+            }
+            #if targetEnvironment(macCatalyst)
+            let r = NSRange(location: (inspirationDraft as NSString).length, length: 0)
+            inspirationSelection = r
+            handleJournalInspirationEdit(inspirationDraft, selection: r, isComposing: false)
+            #else
+            handleJournalInspirationEdit(inspirationDraft, selection: inspirationSelection, isComposing: false)
+            #endif
+            scheduleDebouncedJournalPersistence()
+        }
+    }
+
+    private func performJournalAutosave() {
+        titleDraftTask?.cancel()
+        contentDraftTask?.cancel()
+        inspirationDraftTask?.cancel()
+        journalDeferredPersistTask?.cancel()
+        journalDeferredPersistTask = nil
+        flushAllTextDraftsToEntry()
+        saveJournalAssistantCacheToEntry(force: true)
+        onAutosave?(entry)
+    }
+
     /// Writes inline suggestions, nudges, outline, people, and quick checks into the entry for sync / instant reopen.
     private func saveJournalAssistantCacheToEntry(force: Bool = false) {
         let now = Date()
@@ -3490,6 +3781,7 @@ struct JournalEditorView: View {
             return
         }
         lastJournalAssistantCachePersist = now
+        syncPersistedJournalSidecarsFromEngines()
         let fp = JournalAssistantFingerprint.combine(content: entry.content, inspiration: entry.inspiration, statCardsSignature: journalStatCardsSignature)
         let outlineSnaps = suggestionEngine.backboneOutline.map { sec in
             JournalAssistantOutlineSnapshot(
@@ -3514,24 +3806,36 @@ struct JournalEditorView: View {
     }
 
     private func hydrateJournalAssistantCacheIfNeeded() {
-        guard let cache = entry.assistantCache else { return }
         let fp = JournalAssistantFingerprint.combine(content: entry.content, inspiration: entry.inspiration, statCardsSignature: journalStatCardsSignature)
-        guard cache.contentFingerprint == fp else { return }
-        suggestionEngine.restoreAssistantCache(cache, text: entry.content, inspiration: entry.inspiration)
-        correlationEngine.restoreFromAssistantCache(
-            correlations: cache.detectedCorrelations,
-            people: cache.suggestedPeople,
-            clarifiers: cache.correlationClarifiers,
-            contentFingerprint: fp
+        if let cache = entry.assistantCache, cache.contentFingerprint == fp {
+            suggestionEngine.restoreAssistantCache(cache, text: entry.content, inspiration: entry.inspiration)
+            correlationEngine.restoreFromAssistantCache(
+                correlations: cache.detectedCorrelations,
+                people: cache.suggestedPeople,
+                clarifiers: cache.correlationClarifiers,
+                contentFingerprint: fp
+            )
+            return
+        }
+
+        correlationEngine.seedMergedFromPersisted(
+            journalEntryID: entry.id,
+            draftArchive: entry.journalDraftCorrelations,
+            persistedClarifiers: entry.persistedCorrelationClarifiers,
+            persistedPeople: entry.persistedSuggestedPeople
+        )
+        suggestionEngine.restorePersistedReflectiveNudges(
+            snaps: entry.persistedReflectiveNudges,
+            pinned: entry.persistedPinnedReflectiveNudge
         )
     }
 
     private func wireJournalAssistantPersistence() {
         suggestionEngine.onAssistantStateMayNeedPersistence = {
-            saveJournalAssistantCacheToEntry()
+            scheduleDebouncedJournalPersistence()
         }
         correlationEngine.onAnalysisFinished = {
-            saveJournalAssistantCacheToEntry()
+            scheduleDebouncedJournalPersistence()
         }
     }
 
@@ -3546,12 +3850,47 @@ struct JournalEditorView: View {
 
     @MainActor
     private var todaysWorkouts: [(workout: HKWorkout, analytics: WorkoutAnalytics)] {
+        cachedTodaysWorkouts
+    }
+
+    @MainActor
+    private func refreshTodaysWorkoutsCache() {
         let cal = Calendar.current
         let dayStart = cal.startOfDay(for: referenceDate)
         let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? referenceDate
-        return HealthStateEngine.shared.workoutAnalytics.filter { pair in
+        cachedTodaysWorkouts = HealthStateEngine.shared.workoutAnalytics.filter { pair in
             pair.workout.startDate >= dayStart && pair.workout.startDate < dayEnd
         }.sorted { $0.workout.startDate < $1.workout.startDate }
+    }
+
+    private func handleJournalContentEdit(_ text: String, selection: NSRange, isComposing: Bool) {
+        activeSuggestionField = .content
+        suggestionEngine.textDidChange(
+            text,
+            selection: selection,
+            referenceDate: referenceDate,
+            isFitnessReport: isFitnessReport,
+            inspirationContext: inspirationDraft,
+            isComposing: isComposing
+        )
+        if !isComposing {
+            runJournalCorrelationAnalysis(contentOverride: text, inspirationOverride: nil)
+        }
+    }
+
+    private func handleJournalInspirationEdit(_ text: String, selection: NSRange, isComposing: Bool) {
+        activeSuggestionField = .inspiration
+        suggestionEngine.textDidChange(
+            text,
+            selection: selection,
+            referenceDate: referenceDate,
+            isFitnessReport: isFitnessReport,
+            inspirationContext: text,
+            isComposing: isComposing
+        )
+        if !isComposing {
+            runJournalCorrelationAnalysis(contentOverride: nil, inspirationOverride: text)
+        }
     }
     
     private let dateFormatter: DateFormatter = {
@@ -3606,7 +3945,7 @@ struct JournalEditorView: View {
         isGeneratingAITitle = true
         defer { isGeneratingAITitle = false }
 
-        let inspirationSnippet = entry.inspiration.trimmingCharacters(in: .whitespacesAndNewlines)
+        let inspirationSnippet = inspirationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
 
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
@@ -3639,6 +3978,7 @@ struct JournalEditorView: View {
                         .replacingOccurrences(of: #"^[\"']|[\"']$"#, with: "", options: .regularExpression)
                     if !t.isEmpty, t.count <= 120 {
                         entry.title = t
+                        titleDraft = t
                         return
                     }
                 } catch {}
@@ -3647,7 +3987,10 @@ struct JournalEditorView: View {
         #endif
 
         let fallback = fallbackTitleFromReflection(raw)
-        if !fallback.isEmpty { entry.title = fallback }
+        if !fallback.isEmpty {
+            entry.title = fallback
+            titleDraft = fallback
+        }
     }
 
     #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
@@ -4030,6 +4373,12 @@ struct JournalEditorView: View {
     }
 
     private func closeJournalEditor() {
+        titleDraftTask?.cancel()
+        contentDraftTask?.cancel()
+        inspirationDraftTask?.cancel()
+        journalDeferredPersistTask?.cancel()
+        journalDeferredPersistTask = nil
+        performJournalAutosave()
         #if canImport(UIKit)
         // End editing so the embedded UITextView does not swallow the next interaction or block sheet dismissal on Mac Catalyst.
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -4047,14 +4396,24 @@ struct JournalEditorView: View {
         } else {
             entry.content += "\n" + generateHealthSnapshot()
         }
+        contentDraft = entry.content
         contentSelection = NSRange(location: (entry.content as NSString).length, length: 0)
+        runJournalCorrelationAnalysis()
+        flushJournalPersistenceNow()
     }
 
     private func saveJournalEntryAndClose() {
+        titleDraftTask?.cancel()
+        contentDraftTask?.cancel()
+        inspirationDraftTask?.cancel()
+        journalDeferredPersistTask?.cancel()
+        journalDeferredPersistTask = nil
+        flushAllTextDraftsToEntry()
+
         saveJournalAssistantCacheToEntry(force: true)
         entry.date = Date()
-        onSave(entry)
 
+        var synced = Set(entry.pathfinderSyncedCorrelationIDs)
         let correlationsToSave = correlationEngine.detectedCorrelations.map { corr in
             var mutable = corr
             mutable.journalEntryID = entry.id
@@ -4065,7 +4424,13 @@ struct JournalEditorView: View {
             return mutable
         }
         CorrelationStore.shared.appendBatch(correlationsToSave)
-        PathQuestStore.shared.processCorrelationProgress(correlationsToSave)
+
+        let forQuestProgress = correlationsToSave.filter { !synced.contains($0.id) }
+        PathQuestStore.shared.processCorrelationProgress(forQuestProgress)
+        synced.formUnion(forQuestProgress.map(\.id))
+        entry.pathfinderSyncedCorrelationIDs = Array(synced)
+
+        onSave(entry)
 
         closeJournalEditor()
     }
@@ -4080,9 +4445,12 @@ struct JournalEditorView: View {
                         // Title + Date + Kind Toggle
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                TextField("Untitled entry", text: $entry.title)
+                                TextField("Untitled entry", text: $titleDraft)
                                     .font(.system(.largeTitle, design: .serif, weight: .bold))
                                     .foregroundStyle(.primary)
+                                    .onChange(of: titleDraft) { _, _ in
+                                        scheduleTitleDraftFlush()
+                                    }
 
                                 if hasSufficientContentForTitleSuggestion {
                                     Button {
@@ -4151,30 +4519,24 @@ struct JournalEditorView: View {
                             subtitle: "Write like you're speaking to yourself, not filling out a form."
                         ) {
                             VStack(alignment: .leading, spacing: 10) {
-                                #if canImport(UIKit)
+                                #if targetEnvironment(macCatalyst)
+                                TextEditor(text: $contentDraft)
+                                    .scrollContentBackground(.hidden)
+                                    .frame(minHeight: 260)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 6)
+                                    .onChange(of: contentDraft) { _, _ in
+                                        scheduleContentDraftFlush()
+                                    }
+                                #elseif canImport(UIKit)
                                 JournalSelectableTextEditor(
-                                    text: $entry.content,
+                                    text: $contentDraft,
                                     selection: $contentSelection,
                                     syncToken: journalContentSyncToken
-                                ) { text, range, isComposing in
-                                    activeSuggestionField = .content
-                                    suggestionEngine.textDidChange(
-                                        text,
-                                        selection: range,
-                                        referenceDate: referenceDate,
-                                        isFitnessReport: isFitnessReport,
-                                        inspirationContext: entry.inspiration,
-                                        isComposing: isComposing
-                                    )
-                                    if !isComposing {
-                                        correlationEngine.analyzeText(
-                                            journalContent: text,
-                                            journalInspiration: entry.inspiration,
-                                            journalEntryID: entry.id,
-                                            referenceDate: referenceDate,
-                                            statCardsContext: journalStatCardsCorrelationContext()
-                                        )
-                                    }
+                                ) { _, _, isComposing in
+                                    guard !isComposing else { return }
+                                    scheduleContentDraftFlush()
                                 }
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 260)
@@ -4182,40 +4544,27 @@ struct JournalEditorView: View {
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 6)
                                 #else
-                                TextEditor(text: $entry.content)
+                                TextEditor(text: $contentDraft)
                                     .scrollContentBackground(.hidden)
                                     .frame(minHeight: 260)
                                     .font(.body)
                                     .foregroundStyle(.primary)
                                     .padding(.horizontal, 6)
-                                    .onChange(of: entry.content) { _, newValue in
-                                        activeSuggestionField = .content
-                                        let r = NSRange(location: (newValue as NSString).length, length: 0)
-                                        suggestionEngine.textDidChange(
-                                            newValue,
-                                            selection: r,
-                                            referenceDate: referenceDate,
-                                            isFitnessReport: isFitnessReport,
-                                            inspirationContext: entry.inspiration,
-                                            isComposing: false
-                                        )
-                                        correlationEngine.analyzeText(
-                                            journalContent: newValue,
-                                            journalInspiration: entry.inspiration,
-                                            journalEntryID: entry.id,
-                                            referenceDate: referenceDate,
-                                            statCardsContext: journalStatCardsCorrelationContext()
-                                        )
+                                    .onChange(of: contentDraft) { _, _ in
+                                        scheduleContentDraftFlush()
                                     }
                                 #endif
 
                                 if activeSuggestionField == .content && hasJournalAssistantChips {
                                     Divider().opacity(0.35)
                                     journalAssistantBars { selected in
-                                        let (newText, newSel) = suggestionEngine.apply(selected, to: entry.content, selection: contentSelection)
+                                        let (newText, newSel) = suggestionEngine.apply(selected, to: contentDraft, selection: contentSelection)
                                         journalContentSyncToken &+= 1
-                                        entry.content = newText
+                                        contentDraft = newText
                                         contentSelection = newSel
+                                        entry.content = newText
+                                        handleJournalContentEdit(newText, selection: newSel, isComposing: false)
+                                        flushJournalPersistenceNow()
                                     }
                                 }
                             }
@@ -4249,30 +4598,24 @@ struct JournalEditorView: View {
                             }
 
                             VStack(alignment: .leading, spacing: 10) {
-                                #if canImport(UIKit)
+                                #if targetEnvironment(macCatalyst)
+                                TextEditor(text: $inspirationDraft)
+                                    .scrollContentBackground(.hidden)
+                                    .frame(minHeight: 220)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 6)
+                                    .onChange(of: inspirationDraft) { _, _ in
+                                        scheduleInspirationDraftFlush()
+                                    }
+                                #elseif canImport(UIKit)
                                 JournalSelectableTextEditor(
-                                    text: $entry.inspiration,
+                                    text: $inspirationDraft,
                                     selection: $inspirationSelection,
                                     syncToken: journalInspirationSyncToken
-                                ) { text, range, isComposing in
-                                    activeSuggestionField = .inspiration
-                                    suggestionEngine.textDidChange(
-                                        text,
-                                        selection: range,
-                                        referenceDate: referenceDate,
-                                        isFitnessReport: isFitnessReport,
-                                        inspirationContext: entry.inspiration,
-                                        isComposing: isComposing
-                                    )
-                                    if !isComposing {
-                                        correlationEngine.analyzeText(
-                                            journalContent: entry.content,
-                                            journalInspiration: text,
-                                            journalEntryID: entry.id,
-                                            referenceDate: referenceDate,
-                                            statCardsContext: journalStatCardsCorrelationContext()
-                                        )
-                                    }
+                                ) { _, _, isComposing in
+                                    guard !isComposing else { return }
+                                    scheduleInspirationDraftFlush()
                                 }
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 220)
@@ -4280,40 +4623,27 @@ struct JournalEditorView: View {
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 6)
                                 #else
-                                TextEditor(text: $entry.inspiration)
+                                TextEditor(text: $inspirationDraft)
                                     .scrollContentBackground(.hidden)
                                     .frame(minHeight: 220)
                                     .font(.body)
                                     .foregroundStyle(.primary)
                                     .padding(.horizontal, 6)
-                                    .onChange(of: entry.inspiration) { _, newValue in
-                                        activeSuggestionField = .inspiration
-                                        let r = NSRange(location: (newValue as NSString).length, length: 0)
-                                        suggestionEngine.textDidChange(
-                                            newValue,
-                                            selection: r,
-                                            referenceDate: referenceDate,
-                                            isFitnessReport: isFitnessReport,
-                                            inspirationContext: entry.inspiration,
-                                            isComposing: false
-                                        )
-                                        correlationEngine.analyzeText(
-                                            journalContent: entry.content,
-                                            journalInspiration: newValue,
-                                            journalEntryID: entry.id,
-                                            referenceDate: referenceDate,
-                                            statCardsContext: journalStatCardsCorrelationContext()
-                                        )
+                                    .onChange(of: inspirationDraft) { _, _ in
+                                        scheduleInspirationDraftFlush()
                                     }
                                 #endif
 
                                 if activeSuggestionField == .inspiration && hasJournalAssistantChips {
                                     Divider().opacity(0.35)
                                     journalAssistantBars { selected in
-                                        let (newText, newSel) = suggestionEngine.apply(selected, to: entry.inspiration, selection: inspirationSelection)
+                                        let (newText, newSel) = suggestionEngine.apply(selected, to: inspirationDraft, selection: inspirationSelection)
                                         journalInspirationSyncToken &+= 1
-                                        entry.inspiration = newText
+                                        inspirationDraft = newText
                                         inspirationSelection = newSel
+                                        entry.inspiration = newText
+                                        handleJournalInspirationEdit(newText, selection: newSel, isComposing: false)
+                                        flushJournalPersistenceNow()
                                     }
                                 }
                             }
@@ -4324,8 +4654,7 @@ struct JournalEditorView: View {
                         }
 
                         // Detected Correlations
-                        if !correlationEngine.detectedCorrelations.isEmpty
-                            || !CorrelationStore.shared.correlations(forJournal: entry.id).isEmpty
+                        if !journalCorrelationStripItems.isEmpty
                             || !correlationEngine.suggestedPeople.isEmpty
                             || !correlationEngine.correlationClarifiers.isEmpty {
                             journalEditorSection(
@@ -4333,13 +4662,11 @@ struct JournalEditorView: View {
                                 subtitle: "Emotions, people, and quick checks to sharpen what we spotted."
                             ) {
                                 VStack(alignment: .leading, spacing: 14) {
+                                    journalStaleInsightsBanner
+
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 8) {
-                                            let displayed = correlationEngine.detectedCorrelations.isEmpty
-                                                ? CorrelationStore.shared.correlations(forJournal: entry.id)
-                                                : correlationEngine.detectedCorrelations
-
-                                            ForEach(displayed) { corr in
+                                            ForEach(journalCorrelationStripItems) { corr in
                                                 correlationBubble(corr)
                                             }
 
@@ -4355,6 +4682,7 @@ struct JournalEditorView: View {
                                             .buttonStyle(.plain)
                                         }
                                         .padding(.vertical, 4)
+                                        .transaction { $0.animation = nil }
                                     }
 
                                     if !correlationEngine.suggestedPeople.isEmpty {
@@ -4530,46 +4858,51 @@ struct JournalEditorView: View {
                 if journalMindfulSessionStart == nil {
                     journalMindfulSessionStart = Date()
                 }
+                titleDraft = entry.title
+                contentDraft = entry.content
+                inspirationDraft = entry.inspiration
+                refreshTodaysWorkoutsCache()
                 wireJournalAssistantPersistence()
                 hydrateJournalAssistantCacheIfNeeded()
                 suggestionEngine.prepare(referenceDate: referenceDate)
-                let cLen = (entry.content as NSString).length
+                let cLen = (contentDraft as NSString).length
                 contentSelection = NSRange(location: cLen, length: 0)
-                let iLen = (entry.inspiration as NSString).length
+                let iLen = (inspirationDraft as NSString).length
                 inspirationSelection = NSRange(location: iLen, length: 0)
                 suggestionEngine.textDidChange(
-                    entry.content,
+                    contentDraft,
                     selection: contentSelection,
                     referenceDate: referenceDate,
                     isFitnessReport: isFitnessReport,
-                    inspirationContext: entry.inspiration,
+                    inspirationContext: inspirationDraft,
                     isComposing: false
                 )
-                correlationEngine.analyzeText(
-                    journalContent: entry.content,
-                    journalInspiration: entry.inspiration,
-                    journalEntryID: entry.id,
-                    referenceDate: referenceDate,
-                    statCardsContext: journalStatCardsCorrelationContext()
-                )
+                runJournalCorrelationAnalysis()
             }
             .onChange(of: entry.statCards) { _, _ in
-                correlationEngine.analyzeText(
-                    journalContent: entry.content,
-                    journalInspiration: entry.inspiration,
-                    journalEntryID: entry.id,
-                    referenceDate: referenceDate,
-                    statCardsContext: journalStatCardsCorrelationContext()
-                )
-                saveJournalAssistantCacheToEntry(force: true)
+                runJournalCorrelationAnalysis()
+                flushJournalPersistenceNow()
             }
             .onChange(of: suggestionEngine.pinnedNudge?.id) { _, newID in
                 if newID != nil { journalNudgesAssistantExpanded = true }
             }
             .onDisappear {
-                saveJournalAssistantCacheToEntry(force: true)
+                performJournalAutosave()
                 flushJournalEditorMindfulSession()
             }
+            .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+                performJournalAutosave()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background || phase == .inactive {
+                    performJournalAutosave()
+                }
+            }
+            #if canImport(UIKit)
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+                performJournalAutosave()
+            }
+            #endif
             #if canImport(JournalingSuggestions) && !targetEnvironment(macCatalyst)
             .sheet(isPresented: $showingSuggestions) {
                 if supportsJournalingSuggestions {
@@ -4580,21 +4913,20 @@ struct JournalEditorView: View {
                             await MainActor.run {
                                 if entry.title.isEmpty {
                                     entry.title = suggestion.title
+                                    titleDraft = suggestion.title
                                 }
 
                                 if let dateInterval = suggestion.date {
                                     referenceDate = dateInterval.end
                                 }
 
-                                entry.inspiration = mergeInspiration(
-                                    existing: entry.inspiration,
+                                let mergedInspiration = mergeInspiration(
+                                    existing: inspirationDraft,
                                     imported: importedSuggestion.text
                                 )
-                            journalInspirationSyncToken &+= 1
-                            entry.inspiration = mergeInspiration(
-                                existing: entry.inspiration,
-                                imported: importedSuggestion.text
-                            )
+                                inspirationDraft = mergedInspiration
+                                entry.inspiration = mergedInspiration
+                                journalInspirationSyncToken &+= 1
 
                                 for image in importedSuggestion.imageData where !entry.imageData.contains(image) {
                                     entry.imageData.append(image)
@@ -4602,21 +4934,15 @@ struct JournalEditorView: View {
 
                                 activeSuggestionField = .content
                                 suggestionEngine.textDidChange(
-                                    entry.content,
+                                    contentDraft,
                                     selection: contentSelection,
                                     referenceDate: referenceDate,
                                     isFitnessReport: isFitnessReport,
-                                    inspirationContext: entry.inspiration
+                                    inspirationContext: inspirationDraft,
+                                    isComposing: false
                                 )
-                            activeSuggestionField = .content
-                            suggestionEngine.textDidChange(
-                                entry.content,
-                                selection: contentSelection,
-                                referenceDate: referenceDate,
-                                isFitnessReport: isFitnessReport,
-                                inspirationContext: entry.inspiration,
-                                isComposing: false
-                            )
+                                runJournalCorrelationAnalysis()
+                                flushJournalPersistenceNow()
 
                                 showingSuggestions = false
                             }
@@ -4645,11 +4971,41 @@ struct JournalEditorView: View {
         }
     }
 
+    // MARK: - Stale assistant hints
+
+    @ViewBuilder
+    private var journalStaleInsightsBanner: some View {
+        let pack = journalStaleAssistantPack
+        if !pack.correlations.isEmpty || !pack.clarifiers.isEmpty {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.body)
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Review saved insights")
+                        .font(.caption.weight(.semibold))
+                    Text("About \(pack.correlations.count) correlations and \(pack.clarifiers.count) quick checks may not match your latest reflection or inspiration. Nothing was removed automatically — delete items with the menu if you prefer.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.orange.opacity(0.22), lineWidth: 1)
+            )
+        }
+    }
+
     // MARK: - Correlation Bubble
 
     @ViewBuilder
     private func correlationBubble(_ corr: EmotionCorrelation) -> some View {
         let color = corr.valenceCategory.color
+        let syncedToPathfinder = pathfinderSyncedCorrelationIDSet.contains(corr.id)
         HStack(spacing: 6) {
             Image(systemName: emotionIcon(for: corr.emotionLabel))
                 .font(.caption2)
@@ -4659,6 +5015,12 @@ struct JournalEditorView: View {
             Text(corr.association.displayName)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            if syncedToPathfinder {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green.opacity(0.85))
+                    .accessibilityLabel("Logged to Pathfinder")
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)

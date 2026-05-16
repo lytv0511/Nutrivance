@@ -62,19 +62,27 @@ final class CatalystTrainingLoadSyncStore: ObservableObject {
     private init() {
         // Load from local cache immediately (no blocking)
         loadFromLocalCache()
-        
-        // Schedule cloud sync for background (non-blocking)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.syncCloudInBackground()
+
+        // Kick off iCloud merge promptly — avoids stale Training Load after switching from iPhone.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.syncCloudInBackground()
         }
-        
-        // Listen for external changes (e.g., iPhone updates)
+
+        #if !targetEnvironment(macCatalyst)
         cancellable = NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.syncCloudInBackground()
             }
+        #endif
     }
+
+    #if targetEnvironment(macCatalyst)
+    /// Invoked by `MacCatalystHealthSyncCoordinator` when ubiquitous KVS changes (Catalyst uses one sync pathway).
+    func pullLatestFromICloudForCoordinator() {
+        syncCloudInBackground()
+    }
+    #endif
 
     private func loadFromLocalCache() {
         #if targetEnvironment(macCatalyst)

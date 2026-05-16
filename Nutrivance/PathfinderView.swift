@@ -351,7 +351,7 @@ final class CorrelationStore: ObservableObject {
         for source in inputs {
             for c in source { map[c.id] = c }
         }
-        return map.values.sorted { $0.date > $1.date }
+        return JournalCorrelationEngine.stableCorrelationDisplayOrder(Array(map.values))
     }
 }
 
@@ -746,15 +746,14 @@ final class JournalCorrelationEngine: ObservableObject {
         clarifiers: [JournalCorrelationClarifier],
         contentFingerprint: UInt64
     ) {
-        withAnimation(.easeOut(duration: 0.12)) {
-            detectedCorrelations = correlations
-            suggestedPeople = people
-            correlationClarifiers = clarifiers
-        }
+        // Avoid implicit layout animations — correlation chips otherwise swap positions when identity/order updates.
+        detectedCorrelations = Self.stableCorrelationDisplayOrder(correlations)
+        suggestedPeople = people
+        correlationClarifiers = clarifiers
         assistantRestoredContentFingerprint = contentFingerprint
     }
 
-    func analyzeText(journalContent: String, journalInspiration: String, journalEntryID: UUID?, referenceDate: Date, statCardsContext: String = "") {
+    func analyzeText(journalContent: String, journalInspiration: String, journalEntryID: UUID?, referenceDate: Date, statCardsContext: String = "", persistedDraftCorrelations: [EmotionCorrelation] = [], persistedQuickCheckClarifiers: [JournalCorrelationClarifier] = [], persistedSuggestedPeople: [JournalSuggestedPerson] = []) {
         analysisTask?.cancel()
         let combined = journalContent + " " + journalInspiration + " " + statCardsContext
         let trimmed = combined.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -762,19 +761,27 @@ final class JournalCorrelationEngine: ObservableObject {
         if assistantRestoredContentFingerprint != nil, assistantRestoredContentFingerprint != stableFP {
             assistantRestoredContentFingerprint = nil
         }
+
+        let storeCorrelations: [EmotionCorrelation] = {
+            guard let journalEntryID else { return [] }
+            return CorrelationStore.shared.correlations(forJournal: journalEntryID)
+        }()
+
         guard trimmed.count >= 15 else {
             assistantRestoredContentFingerprint = nil
-            withAnimation {
-                detectedCorrelations = []
-                suggestedPeople = []
-                correlationClarifiers = []
-            }
+            let mergedShort = Self.mergeDisplayedCorrelations(store: storeCorrelations, draftArchive: persistedDraftCorrelations, incoming: [])
+            let mergedClarShort = Self.mergeClarifierLists(persisted: persistedQuickCheckClarifiers, incoming: [])
+            let mergedPeopleShort = Self.mergeSuggestedPeople(persistedFromEntry: persistedSuggestedPeople, incoming: [])
+            detectedCorrelations = mergedShort
+            correlationClarifiers = mergedClarShort
+            suggestedPeople = mergedPeopleShort
             onAnalysisFinished?()
             return
         }
 
+        let debounceNanos: UInt64 = PlatformContext.isMacCatalyst ? 1_600_000_000 : 800_000_000
         analysisTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
 
             var results: [EmotionCorrelation] = []
@@ -782,7 +789,7 @@ final class JournalCorrelationEngine: ObservableObject {
             var clarifiers: [JournalCorrelationClarifier] = []
 
             #if canImport(FoundationModels)
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, *), !PlatformContext.isMacCatalyst {
                 let model = SystemLanguageModel(useCase: .general)
                 if model.isAvailable {
                     if let pack = await analyzeWithFoundationModels(text: trimmed, journalEntryID: journalEntryID, referenceDate: referenceDate) {
@@ -819,31 +826,118 @@ final class JournalCorrelationEngine: ObservableObject {
 
             guard !Task.isCancelled else { return }
 
+            let mergedCorrelations = Self.mergeDisplayedCorrelations(
+                store: storeCorrelations,
+                draftArchive: persistedDraftCorrelations,
+                incoming: results
+            )
+            let mergedClarifiers = Self.mergeClarifierLists(persisted: persistedQuickCheckClarifiers, incoming: clarifiers)
+            let mergedPeople = Self.mergeSuggestedPeople(persistedFromEntry: persistedSuggestedPeople, incoming: people)
+
             let fpNow = JournalAssistantFingerprint.combine(content: journalContent, inspiration: journalInspiration, statCardsSignature: statCardsContext)
-            if results.isEmpty && people.isEmpty && clarifiers.isEmpty,
+            if mergedCorrelations.isEmpty && mergedPeople.isEmpty && mergedClarifiers.isEmpty,
                assistantRestoredContentFingerprint == fpNow {
                 onAnalysisFinished?()
                 return
             }
 
             assistantRestoredContentFingerprint = nil
-            withAnimation(.easeOut(duration: 0.2)) {
-                detectedCorrelations = results
-                suggestedPeople = people
-                correlationClarifiers = clarifiers
-            }
+            detectedCorrelations = mergedCorrelations
+            suggestedPeople = mergedPeople
+            correlationClarifiers = mergedClarifiers
             onAnalysisFinished?()
         }
+    }
+
+    /// Seeds merged correlations/clarifiers when assistant fingerprint cache misses (persisted sidecars + Pathfinder store).
+    func seedMergedFromPersisted(journalEntryID: UUID, draftArchive: [EmotionCorrelation], persistedClarifiers: [JournalCorrelationClarifier], persistedPeople: [JournalSuggestedPerson]) {
+        let store = CorrelationStore.shared.correlations(forJournal: journalEntryID)
+        let merged = Self.mergeDisplayedCorrelations(store: store, draftArchive: draftArchive, incoming: [])
+        detectedCorrelations = merged
+        correlationClarifiers = persistedClarifiers
+        suggestedPeople = Self.mergeSuggestedPeople(persistedFromEntry: persistedPeople, incoming: [])
+    }
+
+    static func mergeDisplayedCorrelations(store: [EmotionCorrelation], draftArchive: [EmotionCorrelation], incoming: [EmotionCorrelation]) -> [EmotionCorrelation] {
+        var byID: [UUID: EmotionCorrelation] = [:]
+        for c in store { byID[c.id] = c }
+        for c in draftArchive { byID[c.id] = c }
+        for c in incoming {
+            if let existingSameID = byID[c.id] {
+                byID[c.id] = c
+                _ = existingSameID
+                continue
+            }
+            let fuzzyDup = byID.values.contains { existing in roughlyDuplicatesCorrelation(existing, c) }
+            if fuzzyDup { continue }
+            byID[c.id] = c
+        }
+        return Self.stableCorrelationDisplayOrder(Array(byID.values))
+    }
+
+    /// Deterministic strip order: newest first, then UUID so equal timestamps never reorder between passes.
+    static func stableCorrelationDisplayOrder(_ correlations: [EmotionCorrelation]) -> [EmotionCorrelation] {
+        correlations.sorted {
+            if $0.date != $1.date { return $0.date > $1.date }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    static func mergeClarifierLists(persisted: [JournalCorrelationClarifier], incoming: [JournalCorrelationClarifier]) -> [JournalCorrelationClarifier] {
+        var mergedByKey: [String: JournalCorrelationClarifier] = [:]
+        for c in persisted { mergedByKey[c.stableKey] = c }
+        for c in incoming { mergedByKey[c.stableKey] = c }
+        let persistedKeys = persisted.map(\.stableKey)
+        var ordered: [JournalCorrelationClarifier] = []
+        for key in persistedKeys {
+            if let c = mergedByKey[key] {
+                ordered.append(c)
+            }
+        }
+        let persistedKeySet = Set(persistedKeys)
+        for c in incoming where !persistedKeySet.contains(c.stableKey) {
+            ordered.append(c)
+        }
+        return ordered
+    }
+
+    static func mergeSuggestedPeople(persistedFromEntry: [JournalSuggestedPerson], incoming: [JournalSuggestedPerson]) -> [JournalSuggestedPerson] {
+        var byLowerName: [String: JournalSuggestedPerson] = [:]
+        for p in persistedFromEntry {
+            byLowerName[p.name.lowercased()] = p
+        }
+        for p in incoming {
+            let key = p.name.lowercased()
+            if let existing = byLowerName[key] {
+                if p.mentionContext.count > existing.mentionContext.count {
+                    byLowerName[key] = p
+                }
+            } else {
+                byLowerName[key] = p
+            }
+        }
+        return Array(byLowerName.values).sorted { $0.name < $1.name }
+    }
+
+    private static func roughlyDuplicatesCorrelation(_ a: EmotionCorrelation, _ b: EmotionCorrelation) -> Bool {
+        guard a.association == b.association else { return false }
+        guard a.emotionLabel.lowercased() == b.emotionLabel.lowercased() else { return false }
+        let ca = a.contextNotes.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let cb = b.contextNotes.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ca.isEmpty, !cb.isEmpty else { return false }
+        let prefixLen = min(28, min(ca.count, cb.count))
+        guard prefixLen > 6 else { return false }
+        let pa = String(ca.prefix(prefixLen))
+        let pb = String(cb.prefix(prefixLen))
+        return ca.contains(pb) || cb.contains(pa)
     }
 
     func clear() {
         analysisTask?.cancel()
         assistantRestoredContentFingerprint = nil
-        withAnimation {
-            detectedCorrelations = []
-            suggestedPeople = []
-            correlationClarifiers = []
-        }
+        detectedCorrelations = []
+        suggestedPeople = []
+        correlationClarifiers = []
         onAnalysisFinished?()
     }
 

@@ -176,6 +176,21 @@ struct EngineSleepNightUIPackage: Codable, Sendable {
     var segments: [EngineSleepSegmentVitalsHandoff]
     var heartRateDip: EngineHeartRateDipHandoff?
     var overnightVitals: [EngineOvernightVitalHandoff]
+    /// Apple Intelligence / on-device LLM sleep quality blurb (plain text). Synced via CloudKit for Catalyst / second devices.
+    var aiSleepQualitySummary: String?
+    /// Fingerprint of inputs used to generate the summary (invalidates when stages/enrichment change).
+    var aiSleepQualityFingerprint: String?
+    var aiSleepQualityGeneratedAt: Date?
+}
+
+extension EngineSleepNightUIPackage {
+    /// Stable subset of sleep inputs available on this blob (excludes 7-day average). Used to retain synced AI text across HealthKit re-uploads when the night row is unchanged.
+    var sleepQualityAISignatureFromPackage: String {
+        let dip = heartRateDip.map { "\(Int($0.dipPercent ?? -1))_\($0.bandRaw)_\($0.nocturnalSampleCount)" } ?? "nodip"
+        let vitOutliers = overnightVitals.filter(\.isOutlier).count
+        let firstEpoch = segments.first?.start.timeIntervalSince1970 ?? 0
+        return "\(segments.count)_\(firstEpoch)_\(dip)_\(overnightVitals.count)_\(vitOutliers)"
+    }
 }
 
 /// Full sleep screen handoff built on iPhone/iPad after HealthKit load.
