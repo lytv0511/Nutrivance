@@ -1407,6 +1407,7 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKQuantityType.quantityType(forIdentifier: .heartRate)!,
             HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!,
             HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
+            HKSeriesType.heartbeat(),
             HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!,
             HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!,
             HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature)!,

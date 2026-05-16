@@ -5,8 +5,8 @@
 //  Created by Vincent Leong on 2/25/25.
 //
 
-// Fetch 10 days of HRV SSDN, compatue baseline HRV (median), convert to RMSSD estimate
-// Basic: HRV SDNN → cleaned → RMSSD estimate → baseline → LF/HF proxy → stress/energy/balance
+// SDNN samples → optional heartbeat-derived RMSSD → cleaned windows → dual baseline (intraday EMA + morning EMA)
+// → LF/HF proxy → Stress / Energy / Regulation (dashboard uses morning-readiness baseline).
 
 import SwiftUI
 import Charts
@@ -19,14 +19,21 @@ struct StressView: View {
         let date: Date
         let sdnn: Double
         let rmssd: Double
+        let rmssdSource: StressRmssdSource
         let combinedHRV: Double
         let lfHfProxy: Double
         let coefficientOfVariation: Double
         let adjustedHRV: Double
+        /// Chart series — intraday EMA baseline (historical continuity).
         let stress: Double
         let energy: Double
         let nervousBalance: Double
         let baselineEMA: Double
+        /// Morning-readiness baseline SDNN used for headline dashboard interpretation.
+        let readinessBaselineSdnn: Double
+        let dashboardStress: Double
+        let dashboardEnergy: Double
+        let dashboardRegulation: Double
     }
     
     enum TimeFilter: Hashable {
@@ -102,6 +109,7 @@ struct StressView: View {
             date: startOfDay,
             sdnn: 0,
             rmssd: 0,
+            rmssdSource: .sdnnProxy,
             combinedHRV: 0,
             lfHfProxy: 1.0,
             coefficientOfVariation: 0,
@@ -109,7 +117,11 @@ struct StressView: View {
             stress: 50,
             energy: 50,
             nervousBalance: 100,
-            baselineEMA: 50
+            baselineEMA: 50,
+            readinessBaselineSdnn: 50,
+            dashboardStress: 50,
+            dashboardEnergy: 50,
+            dashboardRegulation: 100
         )
     }
     
@@ -207,12 +219,12 @@ struct StressView: View {
                             // Current/Selected metrics card (only show if selected)
                             if let selected = selectedSession {
                                 HStackMetricsCard(
-                                    stressScore: selected.stress,
+                                    stressScore: selected.dashboardStress,
                                     stressBaseline: 50,
-                                    energyScore: selected.energy,
+                                    energyScore: selected.dashboardEnergy,
                                     energyBaseline: 50,
-                                    nervousBalance: selected.nervousBalance,
-                                    nervousBalanceBaseline: 100
+                                    nervousBalance: selected.dashboardRegulation,
+                                    nervousBalanceBaseline: 150
                                 )
                                 .padding(.horizontal)
                                 
@@ -222,25 +234,28 @@ struct StressView: View {
                                         title: "RMSSD",
                                         symbol: "waveform.path.ecg",
                                         currentValue: selected.rmssd,
-                                        baselineValue: estimateRMSSD(from: selected.baselineEMA),
+                                        baselineValue: StressHRVTransforms.estimateRMSSDFromSDNN(selected.readinessBaselineSdnn),
                                         unit: "",
-                                        explanation: "RMSSD (Root Mean Square of Successive Differences) is a measure of short-term heart rate variability. Higher RMSSD typically reflects a healthy, resilient nervous system and better stress recovery. Lower values can indicate fatigue or stress."
+                                        explanation: "RMSSD (Root Mean Square of Successive Differences) reflects beat‑to‑beat vagal modulation when computed from heartbeat series data; otherwise a pragmatic fallback scales Apple Watch SDNN. Higher RMSSD generally aligns with stronger parasympathetic tone versus your morning‑readiness baseline."
                                     )
                                     MetricCard(
                                         title: "SDNN",
                                         symbol: "chart.bar.doc.horizontal",
                                         currentValue: selected.sdnn,
-                                        baselineValue: selected.baselineEMA,
+                                        baselineValue: selected.readinessBaselineSdnn,
                                         unit: "",
-                                        explanation: "SDNN (Standard Deviation of NN intervals) measures the overall variability in your heartbeat intervals. Higher SDNN generally means your body is adapting well to daily stressors, while lower values may suggest increased stress or reduced recovery."
+                                        explanation: "SDNN captures overall beat‑to‑beat variability in milliseconds. Your headline Stress/Energy/Regulation row compares readings against a morning‑anchored baseline SDNN when enough waking samples exist; otherwise it blends intraday context."
                                     )
                                     MetricCard(
                                         title: "Combined HRV",
                                         symbol: "circle.grid.cross",
                                         currentValue: selected.combinedHRV,
-                                        baselineValue: combinedHRV(current: selected.baselineEMA, baseline: selected.baselineEMA),
+                                        baselineValue: StressHRVTransforms.combinedHRV(
+                                            sdnn: selected.readinessBaselineSdnn,
+                                            rmssdEffective: StressHRVTransforms.estimateRMSSDFromSDNN(selected.readinessBaselineSdnn)
+                                        ),
                                         unit: "",
-                                        explanation: "Combined HRV is a weighted score using both RMSSD and SDNN, providing a broader view of your heart's adaptability. A higher combined HRV usually reflects good recovery and a balanced nervous system."
+                                        explanation: "Combined HRV weights beat‑to‑beat variation (~70%) with SDNN (~30%). Charts favor continuity against your rolling intraday baseline; the headline cards emphasize interpretation versus morning‑readiness context."
                                     )
                                     MetricCard(
                                         title: "LF/HF Proxy",
@@ -248,15 +263,18 @@ struct StressView: View {
                                         currentValue: selected.lfHfProxy,
                                         baselineValue: 1.0,
                                         unit: "",
-                                        explanation: "The LF/HF Proxy estimates the balance between sympathetic (stress) and parasympathetic (recovery) activity in your body. Values farther from 1 can indicate an imbalance, possibly from stress or overtraining."
+                                        explanation: "The LF/HF proxy compares short‑term HRV against your morning‑readiness baseline (when available). Near low‑stress alignment sits close to 1; sympathetic skew pushes it higher. Stress is calibrated so baseline‑aligned physiology reads as genuinely low stress—not a fixed mid‑score."
                                     )
                                     MetricCard(
                                         title: "Adjusted HRV",
                                         symbol: "shield.lefthalf.fill",
                                         currentValue: selected.adjustedHRV,
-                                        baselineValue: combinedHRV(current: selected.baselineEMA, baseline: selected.baselineEMA),
+                                        baselineValue: StressHRVTransforms.combinedHRV(
+                                            sdnn: selected.readinessBaselineSdnn,
+                                            rmssdEffective: StressHRVTransforms.estimateRMSSDFromSDNN(selected.readinessBaselineSdnn)
+                                        ),
                                         unit: "",
-                                        explanation: "Adjusted HRV accounts for how stable your HRV is over time, not just its level. It helps filter out random fluctuations, giving a more reliable picture of your body's stress and recovery state."
+                                        explanation: "Adjusted HRV scales combined HRV down when recent SDNN samples are noisy (high coefficient of variation). It stabilizes intraday charts while headline scores pair the same adjustment with morning‑readiness baselines."
                                     )
                                 }
                                 .padding()
@@ -647,49 +665,9 @@ struct StressView: View {
                 return
             }
 
-            var hrvSessions: [HRVSession] = []
-            var sdnnValues: [Double] = []
-            var baselineEMA: Double?
-            var prevHRVs: [Double] = []
-            let alpha = 0.3
-            for (date, sdnn) in tuples {
-                sdnnValues.append(sdnn)
-                let window = Array(sdnnValues.suffix(10))
-                let baselineForOutlier = computeBaseline(window)
-                let cleaned = removeOutliers(window, baseline: baselineForOutlier)
-                let baseline = baselineEMA ?? computeBaseline(cleaned)
-                if let prev = baselineEMA {
-                    baselineEMA = alpha * sdnn + (1 - alpha) * prev
-                } else {
-                    baselineEMA = sdnn
-                }
-                prevHRVs.append(sdnn)
-                if prevHRVs.count > 10 { prevHRVs.removeFirst() }
-                let combinedCurrentHRV = combinedHRV(current: sdnn, baseline: baseline)
-                let adjustedCurrentHRV = combinedCurrentHRV * (1 - coefficientOfVariation(cleaned))
-                let combinedBaselineHRV = combinedHRV(current: baseline, baseline: baseline)
-                let currentRMSSD = estimateRMSSD(from: sdnn)
-                let baselineRMSSD = estimateRMSSD(from: baseline)
-                let lfHfProxy = pow(baselineRMSSD / max(currentRMSSD, 1e-5), 0.7)
-                let stress = calculateStress(current: adjustedCurrentHRV, baseline: combinedBaselineHRV, lfHfProxy: lfHfProxy)
-                let energy = calculateEnergy(current: adjustedCurrentHRV, baseline: combinedBaselineHRV, values: cleaned)
-                let balance = calculateNervousBalance(current: combinedCurrentHRV, baseline: combinedBaselineHRV)
-                let cv = coefficientOfVariation(cleaned)
-                let session = HRVSession(
-                    date: date,
-                    sdnn: sdnn,
-                    rmssd: currentRMSSD,
-                    combinedHRV: combinedCurrentHRV,
-                    lfHfProxy: lfHfProxy,
-                    coefficientOfVariation: cv,
-                    adjustedHRV: adjustedCurrentHRV,
-                    stress: stress,
-                    energy: energy,
-                    nervousBalance: balance,
-                    baselineEMA: baselineEMA ?? baseline
-                )
-                hrvSessions.append(session)
-            }
+            let points = tuples.map { StressSessionPipeline.SdnnPoint(sampleUUID: nil, date: $0.0, sdnn: $0.1) }
+            /// Mac Catalyst receives SDNN-only handoffs (`EngineHRVSamplePoint`); native heartbeat RMSSD is unavailable until blobs carry beat-derived RMSSD.
+            let hrvSessions = StressSessionPipeline.buildSessions(points: points, heartbeatRmssdByUUID: [:], calendar: Calendar.current)
 
             let calendar = Calendar.current
             let morningSessions = hrvSessions.filter { session in
@@ -699,9 +677,9 @@ struct StressView: View {
             let dashboardSession = morningSessions.last ?? hrvSessions.last
             hrvHistory = hrvSessions
             if let dash = dashboardSession {
-                stressScore = dash.stress
-                energyScore = dash.energy
-                nervousBalance = dash.nervousBalance
+                stressScore = dash.dashboardStress
+                energyScore = dash.dashboardEnergy
+                nervousBalance = dash.dashboardRegulation
             }
             updateAggregatedData()
             syncSelectedSessionToDate()
@@ -740,76 +718,36 @@ struct StressView: View {
                     return
                 }
                 
-                // Extract SDNN values and dates
-                var hrvSessions: [HRVSession] = []
-                var sdnnValues: [Double] = []
-                var baselineEMA: Double?
-                var prevHRVs: [Double] = []
-                let alpha = 0.3
-                // Process each sample in order
-                for sample in samples {
-                    let sdnn = sample.quantity.doubleValue(for: .init(from: "ms"))
-                    let date = sample.startDate
-                    sdnnValues.append(sdnn)
-                    
-                    // Compute cleaned window for baseline/trend, using last 10 values
-                    let window = Array(sdnnValues.suffix(10))
-                    let baselineForOutlier = computeBaseline(window)
-                    let cleaned = removeOutliers(window, baseline: baselineForOutlier)
-                    let baseline = baselineEMA ?? computeBaseline(cleaned)
-                    // Update baseline EMA
-                    if let prev = baselineEMA {
-                        baselineEMA = alpha * sdnn + (1 - alpha) * prev
-                    } else {
-                        baselineEMA = sdnn
-                    }
-                    prevHRVs.append(sdnn)
-                    if prevHRVs.count > 10 { prevHRVs.removeFirst() }
-                    let trendSlope = (prevHRVs.last ?? sdnn) - (prevHRVs.first ?? sdnn)
-                    // Combined HRV
-                    let combinedCurrentHRV = combinedHRV(current: sdnn, baseline: baseline)
-                    let adjustedCurrentHRV = combinedCurrentHRV * (1 - coefficientOfVariation(cleaned))
-                    let combinedBaselineHRV = combinedHRV(current: baseline, baseline: baseline)
-                    let currentRMSSD = estimateRMSSD(from: sdnn)
-                    let baselineRMSSD = estimateRMSSD(from: baseline)
-                    let lfHfProxy = pow(baselineRMSSD / max(currentRMSSD, 1e-5), 0.7)
-                    let stress = calculateStress(current: adjustedCurrentHRV, baseline: combinedBaselineHRV, lfHfProxy: lfHfProxy)
-                    let energy = calculateEnergy(current: adjustedCurrentHRV, baseline: combinedBaselineHRV, values: cleaned)
-                    let balance = calculateNervousBalance(current: combinedCurrentHRV, baseline: combinedBaselineHRV)
-                    let cv = coefficientOfVariation(cleaned)
-                    let session = HRVSession(
-                        date: date,
-                        sdnn: sdnn,
-                        rmssd: currentRMSSD,
-                        combinedHRV: combinedCurrentHRV,
-                        lfHfProxy: lfHfProxy,
-                        coefficientOfVariation: cv,
-                        adjustedHRV: adjustedCurrentHRV,
-                        stress: stress,
-                        energy: energy,
-                        nervousBalance: balance,
-                        baselineEMA: baselineEMA ?? baseline
+                let msUnit = HKUnit.secondUnit(with: .milli)
+                let points: [StressSessionPipeline.SdnnPoint] = samples.map {
+                    StressSessionPipeline.SdnnPoint(
+                        sampleUUID: $0.uuid,
+                        date: $0.startDate,
+                        sdnn: $0.quantity.doubleValue(for: msUnit)
                     )
-                    hrvSessions.append(session)
                 }
-                
-                // Pick the most significant session for dashboard: latest morning session, or last
-                let calendar = Calendar.current
-                let morningSessions = hrvSessions.filter { session in
-                    let hour = calendar.component(.hour, from: session.date)
-                    return hour >= 4 && hour <= 11
-                }
-                let dashboardSession = morningSessions.last ?? hrvSessions.last
-                DispatchQueue.main.async {
-                    self.hrvHistory = hrvSessions
-                    if let dash = dashboardSession {
-                        self.stressScore = dash.stress
-                        self.energyScore = dash.energy
-                        self.nervousBalance = dash.nervousBalance
+                StressHeartbeatRmssd.prefetchRmssdByHRVSamples(hrvSamples: samples, healthStore: healthStore) { hbMap in
+                    let hrvSessions = StressSessionPipeline.buildSessions(
+                        points: points,
+                        heartbeatRmssdByUUID: hbMap,
+                        calendar: calendar
+                    )
+                    let morningSessions = hrvSessions.filter { session in
+                        let hour = calendar.component(.hour, from: session.date)
+                        return hour >= 4 && hour <= 11
                     }
-                    self.updateAggregatedData()
-                    self.syncSelectedSessionToDate()
-                    self.loading = false
+                    let dashboardSession = morningSessions.last ?? hrvSessions.last
+                    DispatchQueue.main.async {
+                        self.hrvHistory = hrvSessions
+                        if let dash = dashboardSession {
+                            self.stressScore = dash.dashboardStress
+                            self.energyScore = dash.dashboardEnergy
+                            self.nervousBalance = dash.dashboardRegulation
+                        }
+                        self.updateAggregatedData()
+                        self.syncSelectedSessionToDate()
+                        self.loading = false
+                    }
                 }
             }
             healthStore.execute(query)
@@ -856,21 +794,29 @@ struct StressView: View {
                 let hourSamples = dayData.filter { $0.date >= hourStart && $0.date < hourEnd }
                 
                 if !hourSamples.isEmpty {
-                    let avgSDNN = hourSamples.map { $0.sdnn }.reduce(0, +) / Double(hourSamples.count)
-                    let avgRMSSD = hourSamples.map { $0.rmssd }.reduce(0, +) / Double(hourSamples.count)
-                    let avgCombined = hourSamples.map { $0.combinedHRV }.reduce(0, +) / Double(hourSamples.count)
-                    let avgLFHF = hourSamples.map { $0.lfHfProxy }.reduce(0, +) / Double(hourSamples.count)
-                    let avgAdjusted = hourSamples.map { $0.adjustedHRV }.reduce(0, +) / Double(hourSamples.count)
-                    let avgStress = hourSamples.map { $0.stress }.reduce(0, +) / Double(hourSamples.count)
-                    let avgEnergy = hourSamples.map { $0.energy }.reduce(0, +) / Double(hourSamples.count)
-                    let avgBalance = hourSamples.map { $0.nervousBalance }.reduce(0, +) / Double(hourSamples.count)
-                    let avgBaseline = hourSamples.map { $0.baselineEMA }.reduce(0, +) / Double(hourSamples.count)
-                    let avgCV = hourSamples.map { $0.coefficientOfVariation }.reduce(0, +) / Double(hourSamples.count)
-                    
+                    let n = Double(hourSamples.count)
+                    let avgSDNN = hourSamples.map { $0.sdnn }.reduce(0, +) / n
+                    let avgRMSSD = hourSamples.map { $0.rmssd }.reduce(0, +) / n
+                    let avgCombined = hourSamples.map { $0.combinedHRV }.reduce(0, +) / n
+                    let avgLFHF = hourSamples.map { $0.lfHfProxy }.reduce(0, +) / n
+                    let avgAdjusted = hourSamples.map { $0.adjustedHRV }.reduce(0, +) / n
+                    let avgStress = hourSamples.map { $0.stress }.reduce(0, +) / n
+                    let avgEnergy = hourSamples.map { $0.energy }.reduce(0, +) / n
+                    let avgBalance = hourSamples.map { $0.nervousBalance }.reduce(0, +) / n
+                    let avgBaseline = hourSamples.map { $0.baselineEMA }.reduce(0, +) / n
+                    let avgCV = hourSamples.map { $0.coefficientOfVariation }.reduce(0, +) / n
+                    let avgReadiness = hourSamples.map { $0.readinessBaselineSdnn }.reduce(0, +) / n
+                    let avgDashStress = hourSamples.map { $0.dashboardStress }.reduce(0, +) / n
+                    let avgDashEnergy = hourSamples.map { $0.dashboardEnergy }.reduce(0, +) / n
+                    let avgDashReg = hourSamples.map { $0.dashboardRegulation }.reduce(0, +) / n
+                    let hbCount = hourSamples.filter { $0.rmssdSource == .heartbeatDerived }.count
+                    let aggRmssdSource: StressRmssdSource = Double(hbCount) >= Double(hourSamples.count) * 0.5 ? .heartbeatDerived : .sdnnProxy
+
                     let aggregatedSession = HRVSession(
                         date: hourStart,
                         sdnn: avgSDNN,
                         rmssd: avgRMSSD,
+                        rmssdSource: aggRmssdSource,
                         combinedHRV: avgCombined,
                         lfHfProxy: avgLFHF,
                         coefficientOfVariation: avgCV,
@@ -878,7 +824,11 @@ struct StressView: View {
                         stress: avgStress,
                         energy: avgEnergy,
                         nervousBalance: avgBalance,
-                        baselineEMA: avgBaseline
+                        baselineEMA: avgBaseline,
+                        readinessBaselineSdnn: avgReadiness,
+                        dashboardStress: avgDashStress,
+                        dashboardEnergy: avgDashEnergy,
+                        dashboardRegulation: avgDashReg
                     )
                     hourlyData.append(aggregatedSession)
                 }
@@ -916,21 +866,29 @@ struct StressView: View {
                 if daySamples.isEmpty {
                     dailyData.append(stressPlaceholderSession(startOfDay: startOfDay))
                 } else {
-                    let avgSDNN = daySamples.map { $0.sdnn }.reduce(0, +) / Double(daySamples.count)
-                    let avgRMSSD = daySamples.map { $0.rmssd }.reduce(0, +) / Double(daySamples.count)
-                    let avgCombined = daySamples.map { $0.combinedHRV }.reduce(0, +) / Double(daySamples.count)
-                    let avgLFHF = daySamples.map { $0.lfHfProxy }.reduce(0, +) / Double(daySamples.count)
-                    let avgAdjusted = daySamples.map { $0.adjustedHRV }.reduce(0, +) / Double(daySamples.count)
-                    let avgStress = daySamples.map { $0.stress }.reduce(0, +) / Double(daySamples.count)
-                    let avgEnergy = daySamples.map { $0.energy }.reduce(0, +) / Double(daySamples.count)
-                    let avgBalance = daySamples.map { $0.nervousBalance }.reduce(0, +) / Double(daySamples.count)
-                    let avgBaseline = daySamples.map { $0.baselineEMA }.reduce(0, +) / Double(daySamples.count)
-                    let avgCV = daySamples.map { $0.coefficientOfVariation }.reduce(0, +) / Double(daySamples.count)
-                    
+                    let n = Double(daySamples.count)
+                    let avgSDNN = daySamples.map { $0.sdnn }.reduce(0, +) / n
+                    let avgRMSSD = daySamples.map { $0.rmssd }.reduce(0, +) / n
+                    let avgCombined = daySamples.map { $0.combinedHRV }.reduce(0, +) / n
+                    let avgLFHF = daySamples.map { $0.lfHfProxy }.reduce(0, +) / n
+                    let avgAdjusted = daySamples.map { $0.adjustedHRV }.reduce(0, +) / n
+                    let avgStress = daySamples.map { $0.stress }.reduce(0, +) / n
+                    let avgEnergy = daySamples.map { $0.energy }.reduce(0, +) / n
+                    let avgBalance = daySamples.map { $0.nervousBalance }.reduce(0, +) / n
+                    let avgBaseline = daySamples.map { $0.baselineEMA }.reduce(0, +) / n
+                    let avgCV = daySamples.map { $0.coefficientOfVariation }.reduce(0, +) / n
+                    let avgReadiness = daySamples.map { $0.readinessBaselineSdnn }.reduce(0, +) / n
+                    let avgDashStress = daySamples.map { $0.dashboardStress }.reduce(0, +) / n
+                    let avgDashEnergy = daySamples.map { $0.dashboardEnergy }.reduce(0, +) / n
+                    let avgDashReg = daySamples.map { $0.dashboardRegulation }.reduce(0, +) / n
+                    let hbCount = daySamples.filter { $0.rmssdSource == .heartbeatDerived }.count
+                    let aggRmssdSource: StressRmssdSource = Double(hbCount) >= Double(daySamples.count) * 0.5 ? .heartbeatDerived : .sdnnProxy
+
                     let aggregatedSession = HRVSession(
                         date: startOfDay,
                         sdnn: avgSDNN,
                         rmssd: avgRMSSD,
+                        rmssdSource: aggRmssdSource,
                         combinedHRV: avgCombined,
                         lfHfProxy: avgLFHF,
                         coefficientOfVariation: avgCV,
@@ -938,7 +896,11 @@ struct StressView: View {
                         stress: avgStress,
                         energy: avgEnergy,
                         nervousBalance: avgBalance,
-                        baselineEMA: avgBaseline
+                        baselineEMA: avgBaseline,
+                        readinessBaselineSdnn: avgReadiness,
+                        dashboardStress: avgDashStress,
+                        dashboardEnergy: avgDashEnergy,
+                        dashboardRegulation: avgDashReg
                     )
                     dailyData.append(aggregatedSession)
                 }
@@ -985,21 +947,29 @@ struct StressView: View {
                 if daySamples.isEmpty {
                     dailyData.append(stressPlaceholderSession(startOfDay: startOfDay))
                 } else {
-                    let avgSDNN = daySamples.map { $0.sdnn }.reduce(0, +) / Double(daySamples.count)
-                    let avgRMSSD = daySamples.map { $0.rmssd }.reduce(0, +) / Double(daySamples.count)
-                    let avgCombined = daySamples.map { $0.combinedHRV }.reduce(0, +) / Double(daySamples.count)
-                    let avgLFHF = daySamples.map { $0.lfHfProxy }.reduce(0, +) / Double(daySamples.count)
-                    let avgAdjusted = daySamples.map { $0.adjustedHRV }.reduce(0, +) / Double(daySamples.count)
-                    let avgStress = daySamples.map { $0.stress }.reduce(0, +) / Double(daySamples.count)
-                    let avgEnergy = daySamples.map { $0.energy }.reduce(0, +) / Double(daySamples.count)
-                    let avgBalance = daySamples.map { $0.nervousBalance }.reduce(0, +) / Double(daySamples.count)
-                    let avgBaseline = daySamples.map { $0.baselineEMA }.reduce(0, +) / Double(daySamples.count)
-                    let avgCV = daySamples.map { $0.coefficientOfVariation }.reduce(0, +) / Double(daySamples.count)
-                    
+                    let n = Double(daySamples.count)
+                    let avgSDNN = daySamples.map { $0.sdnn }.reduce(0, +) / n
+                    let avgRMSSD = daySamples.map { $0.rmssd }.reduce(0, +) / n
+                    let avgCombined = daySamples.map { $0.combinedHRV }.reduce(0, +) / n
+                    let avgLFHF = daySamples.map { $0.lfHfProxy }.reduce(0, +) / n
+                    let avgAdjusted = daySamples.map { $0.adjustedHRV }.reduce(0, +) / n
+                    let avgStress = daySamples.map { $0.stress }.reduce(0, +) / n
+                    let avgEnergy = daySamples.map { $0.energy }.reduce(0, +) / n
+                    let avgBalance = daySamples.map { $0.nervousBalance }.reduce(0, +) / n
+                    let avgBaseline = daySamples.map { $0.baselineEMA }.reduce(0, +) / n
+                    let avgCV = daySamples.map { $0.coefficientOfVariation }.reduce(0, +) / n
+                    let avgReadiness = daySamples.map { $0.readinessBaselineSdnn }.reduce(0, +) / n
+                    let avgDashStress = daySamples.map { $0.dashboardStress }.reduce(0, +) / n
+                    let avgDashEnergy = daySamples.map { $0.dashboardEnergy }.reduce(0, +) / n
+                    let avgDashReg = daySamples.map { $0.dashboardRegulation }.reduce(0, +) / n
+                    let hbCount = daySamples.filter { $0.rmssdSource == .heartbeatDerived }.count
+                    let aggRmssdSource: StressRmssdSource = Double(hbCount) >= Double(daySamples.count) * 0.5 ? .heartbeatDerived : .sdnnProxy
+
                     let aggregatedSession = HRVSession(
                         date: startOfDay,
                         sdnn: avgSDNN,
                         rmssd: avgRMSSD,
+                        rmssdSource: aggRmssdSource,
                         combinedHRV: avgCombined,
                         lfHfProxy: avgLFHF,
                         coefficientOfVariation: avgCV,
@@ -1007,7 +977,11 @@ struct StressView: View {
                         stress: avgStress,
                         energy: avgEnergy,
                         nervousBalance: avgBalance,
-                        baselineEMA: avgBaseline
+                        baselineEMA: avgBaseline,
+                        readinessBaselineSdnn: avgReadiness,
+                        dashboardStress: avgDashStress,
+                        dashboardEnergy: avgDashEnergy,
+                        dashboardRegulation: avgDashReg
                     )
                     dailyData.append(aggregatedSession)
                 }
@@ -1074,117 +1048,6 @@ struct StressView: View {
             }
         }
         
-        // MARK: - Baseline Calculation
-        
-        func computeBaseline(_ values: [Double]) -> Double {
-            let sorted = values.sorted()
-            let mid = sorted.count / 2
-            
-            if sorted.count % 2 == 0 {
-                return (sorted[mid - 1] + sorted[mid]) / 2
-            } else {
-                return sorted[mid]
-            }
-        }
-        
-        func estimateRMSSD(from sdnn: Double) -> Double {
-            return sdnn * 0.85
-        }
-        
-        func coefficientOfVariation(_ values: [Double]) -> Double {
-            
-            let mean = values.reduce(0,+) / Double(values.count)
-            
-            let variance = values.map {
-                pow($0 - mean, 2)
-            }.reduce(0,+) / Double(values.count)
-            
-            let sd = sqrt(variance)
-            
-            return sd / mean
-        }
-        
-        func removeOutliers(_ values: [Double], baseline: Double) -> [Double] {
-            
-            guard values.count > 4 else { return values }
-            
-            let mean = values.reduce(0,+) / Double(values.count)
-            
-            let variance = values.map {
-                pow($0 - mean,2)
-            }.reduce(0,+) / Double(values.count)
-            
-            let sd = sqrt(variance)
-            
-            // Use baseline-adaptive threshold (e.g. 2 * baseline * 0.1)
-            let threshold = max(sd * 2, baseline * 0.1)
-            
-            return values.filter {
-                abs($0 - mean) < threshold
-            }
-        }
-        
-        func isMeasurementQualityGood(_ values: [Double]) -> Bool {
-            
-            guard values.count >= 3 else { return false }
-            
-            let cv = coefficientOfVariation(values)
-            
-            // Apple Watch HRV is noisy
-            if cv > 0.60 { return false }
-            
-            let minVal = values.min() ?? 0
-            let maxVal = values.max() ?? 0
-            
-            // artifact detection
-            if maxVal - minVal > 120 { return false }
-            
-            return true
-        }
-        
-        // MARK: - Stress Score
-        
-        func calculateStress(current: Double, baseline: Double, lfHfProxy: Double) -> Double {
-            
-            let score = (lfHfProxy - 0.5) * 80
-            
-            return min(max(score,0),100)
-        }
-        
-        // MARK: - Nervous Balance
-        
-        func calculateNervousBalance(current: Double, baseline: Double) -> Double {
-            
-            let ratio = current / baseline
-            
-            let score = ratio * 100
-            
-            return min(max(score,0),120)
-        }
-        
-        func calculateEnergy(current: Double, baseline: Double, values: [Double]) -> Double {
-            
-            let recovery = (current / baseline)
-            
-            let cv = coefficientOfVariation(values)
-            
-            let stability = max(0, 1 - cv)
-            
-            let energy = recovery * 0.7 + stability * 0.3
-            
-            return min(max(energy * 100,0),100)
-        }
-        
-        func combinedHRV(current: Double, baseline: Double) -> Double {
-            let rmssdCurrent = estimateRMSSD(from: current)
-            let rmssdBaseline = estimateRMSSD(from: baseline)
-            
-            // SDNN is current and baseline as is
-            // Combine weighted 0.7 RMSSD + 0.3 SDNN (using current and baseline as needed)
-            return 0.7 * rmssdCurrent + 0.3 * current
-        }
-    }
-    
     // MARK: - HStack Metrics Card for Stress/Energy/Balance
     struct HStackMetricsCard: View {
         let stressScore: Double
@@ -1250,7 +1113,144 @@ struct StressView: View {
             .frame(maxWidth: .infinity)
         }
     }
+}
 
+
+// MARK: - Stress session pipeline (shared iOS / Catalyst)
+
+enum StressSessionPipeline {
+    struct SdnnPoint {
+        let sampleUUID: UUID?
+        let date: Date
+        let sdnn: Double
+    }
+
+    static func buildSessions(
+        points: [SdnnPoint],
+        heartbeatRmssdByUUID: [UUID: Double],
+        calendar: Calendar = .current
+    ) -> [StressView.HRVSession] {
+        var hrvSessions: [StressView.HRVSession] = []
+        var sdnnValues: [Double] = []
+        var baselineEMA: Double?
+        var morningBaselineEMA: Double?
+        var prevHRVs: [Double] = []
+        let alpha = 0.3
+
+        for point in points {
+            let sdnn = point.sdnn
+            let date = point.date
+            sdnnValues.append(sdnn)
+
+            let window = Array(sdnnValues.suffix(10))
+            let baselineForOutlier = computeBaseline(window)
+            let cleaned = removeOutliers(window, baseline: baselineForOutlier)
+            let baselineSnapshot = baselineEMA ?? computeBaseline(cleaned)
+
+            if let prev = baselineEMA {
+                baselineEMA = alpha * sdnn + (1 - alpha) * prev
+            } else {
+                baselineEMA = sdnn
+            }
+
+            prevHRVs.append(sdnn)
+            if prevHRVs.count > 10 { prevHRVs.removeFirst() }
+
+            let hour = calendar.component(.hour, from: date)
+            if hour >= 4 && hour <= 11 {
+                if let prev = morningBaselineEMA {
+                    morningBaselineEMA = alpha * sdnn + (1 - alpha) * prev
+                } else {
+                    morningBaselineEMA = sdnn
+                }
+            }
+
+            let readinessBaselineSdnn = morningBaselineEMA ?? baselineSnapshot
+
+            let hbRmssdMs: Double?
+            if let id = point.sampleUUID {
+                hbRmssdMs = heartbeatRmssdByUUID[id]
+            } else {
+                hbRmssdMs = nil
+            }
+            let rmEff = StressHRVTransforms.rmssdEffective(sdnn: sdnn, heartbeatRmssdMs: hbRmssdMs)
+
+            let combinedCurrent = StressHRVTransforms.combinedHRV(sdnn: sdnn, rmssdEffective: rmEff.rmssd)
+            let cv = StressHRVTransforms.coefficientOfVariation(cleaned)
+            let adjustedCurrent = combinedCurrent * (1 - cv)
+
+            let intradayBaselineRMSSD = StressHRVTransforms.estimateRMSSDFromSDNN(baselineSnapshot)
+            let combinedBaselineIntraday = StressHRVTransforms.combinedHRV(sdnn: baselineSnapshot, rmssdEffective: intradayBaselineRMSSD)
+
+            let lfIntraday = StressHRVTransforms.lfHfProxy(baselineRMSSD: intradayBaselineRMSSD, currentRMSSD: rmEff.rmssd)
+            let stress = StressHRVTransforms.calculateStress(lfHfProxy: lfIntraday)
+            let energy = StressHRVTransforms.calculateEnergy(
+                currentAdjustedCombined: adjustedCurrent,
+                readinessBaselineCombined: combinedBaselineIntraday,
+                windowValues: cleaned
+            )
+            let nervousBalance = StressHRVTransforms.calculateRegulationScore(
+                currentCombined: combinedCurrent,
+                readinessBaselineCombined: combinedBaselineIntraday
+            )
+
+            let readinessBaselineRMSSD = StressHRVTransforms.estimateRMSSDFromSDNN(readinessBaselineSdnn)
+            let combinedReadinessBaseline = StressHRVTransforms.combinedHRV(sdnn: readinessBaselineSdnn, rmssdEffective: readinessBaselineRMSSD)
+            let lfReadiness = StressHRVTransforms.lfHfProxy(baselineRMSSD: readinessBaselineRMSSD, currentRMSSD: rmEff.rmssd)
+            let dashStress = StressHRVTransforms.calculateStress(lfHfProxy: lfReadiness)
+            let dashEnergy = StressHRVTransforms.calculateEnergy(
+                currentAdjustedCombined: adjustedCurrent,
+                readinessBaselineCombined: combinedReadinessBaseline,
+                windowValues: cleaned
+            )
+            let dashRegulation = StressHRVTransforms.calculateRegulationScore(
+                currentCombined: combinedCurrent,
+                readinessBaselineCombined: combinedReadinessBaseline
+            )
+
+            let session = StressView.HRVSession(
+                date: date,
+                sdnn: sdnn,
+                rmssd: rmEff.rmssd,
+                rmssdSource: rmEff.source,
+                combinedHRV: combinedCurrent,
+                lfHfProxy: lfIntraday,
+                coefficientOfVariation: cv,
+                adjustedHRV: adjustedCurrent,
+                stress: stress,
+                energy: energy,
+                nervousBalance: nervousBalance,
+                baselineEMA: baselineEMA ?? baselineSnapshot,
+                readinessBaselineSdnn: readinessBaselineSdnn,
+                dashboardStress: dashStress,
+                dashboardEnergy: dashEnergy,
+                dashboardRegulation: dashRegulation
+            )
+            hrvSessions.append(session)
+        }
+
+        return hrvSessions
+    }
+
+    private static func computeBaseline(_ values: [Double]) -> Double {
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count % 2 == 0 {
+            return (sorted[mid - 1] + sorted[mid]) / 2
+        } else {
+            return sorted[mid]
+        }
+    }
+
+    private static func removeOutliers(_ values: [Double], baseline: Double) -> [Double] {
+        guard values.count > 4 else { return values }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let variance = values.map { pow($0 - mean, 2) }.reduce(0, +) / Double(values.count)
+        let sd = sqrt(variance)
+        let threshold = max(sd * 2, baseline * 0.1)
+        return values.filter { abs($0 - mean) < threshold }
+    }
+}
 
 // MARK: - Filter Button Group
 struct FilterButtonGroup: View {

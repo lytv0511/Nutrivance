@@ -97,6 +97,7 @@ extension HealthMetricRecordPayload {
 // MARK: - Full engine blobs (CKAsset) for cross-device graphs
 
 /// Full-resolution HRV SDNN samples (ms) for Stress / charts on Mac Catalyst (not the KVS-trimmed snapshot).
+/// RMSSD derived from heartbeat series is computed on iOS before upload; Catalyst stays SDNN→proxy until the blob optionally carries beat-derived RMSSD.
 struct EngineHRVSamplesBlob: Codable, Sendable {
     var updatedAt: Date
     var samples: [EngineHRVSamplePoint]

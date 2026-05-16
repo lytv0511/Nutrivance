@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		E9F0A0022F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F0A0012F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift */; };
+		E9F0B1062FAA100100ABCDEF /* StressHRVTransformsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F0B1052FAA100100ABCDEF /* StressHRVTransformsTests.swift */; };
 		151F147A2D77BE1900B51F88 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 151F14792D77BE1900B51F88 /* UIKit.framework */; };
 		15741EA52CEFE2FB00CDE4F9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 15741EA42CEFE2F400CDE4F9 /* README.md */; };
 		15753FA52F74D9CA00007262 /* Nutrivance for Apple Watch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 15753F9B2F74D9C900007262 /* Nutrivance for Apple Watch.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -127,6 +128,8 @@
 		15C8233A2F9C5D4700FECFDC /* StrainModelContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96542F95EDB0007CDCDB /* StrainModelContext.swift */; };
 		15C8233B2F9C5D4700FECFDC /* StrainRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */; };
 		15C8233C2F9C5D4700FECFDC /* StressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96562F95EDB0007CDCDB /* StressView.swift */; };
+		E9F0B1022FAA100100ABCDEF /* StressHRVTransforms.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F0B1012FAA100100ABCDEF /* StressHRVTransforms.swift */; };
+		E9F0B1042FAA100100ABCDEF /* StressHeartbeatRmssd.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F0B1032FAA100100ABCDEF /* StressHeartbeatRmssd.swift */; };
 		A7E4B2D22F95EDB0007CDC02 /* BodyStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E4B2D12F95EDB0007CDC01 /* BodyStatusView.swift */; };
 		A7E4B2E22F95EDB0007CDC04 /* RecoveryPhysiologyModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E4B2E12F95EDB0007CDC03 /* RecoveryPhysiologyModel.swift */; };
 		15C8233D2F9C5D4700FECFDC /* SubcategoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */; };
@@ -328,6 +331,8 @@
 		159A96542F95EDB0007CDCDB /* StrainModelContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrainModelContext.swift; sourceTree = "<group>"; };
 		159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrainRecoveryView.swift; sourceTree = "<group>"; };
 		159A96562F95EDB0007CDCDB /* StressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressView.swift; sourceTree = "<group>"; };
+		E9F0B1012FAA100100ABCDEF /* StressHRVTransforms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressHRVTransforms.swift; sourceTree = "<group>"; };
+		E9F0B1032FAA100100ABCDEF /* StressHeartbeatRmssd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressHeartbeatRmssd.swift; sourceTree = "<group>"; };
 		A7E4B2D12F95EDB0007CDC01 /* BodyStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyStatusView.swift; sourceTree = "<group>"; };
 		159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubcategoryDetailView.swift; sourceTree = "<group>"; };
 		159A96582F95EDB0007CDCDB /* SubjectiveDailyEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubjectiveDailyEntry.swift; sourceTree = "<group>"; };
@@ -380,6 +385,7 @@
 		15D7FFB92CD1426A0048E050 /* NutrivanceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NutrivanceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		15D7FFBD2CD1426A0048E050 /* NutrivanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITests.swift; sourceTree = "<group>"; };
 		E9F0A0012F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPhysiologyModelTests.swift; sourceTree = "<group>"; };
+		E9F0B1052FAA100100ABCDEF /* StressHRVTransformsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressHRVTransformsTests.swift; sourceTree = "<group>"; };
 		15D7FFBF2CD1426A0048E050 /* NutrivanceUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutrivanceUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		15F581EA2F7763BE00F27319 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -776,6 +782,8 @@
 				159A96552F95EDB0007CDCDB /* StrainRecoveryView.swift */,
 				A7E4B2D12F95EDB0007CDC01 /* BodyStatusView.swift */,
 				159A96562F95EDB0007CDCDB /* StressView.swift */,
+				E9F0B1012FAA100100ABCDEF /* StressHRVTransforms.swift */,
+				E9F0B1032FAA100100ABCDEF /* StressHeartbeatRmssd.swift */,
 				159A96572F95EDB0007CDCDB /* SubcategoryDetailView.swift */,
 				159A96582F95EDB0007CDCDB /* SubjectiveDailyEntry.swift */,
 				159A96592F95EDB0007CDCDB /* SubjectiveDailyEntryView.swift */,
@@ -800,6 +808,7 @@
 			isa = PBXGroup;
 			children = (
 				E9F0A0012F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift */,
+				E9F0B1052FAA100100ABCDEF /* StressHRVTransformsTests.swift */,
 			);
 			path = NutrivanceTests;
 			sourceTree = "<group>";
@@ -1119,6 +1128,8 @@
 				15C8233B2F9C5D4700FECFDC /* StrainRecoveryView.swift in Sources */,
 				A7E4B2D22F95EDB0007CDC02 /* BodyStatusView.swift in Sources */,
 				15C8233C2F9C5D4700FECFDC /* StressView.swift in Sources */,
+				E9F0B1022FAA100100ABCDEF /* StressHRVTransforms.swift in Sources */,
+				E9F0B1042FAA100100ABCDEF /* StressHeartbeatRmssd.swift in Sources */,
 				15C8233D2F9C5D4700FECFDC /* SubcategoryDetailView.swift in Sources */,
 				15C8233E2F9C5D4700FECFDC /* SubjectiveDailyEntry.swift in Sources */,
 				15C8233F2F9C5D4700FECFDC /* SubjectiveDailyEntryView.swift in Sources */,
@@ -1143,6 +1154,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E9F0A0022F9A210100ABCDEF /* RecoveryPhysiologyModelTests.swift in Sources */,
+				E9F0B1062FAA100100ABCDEF /* StressHRVTransformsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1523,7 +1535,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 27TF38C56Z;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.NutrivanceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1542,7 +1554,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 27TF38C56Z;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = None.NutrivanceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
