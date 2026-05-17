@@ -39,20 +39,28 @@ struct ContentView: View {
     @SceneStorage("startup_curtain_dismissed") private var hasDismissedStartupCurtain = false
     @State private var showStartupCurtain = true
 
-    private var startupStatusText: String {
-        let hasCoreHealthBootstrap =
-            engine.hasHydratedCachedMetrics ||
-            !engine.dailyHRV.isEmpty ||
-            !engine.dailyRestingHeartRate.isEmpty ||
-            !engine.sleepStages.isEmpty
+    private var hasCoreHealthBootstrap: Bool {
+        engine.hasHydratedCachedMetrics ||
+        !engine.dailyHRV.isEmpty ||
+        !engine.dailyRestingHeartRate.isEmpty ||
+        !engine.sleepStages.isEmpty
+    }
 
+    private var isStartupBootstrapReady: Bool {
+        if engine.requiresInitialFullSync {
+            return engine.hasInitializedWorkoutAnalytics
+        }
+        return engine.hasHydratedCachedMetrics || engine.hasInitializedWorkoutAnalytics || hasCoreHealthBootstrap
+    }
+
+    private var startupStatusText: String {
         if !engine.hasHydratedCachedMetrics && !engine.hasInitializedWorkoutAnalytics {
             return "Loading cached health data..."
         }
-        if engine.isSyncingStartupWorkoutCoverage {
+        if engine.isSyncingStartupWorkoutCoverage, !engine.hasInitializedWorkoutAnalytics {
             return "Fetching workouts..."
         }
-        if engine.isRefreshingCachedMetrics {
+        if engine.isRefreshingCachedMetrics, !engine.hasHydratedCachedMetrics {
             return "Updating metrics..."
         }
         if !engine.hasInitializedWorkoutAnalytics {
@@ -61,7 +69,23 @@ struct ContentView: View {
         if !hasCoreHealthBootstrap {
             return "Updating recovery metrics..."
         }
-        return "Finalizing startup..."
+        return "Opening Nutrivance..."
+    }
+
+    private func dismissStartupCurtain() {
+        guard !hasDismissedStartupCurtain else {
+            showStartupCurtain = false
+            return
+        }
+        withAnimation(.easeOut(duration: 0.22)) {
+            hasDismissedStartupCurtain = true
+            showStartupCurtain = false
+        }
+    }
+
+    private func tryDismissStartupCurtainIfReady() {
+        guard showStartupCurtain, !hasDismissedStartupCurtain, isStartupBootstrapReady else { return }
+        dismissStartupCurtain()
     }
     
     var body: some View {
@@ -111,62 +135,37 @@ struct ContentView: View {
             }
 
             #if targetEnvironment(macCatalyst)
-            // HealthKit is unavailable; don’t block the UI on iOS-style bootstrap or long polling.
-            try? await Task.sleep(nanoseconds: 280_000_000)
-            withAnimation(.easeOut(duration: 0.32)) {
-                hasDismissedStartupCurtain = true
-                showStartupCurtain = false
-            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            dismissStartupCurtain()
             return
             #endif
 
-            try? await Task.sleep(nanoseconds: 120_000_000)
-
-            // Early exit when cached data already exists - no need to show curtain
-            let hasAllCachedData = engine.hasHydratedCachedMetrics && engine.hasInitializedWorkoutAnalytics
-            if hasAllCachedData {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    hasDismissedStartupCurtain = true
-                    showStartupCurtain = false
-                }
+            // One frame so the curtain can appear, then dismiss as soon as cache metadata is ready.
+            try? await Task.sleep(nanoseconds: 32_000_000)
+            if isStartupBootstrapReady {
+                dismissStartupCurtain()
                 return
             }
 
-            let minimumCurtainDuration: UInt64 = {
-                if engine.hasHydratedCachedMetrics { return 600_000_000 }
-                if engine.hasInitializedWorkoutAnalytics { return 900_000_000 }
-                return 2_000_000_000
-            }()
-            let maximumCurtainDuration: UInt64 = 12_000_000_000
-            let pollInterval: UInt64 = 200_000_000
-
-            let startedAt = Date()
-            try? await Task.sleep(nanoseconds: minimumCurtainDuration)
-
-            while Date().timeIntervalSince(startedAt) < Double(maximumCurtainDuration) / 1_000_000_000 {
-                let hasWorkoutBootstrap = engine.hasInitializedWorkoutAnalytics
-                let hasCoreHealthBootstrap =
-                    engine.hasHydratedCachedMetrics ||
-                    !engine.dailyHRV.isEmpty ||
-                    !engine.dailyRestingHeartRate.isEmpty ||
-                    !engine.sleepStages.isEmpty
-
-                if engine.requiresInitialFullSync {
-                    if hasWorkoutBootstrap && !engine.isSyncingStartupWorkoutCoverage {
-                        break
-                    }
-                } else if (hasWorkoutBootstrap || hasCoreHealthBootstrap) && !engine.isSyncingStartupWorkoutCoverage {
-                    break
+            let deadline = Date().addingTimeInterval(4)
+            while Date() < deadline {
+                if isStartupBootstrapReady {
+                    dismissStartupCurtain()
+                    return
                 }
-
-                try? await Task.sleep(nanoseconds: pollInterval)
+                try? await Task.sleep(nanoseconds: 48_000_000)
             }
 
-            try? await Task.sleep(nanoseconds: 100_000_000)  // Reduced from 500ms to 100ms
-            withAnimation(.easeOut(duration: 0.35)) {
-                hasDismissedStartupCurtain = true
-                showStartupCurtain = false
-            }
+            dismissStartupCurtain()
+        }
+        .onChange(of: engine.hasHydratedCachedMetrics) { _, _ in
+            tryDismissStartupCurtainIfReady()
+        }
+        .onChange(of: engine.hasInitializedWorkoutAnalytics) { _, _ in
+            tryDismissStartupCurtainIfReady()
+        }
+        .onChange(of: engine.requiresInitialFullSync) { _, _ in
+            tryDismissStartupCurtainIfReady()
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active, hasDismissedStartupCurtain else { return }

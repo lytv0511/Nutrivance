@@ -37,10 +37,11 @@ final class StressHRVTransformsTests: XCTestCase {
         XCTAssertLessThan(low, high)
     }
 
-    func testRegulationAllowsHeadroomBeyondLegacy120() {
+    func testRegulationUsesSameScaleAsStressAndEnergy() {
         let score = StressHRVTransforms.calculateRegulationScore(currentCombined: 200, readinessBaselineCombined: 50)
-        XCTAssertGreaterThan(score, 120)
-        XCTAssertLessThanOrEqual(score, 250)
+        XCTAssertEqual(score, 100, accuracy: 0.001)
+        let parity = StressHRVTransforms.calculateRegulationScore(currentCombined: 80, readinessBaselineCombined: 80)
+        XCTAssertEqual(parity, 100, accuracy: 0.001)
     }
 
     func testRmssdEffectivePrefersHeartbeatWhenProvided() {

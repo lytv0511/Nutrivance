@@ -29,8 +29,12 @@ struct StressView: View {
         let energy: Double
         let nervousBalance: Double
         let baselineEMA: Double
-        /// Morning-readiness baseline SDNN used for headline dashboard interpretation.
+        /// Morning-readiness baseline SDNN (cold-start falls back to intraday snapshot).
         let readinessBaselineSdnn: Double
+        /// Combined HRV baseline for headline scores — not below intraday snapshot so afternoon samples aren’t pegged vs depressed morning-only memory.
+        let dashboardCombinedBaseline: Double
+        /// LF/HF proxy for headline Stress (baseline RMSSD leg matches dashboard baseline SDNN).
+        let dashboardLfHfProxy: Double
         let dashboardStress: Double
         let dashboardEnergy: Double
         let dashboardRegulation: Double
@@ -119,6 +123,8 @@ struct StressView: View {
             nervousBalance: 100,
             baselineEMA: 50,
             readinessBaselineSdnn: 50,
+            dashboardCombinedBaseline: StressHRVTransforms.readinessCombinedBaseline(sdnn: 50),
+            dashboardLfHfProxy: 1.0,
             dashboardStress: 50,
             dashboardEnergy: 50,
             dashboardRegulation: 100
@@ -218,15 +224,12 @@ struct StressView: View {
                             
                             // Current/Selected metrics card (only show if selected)
                             if let selected = selectedSession {
-                                HStackMetricsCard(
-                                    stressScore: selected.dashboardStress,
-                                    stressBaseline: 50,
-                                    energyScore: selected.dashboardEnergy,
-                                    energyBaseline: 50,
-                                    nervousBalance: selected.dashboardRegulation,
-                                    nervousBalanceBaseline: 150
-                                )
-                                .padding(.horizontal)
+                                StressHeadlineMetricsCard(session: selected)
+                                    .padding(.horizontal)
+
+                                StressScoresExplanation(session: selected)
+                                    .padding(.horizontal)
+
                                 
                                 // Show detailed metric cards for selected point
                                 LazyVGrid(columns: [GridItem(.flexible())], spacing: 22) {
@@ -257,14 +260,7 @@ struct StressView: View {
                                         unit: "",
                                         explanation: "Combined HRV weights beat‑to‑beat variation (~70%) with SDNN (~30%). Charts favor continuity against your rolling intraday baseline; the headline cards emphasize interpretation versus morning‑readiness context."
                                     )
-                                    MetricCard(
-                                        title: "LF/HF Proxy",
-                                        symbol: "arrow.left.arrow.right",
-                                        currentValue: selected.lfHfProxy,
-                                        baselineValue: 1.0,
-                                        unit: "",
-                                        explanation: "The LF/HF proxy compares short‑term HRV against your morning‑readiness baseline (when available). Near low‑stress alignment sits close to 1; sympathetic skew pushes it higher. Stress is calibrated so baseline‑aligned physiology reads as genuinely low stress—not a fixed mid‑score."
-                                    )
+                                    StressLfHfProxiesCard(session: selected)
                                     MetricCard(
                                         title: "Adjusted HRV",
                                         symbol: "shield.lefthalf.fill",
@@ -806,9 +802,11 @@ struct StressView: View {
                     let avgBaseline = hourSamples.map { $0.baselineEMA }.reduce(0, +) / n
                     let avgCV = hourSamples.map { $0.coefficientOfVariation }.reduce(0, +) / n
                     let avgReadiness = hourSamples.map { $0.readinessBaselineSdnn }.reduce(0, +) / n
+                    let avgDashboardCombined = hourSamples.map { $0.dashboardCombinedBaseline }.reduce(0, +) / n
                     let avgDashStress = hourSamples.map { $0.dashboardStress }.reduce(0, +) / n
                     let avgDashEnergy = hourSamples.map { $0.dashboardEnergy }.reduce(0, +) / n
                     let avgDashReg = hourSamples.map { $0.dashboardRegulation }.reduce(0, +) / n
+                    let avgDashLf = hourSamples.map { $0.dashboardLfHfProxy }.reduce(0, +) / n
                     let hbCount = hourSamples.filter { $0.rmssdSource == .heartbeatDerived }.count
                     let aggRmssdSource: StressRmssdSource = Double(hbCount) >= Double(hourSamples.count) * 0.5 ? .heartbeatDerived : .sdnnProxy
 
@@ -826,6 +824,8 @@ struct StressView: View {
                         nervousBalance: avgBalance,
                         baselineEMA: avgBaseline,
                         readinessBaselineSdnn: avgReadiness,
+                        dashboardCombinedBaseline: avgDashboardCombined,
+                        dashboardLfHfProxy: avgDashLf,
                         dashboardStress: avgDashStress,
                         dashboardEnergy: avgDashEnergy,
                         dashboardRegulation: avgDashReg
@@ -878,9 +878,11 @@ struct StressView: View {
                     let avgBaseline = daySamples.map { $0.baselineEMA }.reduce(0, +) / n
                     let avgCV = daySamples.map { $0.coefficientOfVariation }.reduce(0, +) / n
                     let avgReadiness = daySamples.map { $0.readinessBaselineSdnn }.reduce(0, +) / n
+                    let avgDashboardCombined = daySamples.map { $0.dashboardCombinedBaseline }.reduce(0, +) / n
                     let avgDashStress = daySamples.map { $0.dashboardStress }.reduce(0, +) / n
                     let avgDashEnergy = daySamples.map { $0.dashboardEnergy }.reduce(0, +) / n
                     let avgDashReg = daySamples.map { $0.dashboardRegulation }.reduce(0, +) / n
+                    let avgDashLf = daySamples.map { $0.dashboardLfHfProxy }.reduce(0, +) / n
                     let hbCount = daySamples.filter { $0.rmssdSource == .heartbeatDerived }.count
                     let aggRmssdSource: StressRmssdSource = Double(hbCount) >= Double(daySamples.count) * 0.5 ? .heartbeatDerived : .sdnnProxy
 
@@ -898,6 +900,8 @@ struct StressView: View {
                         nervousBalance: avgBalance,
                         baselineEMA: avgBaseline,
                         readinessBaselineSdnn: avgReadiness,
+                        dashboardCombinedBaseline: avgDashboardCombined,
+                        dashboardLfHfProxy: avgDashLf,
                         dashboardStress: avgDashStress,
                         dashboardEnergy: avgDashEnergy,
                         dashboardRegulation: avgDashReg
@@ -959,9 +963,11 @@ struct StressView: View {
                     let avgBaseline = daySamples.map { $0.baselineEMA }.reduce(0, +) / n
                     let avgCV = daySamples.map { $0.coefficientOfVariation }.reduce(0, +) / n
                     let avgReadiness = daySamples.map { $0.readinessBaselineSdnn }.reduce(0, +) / n
+                    let avgDashboardCombined = daySamples.map { $0.dashboardCombinedBaseline }.reduce(0, +) / n
                     let avgDashStress = daySamples.map { $0.dashboardStress }.reduce(0, +) / n
                     let avgDashEnergy = daySamples.map { $0.dashboardEnergy }.reduce(0, +) / n
                     let avgDashReg = daySamples.map { $0.dashboardRegulation }.reduce(0, +) / n
+                    let avgDashLf = daySamples.map { $0.dashboardLfHfProxy }.reduce(0, +) / n
                     let hbCount = daySamples.filter { $0.rmssdSource == .heartbeatDerived }.count
                     let aggRmssdSource: StressRmssdSource = Double(hbCount) >= Double(daySamples.count) * 0.5 ? .heartbeatDerived : .sdnnProxy
 
@@ -979,6 +985,8 @@ struct StressView: View {
                         nervousBalance: avgBalance,
                         baselineEMA: avgBaseline,
                         readinessBaselineSdnn: avgReadiness,
+                        dashboardCombinedBaseline: avgDashboardCombined,
+                        dashboardLfHfProxy: avgDashLf,
                         dashboardStress: avgDashStress,
                         dashboardEnergy: avgDashEnergy,
                         dashboardRegulation: avgDashReg
@@ -1048,71 +1056,223 @@ struct StressView: View {
             }
         }
         
-    // MARK: - HStack Metrics Card for Stress/Energy/Balance
-    struct HStackMetricsCard: View {
-        let stressScore: Double
-        let stressBaseline: Double
-        let energyScore: Double
-        let energyBaseline: Double
-        let nervousBalance: Double
-        let nervousBalanceBaseline: Double
+    // MARK: - Stress headline + explainability
         
-        var body: some View {
-            HStack(spacing: 0) {
-                metricSection(
-                    symbol: "flame",
-                    title: "Stress",
-                    value: Int(stressScore),
-                    baseline: Int(stressBaseline)
-                )
-                Divider()
-                    .frame(width: 1)
-                    .background(Color.secondary.opacity(0.2))
-                    .padding(.vertical, 12)
-                metricSection(
-                    symbol: "bolt",
-                    title: "Energy",
-                    value: Int(energyScore),
-                    baseline: Int(energyBaseline)
-                )
-                Divider()
-                    .frame(width: 1)
-                    .background(Color.secondary.opacity(0.2))
-                    .padding(.vertical, 12)
-                metricSection(
-                    symbol: "heart",
-                    title: "Regulation",
-                    value: Int(nervousBalance),
-                    baseline: Int(nervousBalanceBaseline)
-                )
+        struct StressHeadlineMetricsCard: View {
+            let session: StressView.HRVSession
+            
+            /// Combined HRV baseline used for headline Stress/Energy/Regulation (matches pipeline blending).
+            private var headlineBaseline: Double {
+                session.dashboardCombinedBaseline
             }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(.ultraThinMaterial)
-            )
-            .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 2)
+            
+            private var measurable: Bool {
+                session.sdnn > 0.001
+            }
+            
+            var body: some View {
+                VStack(spacing: 8) {
+                    HStack(spacing: 0) {
+                    headlineColumn(
+                        symbol: "flame",
+                        title: "Stress",
+                        subtitle: nil,
+                        value: session.dashboardStress,
+                        footnote: measurable
+                            ? String(format: "proxy %.2f", session.dashboardLfHfProxy)
+                            : "—"
+                    )
+                    Divider()
+                        .frame(width: 1)
+                        .background(Color.secondary.opacity(0.2))
+                        .padding(.vertical, 12)
+                    headlineColumn(
+                        symbol: "bolt.fill",
+                        title: "Energy",
+                        subtitle: "Autonomic battery",
+                        value: session.dashboardEnergy,
+                        footnote: measurable ? relativeToMorningBaseline : "—"
+                    )
+                    Divider()
+                        .frame(width: 1)
+                        .background(Color.secondary.opacity(0.2))
+                        .padding(.vertical, 12)
+                    headlineColumn(
+                        symbol: "heart.circle.fill",
+                        title: "Regulation",
+                        subtitle: nil,
+                        value: session.dashboardRegulation,
+                        footnote: measurable ? "vs baseline ≈ 100" : "—"
+                    )
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(.ultraThinMaterial)
+                    )
+                    .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 2)
+
+                    Text("Each headline score is on a 0–100 scale.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            
+            private var relativeToMorningBaseline: String {
+                guard headlineBaseline > 1e-9 else { return "—" }
+                let ratio = session.adjustedHRV / headlineBaseline
+                return String(format: "adj. HRV %.0f%% of baseline", min(max(ratio * 100, 0), 999))
+            }
+            
+            @ViewBuilder
+            private func headlineColumn(symbol: String, title: String, subtitle: String?, value: Double, footnote: String) -> some View {
+                VStack(spacing: 6) {
+                    Image(systemName: symbol)
+                        .font(.title2)
+                        .foregroundStyle(Color.accentColor)
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
+                    Text("\(Int(min(max(value.rounded(), 0), 100))))")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                    Text(footnote)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
         
-        @ViewBuilder
-        private func metricSection(symbol: String, title: String, value: Int, baseline: Int) -> some View {
-            VStack(spacing: 4) {
-                Image(systemName: symbol)
-                    .font(.title2)
-                    .foregroundColor(.accentColor)
-                Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("\(value)")
-                    .font(.system(size: 40, weight: .bold, design: .rounded))
-                Text("(\(baseline))")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+        struct StressScoresExplanation: View {
+            let session: StressView.HRVSession
+            
+            private var headlineBaseline: Double {
+                session.dashboardCombinedBaseline
             }
-            .frame(maxWidth: .infinity)
+            
+            private var recoveryStability: (recovery: Double, stability: Double) {
+                StressHRVTransforms.energyBlendComponents(
+                    adjustedCombined: session.adjustedHRV,
+                    readinessBaselineCombined: headlineBaseline,
+                    coefficientOfVariation: session.coefficientOfVariation
+                )
+            }
+            
+            private var regulationLinear: Double {
+                StressHRVTransforms.regulationLinearPercent(
+                    currentCombined: session.combinedHRV,
+                    readinessBaselineCombined: headlineBaseline
+                )
+            }
+            
+            private var rmssdNote: String {
+                switch session.rmssdSource {
+                case .heartbeatDerived:
+                    return "Heartbeat‑derived RMSSD."
+                case .sdnnProxy:
+                    return "RMSSD estimated from SDNN (Apple Watch path)."
+                }
+            }
+            
+            var body: some View {
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(
+                            "Stress uses the headline LF/HF proxy versus baseline RMSSD (baseline SDNN is the larger of morning‑window memory and the intraday snapshot so afternoons aren’t compared to an artificially low morning-only SDNN). The score clamps to 0–100 using anchor \(String(format: "%.2f", StressHRVTransforms.stressProxyAnchor)) and scale \(String(format: "%.0f", StressHRVTransforms.stressProxyScale)). Proxy \(String(format: "%.2f", session.dashboardLfHfProxy)) → Stress \(Int(session.dashboardStress))."
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        
+                        Text(
+                            "Energy (autonomic battery) blends recovery = adjusted combined HRV ÷ headline baseline combined HRV (baseline \(String(format: "%.1f", headlineBaseline)) → ratio \(String(format: "%.2f", recoveryStability.recovery))) with stability = 1 − coefficient of variation (\(String(format: "%.2f", recoveryStability.stability))) at 70% / 30%, then ×100 → \(Int(session.dashboardEnergy)). \(rmssdNote)"
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        
+                        Text(
+                            "Regulation is combined HRV ÷ headline baseline combined × 100 (here \(String(format: "%.1f", regulationLinear))), capped 0–100 → \(Int(session.dashboardRegulation)); parity with the headline baseline reads near 100."
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        
+                        Text(
+                            "LF/HF proxy on charts (\(String(format: "%.2f", session.lfHfProxy))) uses the rolling intraday baseline; headline proxy (\(String(format: "%.2f", session.dashboardLfHfProxy))) uses the morning baseline—the Stress number follows the headline value."
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("Why these scores?", systemImage: "questionmark.circle")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(.ultraThinMaterial)
+                )
+            }
         }
-    }
+        
+        struct StressLfHfProxiesCard: View {
+            let session: StressView.HRVSession
+            
+            var body: some View {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .center, spacing: 12) {
+                        Image(systemName: "arrow.left.arrow.right")
+                            .font(.system(size: 28))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 36, height: 36)
+                        Text("LF/HF Proxy")
+                            .bold()
+                            .font(.title3)
+                    }
+                    
+                    proxyRow(label: "Headline (morning baseline)", value: session.dashboardLfHfProxy, caption: "Drives headline Stress")
+                    Divider().opacity(0.35)
+                    proxyRow(label: "Chart (intraday baseline)", value: session.lfHfProxy, caption: "Historical continuity on graphs")
+                    
+                    Text("Both compare baseline RMSSD (morning‑aware, never below the intraday snapshot SDNN) to your effective RMSSD at this sample. Near 1.0 is low sympathetic skew versus that baseline; higher values mean relatively tighter HRV vs baseline.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 20)
+                .padding(.horizontal, 18)
+                .background(
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(.ultraThinMaterial)
+                )
+                .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+            }
+            
+            private func proxyRow(label: String, value: Double, caption: String) -> some View {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.2f · ref 1.00", value))
+                        .bold()
+                        .font(.title2)
+                    Text(caption)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
 }
 
 
@@ -1194,18 +1354,20 @@ enum StressSessionPipeline {
                 readinessBaselineCombined: combinedBaselineIntraday
             )
 
-            let readinessBaselineRMSSD = StressHRVTransforms.estimateRMSSDFromSDNN(readinessBaselineSdnn)
-            let combinedReadinessBaseline = StressHRVTransforms.combinedHRV(sdnn: readinessBaselineSdnn, rmssdEffective: readinessBaselineRMSSD)
-            let lfReadiness = StressHRVTransforms.lfHfProxy(baselineRMSSD: readinessBaselineRMSSD, currentRMSSD: rmEff.rmssd)
+            let dashboardSdnnBaseline = max(readinessBaselineSdnn, baselineSnapshot)
+            let dashboardBaselineRMSSD = StressHRVTransforms.estimateRMSSDFromSDNN(dashboardSdnnBaseline)
+            let combinedDashboardBaseline = StressHRVTransforms.combinedHRV(sdnn: dashboardSdnnBaseline, rmssdEffective: dashboardBaselineRMSSD)
+
+            let lfReadiness = StressHRVTransforms.lfHfProxy(baselineRMSSD: dashboardBaselineRMSSD, currentRMSSD: rmEff.rmssd)
             let dashStress = StressHRVTransforms.calculateStress(lfHfProxy: lfReadiness)
             let dashEnergy = StressHRVTransforms.calculateEnergy(
                 currentAdjustedCombined: adjustedCurrent,
-                readinessBaselineCombined: combinedReadinessBaseline,
+                readinessBaselineCombined: combinedDashboardBaseline,
                 windowValues: cleaned
             )
             let dashRegulation = StressHRVTransforms.calculateRegulationScore(
                 currentCombined: combinedCurrent,
-                readinessBaselineCombined: combinedReadinessBaseline
+                readinessBaselineCombined: combinedDashboardBaseline
             )
 
             let session = StressView.HRVSession(
@@ -1222,6 +1384,8 @@ enum StressSessionPipeline {
                 nervousBalance: nervousBalance,
                 baselineEMA: baselineEMA ?? baselineSnapshot,
                 readinessBaselineSdnn: readinessBaselineSdnn,
+                dashboardCombinedBaseline: combinedDashboardBaseline,
+                dashboardLfHfProxy: lfReadiness,
                 dashboardStress: dashStress,
                 dashboardEnergy: dashEnergy,
                 dashboardRegulation: dashRegulation

@@ -377,6 +377,10 @@ struct ProgramBuilderView: View {
     @State private var showRepositoryDeleteConfirmation = false
     @State private var repositoryDeletePendingID: UUID?
     @State private var repositoryDeletePendingTitle: String = ""
+    @State private var showRepositoryLoadConfirmation = false
+    @State private var repositoryLoadPendingPlan: ProgramWorkoutPlanRecord?
+    @State private var renamingRepositoryPlan: ProgramWorkoutPlanRecord?
+    @State private var renameRepositoryTitleText: String = ""
     @StateObject private var dailyMissionPinStore = DailyMissionPinStore.shared
     @State private var isDailyMissionRepoPinPickerPresented = false
     @State private var isDailyMissionActivityPinPickerPresented = false
@@ -617,6 +621,30 @@ struct ProgramBuilderView: View {
             .sheet(isPresented: $isDailyMissionActivityPinPickerPresented) {
                 dailyMissionActivityPinPickerSheet
             }
+            .sheet(item: $renamingRepositoryPlan) { plan in
+                NavigationStack {
+                    Form {
+                        TextField("Workout title", text: $renameRepositoryTitleText)
+                            .textInputAutocapitalization(.words)
+                    }
+                    .navigationTitle("Rename Workout")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                renamingRepositoryPlan = nil
+                            }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Save") {
+                                planStore.renameRepositoryPlan(id: plan.id, title: renameRepositoryTitleText)
+                                planSyncStatusMessage = "Renamed workout to \(renameRepositoryTitleText.trimmingCharacters(in: .whitespacesAndNewlines))."
+                                renamingRepositoryPlan = nil
+                            }
+                            .disabled(renameRepositoryTitleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
+                }
+            }
             .task(id: coachContextID) {
                 guard presentationStyle == .dailyMission else { return }
                 await planner.refreshCoachAdvice(
@@ -670,6 +698,25 @@ struct ProgramBuilderView: View {
             }
         } message: {
             Text("“\(repositoryDeletePendingTitle)” will be removed from your Workout Repository on all devices. This cannot be undone.")
+        }
+        .confirmationDialog(
+            "Load saved workout?",
+            isPresented: $showRepositoryLoadConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Load into Daily Mission") {
+                if let plan = repositoryLoadPendingPlan {
+                    applyPlan(plan)
+                }
+                repositoryLoadPendingPlan = nil
+            }
+            Button("Cancel", role: .cancel) {
+                repositoryLoadPendingPlan = nil
+            }
+        } message: {
+            if let plan = repositoryLoadPendingPlan {
+                Text("“\(plan.title)” will replace your current Daily Mission builder settings. Any unsaved changes in the builder may be overwritten.")
+            }
         }
         .onReceiveViewControl(.nutrivanceViewControlWorkoutViews) {
             guard navigationState.isGloballyActiveRootTab(.programBuilder) else { return }
@@ -2317,61 +2364,82 @@ Text(stage.displaySummary(usesImperial: self.unitPreferences.resolvedDistanceUni
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(planStore.repositoryPlans) { plan in
-                        let stageRows = repositoryCardStageDetailRows(for: plan)
-                        VStack(alignment: .leading, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(plan.title)
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(.white)
-                                Text(plan.summary)
-                                    .font(.footnote)
-                                    .foregroundStyle(.white.opacity(0.72))
-                                    .lineLimit(2)
-                                Text("Saved \(plan.sourceDeviceLabel) • \(plan.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.white.opacity(0.55))
-
-                                Text(repositoryCardActivityTitles(for: plan).joined(separator: " • "))
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.62))
-                                    .lineLimit(2)
-
-                                if !stageRows.isEmpty {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        ForEach(Array(stageRows.prefix(2).enumerated()), id: \.offset) { _, row in
-                                            Text(row)
-                                                .font(.caption2)
-                                                .foregroundStyle(.white.opacity(0.55))
-                                                .lineLimit(2)
-                                        }
-                                    }
-                                    .padding(.top, 2)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                beginRepositoryStageEdit(plan: plan)
-                            }
-
-                            HStack(spacing: 10) {
-                                Button("Load") {
-                                    applyPlan(plan)
-                                }
-                                .buttonStyle(.glass)
-                                .foregroundStyle(.white)
-
-                                Button("Delete", role: .destructive) {
-                                    repositoryDeletePendingID = plan.id
-                                    repositoryDeletePendingTitle = plan.title
-                                    showRepositoryDeleteConfirmation = true
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                        }
-                        .padding(14)
-                        .background(Color.white.opacity(0.13), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        dailyMissionRepositoryPlanCard(plan)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dailyMissionRepositoryPlanCard(_ plan: ProgramWorkoutPlanRecord) -> some View {
+        let stageRows = repositoryCardStageDetailRows(for: plan)
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(plan.title)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                Text(plan.summary)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(2)
+                Text("Saved \(plan.sourceDeviceLabel) • \(plan.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.55))
+
+                Text(repositoryCardActivityTitles(for: plan).joined(separator: " • "))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(2)
+
+                if !stageRows.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(stageRows.prefix(2).enumerated()), id: \.offset) { _, row in
+                            Text(row)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.55))
+                                .lineLimit(2)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                beginRepositoryStageEdit(plan: plan)
+            }
+
+            HStack(spacing: 10) {
+                Button("Load") {
+                    repositoryLoadPendingPlan = plan
+                    showRepositoryLoadConfirmation = true
+                }
+                .buttonStyle(.glass)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+
+                Button("Delete", role: .destructive) {
+                    repositoryDeletePendingID = plan.id
+                    repositoryDeletePendingTitle = plan.title
+                    showRepositoryDeleteConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.13), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .contextMenu {
+            Button("Rename") {
+                renamingRepositoryPlan = plan
+                renameRepositoryTitleText = plan.title
+            }
+            Button("Delete", role: .destructive) {
+                repositoryDeletePendingID = plan.id
+                repositoryDeletePendingTitle = plan.title
+                showRepositoryDeleteConfirmation = true
             }
         }
     }

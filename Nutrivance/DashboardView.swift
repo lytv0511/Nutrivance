@@ -154,6 +154,303 @@ private enum DashboardSnapshotPersistence {
     }
 }
 
+extension Notification.Name {
+    static let dashboardWorkoutWindowCacheDidUpdate = Notification.Name("dashboardWorkoutWindowCacheDidUpdate")
+}
+
+/// Pre-aggregated 42-day training load + workout preview data for `DashboardView`.
+/// Built from persisted workout analytics entries (no full in-memory hydrate required).
+enum DashboardWorkoutWindowCache {
+    static let coverageDays = 42
+    private static let fileName = "dashboard_workout_window_v1.json"
+    private static let cachedWorkoutUUIDMetadataKey = "NutrivanceCachedWorkoutUUID"
+
+    struct DisplayState: Sendable {
+        let loadByDay: [Date: Double]
+        let workoutsByDay: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]]
+        let updatedAt: Date?
+    }
+
+    private struct Payload: Codable {
+        let schemaVersion: Int
+        let updatedAt: Date
+        let coverageDays: Int
+        let windowStart: Date
+        let windowEnd: Date
+        let loadsByDay: [PersistedDayLoad]
+        let workoutRows: [PersistedWorkoutRow]
+    }
+
+    private struct PersistedDayLoad: Codable {
+        let day: TimeInterval
+        let value: Double
+    }
+
+    private struct PersistedWorkoutRow: Codable {
+        let day: TimeInterval
+        let workoutUUID: String
+        let workoutTypeRawValue: UInt
+        let workoutStartDate: Date
+        let workoutEndDate: Date
+        let workoutDuration: Double
+        let sessionLoad: Double
+        let metTotal: Double?
+        let avgHR: Double?
+        let peakHR: Double?
+        let totalKcal: Double?
+        let distanceMeters: Double?
+        let heartRates: [HealthStateEngine.PersistedWorkoutSeriesPoint]
+        let hrZoneBreakdown: [HealthStateEngine.PersistedWorkoutZoneBreakdown]
+    }
+
+    private static var fileURL: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(fileName)
+    }
+
+    /// Fast path: training-load chart only (no `HKWorkout` stub construction).
+    static func loadLoadsByDay() -> [Date: Double] {
+        guard let url = fileURL,
+              FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
+            return [:]
+        }
+        let calendar = Calendar.current
+        return Dictionary(uniqueKeysWithValues: payload.loadsByDay.map {
+            (calendar.startOfDay(for: Date(timeIntervalSince1970: $0.day)), $0.value)
+        })
+    }
+
+    static func loadDisplayState(includeWorkoutPreviews: Bool = true) -> DisplayState {
+        guard let url = fileURL,
+              FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
+            return DisplayState(loadByDay: [:], workoutsByDay: [:], updatedAt: nil)
+        }
+
+        let calendar = Calendar.current
+        let loadByDay = Dictionary(uniqueKeysWithValues: payload.loadsByDay.map {
+            (calendar.startOfDay(for: Date(timeIntervalSince1970: $0.day)), $0.value)
+        })
+
+        guard includeWorkoutPreviews else {
+            return DisplayState(loadByDay: loadByDay, workoutsByDay: [:], updatedAt: payload.updatedAt)
+        }
+
+        var workoutsByDay: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] = [:]
+        for row in payload.workoutRows {
+            let day = calendar.startOfDay(for: Date(timeIntervalSince1970: row.day))
+            let pair = previewPair(from: row)
+            workoutsByDay[day, default: []].append(pair)
+        }
+        for day in workoutsByDay.keys {
+            workoutsByDay[day] = workoutsByDay[day]?.sorted { $0.workout.startDate > $1.workout.startDate }
+        }
+
+        return DisplayState(loadByDay: loadByDay, workoutsByDay: workoutsByDay, updatedAt: payload.updatedAt)
+    }
+
+    private static let notificationDebounceNanos: UInt64 = 900_000_000
+    private static var pendingNotificationTask: Task<Void, Never>?
+
+    private static func scheduleDashboardUpdateNotification() {
+        pendingNotificationTask?.cancel()
+        pendingNotificationTask = Task {
+            try? await Task.sleep(nanoseconds: notificationDebounceNanos)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                NotificationCenter.default.post(name: .dashboardWorkoutWindowCacheDidUpdate, object: nil)
+            }
+        }
+    }
+
+    static func saveFromEntries(
+        _ entries: [HealthStateEngine.PersistedWorkoutAnalyticsEntry],
+        windowDays: Int = coverageDays
+    ) {
+        guard let url = fileURL else { return }
+        let calendar = Calendar.current
+        let windowEnd = Date()
+        let windowStart = calendar.date(byAdding: .day, value: -windowDays, to: calendar.startOfDay(for: windowEnd)) ?? windowEnd
+        let windowStartDay = calendar.startOfDay(for: windowStart)
+
+        let inWindow = entries.filter { $0.workoutStartDate >= windowStartDay }
+        var loadByDay: [Date: Double] = [:]
+        var rows: [PersistedWorkoutRow] = []
+
+        for entry in inWindow {
+            let day = calendar.startOfDay(for: entry.workoutStartDate)
+            let pair = previewPair(from: entry)
+            let load = sessionLoad(for: pair.workout, analytics: pair.analytics)
+            loadByDay[day, default: 0] += load
+            rows.append(
+                PersistedWorkoutRow(
+                    day: day.timeIntervalSince1970,
+                    workoutUUID: entry.workoutUUID,
+                    workoutTypeRawValue: entry.workoutTypeRawValue,
+                    workoutStartDate: entry.workoutStartDate,
+                    workoutEndDate: entry.workoutEndDate,
+                    workoutDuration: entry.workoutDuration,
+                    sessionLoad: load,
+                    metTotal: entry.metTotal,
+                    avgHR: entry.heartRates.map(\.value).average,
+                    peakHR: entry.peakHR,
+                    totalKcal: entry.totalEnergyBurnedKilocalories,
+                    distanceMeters: entry.totalDistanceMeters,
+                    heartRates: entry.heartRates,
+                    hrZoneBreakdown: entry.hrZoneBreakdown
+                )
+            )
+        }
+
+        let payload = Payload(
+            schemaVersion: 1,
+            updatedAt: Date(),
+            coverageDays: windowDays,
+            windowStart: windowStartDay,
+            windowEnd: windowEnd,
+            loadsByDay: loadByDay.map { PersistedDayLoad(day: $0.key.timeIntervalSince1970, value: $0.value) }
+                .sorted { $0.day < $1.day },
+            workoutRows: rows.sorted { $0.workoutStartDate > $1.workoutStartDate }
+        )
+
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func saveFromEntriesDetached(
+        _ entries: [HealthStateEngine.PersistedWorkoutAnalyticsEntry],
+        notifyDashboard: Bool = false
+    ) {
+        Task.detached(priority: .utility) {
+            saveFromEntries(entries)
+            if notifyDashboard {
+                scheduleDashboardUpdateNotification()
+            }
+        }
+    }
+
+    static func rebuildFromWorkoutAnalyticsFile(notifyDashboard: Bool = false) {
+        Task.detached(priority: .utility) {
+            let entries = WorkoutAnalyticsDiskIO.decodePersistedEntries()
+            guard !entries.isEmpty else { return }
+            saveFromEntries(entries)
+            if notifyDashboard {
+                scheduleDashboardUpdateNotification()
+            }
+        }
+    }
+
+    private static func previewPair(from entry: HealthStateEngine.PersistedWorkoutAnalyticsEntry) -> (workout: HKWorkout, analytics: WorkoutAnalytics) {
+        let workout = stubWorkout(from: entry)
+        let analytics = WorkoutAnalytics(
+            workout: workout,
+            heartRates: entry.heartRates.map { ($0.date, $0.value) },
+            vo2Max: entry.vo2Max,
+            metTotal: entry.metTotal,
+            metAverage: entry.metAverage,
+            metSeries: entry.metSeries.map { ($0.date, $0.value) },
+            postWorkoutHRSeries: entry.postWorkoutHRSeries.map { ($0.date, $0.value) },
+            peakHR: entry.peakHR,
+            hrr0: entry.hrr0,
+            hrr1: entry.hrr1,
+            hrr2: entry.hrr2,
+            powerSeries: [],
+            speedSeries: [],
+            cadenceSeries: [],
+            elevationSeries: [],
+            elevationGain: entry.elevationGain,
+            verticalOscillationSeries: [],
+            groundContactTimeSeries: [],
+            strideLengthSeries: [],
+            strokeCountSeries: [],
+            verticalOscillation: entry.verticalOscillation,
+            groundContactTime: entry.groundContactTime,
+            strideLength: entry.strideLength,
+            workoutEffortScore: entry.metadata["HKMetadataKeyWorkoutEffortScore"],
+            hrZoneProfile: entry.hrZoneProfile,
+            hrZoneBreakdown: entry.hrZoneBreakdown.map { ($0.zone, $0.timeInZone) }
+        )
+        return (workout, analytics)
+    }
+
+    private static func previewPair(from row: PersistedWorkoutRow) -> (workout: HKWorkout, analytics: WorkoutAnalytics) {
+        let totalEnergy = row.totalKcal.map { HKQuantity(unit: .kilocalorie(), doubleValue: $0) }
+        let totalDistance = row.distanceMeters.map { HKQuantity(unit: .meter(), doubleValue: $0) }
+        let metadata: [String: Any] = [cachedWorkoutUUIDMetadataKey: row.workoutUUID]
+        let workout = HKWorkout(
+            activityType: HKWorkoutActivityType(rawValue: row.workoutTypeRawValue) ?? .other,
+            start: row.workoutStartDate,
+            end: row.workoutEndDate,
+            duration: row.workoutDuration,
+            totalEnergyBurned: totalEnergy,
+            totalDistance: totalDistance,
+            metadata: metadata
+        )
+        let analytics = WorkoutAnalytics(
+            workout: workout,
+            heartRates: row.heartRates.map { ($0.date, $0.value) },
+            vo2Max: nil,
+            metTotal: row.metTotal,
+            metAverage: nil,
+            metSeries: [],
+            postWorkoutHRSeries: [],
+            peakHR: row.peakHR,
+            hrr0: nil,
+            hrr1: nil,
+            hrr2: nil,
+            powerSeries: [],
+            speedSeries: [],
+            cadenceSeries: [],
+            elevationSeries: [],
+            elevationGain: nil,
+            verticalOscillationSeries: [],
+            groundContactTimeSeries: [],
+            strideLengthSeries: [],
+            strokeCountSeries: [],
+            verticalOscillation: nil,
+            groundContactTime: nil,
+            strideLength: nil,
+            workoutEffortScore: nil,
+            hrZoneProfile: nil,
+            hrZoneBreakdown: row.hrZoneBreakdown.map { ($0.zone, $0.timeInZone) }
+        )
+        return (workout, analytics)
+    }
+
+    private static func stubWorkout(from entry: HealthStateEngine.PersistedWorkoutAnalyticsEntry) -> HKWorkout {
+        let totalEnergy = entry.totalEnergyBurnedKilocalories.map { HKQuantity(unit: .kilocalorie(), doubleValue: $0) }
+        let totalDistance = entry.totalDistanceMeters.map { HKQuantity(unit: .meter(), doubleValue: $0) }
+        var metadata = entry.metadata.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
+        metadata[cachedWorkoutUUIDMetadataKey] = entry.workoutUUID
+        return HKWorkout(
+            activityType: HKWorkoutActivityType(rawValue: entry.workoutTypeRawValue) ?? .other,
+            start: entry.workoutStartDate,
+            end: entry.workoutEndDate,
+            duration: entry.workoutDuration,
+            totalEnergyBurned: totalEnergy,
+            totalDistance: totalDistance,
+            metadata: metadata.isEmpty ? nil : metadata
+        )
+    }
+
+    private static func sessionLoad(for workout: HKWorkout, analytics: WorkoutAnalytics) -> Double {
+        let zoneWeightedLoad = analytics.hrZoneBreakdown.reduce(0.0) { partial, entry in
+            let zoneWeight = Double(min(max(entry.zone.zoneNumber, 1), 5))
+            return partial + (entry.timeInZone / 60.0 * zoneWeight)
+        }
+        if zoneWeightedLoad > 0 { return zoneWeightedLoad.rounded() }
+        let durationMinutes = workout.duration / 60.0
+        if let effort = workout.metadata?["HKMetadataKeyWorkoutEffortScore"] as? NSNumber {
+            return (durationMinutes * max(1, effort.doubleValue)).rounded()
+        }
+        if let met = analytics.metTotal, met > 0 { return met.rounded() }
+        return 0
+    }
+}
+
 /// Clock-driven hue phase wrapper for the dashboard background. By owning the animation
 /// inside its own view body, the dashboard's outer body no longer invalidates on every
 /// `withAnimation(.repeatForever)` tick (which was the root cause of dashboard lag).
@@ -172,7 +469,8 @@ private struct DashboardBurningGradientBackground: View {
 }
 
 struct DashboardView: View {
-    @StateObject var engine = HealthStateEngine.shared
+    /// Shared engine — not `@StateObject` so `workoutAnalytics` backfill does not invalidate the whole dashboard.
+    private let engine = HealthStateEngine.shared
     @ObservedObject private var tuningStore = NutrivanceTuningStore.shared
     @EnvironmentObject private var unitPreferences: UnitPreferencesStore
     @EnvironmentObject private var navigationState: NavigationState
@@ -184,9 +482,7 @@ struct DashboardView: View {
 
     @State private var selectedTrainingLoadPoint: TrainingLoadChartPoint? = nil
 
-    // Memoized per-day caches over `engine.workoutAnalytics`, recomputed only when
-    // workouts actually change. Used by the preview pager and chart so per-frame
-    // `engine.workoutAnalytics.filter` calls vanish from the render path.
+    // Pre-aggregated 42-day window (`DashboardWorkoutWindowCache`) — not tied to full `workoutAnalytics` hydrate.
     @State private var workoutsByDay: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] = [:]
     @State private var loadByDay: [Date: Double] = [:]
     @State private var lastSnapshotPersistTask: Task<Void, Never>? = nil
@@ -241,13 +537,12 @@ struct DashboardView: View {
     @State private var dashboardItemOrder: [String] = DashboardSectionID.defaultOrder
     @State private var summaryCardsOrder: [String] = ["Recovery", "Readiness", "Strain", "Allostatic", "Autonomic"]
     @State private var hasLoadedLayoutSettings = false
-    @State private var isRefreshingDashboardMetrics = false
     @State private var hasStartedBackgroundRefresh = false
-    @State private var dashboardRefreshTask: Task<Void, Never>? = nil
     /// Matches `ReadinessCheckView` / `RecoveryScoreView` headline math; refreshed via disk cache + debounced recompute.
-    @State private var dashboardAlignedRecoveryReadiness: (recovery: Double, readiness: Double)? = nil
+    @State private var dashboardAlignedRecoveryReadiness: (recovery: Double, readiness: Double)? = Self.initialDashboardHeadlines()
     @State private var dashboardHeadlineRefreshTask: Task<Void, Never>? = nil
-    @State private var workoutCacheRebuildTask: Task<Void, Never>? = nil
+    @State private var workoutWindowReloadTask: Task<Void, Never>? = nil
+    @State private var lastWorkoutWindowCacheUpdatedAt: Date? = nil
     @State private var liveLoadSnapshot: DashboardLoadSnapshot = DashboardLoadSnapshot(
         acuteLoad: 0,
         acuteTotal: 0,
@@ -288,6 +583,9 @@ struct DashboardView: View {
             activeDaysLast28: 0,
             daysSinceLastWorkout: nil
         ))
+        let workoutWindow = DashboardWorkoutWindowCache.loadDisplayState()
+        _loadByDay = State(initialValue: workoutWindow.loadByDay)
+        _workoutsByDay = State(initialValue: workoutWindow.workoutsByDay)
         
         // Load HR zone settings
         let persisted = HRZoneSettingsPersistence.load() ?? .fallback
@@ -314,6 +612,12 @@ struct DashboardView: View {
             dashboardItemOrder: dashboardItemOrder,
             summaryCardsOrder: summaryCardsOrder
         )
+    }
+
+    private static func initialDashboardHeadlines() -> (recovery: Double, readiness: Double)? {
+        let disk = MetricDisplayHeadlineCache.load(anchorDay: Calendar.current.startOfDay(for: Date()))
+        guard let recovery = disk.recovery1D, let readiness = disk.readiness else { return nil }
+        return (recovery, readiness)
     }
     
     private var hrZoneSettings: HRZoneUserSettings {
@@ -375,43 +679,56 @@ struct DashboardView: View {
         return 0
     }
 
-    nonisolated private static func buildWorkoutDayCaches(from pairs: [(workout: HKWorkout, analytics: WorkoutAnalytics)]) -> (
-        workoutsByDay: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]],
-        loadByDay: [Date: Double]
+    private func applyWorkoutWindowCacheDisplayState(
+        _ state: DashboardWorkoutWindowCache.DisplayState,
+        reloadWorkoutPreviews: Bool
     ) {
-        let calendar = Calendar.current
-        var workoutsByDayBuf: [Date: [(workout: HKWorkout, analytics: WorkoutAnalytics)]] = [:]
-        var loadByDayBuf: [Date: Double] = [:]
-        for pair in pairs {
-            let day = calendar.startOfDay(for: pair.workout.startDate)
-            workoutsByDayBuf[day, default: []].append(pair)
-            loadByDayBuf[day, default: 0] += sessionLoadForCharts(workout: pair.workout, analytics: pair.analytics)
-        }
-        for (day, list) in workoutsByDayBuf {
-            workoutsByDayBuf[day] = list.sorted { $0.workout.startDate > $1.workout.startDate }
-        }
-        return (workoutsByDayBuf, loadByDayBuf)
-    }
-
-    private func recomputeWorkoutCachesFromEngineAsync() async {
-        let pairs = await MainActor.run { engine.workoutAnalytics }
-        guard !Task.isCancelled else { return }
-        let result = await Task.detached(priority: .userInitiated) {
-            DashboardView.buildWorkoutDayCaches(from: pairs)
-        }.value
-        guard !Task.isCancelled else { return }
-        await MainActor.run {
-            workoutsByDay = result.workoutsByDay
-            loadByDay = result.loadByDay
+        let loadsChanged = state.loadByDay != loadByDay
+        if loadsChanged {
+            loadByDay = state.loadByDay
             updateLiveLoadSnapshot()
-            scheduleDashboardHeadlineRefresh()
+        }
+        if reloadWorkoutPreviews {
+            workoutsByDay = state.workoutsByDay
+        }
+        if state.updatedAt != lastWorkoutWindowCacheUpdatedAt {
+            lastWorkoutWindowCacheUpdatedAt = state.updatedAt
         }
     }
 
-    private func enqueueWorkoutCacheRebuildFromEngine() {
-        workoutCacheRebuildTask?.cancel()
-        workoutCacheRebuildTask = Task {
-            await recomputeWorkoutCachesFromEngineAsync()
+    /// Debounced, mostly off-main reload — chart loads first; workout previews only when needed.
+    private func scheduleWorkoutWindowCacheReload(reloadWorkoutPreviews: Bool = false) {
+        workoutWindowReloadTask?.cancel()
+        workoutWindowReloadTask = Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard !Task.isCancelled else { return }
+
+            if reloadWorkoutPreviews {
+                let state = await Task.detached(priority: .utility) {
+                    DashboardWorkoutWindowCache.loadDisplayState(includeWorkoutPreviews: true)
+                }.value
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    applyWorkoutWindowCacheDisplayState(state, reloadWorkoutPreviews: true)
+                }
+                return
+            }
+
+            let loads = await Task.detached(priority: .utility) {
+                DashboardWorkoutWindowCache.loadLoadsByDay()
+            }.value
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard loads != loadByDay else { return }
+                applyWorkoutWindowCacheDisplayState(
+                    DashboardWorkoutWindowCache.DisplayState(
+                        loadByDay: loads,
+                        workoutsByDay: workoutsByDay,
+                        updatedAt: lastWorkoutWindowCacheUpdatedAt
+                    ),
+                    reloadWorkoutPreviews: false
+                )
+            }
         }
     }
 
@@ -448,48 +765,24 @@ struct DashboardView: View {
         }
         let acuteLoad = acuteTotal / 7.0
         let chronicLoad = chronicTotal / 28.0
+        let acwr: Double = chronicLoad > 0.0 ? (acuteLoad / chronicLoad) : 0.0
 
         return DashboardLoadSnapshot(
             acuteLoad: acuteLoad,
             acuteTotal: acuteTotal,
             chronicLoad: chronicLoad,
             chronicTotal: chronicTotal,
-            acwr: chronicLoad > 0 ? acuteLoad / chronicLoad : 0,
+            acwr: acwr,
             activeDaysLast28: activeDaysLast28,
             daysSinceLastWorkout: daysSinceLastWorkout
         )
     }
 
-    private var backgroundRefreshDelayNanoseconds: UInt64 {
-        let processInfo = ProcessInfo.processInfo
-        switch processInfo.thermalState {
-        case .serious, .critical:
-            return 2_500_000_000
-        case .fair:
-            return processInfo.isLowPowerModeEnabled ? 1_800_000_000 : 1_200_000_000
-        case .nominal:
-            return processInfo.isLowPowerModeEnabled ? 1_250_000_000 : 900_000_000
-        @unknown default:
-            return 1_500_000_000
-        }
-    }
-
-    private var shouldFetchWorkoutHistoryNow: Bool {
-        let processInfo = ProcessInfo.processInfo
-        guard !processInfo.isLowPowerModeEnabled else { return false }
-        switch processInfo.thermalState {
-        case .serious, .critical:
-            return false
-        default:
-            return true
-        }
-    }
-
     private static var dashboardHeadlineDebounceNanos: UInt64 {
         #if targetEnvironment(macCatalyst)
-        520_000_000
+        900_000_000
         #else
-        120_000_000
+        450_000_000
         #endif
     }
 
@@ -520,7 +813,11 @@ struct DashboardView: View {
         }
 
         let context = RecoveryComputationContext.make(engine: engine)
-        let pairs = engine.workoutAnalytics
+        let workoutCount = await MainActor.run { engine.workoutAnalytics.count }
+        let pairs: [(workout: HKWorkout, analytics: WorkoutAnalytics)] = await MainActor.run {
+            guard workoutCount > 0, workoutCount <= 250 else { return [] }
+            return engine.workoutAnalytics
+        }
         let recoveryFallback = engine.recoveryScore
         let strainFallback = engine.strainScore
         let readinessFallback = engine.readinessScore
@@ -563,22 +860,6 @@ struct DashboardView: View {
                 DashboardSnapshotPersistence.saveDetached(snapshot)
             }
         }
-    }
-
-    /// Rebuilds the per-day workout and load lookups. Triggered only when
-    /// `engine.workoutAnalytics` actually changes (count / last end date).
-    private func recomputeWorkoutDayCaches() {
-        let built = Self.buildWorkoutDayCaches(from: engine.workoutAnalytics)
-        workoutsByDay = built.workoutsByDay
-        loadByDay = built.loadByDay
-    }
-
-    private var hasEnoughLoadedWorkoutsForDashboard: Bool {
-        // Uses the engine's memoized `oldestLoadedWorkoutDate` so this property does
-        // not re-scan every workout on every render pass.
-        guard let oldestLoadedWorkout = engine.oldestLoadedWorkoutDate else { return false }
-        let requiredStart = Calendar.current.date(byAdding: .day, value: -35, to: Date()) ?? Date()
-        return oldestLoadedWorkout <= requiredStart
     }
 
     private var dashboardLoadSummary: (title: String, detail: String, color: Color) {
@@ -634,39 +915,117 @@ struct DashboardView: View {
     }
 
     private var cacheRefreshStatusText: String? {
-        if engine.isRefreshingCachedMetrics {
-            if let updatedAt = engine.cachedMetricsUpdatedAt {
-                return "Showing cached metrics from \(updatedAt.formatted(date: .abbreviated, time: .shortened)) while live values refresh in the background."
-            }
-            return "Refreshing live metrics in the background."
+        // Snapshot scores are already on-screen after launch; avoid a banner that implies the UI is blocked.
+        if engine.hasHydratedCachedMetrics {
+            return nil
         }
-
-        guard let updatedAt = engine.cachedMetricsUpdatedAt else { return nil }
-        return "Cached metrics last updated \(updatedAt.formatted(date: .abbreviated, time: .shortened))."
+        if engine.isRefreshingCachedMetrics {
+            return "Refreshing live metrics…"
+        }
+        return nil
     }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    if let cacheRefreshStatusText {
-                        Text(cacheRefreshStatusText)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    dashboardItemsSection()
+            dashboardScrollStack
+        }
+    }
+
+    @ViewBuilder
+    private var dashboardScrollStack: some View {
+        dashboardScrollWithSheets
+            .task {
+                guard !hasStartedBackgroundRefresh else { return }
+                hasStartedBackgroundRefresh = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .dashboardWorkoutWindowCacheDidUpdate)) { _ in
+                guard navigationState.isGloballyActiveRootTab(.dashboard) else { return }
+                scheduleWorkoutWindowCacheReload(reloadWorkoutPreviews: false)
+            }
+            .onChange(of: layoutSettings) { _, newValue in
+                guard hasLoadedLayoutSettings else { return }
+                DashboardLayoutPersistence.save(newValue)
+            }
+            .onReceive(HealthStateEngine.shared.$hasHydratedCachedMetrics) { hydrated in
+                guard hydrated,
+                      navigationState.isGloballyActiveRootTab(.dashboard),
+                      dashboardAlignedRecoveryReadiness == nil else { return }
+                dashboardAlignedRecoveryReadiness = (engine.recoveryScore, engine.readinessScore)
+            }
+            .onReceive(HealthStateEngine.shared.$recoveryScore) { _ in
+                guard navigationState.isGloballyActiveRootTab(.dashboard) else { return }
+                scheduleDashboardHeadlineRefresh()
+            }
+            .onReceive(HealthStateEngine.shared.$readinessScore) { _ in
+                guard navigationState.isGloballyActiveRootTab(.dashboard) else { return }
+                scheduleDashboardHeadlineRefresh()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+                let saved = DashboardLayoutPersistence.load()
+                groupSummaryCards = saved.groupSummaryCards
+                dashboardItemOrder = DashboardSectionID.normalizedOrder(from: saved.dashboardItemOrder)
+                summaryCardsOrder = saved.summaryCardsOrder
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    guard navigationState.isGloballyActiveRootTab(.dashboard),
+                          dashboardAlignedRecoveryReadiness == nil else { return }
+                    scheduleDashboardHeadlineRefresh(immediate: false)
+                    return
                 }
-                .padding(.top)
-                .coordinateSpace(name: "dashboardBase")
+                guard newPhase == .background else { return }
+                dashboardHeadlineRefreshTask?.cancel()
+                workoutWindowReloadTask?.cancel()
             }
+            .onDisappear {
+                dashboardHeadlineRefreshTask?.cancel()
+                workoutWindowReloadTask?.cancel()
+            }
+            .navigationDestination(isPresented: $showWorkoutDetail) {
+                if let selectedWorkout = selectedWorkoutForDetail {
+                    ScrollView {
+                        WorkoutDetailView(
+                            analytics: selectedWorkout.analytics,
+                            hrZoneSettings: hrZoneSettings,
+                            showsMapSection: true
+                        )
+                    }
+                    .padding(.horizontal)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var dashboardScrollWithSheets: some View {
+        dashboardScrollWithNavigation
+            .sheet(isPresented: $showArrangementSheet) {
+                DashboardArrangementSheet(
+                    isPresented: $showArrangementSheet,
+                    dashboardItemOrder: $dashboardItemOrder,
+                    summaryCardsOrder: $summaryCardsOrder
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+            }
+            .sheet(isPresented: $showUnitSettings) {
+                UnitSettingsView(isPresented: $showUnitSettings)
+                    .environmentObject(unitPreferences)
+            }
+    }
+
+    @ViewBuilder
+    private var dashboardScrollWithNavigation: some View {
+        dashboardScrollContent
             .onAppear {
-                scheduleDashboardHeadlineRefresh(immediate: true)
+                if dashboardAlignedRecoveryReadiness == nil,
+                   engine.hasHydratedCachedMetrics {
+                    dashboardAlignedRecoveryReadiness = (engine.recoveryScore, engine.readinessScore)
+                } else if dashboardAlignedRecoveryReadiness == nil {
+                    scheduleDashboardHeadlineRefresh(immediate: false)
+                }
             }
-            .background(
-                DashboardBurningGradientBackground()
-            )
+            .background(DashboardBurningGradientBackground())
             .onReceiveViewControl(.nutrivanceViewControlChartRange7d) {
                 guard navigationState.isGloballyActiveRootTab(.dashboard) else { return }
                 selectedChartRange = .week
@@ -691,133 +1050,51 @@ struct DashboardView: View {
             }
             .navigationTitle("Dashboard")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        showUnitSettings = true
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
-                    }) {
-                        Image(systemName: "gearshape")
-                            .foregroundColor(.orange)
-                    }
-                    .accessibilityLabel("Display units")
-                    .dashboardKeyboardFocusable()
-                    Button(action: { showArrangementSheet = true
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()}) {
-                        Image(systemName: "slider.horizontal.3")
-                            .foregroundColor(.orange)
-                    }
-                    .accessibilityLabel("Arrange dashboard")
-                    .dashboardKeyboardFocusable()
+            .toolbar { dashboardToolbarContent }
+    }
+
+    @ViewBuilder
+    private var dashboardScrollContent: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                if let cacheRefreshStatusText {
+                    Text(cacheRefreshStatusText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                dashboardItemsSection()
             }
-            .sheet(isPresented: $showArrangementSheet) {
-                DashboardArrangementSheet(
-                    isPresented: $showArrangementSheet,
-                    dashboardItemOrder: $dashboardItemOrder,
-                    summaryCardsOrder: $summaryCardsOrder
-                )
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                .presentationCornerRadius(28)
-            }
-            .sheet(isPresented: $showUnitSettings) {
-                UnitSettingsView(isPresented: $showUnitSettings)
-                    .environmentObject(unitPreferences)
-            }
-            .task {
-                guard !hasStartedBackgroundRefresh else { return }
-                hasStartedBackgroundRefresh = true
-                dashboardRefreshTask?.cancel()
-                dashboardRefreshTask = Task(priority: .utility) {
-                    await refreshDashboardMetricsInBackground()
-                }
-                // Let the navigation shell paint; aggregated load is intentionally off-thread
-                // (full `sessionLoad` over every workout dominated startup when run on MainActor).
-                await Task.yield()
-                await recomputeWorkoutCachesFromEngineAsync()
-            }
-            .onChange(of: layoutSettings) { _, newValue in
-                guard hasLoadedLayoutSettings else { return }
-                DashboardLayoutPersistence.save(newValue)
-            }
-            .onChange(of: engine.workoutAnalytics.count) { _, _ in
-                enqueueWorkoutCacheRebuildFromEngine()
-            }
-            .onChange(of: engine.workoutAnalytics.last?.workout.endDate) { _, _ in
-                enqueueWorkoutCacheRebuildFromEngine()
-            }
-            .onChange(of: engine.cachedMetricsUpdatedAt) { _, _ in
-                scheduleDashboardHeadlineRefresh()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
-                let saved = DashboardLayoutPersistence.load()
-                groupSummaryCards = saved.groupSummaryCards
-                dashboardItemOrder = DashboardSectionID.normalizedOrder(from: saved.dashboardItemOrder)
-                summaryCardsOrder = saved.summaryCardsOrder
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active {
-                    scheduleDashboardHeadlineRefresh(immediate: true)
-                    return
-                }
-                guard newPhase == .background else { return }
-                dashboardRefreshTask?.cancel()
-                workoutCacheRebuildTask?.cancel()
-                dashboardHeadlineRefreshTask?.cancel()
-                isRefreshingDashboardMetrics = false
-            }
-            .onDisappear {
-                dashboardRefreshTask?.cancel()
-                workoutCacheRebuildTask?.cancel()
-                dashboardHeadlineRefreshTask?.cancel()
-            }
-            .navigationDestination(isPresented: $showWorkoutDetail) {
-                if let selectedWorkout = selectedWorkoutForDetail {
-                    ScrollView {
-                        WorkoutDetailView(
-                            analytics: selectedWorkout.analytics,
-                            hrZoneSettings: hrZoneSettings,
-                            showsMapSection: true
-                        )
-                    }
-                    .padding(.horizontal)
-                }
-            }
+            .padding(.top)
+            .coordinateSpace(name: "dashboardBase")
         }
     }
 
-    private func refreshDashboardMetricsInBackground() async {
-        guard !isRefreshingDashboardMetrics else { return }
-        isRefreshingDashboardMetrics = true
-        defer { isRefreshingDashboardMetrics = false }
-
-        try? await Task.sleep(nanoseconds: backgroundRefreshDelayNanoseconds)
-        guard !Task.isCancelled else { return }
-
-        await MainActor.run {
-            engine.refreshStartupMetrics()
-            scheduleDashboardHeadlineRefresh()
+    @ToolbarContentBuilder
+    private var dashboardToolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigationBarTrailing) {
+            Button(action: {
+                showUnitSettings = true
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+            }) {
+                Image(systemName: "gearshape")
+                    .foregroundColor(.orange)
+            }
+            .accessibilityLabel("Display units")
+            .dashboardKeyboardFocusable()
+            Button(action: {
+                showArrangementSheet = true
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+            }) {
+                Image(systemName: "slider.horizontal.3")
+                    .foregroundColor(.orange)
+            }
+            .accessibilityLabel("Arrange dashboard")
+            .dashboardKeyboardFocusable()
         }
-
-        guard !Task.isCancelled else { return }
-
-        // Let the initial screen animation and first render settle before heavier history fetches.
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        guard !Task.isCancelled else { return }
-
-        if shouldFetchWorkoutHistoryNow && !hasEnoughLoadedWorkoutsForDashboard {
-            await engine.refreshWorkoutAnalytics(days: 35)
-        } else if shouldFetchWorkoutHistoryNow {
-            // Cheaply pick up any newly recorded workouts; the dashboard already has enough
-            // coverage so we don't need the multi-day window – just the delta since last refresh.
-            await engine.refreshWorkoutAnalyticsIncrementally()
-        }
-
-        guard !Task.isCancelled else { return }
-        await recomputeWorkoutCachesFromEngineAsync()
     }
 
     // MARK: - Dashboard Sections as ViewBuilder functions
@@ -1133,6 +1410,10 @@ private func workoutHistoryPreviewSection() -> some View {
         .cornerRadius(12)
         .shadow(radius: 2)
         .padding(.horizontal)
+        .onAppear {
+            guard workoutsByDay.isEmpty else { return }
+            scheduleWorkoutWindowCacheReload(reloadWorkoutPreviews: true)
+        }
     }
 
     @ViewBuilder
@@ -1346,7 +1627,7 @@ private func workoutHistoryPreviewSection() -> some View {
 
     func baselineFor(_ title: String) -> Double? {
         switch title {
-        case "Recovery": return engine.hrvBaseline7Day
+        case "Recovery": return nil
         default: return nil
         }
     }
@@ -1924,12 +2205,8 @@ struct MetricDetailModal: View {
     private func calculateLatestLoadSnapshot() -> DashboardView.DashboardLoadSnapshot {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        var loadByDay: [Date: Double] = [:]
-
-        for (workout, analytics) in engine.workoutAnalytics {
-            let day = calendar.startOfDay(for: workout.startDate)
-            loadByDay[day, default: 0] += sessionLoad(for: workout, analytics: analytics)
-        }
+        let window = DashboardWorkoutWindowCache.loadDisplayState()
+        let loadByDay = window.loadByDay
 
         let acuteTotal = (0..<7).reduce(0.0) { partial, offset in
             let day = calendar.date(byAdding: .day, value: -offset, to: today) ?? today
@@ -1949,13 +2226,14 @@ struct MetricDetailModal: View {
         }
         let acuteLoad = acuteTotal / 7.0
         let chronicLoad = chronicTotal / 28.0
+        let acwr: Double = chronicLoad > 0.0 ? (acuteLoad / chronicLoad) : 0.0
 
         return DashboardView.DashboardLoadSnapshot(
             acuteLoad: acuteLoad,
             acuteTotal: acuteTotal,
             chronicLoad: chronicLoad,
             chronicTotal: chronicTotal,
-            acwr: chronicLoad > 0 ? acuteLoad / chronicLoad : 0,
+            acwr: acwr,
             activeDaysLast28: activeDaysLast28,
             daysSinceLastWorkout: daysSinceLastWorkout
         )

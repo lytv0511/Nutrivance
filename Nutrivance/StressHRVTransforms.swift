@@ -50,11 +50,14 @@ enum StressHRVTransforms {
         pow(baselineRMSSD / max(currentRMSSD, 1e-5), 0.7)
     }
 
+    /// Stress mapping anchor on LF/HF proxy (headline calibration).
+    static let stressProxyAnchor = 0.95
+    /// Stress mapping scale on LF/HF proxy (headline calibration).
+    static let stressProxyScale = 120.0
+
     /// Maps LF/HF-style proxy to 0–100 stress; proxy≈1 aligned to low stress (anchor 0.95).
     static func calculateStress(lfHfProxy proxy: Double) -> Double {
-        let anchor = 0.95
-        let scale = 120.0
-        let raw = (proxy - anchor) * scale
+        let raw = (proxy - stressProxyAnchor) * stressProxyScale
         return min(max(raw, 0), 100)
     }
 
@@ -75,14 +78,29 @@ enum StressHRVTransforms {
         return min(max(energy * 100, 0), 100)
     }
 
-    /// Regulation score with extra headroom above prior 120 cap; mild squash above 150.
-    static func calculateRegulationScore(currentCombined: Double, readinessBaselineCombined: Double) -> Double {
+    /// Combined HRV implied by morning-readiness baseline SDNN (proxy RMSSD leg matches baseline snapshot).
+    static func readinessCombinedBaseline(sdnn: Double) -> Double {
+        let rm = estimateRMSSDFromSDNN(sdnn)
+        return combinedHRV(sdnn: sdnn, rmssdEffective: rm)
+    }
+
+    /// Recovery ratio and stability term matching `calculateEnergy` (CV comes from the cleaned SDNN window).
+    static func energyBlendComponents(adjustedCombined: Double, readinessBaselineCombined: Double, coefficientOfVariation: Double) -> (recovery: Double, stability: Double) {
+        guard readinessBaselineCombined > 1e-9 else { return (0, 0) }
+        let recovery = adjustedCombined / readinessBaselineCombined
+        let stability = max(0, 1 - coefficientOfVariation)
+        return (recovery, stability)
+    }
+
+    /// Raw ratio × 100 before headline cap (for explainability).
+    static func regulationLinearPercent(currentCombined: Double, readinessBaselineCombined: Double) -> Double {
         guard readinessBaselineCombined > 1e-9 else { return 0 }
-        let linear = (currentCombined / readinessBaselineCombined) * 100
-        let clampedLow = max(0, linear)
-        if clampedLow <= 150 { return min(clampedLow, 250) }
-        let excess = clampedLow - 150
-        let compressed = 150 + excess / (1 + excess / 200)
-        return min(max(compressed, 0), 250)
+        return (currentCombined / readinessBaselineCombined) * 100
+    }
+
+    /// Regulation on the same 0–100 scale as Stress and Energy: parity ≈ 100 when combined HRV matches readiness baseline.
+    static func calculateRegulationScore(currentCombined: Double, readinessBaselineCombined: Double) -> Double {
+        let linear = regulationLinearPercent(currentCombined: currentCombined, readinessBaselineCombined: readinessBaselineCombined)
+        return min(max(linear, 0), 100)
     }
 }

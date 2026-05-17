@@ -23,14 +23,14 @@ final class AppResourceCoordinator {
     }
 }
 
-enum HRZoneSchema: String, Codable {
+enum HRZoneSchema: String, Codable, Sendable {
     case mhrPercentage = "mhr_percentage"
     case karvonen = "karvonen_hrr"
     case lactatThreshold = "lactate_threshold"
     case polarized = "polarized_3zone"
 }
 
-struct HeartRateZone: Identifiable, Codable {
+struct HeartRateZone: Identifiable, Codable, Sendable {
     let id = UUID()
     let name: String
     let range: ClosedRange<Double>
@@ -39,7 +39,7 @@ struct HeartRateZone: Identifiable, Codable {
     var timeInZone: TimeInterval = 0
 }
 
-struct HRZoneProfile: Codable {
+struct HRZoneProfile: Codable, Sendable {
     var sport: HKWorkoutActivityType.RawValue
     var schema: HRZoneSchema
     var maxHR: Double?

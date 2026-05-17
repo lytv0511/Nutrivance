@@ -230,6 +230,8 @@ struct ReadinessCheckView: View {
                                         Text(String(format: "Readiness blends recovery at %.0f%% weight; zone: %@.", r.recoveryConfidence01 * 100, r.trainingZone))
                                             .padding(.top, 4)
                                     }
+                                    Text("Recovery Reserve here is the daily engine score (sleep, HRV effect, resting HR context, and related signals). On Stress, Energy (“autonomic battery”) is a separate, intraday read: HRV versus your morning‑anchored baseline. Same reserve intuition—different inputs—not interchangeable numbers.")
+                                        .padding(.top, 8)
                                 }
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
